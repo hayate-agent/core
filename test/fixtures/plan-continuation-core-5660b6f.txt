@@ -1,0 +1,19 @@
+  planContinuation(key: string, plan: NonNullable<Inbound["continuation"]>): void {
+    const input = this.sessions.get(key)?.current;
+    if (input?.source === "host") {
+      const mandate = this.resultMandate(input);
+      if (!mandate) throw new ToolGuardError("authority_revoked", "No live parent mandate for result continuation");
+      if (plan.state === "continue" && repetitions(this.tasks(this.state(key)).find(t => t.id === mandate.taskId)!) >= 20)
+        throw new ToolGuardError("continuation_budget_exhausted", `Task ${mandate.taskId}: productive continuation budget exhausted; status rechecks only`);
+    }
+    if (!input || !this.sessions.get(key)?.prompting) throw Error("Continuation requires an active working turn");
+    if (!["continue", "waiting", "blocked", "completed"].includes(plan.state) || (plan.state === "continue" && (!plan.next?.trim() || plan.next.length > 4000))) throw Error("Invalid continuation plan");
+    if (plan.replyKind !== undefined && !["routine", "substantive"].includes(plan.replyKind)) throw Error("Invalid continuation reply kind");
+    if (plan.wait && (input.source === "api" || key === "improvement:nightly" || !this.onStateChange || plan.state !== "waiting" || !plan.next?.trim() || plan.next.length > 4000 ||
+        typeof plan.wait.reason !== "string" || !plan.wait.reason.trim() || plan.wait.reason.length > 1000 ||
+        !Number.isSafeInteger(plan.wait.retryAfterMs) || plan.wait.retryAfterMs < 60000 || plan.wait.retryAfterMs > 86400000 ||
+        !Number.isSafeInteger(plan.wait.deadline) || plan.wait.deadline <= this.now() + plan.wait.retryAfterMs ||
+        plan.wait.deadline > this.now() + 7 * 86400000)) throw Error("Invalid bounded wait plan");
+    input.continuation = { state: plan.state, ...(plan.replyKind ? { replyKind: plan.replyKind } : {}), ...((plan.state === "continue" || plan.state === "blocked" || plan.wait) ? { next: plan.next } : {}),
+      ...(plan.wait ? { wait: structuredClone(plan.wait) } : {}) };
+  }

@@ -1,0 +1,23 @@
+services:
+  harness:
+    build: .
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 90s
+    ports:
+      - '127.0.0.1:8642:8642'
+    environment:
+      API_SERVER_KEY: ${API_SERVER_KEY:?Set API_SERVER_KEY in your environment}
+      MODEL_API_KEY: ${MODEL_API_KEY:?Set MODEL_API_KEY in your environment}
+    volumes:
+      - harness-home:/home/node
+      - ./config/harness.yaml:/home/node/.vanillacore-harness/harness.yaml:ro
+      - ./config/SOUL.md:/home/node/.vanillacore-harness/SOUL.md:ro
+      - ./config/models.json:/home/node/.pi/agent/models.json:ro
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 4g
+volumes:
+  harness-home:

@@ -1,0 +1,53 @@
+import { randomUUID } from "node:crypto";
+import { open, rename, unlink } from "node:fs/promises";
+import path from "node:path";
+
+/**
+ * Crash-durable atomic replace: write + fsync a temp file, rename it over the target,
+ * fsync the directory. When this resolves the new content survives power loss, so
+ * acknowledgements (state inbox before Matrix cursor) keep their order on disk.
+ */
+export async function writeFileDurable(file: string, data: string, mode = 0o600): Promise<void> {
+  // Each call owns its staging inode, including overlapping replacements of one target.
+  const tmp = `${file}.${process.pid}.${randomUUID()}.tmp`;
+  const fh = await open(tmp, "wx", mode);
+  try {
+    try {
+      await fh.writeFile(data);
+      await fh.sync();
+    } finally {
+      await fh.close();
+    }
+    await rename(tmp, file);
+    await syncDir(path.dirname(file));
+  } catch (err) {
+    // Preserve the write/rename failure if best-effort staging cleanup also fails.
+    await unlink(tmp).catch(() => {});
+    throw err;
+  }
+}
+
+/** Append a line and fsync the file and its directory entry (dead-letter records). */
+export async function appendFileDurable(file: string, data: string, mode = 0o600): Promise<void> {
+  const fh = await open(file, "a", mode);
+  try {
+    await fh.appendFile(data);
+    await fh.sync();
+  } finally {
+    await fh.close();
+  }
+  await syncDir(path.dirname(file)); // a newly created file must survive power loss too
+}
+
+async function syncDir(dir: string): Promise<void> {
+  let fh;
+  try {
+    fh = await open(dir, "r");
+    await fh.sync();
+  } catch (err) {
+    // Some platforms/filesystems do not support fsync on directories.
+    if (!["EISDIR", "EINVAL", "EPERM", "ENOTSUP"].includes((err as NodeJS.ErrnoException).code ?? "")) throw err;
+  } finally {
+    await fh?.close();
+  }
+}

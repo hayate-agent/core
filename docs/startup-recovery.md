@@ -1,0 +1,9 @@
+# Bounded startup completion recovery
+
+An active host-retained task without `next` may be assessed once through the existing completion checker. The original task is the authority, never worker prose. No retained task means no startup inference or action. Unknown completion evidence permits verification/reconciliation only, not blind replay of external effects.
+
+The host persists a one-shot claim before assessment and its decision before durable inbox recovery. Interrupted claims do not rerun inference after restart. Missing/invalid/failed decisions block the task. A valid continuation uses the existing durable recovery queue, task identity, depth and expiry fences; its next step explicitly requires effect reconciliation. Blocked/waiting/completed/stopped tasks, expired/depth-exhausted tasks, queued inputs and accepted nonterminal children prevent inference. Stop, changed task ownership, new input and expiry are rechecked after inference. No child polling or automatic worker resumption is added.
+
+This is deliberately not the older standalone semantic reconciliation architecture. It does not automatically wake tasks skipped because a child remains active; existing result delivery handles those children. It does not derive a missing mandate from transcripts. A crash after the claim requires operator reconciliation rather than repeated inference. Existing external effects remain at-least-once; verification is mandatory.
+
+Regression coverage executes a real resumed turn from a retained task with absent next, repeats recovery, restores a JSON checkpoint, tests terminal/state/expiry/ownership/accepted-child fences and exercises direct checkpoint-registration rejection followed by independent turn-end rescue. This does not prove real-model classification quality or deployment activation.
