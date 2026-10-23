@@ -689,7 +689,7 @@ export class Harness {
       return;
     }
     // Recorded together with the turn's completion; pump delivers it (and retries on failure).
-    s.outbox.push(this.outbox.create(s.key, dest, reply));
+    s.outbox.push(this.outbox.create(s.key, dest, reply, outcome));
   }
 
   /**

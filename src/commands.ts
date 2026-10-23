@@ -34,6 +34,7 @@ export interface CommandContext {
   agent: string;
   pluginCommands?: ReadonlyMap<string, PluginCommand>;
   pluginUI?: () => PluginUI | undefined;
+  localSessionKey?: () => string;
   /** Graceful restart (supervisor brings the process back). */
   restart: () => Promise<void>;
 }
@@ -491,7 +492,7 @@ export function installCommands(ctx: CommandContext): void {
         else {
           try {
             const text = await plugin.run(parsed.args, { sessionKey: input.sessionKey, sender: input.sender,
-              ui: input.replyTo?.channel === "console" && input.sessionKey === "console:local" ? ctx.pluginUI?.() : undefined });
+              ui: input.replyTo?.channel === "console" && input.sessionKey === (ctx.localSessionKey?.() ?? "console:local") ? ctx.pluginUI?.() : undefined });
             if (text) reply(ctx, input, text);
           } catch { reply(ctx, input, `⚠️ /${plugin.name}: plugin command failed (details withheld)`); }
         }

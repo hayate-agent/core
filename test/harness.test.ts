@@ -149,6 +149,8 @@ test("runtime errors are reported, loop keeps going", async () => {
   await harness.submit(msg("next"));
   await harness.drained();
   assert.deepEqual(ch.texts(), ["⚠️ model down", "ok next"]);
+  assert.equal(ch.sent[0]!.meta?.outcome, "failed", "interactive channels receive failure styling metadata too");
+  assert.equal(ch.sent[1]!.meta?.outcome, undefined);
 });
 
 test("steered input stays in the inbox until the turn finishes", async () => {

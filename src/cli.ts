@@ -2,6 +2,7 @@
 import { readdir } from "node:fs/promises";
 import path from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { LocalSessions } from "./local-sessions.js";
 import { HarnessTuiChannel } from "./channels/tui.js";
 import { ConsoleChannel } from "./channels/console.js";
 import { MatrixChannel, matrixOptionsFromEnv } from "./channels/matrix.js";
@@ -34,6 +35,8 @@ Usage:
 Home (default ~/.vanillacore-harness, env VANILLACORE_HARNESS_HOME): harness.yaml, SOUL.md, VOICE.md,
 personalities/<name>.md, skills/, cron/jobs.yaml (+ cron/scripts, cron/prompts), sessions/.`;
 
+const sessionOwners = new Set<LocalSessions>();
+
 async function main(argv: string[]): Promise<void> {
   const interactive = launchMode(argv) === "interactive";
   if (interactive && (!process.stdin.isTTY || !process.stdout.isTTY)) throw new Error("Interactive mode requires a terminal; use 'run' for the gateway.");
@@ -63,6 +66,9 @@ async function main(argv: string[]): Promise<void> {
   }
   const config = await loadConfig(values["--home"]);
   if (interactive) config.cwd = process.cwd();
+  const sessionOwnership = await LocalSessions.open(config.home, config.cwd);
+  await sessionOwnership.acquireHome();
+  sessionOwners.add(sessionOwnership);
   let tui: HarnessTuiChannel | undefined;
   const log = (text: string) => tui ? tui.note(text) : console.error(text);
   const approvals = { mode: "off" as "off" | "manual", tools: [] as string[] };
@@ -129,19 +135,36 @@ async function main(argv: string[]): Promise<void> {
   }
   // Console: interactive use, or when nothing else would receive input. A daemon with Matrix or
   // the API (e.g. a container without a TTY) does not read stdin unless asked to.
+  let localSessions: LocalSessions | undefined;
   if (interactive) {
+    localSessions = await LocalSessions.open(config.home, config.cwd);
+    sessionOwners.add(localSessions);
+    await localSessions.create();
     tui = new HarnessTuiChannel({
+      sessions: localSessions,
+      workState: () => {
+        const state = harness.sessions.get(localSessions?.current?.key ?? "console:local");
+        return { running: !!state?.running, queued: state?.queue.length ?? 0 };
+      },
+      canSwitchSession: () => {
+        const key = localSessions?.current?.key;
+        const state = key ? harness.sessions.get(key) : undefined;
+        return !state?.running && !state?.queue.length && !state?.outbox.length && !state?.unsaved
+          && !harness.pendingInputs().some((input) => input.sessionKey === key);
+      },
       panels: () => plugins.panels.values(),
       agent: config.agent,
       models: () => runtime.models(),
       login: (ui) => runtime.login(ui),
       quit: () => void shutdown(0),
+      prepareSession: async () => { await harness.sessionFor(localSessions?.current?.key ?? "console:local"); },
+      model: () => harness.sessions.get(localSessions?.current?.key ?? "console:local")?.session?.status().model ?? "unavailable",
+      reasoning: () => harness.sessions.get(localSessions?.current?.key ?? "console:local")?.session?.status().thinking ?? "unavailable",
       status: () => {
         const sessions = [...harness.sessions.values()];
         const active = sessions.filter((s) => s.running).length;
         const queued = sessions.reduce((n, s) => n + s.queue.length, 0);
-        const model = harness.sessions.get("console:local")?.session?.status().model ?? config.model ?? "runtime default";
-        return `Model: ${model} · ${harness.paused ? "PAUSED" : "running"} · Active: ${active} · Queue: ${queued}\nGoals: ${sessions.filter((s) => s.goal).length} · Heartbeats: ${sessions.filter((s) => s.heartbeat).length} · Channels: ${[...harness.channels.keys()].join(", ")}`;
+        return `${harness.paused ? "PAUSED" : "running"} · Active: ${active} · Queue: ${queued}\nGoals: ${sessions.filter((s) => s.goal).length} · Heartbeats: ${sessions.filter((s) => s.heartbeat).length} · Channels: ${[...harness.channels.keys()].join(", ")}`;
       },
     });
     harness.addChannel(tui);
@@ -192,7 +215,7 @@ async function main(argv: string[]): Promise<void> {
   }
   await scheduler.load();
 
-  await plugins.load(config.plugins ?? [], { agent: config.agent, home: config.home, cwd: config.cwd }, [...builtinCommandNames, ...skills.map((s) => s.name)], ["console", "api", "matrix", ...harness.channels.keys()]);
+  await plugins.load(config.plugins ?? [], { agent: config.agent, home: config.home, cwd: config.cwd }, [...builtinCommandNames, "sessions", "resume", ...skills.map((s) => s.name)], ["console", "api", "matrix", ...harness.channels.keys()]);
   for (const channel of plugins.channels.values()) harness.addChannel(channel);
 
   let stopping = false;
@@ -209,6 +232,7 @@ async function main(argv: string[]): Promise<void> {
     await persist(unfinished).catch((err) => console.error(`[state] save failed: ${err}`));
     if (unfinished.length) console.error(`[harness] ${unfinished.length} unfinished input(s) saved for replay`);
     await plugins.stop().catch(() => console.error("[plugins] cleanup failed"));
+    await sessionOwnership.release();
     process.exit(code);
   };
 
@@ -219,6 +243,7 @@ async function main(argv: string[]): Promise<void> {
     skills: () => skills,
     pluginCommands: plugins.commands,
     pluginUI: () => tui?.pluginUI(),
+    localSessionKey: () => localSessions?.current?.key ?? "console:local",
     reloadSkills,
     personality: {
       get current() {
@@ -271,7 +296,8 @@ async function main(argv: string[]): Promise<void> {
   }
 }
 
-main(process.argv.slice(2)).catch((err) => {
+main(process.argv.slice(2)).catch(async (err) => {
+  for (const owner of sessionOwners) await owner.release().catch(() => {});
   console.error(err instanceof Error ? (err.stack ?? err.message) : err);
   process.exit(1);
 });
