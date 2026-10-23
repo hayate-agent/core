@@ -189,7 +189,8 @@ async function main(argv: string[]): Promise<void> {
   await scheduler.load();
 
   const plugins = new PluginHost();
-  await plugins.load(config.plugins ?? [], { agent: config.agent, home: config.home, cwd: config.cwd }, [...builtinCommandNames, ...skills.map((s) => s.name)]);
+  await plugins.load(config.plugins ?? [], { agent: config.agent, home: config.home, cwd: config.cwd }, [...builtinCommandNames, ...skills.map((s) => s.name)], ["console", "api", "matrix", ...harness.channels.keys()]);
+  for (const channel of plugins.channels.values()) harness.addChannel(channel);
 
   let stopping = false;
   const shutdown = async (code = 0) => {
@@ -234,7 +235,7 @@ async function main(argv: string[]): Promise<void> {
     // Remote channels fail closed: without `admins` only MATRIX_APPROVAL_APPROVERS (AgentOS:
     // the human owner) and the local console may run privileged commands.
     admins,
-    openAdmin: !matrixOpts,
+    openAdmin: !matrixOpts && plugins.channels.size === 0,
     approvers,
     agent: config.agent,
     // Exit with 75 (EX_TEMPFAIL); the supervisor (systemd/Kubernetes) restarts the process.
@@ -250,7 +251,11 @@ async function main(argv: string[]): Promise<void> {
   process.on("SIGINT", () => void shutdown(0));
   process.on("SIGTERM", () => void shutdown(0));
   try { await harness.start(); }
-  catch (err) { await plugins.stop().catch(() => {}); throw err; }
+  catch (err) {
+    await harness.stop(0).catch(() => {});
+    await plugins.stop().catch(() => {});
+    throw err;
+  }
 
   // Replay only after outbound channels are authenticated and ready. Entries remain in the
   // durable inbox until both their reply and the completion-state write succeed.
