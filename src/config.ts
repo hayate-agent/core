@@ -13,6 +13,8 @@ export interface HarnessConfig {
   timezone: string;
   model?: string;
   thinking?: string;
+  /** Literal tool names exposed to the model; omitted = runtime defaults, [] = no tools. */
+  tools?: string[];
   persona: {
     /** Identity file (Hermes-compatible). */
     soul: string;
@@ -47,6 +49,10 @@ export interface HarnessConfig {
 }
 
 export function defaultConfig(overrides: Partial<HarnessConfig> = {}): HarnessConfig {
+  if (overrides.tools !== undefined && (!Array.isArray(overrides.tools) ||
+      overrides.tools.some((name) => typeof name !== "string" || !/^[a-zA-Z0-9_][a-zA-Z0-9_.:-]*$/.test(name)))) {
+    throw new Error("tools must be an array of literal tool names (or [] for no tools)");
+  }
   const home = overrides.home ?? process.env.VANILLACORE_HARNESS_HOME ?? path.join(os.homedir(), ".vanillacore-harness");
   return {
     agent: overrides.agent ?? process.env.VANILLACORE_HARNESS_AGENT ?? "agent",
@@ -55,6 +61,7 @@ export function defaultConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
     timezone: overrides.timezone ?? process.env.TZ ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
     model: overrides.model,
     thinking: overrides.thinking,
+    tools: overrides.tools === undefined ? undefined : [...new Set(overrides.tools)],
     persona: {
       soul: path.join(home, "SOUL.md"),
       voice: path.join(home, "VOICE.md"),

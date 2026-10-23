@@ -26,6 +26,8 @@ export interface PiRuntimeOptions {
   sessionsDir: string;
   model?: string;
   thinking?: string;
+  /** Explicit active tool names, including extension tools; [] disables all tools. */
+  tools?: string[];
   skillPaths: string[];
   /** Returns persona sections, read on every session open (so persona edits apply to new sessions). */
   personaSections: () => Promise<string[]>;
@@ -264,6 +266,8 @@ export class PiRuntime implements AgentRuntime {
       modelRuntime: models,
       resourceLoader: loader,
       sessionManager,
+      tools: this.opts.tools,
+      noTools: this.opts.tools?.length === 0 ? "all" : undefined,
     });
     // Extensions may register providers (e.g. a custom AI gateway), so resolve the
     // configured model only after they are bound.
