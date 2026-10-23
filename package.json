@@ -5,13 +5,20 @@
   "type": "module",
   "license": "Apache-2.0",
   "private": true,
-  "repository": { "type": "git", "url": "https://git.vanillacore.net/harness/core.git" },
-  "files": ["dist", "README.md", "LICENSE"],
+  "repository": {
+    "type": "git",
+    "url": "https://git.vanillacore.net/harness/core.git"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
   "bin": {
     "vanillacore-harness": "./dist/cli.js"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=22.19.0"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
@@ -21,14 +28,14 @@
     "start": "node --import tsx src/cli.ts run"
   },
   "dependencies": {
-    "@earendil-works/pi-coding-agent": "^1.1.0",
-    "croner": "^10.0.1",
-    "marked": "^18.1.1",
-    "yaml": "^2.9.1"
+    "@earendil-works/pi-coding-agent": "1.4.0",
+    "croner": "10.0.1",
+    "marked": "18.1.1",
+    "yaml": "2.9.1"
   },
   "devDependencies": {
-    "@types/node": "^22.0.0",
-    "tsx": "^4.20.0",
-    "typescript": "^5.9.0"
+    "@types/node": "24.19.2",
+    "tsx": "4.23.15",
+    "typescript": "7.0.2"
   }
 }
