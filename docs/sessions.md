@@ -1,19 +1,19 @@
 # Session providers
 
-The Harness selects one authoritative session provider. The bundled filesystem
-provider is the default, requires no service or additional installation, and
-stores records under Harness home/session-store. The PI adapter uses an in-memory
-SessionManager; it does not keep a second writable PI history alongside the
-provider. Persisted entries are tagged pi-session-v1: storage is interchangeable,
-but history interpretation remains runtime-specific.
+The native default uses PI's SessionManager and append-only JSONL under Harness
+home/sessions. PI owns tree semantics, replay, branches and context compaction.
+Harness does not copy the entire native tree on append. The optional filesystem
+snapshot provider remains for compatibility and external-provider examples under
+home/session-store. External providers use PI's in-memory manager and tagged
+pi-session-v1 records: an adapter, not a second conversation engine.
 
 ```yaml
 sessions:
-  provider: filesystem
+  provider: native
 ```
 
 Trusted local plugins can call `api.registerSessionProvider(name, factory)` during
-activation. The filesystem name is reserved. The async factory receives
+activation. The native and filesystem names are reserved. The async factory receives
 `{home, options}` from sessions.options and returns a SessionProvider as declared
 in src/sessions.ts. Use api.onStop for connection cleanup. Unknown providers fail
 startup. This does not change Harness state.json or cron storage.
@@ -28,18 +28,18 @@ Use one owner process for a filesystem provider directory; CLI home locking
 prevents concurrent local writers. A database implementation must enforce its
 revision check atomically. No database provider is bundled in this release.
 
-The PI adapter serializes asynchronous checkpoints from the SDK persistence
-callback, waits for a checkpoint at turn completion, title changes, compaction
-and disposal, and retries later checkpoints after transient storage failure.
-SDK callbacks are synchronous, so a background append alone is not a durable
-acknowledgement. The Harness inbox retains unfinished turns for replay; delivery
+External providers checkpoint at turn completion, title changes, manual compaction
+and disposal. SDK persistence callbacks are not overridden. Mid-turn external
+history may replay from the durable inbox after a crash; native PI persistence
+continues appending normally. The Harness inbox retains unfinished turns for replay; delivery
 remains at-least-once, not exactly-once. Failed final checkpoints fail the turn.
 Revision conflicts require resolving competing writers, not blind overwrite.
 
 ## Existing conversations
 
-On the first opening of a conversation without a provider binding, the adapter
-imports its latest existing Harness-owned PI history. It leaves the original
+With an explicitly selected external provider, first opening imports the latest
+Harness-owned PI history when no binding exists. The native default keeps existing
+snapshot bindings on their original provider to avoid returning to stale history. It leaves the original
 JSONL files untouched. Older branches/files are not bulk migrated automatically.
 Back up Harness home before upgrading. Switching provider configuration is not a
 migration: export/import tooling across providers is not yet supplied.
@@ -55,6 +55,16 @@ Explicit `/resume <id>` uses the full identifier from `/sessions`. Local workspa
 IDs identify conversation slots; provider IDs identify histories within a slot.
 Remote sessions/resume are restricted to the same conversation key. Never infer
 identity from a title or use a partial hash as an authority.
+
+## Compaction plugins
+
+compaction.strategy defaults to native and delegates manual /compact and /compress
+to PI's existing LLM compaction. Plugins register with
+`api.registerCompaction(name, {async compact({instructions, compactNative}) {...}})`
+and select their name in compaction.strategy. Await compactNative to reuse the
+runtime algorithm; no internal tree is exposed. PI automatic compaction retains
+its own settings/hooks. This contract controls manual compaction only, not auto
+scheduling. Compaction reduces context, not necessarily archive size or tree RAM.
 
 ## Current scaling limits
 

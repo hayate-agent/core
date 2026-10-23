@@ -8,6 +8,7 @@ import { ConsoleChannel } from "./channels/console.js";
 import { MatrixChannel, matrixOptionsFromEnv } from "./channels/matrix.js";
 import { RunRegistry } from "./api/runs.js";
 import { API_CHANNEL, ApiChannel } from "./api/server.js";
+import { nativeCompaction, type CompactionStrategy } from "./compaction.js";
 import { FilesystemSessionProvider, type SessionProvider } from "./sessions.js";
 import { PluginHost } from "./plugins.js";
 import { builtinCommandNames, installCommands, VERSION } from "./commands.js";
@@ -82,7 +83,8 @@ async function main(argv: string[]): Promise<void> {
   await reloadSkills();
 
   const plugins = new PluginHost();
-  let sessionProvider: SessionProvider;
+  let sessionProvider: SessionProvider | undefined;
+  let compaction = nativeCompaction as CompactionStrategy;
   let harness!: Harness;
   const runtime = new PiRuntime({
     cwd: config.cwd,
@@ -92,6 +94,8 @@ async function main(argv: string[]): Promise<void> {
     tools: config.tools,
     pluginTools: () => plugins.tools.values(),
     sessionProvider: () => sessionProvider,
+    legacySessionProvider: new FilesystemSessionProvider(path.join(config.home, "session-store")),
+    compaction: () => compaction,
     mcp: config.mcp,
     skillPaths: config.skills.paths,
     personaSections: async () => personaSections(await loadPersona(config.persona, personality), { name: config.agent, workspace: config.cwd }),
@@ -219,14 +223,20 @@ async function main(argv: string[]): Promise<void> {
   await scheduler.load();
 
   await plugins.load(config.plugins ?? [], { agent: config.agent, home: config.home, cwd: config.cwd }, [...builtinCommandNames, "sessions", "resume", ...skills.map((s) => s.name)], ["console", "api", "matrix", ...harness.channels.keys()]);
-  const providerName = config.sessions?.provider ?? "filesystem";
+  const strategyName = config.compaction?.strategy ?? "native";
+  if (strategyName !== "native") {
+    const strategy = plugins.compactions.get(strategyName);
+    if (!strategy) throw new Error(`Unknown compaction strategy: ${strategyName}`);
+    compaction = strategy;
+  }
+  const providerName = config.sessions?.provider ?? "native";
   if (providerName === "filesystem") sessionProvider = new FilesystemSessionProvider(path.join(config.home, "session-store"));
-  else {
+  else if (providerName !== "native") {
     const factory = plugins.sessionProviders.get(providerName);
     if (!factory) throw new Error(`Unknown session provider: ${providerName}`);
     sessionProvider = await factory({ home: config.home, options: config.sessions?.options });
   }
-  if (localSessions) localSessions.provider = sessionProvider;
+  if (localSessions) localSessions.provider = sessionProvider ?? new FilesystemSessionProvider(path.join(config.home, "session-store"));
   for (const channel of plugins.channels.values()) harness.addChannel(channel);
 
   let stopping = false;

@@ -193,9 +193,17 @@ or internal terminal object is exposed. For background status use panels instead
 
 `api.registerSessionProvider(name, async ({home, options}) => provider)` registers
 an authoritative storage implementation selectable with sessions.provider.
-The bundled filesystem provider is the default. See sessions.md and the
+Native PI storage is the default; the filesystem snapshot provider remains opt-in and for existing bindings. See sessions.md and the
 SessionProvider interface in src/sessions.ts for revision/durability semantics,
 legacy import and current large-history limits. This is separate from model tools.
+
+## Compaction strategy
+
+Register `api.registerCompaction('policy', {async compact({instructions, compactNative}) {
+await compactNative(instructions); }})` and select `compaction.strategy: policy`.
+The built-in native strategy delegates directly to PI; native is reserved.
+Strategies wrap manual compaction without receiving or rewriting the session tree.
+PI automatic compaction remains configured by PI settings and hooks.
 
 ## Deliberate limits
 

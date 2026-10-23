@@ -18,6 +18,7 @@ export interface HarnessConfig {
   /** Trusted local ESM plugin paths, relative to Harness home or absolute. */
   plugins?: string[];
   sessions?: { provider: string; options?: unknown };
+  compaction?: { strategy: string };
   /** Enable configured MCP servers; credentials and server definitions stay outside product code. */
   mcp?: { enabled: boolean };
   persona: {
@@ -65,6 +66,7 @@ export function defaultConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
     throw new Error("mcp.enabled must be a boolean");
   }
   if (overrides.sessions !== undefined && (!overrides.sessions || typeof overrides.sessions.provider !== "string" || !/^[a-z][a-z0-9_-]*$/.test(overrides.sessions.provider))) throw new Error("Invalid sessions.provider");
+  if (overrides.compaction !== undefined && (!overrides.compaction || typeof overrides.compaction.strategy !== "string" || !/^[a-z][a-z0-9_-]*$/.test(overrides.compaction.strategy))) throw new Error("Invalid compaction.strategy");
   const home = overrides.home ?? process.env.VANILLACORE_HARNESS_HOME ?? path.join(os.homedir(), ".vanillacore-harness");
   return {
     agent: overrides.agent ?? process.env.VANILLACORE_HARNESS_AGENT ?? "agent",
@@ -74,7 +76,8 @@ export function defaultConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
     model: overrides.model,
     thinking: overrides.thinking,
     plugins: overrides.plugins ?? [],
-    sessions: overrides.sessions ?? { provider: "filesystem" },
+    sessions: overrides.sessions ?? { provider: "native" },
+    compaction: overrides.compaction ?? { strategy: "native" },
     tools: overrides.tools === undefined ? undefined : [...new Set(overrides.tools)],
     mcp: overrides.mcp ?? { enabled: false },
     persona: {

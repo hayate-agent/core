@@ -1,6 +1,7 @@
 /**
  * PI runtime adapter. The only module that imports the PI SDK.
  */
+import { nativeCompaction, type CompactionStrategy } from "../compaction.js";
 import type { SessionProvider, SessionRecord, SessionSummary } from "../sessions.js";
 import type { PluginTool } from "../plugins.js";
 import { mkdir } from "node:fs/promises";
@@ -34,7 +35,10 @@ export interface PiRuntimeOptions {
   /** Explicit active tool names, including extension tools; [] disables all tools. */
   tools?: string[];
   pluginTools?: () => Iterable<PluginTool>;
-  sessionProvider?: () => SessionProvider;
+  sessionProvider?: () => SessionProvider | undefined;
+  compaction?: () => CompactionStrategy;
+  /** Existing snapshot bindings stay on their provider until explicitly migrated. */
+  legacySessionProvider?: SessionProvider;
   mcp?: { enabled: boolean };
   skillPaths: string[];
   /** Returns persona sections, read on every session open (so persona edits apply to new sessions). */
@@ -96,6 +100,7 @@ export class PiSession implements RuntimeSession {
     private readonly slot: TurnSlot,
     private readonly checkpoint?: () => Promise<void>,
     private readonly record?: SessionRecord,
+    private readonly compaction: CompactionStrategy = nativeCompaction,
   ) {}
 
   get busy(): boolean {
@@ -167,7 +172,7 @@ export class PiSession implements RuntimeSession {
   }
 
   async compact(instructions?: string): Promise<void> {
-    await this.session.compact(instructions);
+    await this.compaction.compact({ instructions, compactNative: (text) => this.session.compact(text).then(() => {}) });
     await this.checkpoint?.();
   }
 
@@ -256,7 +261,14 @@ export class PiRuntime implements AgentRuntime {
   }
 
   async sessions(key: string, offset = 0): Promise<SessionSummary[]> {
-    return this.opts.sessionProvider?.().list(key, offset, 20) ?? [];
+    const provider = this.opts.sessionProvider?.();
+    const legacy = this.opts.legacySessionProvider;
+    if (provider) return provider.list(key, offset, 20);
+    if (await legacy?.active(key)) return legacy!.list(key, offset, 20);
+    const rows = await SessionManager.list(this.opts.cwd, path.join(this.opts.sessionsDir, safeKey(key)));
+    return rows.slice(offset, offset + 20).map((s) => ({ id: s.id, key,
+      title: s.name ?? (s.firstMessage.replace(/\s+/g, " ").slice(0, 90) || "New conversation"),
+      updated: s.modified.toISOString(), revision: 0, format: "pi-session-v1" }));
   }
 
   async models(): Promise<string[]> {
@@ -269,7 +281,8 @@ export class PiRuntime implements AgentRuntime {
     const models = await this.modelRuntime();
     const dir = path.join(sessionsDir, safeKey(sessionKey));
     await mkdir(dir, { recursive: true });
-    const provider = this.opts.sessionProvider?.();
+    let provider = this.opts.sessionProvider?.();
+    if (!provider && await this.opts.legacySessionProvider?.active(sessionKey)) provider = this.opts.legacySessionProvider;
     let record: SessionRecord | undefined;
     let sessionManager: SessionManager;
     if (provider) {
@@ -286,6 +299,10 @@ export class PiRuntime implements AgentRuntime {
         sessionManager = SessionManager.inMemory(cwd, undefined, entries as Parameters<typeof SessionManager.inMemory>[2]);
         record.title = legacy.getSessionName() ?? "New conversation";
       }
+    } else if (options.sessionId) {
+      const info = (await SessionManager.list(cwd, dir)).find((s) => s.id === options.sessionId);
+      if (!info) throw new Error("Session not found in this conversation");
+      sessionManager = SessionManager.open(info.path, dir, cwd);
     } else sessionManager = options.fresh ? SessionManager.create(cwd, dir) : SessionManager.continueRecent(cwd, dir);
 
     const sections = await this.opts.personaSections();
@@ -377,21 +394,8 @@ export class PiRuntime implements AgentRuntime {
       saving = task;
       return task;
     } : undefined;
-    if (checkpoint) {
-      let background: Promise<void> | undefined;
-      let dirty = false;
-      sessionManager._persist = () => {
-        dirty = true;
-        if (background) return;
-        background = (async () => {
-          while (dirty) {
-            dirty = false;
-            try { await checkpoint(); } catch { break; } // explicit barriers surface/retry failures
-          }
-        })().finally(() => { background = undefined; });
-      };
-    }
-    const wrapped = new PiSession(session, models, slot, checkpoint, record);
+    // External providers checkpoint at explicit durability barriers, never by replacing SDK internals.
+    const wrapped = new PiSession(session, models, slot, checkpoint, record, this.opts.compaction?.());
     try {
       if (checkpoint) await checkpoint();
       if (this.opts.model && wrapped.status().model !== this.opts.model) await wrapped.setModel(this.opts.model);
