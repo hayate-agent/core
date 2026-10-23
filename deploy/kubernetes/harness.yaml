@@ -1,0 +1,5 @@
+agent: example-agent
+model: example-provider/example-model
+thinking: medium
+loop:
+  drainSeconds: 60

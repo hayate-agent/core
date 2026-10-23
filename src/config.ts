@@ -1,0 +1,85 @@
+import { readFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { parse } from "yaml";
+
+export interface HarnessConfig {
+  /** Agent identity key (e.g. "example-agent"). */
+  agent: string;
+  /** Harness home: sessions, state, persona files. */
+  home: string;
+  /** Working directory for tools. */
+  cwd: string;
+  timezone: string;
+  model?: string;
+  thinking?: string;
+  persona: {
+    /** Identity file (Hermes-compatible). */
+    soul: string;
+    /** Personality / tone file. */
+    voice: string;
+    /** Named personalities selectable via /personality, file per name. */
+    personalitiesDir: string;
+  };
+  skills: {
+    /** Extra skill dirs in addition to PI's global/project discovery. */
+    paths: string[];
+  };
+  cron: {
+    /** Hermes-compatible jobs.yaml; optional. */
+    jobsFile?: string;
+  };
+  loop: {
+    /** Idle tick of the main loop in ms (heartbeats, goals, loops are checked on each tick). */
+    tickMs: number;
+    busyMode: "queue" | "steer" | "interrupt";
+    /** On SIGTERM / restart: wait this long for in-flight turns, then abort (Hermes restart_drain_timeout). */
+    drainSeconds: number;
+  };
+  /** Container memory guard: kill the largest child above this % of the cgroup limit; 0 = off. */
+  memoryGuard: { percent: number };
+  /** Senders allowed to run privileged commands (/approve, /pause, /restart, /yolo ...). Empty = everyone. */
+  admins: string[];
+  /** Who may /approve, /deny (and react on Matrix). Empty: MATRIX_APPROVAL_APPROVERS, else admins. */
+  approvers: string[];
+  /** Home address for cron output and notices (/sethome). */
+  home_address?: { channel: string; target: string };
+}
+
+export function defaultConfig(overrides: Partial<HarnessConfig> = {}): HarnessConfig {
+  const home = overrides.home ?? process.env.VANILLACORE_HARNESS_HOME ?? path.join(os.homedir(), ".vanillacore-harness");
+  return {
+    agent: overrides.agent ?? process.env.VANILLACORE_HARNESS_AGENT ?? "agent",
+    home,
+    cwd: overrides.cwd ?? process.cwd(),
+    timezone: overrides.timezone ?? process.env.TZ ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
+    model: overrides.model,
+    thinking: overrides.thinking,
+    persona: {
+      soul: path.join(home, "SOUL.md"),
+      voice: path.join(home, "VOICE.md"),
+      personalitiesDir: path.join(home, "personalities"),
+      ...overrides.persona,
+    },
+    skills: { paths: [path.join(home, "skills")], ...overrides.skills },
+    cron: { jobsFile: path.join(home, "cron", "jobs.yaml"), ...overrides.cron },
+    loop: { tickMs: 15_000, busyMode: "queue", drainSeconds: 60, ...overrides.loop },
+    memoryGuard: { percent: 90, ...overrides.memoryGuard },
+    admins: overrides.admins ?? [],
+    approvers: overrides.approvers ?? [],
+    home_address: overrides.home_address,
+  };
+}
+
+/** Load `<home>/harness.yaml` (if present) over the defaults. */
+export async function loadConfig(home?: string): Promise<HarnessConfig> {
+  const base = defaultConfig(home ? { home } : {});
+  const file = path.join(base.home, "harness.yaml");
+  let raw: Partial<HarnessConfig> = {};
+  try {
+    raw = (parse(await readFile(file, "utf8")) ?? {}) as Partial<HarnessConfig>;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+  }
+  return defaultConfig({ ...raw, home: base.home });
+}

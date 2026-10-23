@@ -1,0 +1,152 @@
+/**
+ * Core contracts. Nothing in here knows about PI: the runtime is swappable.
+ */
+
+/** Where an input came from. */
+export type InputSource = "channel" | "cron" | "api" | "heartbeat" | "loop" | "goal";
+
+/** Where a reply goes. `channel` + `target` identify a conversation (e.g. matrix + room id). */
+export interface Address {
+  channel: string;
+  target: string;
+  thread?: string;
+}
+
+export interface Inbound {
+  /** Channel-level id (e.g. Matrix event id) to drop duplicates on redelivery. */
+  id?: string;
+  /** Several channel messages merged into one turn; seen parts are dropped on redelivery. */
+  parts?: Array<{ id: string; text: string }>;
+  /** Stable conversation key; one runtime session per key. */
+  sessionKey: string;
+  text: string;
+  source: InputSource;
+  sender?: string;
+  /** Where replies for this input are delivered. */
+  replyTo?: Address;
+  /** Not addressed to the agent (free/coordination room): answering is optional. */
+  replyOptional?: boolean;
+  /** Per-turn overrides (API runs); persisted with the inbox. */
+  turn?: TurnOptions;
+  /** Its turn started and has not finished (persisted: a crash while set counts as a replay). */
+  started?: boolean;
+  /** Crashes (OOM, kill) that interrupted this input's turn so far. */
+  replays?: number;
+}
+
+/** Overrides for a single turn; the session's own settings are restored afterwards. */
+export interface TurnOptions {
+  /** Extra system instructions for this turn only. */
+  instructions?: string;
+  /** "provider/model". */
+  model?: string;
+  thinking?: string;
+}
+
+/** Progress of a running turn, for channels that stream it (API runs). */
+export type TurnEvent =
+  | { type: "text"; delta: string }
+  | { type: "tool"; phase: "start" | "end"; name: string; error?: boolean }
+  /** One assistant message finished; usage is for that message only. */
+  | {
+      type: "usage";
+      model?: string;
+      thinking?: string;
+      input: number;
+      output: number;
+      cacheRead: number;
+      cacheWrite: number;
+      costUsd: number;
+    };
+
+export interface PromptOptions extends TurnOptions {
+  onEvent?: (event: TurnEvent) => void;
+}
+
+/** How a turn ended, when it did not simply complete. */
+export type TurnOutcome = "failed" | "cancelled";
+
+/** How a message is handled while the session is busy (Hermes `/busy`). */
+export type BusyMode = "queue" | "steer" | "interrupt";
+
+export interface RuntimeSessionStatus {
+  sessionId: string;
+  sessionFile?: string;
+  model?: string;
+  thinking?: string;
+  busy: boolean;
+  messages?: number;
+  tokens?: { input: number; output: number };
+  contextPercent?: number;
+}
+
+/** One live conversation inside an agent runtime. */
+export interface RuntimeSession {
+  readonly busy: boolean;
+  /** Run one turn to completion (including tool calls) and return the final assistant text. */
+  prompt(text: string, options?: PromptOptions): Promise<string>;
+  /** Inject into the running turn after the next tool call. */
+  steer(text: string): Promise<void>;
+  abort(): Promise<void>;
+  compact(instructions?: string): Promise<void>;
+  setModel(ref: string): Promise<void>;
+  setThinking(level: string): void;
+  setTitle(title: string): void;
+  status(): RuntimeSessionStatus;
+  dispose(): void;
+}
+
+export interface OpenSessionOptions {
+  /** Start a fresh conversation instead of resuming the stored one. */
+  fresh?: boolean;
+}
+
+/** Agent runtime (currently PI). */
+export interface AgentRuntime {
+  readonly name: string;
+  open(sessionKey: string, options?: OpenSessionOptions): Promise<RuntimeSession>;
+  /** Model refs ("provider/model") usable for per-turn overrides. */
+  models?(): Promise<string[]>;
+  /** Re-read persona/skills/config for sessions opened afterwards. */
+  reload(): Promise<void>;
+}
+
+/**
+ * Thrown by Channel.send() when retrying can never succeed (e.g. Matrix 403: no permission in
+ * the room). The harness parks such replies instead of blocking the session; any other error
+ * is treated as transient and retried.
+ */
+export class PermanentDeliveryError extends Error {}
+
+/** Extra info for outbound messages. */
+export interface SendMeta {
+  /** Message is an approval prompt; channels may resolve it via reactions (→ /approve|/deny <id>). */
+  approvalId?: string;
+  /** Stable delivery id: retries of the same reply reuse it (channels derive idempotency keys). */
+  deliveryId?: string;
+  /** The turn behind this reply failed or was cancelled (text is the error/partial output). */
+  outcome?: TurnOutcome;
+}
+
+/**
+ * Channels whose upstream acknowledgement (e.g. a sync cursor) lags acceptance pin the ids of
+ * that window so the harness keeps deduplicating them until the checkpoint is durable.
+ */
+export interface DedupPins {
+  pin(ids: Iterable<string>): void;
+  unpin(ids: Iterable<string>): void;
+}
+
+/** A messaging channel (Matrix, console, ...). */
+export interface Channel {
+  readonly name: string;
+  /** `deliverInbound` resolves once the input is durably accepted (safe to acknowledge upstream). */
+  start(deliverInbound: (input: Inbound) => Promise<void>, dedup?: DedupPins): Promise<void>;
+  send(to: Address, text: string, meta?: SendMeta): Promise<void>;
+  /** Optional live progress of the turn answering `to` (best effort, not durable). */
+  turnEvent?(to: Address, event: TurnEvent): void;
+  /** Optional "is typing" indicator while a turn runs. */
+  typing?(to: Address, on: boolean): Promise<void>;
+  /** `budgetMs`: give up waiting for in-flight work after this long (bounded shutdown). */
+  stop(budgetMs?: number): Promise<void>;
+}
