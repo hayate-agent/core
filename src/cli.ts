@@ -8,6 +8,7 @@ import { RunRegistry } from "./api/runs.js";
 import { API_CHANNEL, ApiChannel } from "./api/server.js";
 import { installCommands, VERSION } from "./commands.js";
 import { loadConfig } from "./config.js";
+import { initialize, diagnose } from "./setup.js";
 import { Harness } from "./harness.js";
 import { startMemoryGuard } from "./memguard.js";
 import { loadPersona, personaSections } from "./persona.js";
@@ -22,6 +23,8 @@ const USAGE = `VanillaCore Agent Harness ${VERSION}
 
 Usage:
   vanillacore-harness run [--home <dir>]   Start the agent loop (console channel on stdin/stdout)
+  vanillacore-harness init [--home <dir>] [--cwd <dir>] [--agent <name>] [--model <provider/model>]
+  vanillacore-harness doctor [--home <dir>]
   vanillacore-harness version
 
 Home (default ~/.vanillacore-harness, env VANILLACORE_HARNESS_HOME): harness.yaml, SOUL.md, VOICE.md,
@@ -30,10 +33,29 @@ personalities/<name>.md, skills/, cron/jobs.yaml (+ cron/scripts, cron/prompts),
 async function main(argv: string[]): Promise<void> {
   const [cmd, ...rest] = argv;
   if (cmd === "version" || cmd === "--version") return void console.log(VERSION);
-  if (cmd !== "run") return void console.log(USAGE);
-
-  const homeFlag = rest.indexOf("--home");
-  const config = await loadConfig(homeFlag >= 0 ? rest[homeFlag + 1] : undefined);
+  if (!["run", "init", "doctor"].includes(cmd ?? "")) return void console.log(USAGE);
+  const allowed = cmd === "init" ? ["--home", "--cwd", "--agent", "--model"] : ["--home", ...(cmd === "run" ? ["--console"] : [])];
+  const values: Record<string, string> = {};
+  for (let i = 0; i < rest.length; i++) {
+    const flag = rest[i]!;
+    if (!allowed.includes(flag)) throw new Error(`Unknown option: ${flag}`);
+    if (flag === "--console") continue;
+    const value = rest[++i];
+    if (!value || value.startsWith("--")) throw new Error(`Missing value for ${flag}`);
+    values[flag] = value;
+  }
+  if (cmd === "init") {
+    const created = await initialize({ home: values["--home"], cwd: values["--cwd"], agent: values["--agent"], model: values["--model"] });
+    console.log(created.length ? `Created:\n${created.join("\n")}` : "Existing files retained; nothing overwritten.");
+    return;
+  }
+  if (cmd === "doctor") {
+    const result = await diagnose(values["--home"]);
+    console.log(result.lines.join("\n"));
+    if (!result.ok) process.exitCode = 1;
+    return;
+  }
+  const config = await loadConfig(values["--home"]);
   const approvals = { mode: "off" as "off" | "manual", tools: [] as string[] };
   let personality: string | undefined;
   let skills: SkillInfo[] = [];
