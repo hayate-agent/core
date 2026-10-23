@@ -39,6 +39,20 @@ function setup(opts: { admins?: string[]; approvers?: string[]; skills?: SkillIn
   return { runtime, harness, ch, ctx, send, approvals };
 }
 
+test("plugin commands use admin authorization, help and outbox instead of model turns", async () => {
+  const { ctx, send, ch, runtime } = setup({ admins: ["owner"] });
+  let calls = 0;
+  ctx.pluginCommands = new Map([["extension", { name: "extension", help: "Extension command", admin: true, run: async () => { calls++; return "plugin reply"; } }]]);
+  await send("/extension", "other");
+  assert.match(ch.texts().at(-1)!, /admin only/);
+  assert.equal(calls, 0);
+  await send("/extension", "owner");
+  assert.equal(ch.texts().at(-1), "plugin reply");
+  await send("/help", "owner");
+  assert.match(ch.texts().at(-1)!, /\/extension: Extension command/);
+  assert.equal(runtime.sessions.size, 0);
+});
+
 test("parseCommand handles args, bot suffix and non-commands", () => {
   assert.deepEqual(parseCommand("/goal ship v1"), { name: "goal", args: "ship v1" });
   assert.deepEqual(parseCommand("/status@agent"), { name: "status", args: "" });

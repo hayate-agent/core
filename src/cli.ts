@@ -7,7 +7,8 @@ import { ConsoleChannel } from "./channels/console.js";
 import { MatrixChannel, matrixOptionsFromEnv } from "./channels/matrix.js";
 import { RunRegistry } from "./api/runs.js";
 import { API_CHANNEL, ApiChannel } from "./api/server.js";
-import { installCommands, VERSION } from "./commands.js";
+import { PluginHost } from "./plugins.js";
+import { builtinCommandNames, installCommands, VERSION } from "./commands.js";
 import { loadConfig } from "./config.js";
 import { initialize, diagnose } from "./setup.js";
 import { Harness } from "./harness.js";
@@ -187,6 +188,9 @@ async function main(argv: string[]): Promise<void> {
   }
   await scheduler.load();
 
+  const plugins = new PluginHost();
+  await plugins.load(config.plugins ?? [], { agent: config.agent, home: config.home, cwd: config.cwd }, [...builtinCommandNames, ...skills.map((s) => s.name)]);
+
   let stopping = false;
   const shutdown = async (code = 0) => {
     if (stopping) return;
@@ -200,6 +204,7 @@ async function main(argv: string[]): Promise<void> {
     for (const input of unfinished) input.started = undefined;
     await persist(unfinished).catch((err) => console.error(`[state] save failed: ${err}`));
     if (unfinished.length) console.error(`[harness] ${unfinished.length} unfinished input(s) saved for replay`);
+    await plugins.stop().catch(() => console.error("[plugins] cleanup failed"));
     process.exit(code);
   };
 
@@ -208,6 +213,7 @@ async function main(argv: string[]): Promise<void> {
     scheduler,
     approvals,
     skills: () => skills,
+    pluginCommands: plugins.commands,
     reloadSkills,
     personality: {
       get current() {
@@ -243,7 +249,8 @@ async function main(argv: string[]): Promise<void> {
   process.on("exit", stopGuard);
   process.on("SIGINT", () => void shutdown(0));
   process.on("SIGTERM", () => void shutdown(0));
-  await harness.start();
+  try { await harness.start(); }
+  catch (err) { await plugins.stop().catch(() => {}); throw err; }
 
   // Replay only after outbound channels are authenticated and ready. Entries remain in the
   // durable inbox until both their reply and the completion-state write succeed.

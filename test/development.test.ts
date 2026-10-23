@@ -7,7 +7,7 @@ test("built-in development instructions resolve independently of current workspa
   assert.ok(developmentGuide.endsWith("/docs/development.md"));
   const guide = await readFile(developmentGuide, "utf8");
   assert.match(guide, /src\/channels\/tui.ts/);
-  assert.match(guide, /native plugin API not shipped yet/);
+  assert.match(guide, /configured local ESM plugins, API v1/);
   assert.match(guide, /npm run typecheck/);
   assert.ok(developmentContext().includes(JSON.stringify(developmentGuide)));
 });
