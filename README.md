@@ -107,14 +107,9 @@ docker run -p 8642:8642 -e API_SERVER_KEY=... -e GATEWAY_KEY=... \
 
 Runs as uid 1000 under tini (SIGTERM drains in-flight turns for `loop.drainSeconds`).
 
-Memory: Kubernetes OOM-kills the whole container (cgroup v2 `memory.oom.group`), harness
-included. Above `memoryGuard.percent` (default 90) of the cgroup limit the harness SIGKILLs its
-largest child process instead (e.g. a `tsc` started by a tool), so the tool call fails with
-exit 137 and the turn goes on. An input whose turn is still interrupted by crashes is replayed
-at most 3 times, then answered with a failure (graceful restarts do not count).
-Nothing is baked in: providers come from `models.json` (`"apiKey": "$GATEWAY_KEY"` reads
-the env), the agent from the home volume. The console channel is only attached on a TTY,
-with `--console`, or when no other channel is configured.
+Identity and provider configuration are supplied at runtime; state lives in the home volume.
+See [operations](docs/operations.md) for memory pressure, crash recovery and console behavior,
+and [configuration](docs/configuration.md) for provider credentials and memory-guard settings.
 
 `GET /v1/models` lists `provider/model` refs plus each bare model id that is unique across
 providers (Hermes-style alias); `POST /v1/runs` accepts either, and an optional `provider`

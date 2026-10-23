@@ -2,7 +2,8 @@
 
 Supported targets: Linux, macOS and Windows through WSL2 (a Linux distribution).
 Native Windows outside WSL is not a supported deployment target. Use Node.js 22+
-with npm, Git and a configured model provider. No root execution is required.
+with npm, Git and a configured model provider. Minimum Node version is 22.19.0;
+Node 24.22.1 LTS is recommended and recorded in `.node-version`. No root execution is required.
 
 ## Native installation
 
@@ -81,6 +82,7 @@ restart after changes. Provision a persistent volume usable by uid/gid 1000.
 
 ## Verification scope
 
-The TypeScript suite is runtime-independent where possible. Native CLI installation
-is smoke-tested on the development host; Linux container builds exercise the Linux
-packaging path. WSL and other macOS/Linux machines still require platform smoke tests.
+The TypeScript suite is runtime-independent where possible. Verified on macOS and
+WSL2: dependency installation, typecheck, all 171 tests and native CLI installation/version.
+The Linux container build and CLI version were also verified with Node 24.22.1.
+These packaging tests do not replace live provider/channel integration tests.

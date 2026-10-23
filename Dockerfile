@@ -1,10 +1,10 @@
 # syntax=docker/dockerfile:1.6
-# VanillaCore Agent Harness runtime image: the harness (dist/) plus the PI SDK it embeds, on Node 22.
+# VanillaCore Agent Harness runtime image with a pinned Node 24 LTS base.
 # Configuration is not baked in: VANILLACORE_HARNESS_HOME (harness.yaml, SOUL.md, state) and
 # PI_CODING_AGENT_DIR (PI models.json/settings.json) come from volumes at run time.
-ARG NODE_VERSION=22
+ARG NODE_IMAGE=node:24.22.1-bookworm-slim@sha256:55fb5f5a527ea2c5c4a95f963e48ef90aa38c7b346054fdc8ee9957a2b55d205
 
-FROM node:${NODE_VERSION}-bookworm-slim AS build
+FROM ${NODE_IMAGE} AS build
 WORKDIR /src
 COPY package.json package-lock.json ./
 RUN npm ci --ignore-scripts
@@ -12,7 +12,7 @@ COPY tsconfig.json ./
 COPY src ./src
 RUN npm run build && npm prune --omit=dev
 
-FROM node:${NODE_VERSION}-bookworm-slim
+FROM ${NODE_IMAGE}
 # Tools the agent's bash/read/edit tools commonly need; tini forwards SIGTERM so the
 # harness can drain (restart_drain) before the pod is killed.
 RUN apt-get update \
