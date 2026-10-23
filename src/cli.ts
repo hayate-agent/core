@@ -49,6 +49,7 @@ async function main(argv: string[]): Promise<void> {
     sessionsDir: path.join(config.home, "sessions"),
     model: config.model,
     thinking: config.thinking,
+    tools: config.tools,
     skillPaths: config.skills.paths,
     personaSections: async () => personaSections(await loadPersona(config.persona, personality)),
     approvals,

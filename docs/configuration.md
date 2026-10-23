@@ -25,6 +25,21 @@ memoryGuard:
 SOUL.md, VOICE.md and optional personalities belong in the harness home. These
 files describe identity and tone, not secrets. See README for Matrix settings.
 
+## Available tools
+
+An optional top-level `tools` list selects actual runtime tools, not just prompt guidance:
+
+```yaml
+tools: [read, bash, edit, write]
+```
+
+Omit `tools` to use runtime defaults. Set `tools: []` for no model-visible tools.
+Names are literal (no wildcards or `+`/`-` modifiers); installed extension tools may
+also be named. Tool availability is determined when a session opens; restart to apply
+changes to existing sessions. This selection is not an OS security sandbox: a bash
+or extension tool can provide broader capabilities, and extensions execute trusted code.
+MCP and CLI lifecycle management are not implemented by this setting.
+
 ## Models and credentials
 
 Provider definitions live in PI's `models.json`; examples are in
