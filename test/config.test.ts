@@ -5,6 +5,14 @@ import path from "node:path";
 import { test } from "node:test";
 import { defaultConfig, loadConfig } from "../src/config.js";
 
+test("MCP is explicitly opt-in and validates enablement", () => {
+  assert.deepEqual(defaultConfig().mcp, { enabled: false });
+  assert.deepEqual(defaultConfig({ mcp: { enabled: true } }).mcp, { enabled: true });
+  for (const mcp of [null, [], true, {}, { enabled: "true" }]) {
+    assert.throws(() => defaultConfig({ mcp } as never), /mcp.enabled/);
+  }
+});
+
 test("tool configuration distinguishes runtime defaults, empty and explicit lists", () => {
   assert.equal(defaultConfig().tools, undefined);
   assert.deepEqual(defaultConfig({ tools: [] }).tools, []);

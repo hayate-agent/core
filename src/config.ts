@@ -17,6 +17,8 @@ export interface HarnessConfig {
   tools?: string[];
   /** Trusted local ESM plugin paths, relative to Harness home or absolute. */
   plugins?: string[];
+  /** Enable configured MCP servers; credentials and server definitions stay outside product code. */
+  mcp?: { enabled: boolean };
   persona: {
     /** Identity file (Hermes-compatible). */
     soul: string;
@@ -58,6 +60,9 @@ export function defaultConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
   if (overrides.plugins !== undefined && (!Array.isArray(overrides.plugins) || overrides.plugins.some((p) => typeof p !== "string" || !p.trim()))) {
     throw new Error("plugins must be an array of local module paths");
   }
+  if (overrides.mcp !== undefined && (overrides.mcp === null || typeof overrides.mcp !== "object" || typeof overrides.mcp.enabled !== "boolean")) {
+    throw new Error("mcp.enabled must be a boolean");
+  }
   const home = overrides.home ?? process.env.VANILLACORE_HARNESS_HOME ?? path.join(os.homedir(), ".vanillacore-harness");
   return {
     agent: overrides.agent ?? process.env.VANILLACORE_HARNESS_AGENT ?? "agent",
@@ -68,6 +73,7 @@ export function defaultConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
     thinking: overrides.thinking,
     plugins: overrides.plugins ?? [],
     tools: overrides.tools === undefined ? undefined : [...new Set(overrides.tools)],
+    mcp: overrides.mcp ?? { enabled: false },
     persona: {
       soul: path.join(home, "SOUL.md"),
       voice: path.join(home, "VOICE.md"),

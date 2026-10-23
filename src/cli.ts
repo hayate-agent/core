@@ -83,6 +83,7 @@ async function main(argv: string[]): Promise<void> {
     thinking: config.thinking,
     tools: config.tools,
     pluginTools: () => plugins.tools.values(),
+    mcp: config.mcp,
     skillPaths: config.skills.paths,
     personaSections: async () => personaSections(await loadPersona(config.persona, personality), { name: config.agent, workspace: config.cwd }),
     approvals,

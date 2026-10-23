@@ -93,7 +93,7 @@ export interface RuntimeSession {
   setThinking(level: string): void;
   setTitle(title: string): void;
   status(): RuntimeSessionStatus;
-  dispose(): void;
+  dispose(): void | Promise<void>;
 }
 
 export interface OpenSessionOptions {
