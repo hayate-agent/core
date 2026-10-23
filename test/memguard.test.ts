@@ -49,8 +49,13 @@ test("memguard: kills the largest child above the threshold only", async () => {
   const logs: string[] = [];
   for (const h of [below, above]) {
     const stop = startMemoryGuard({ percent: 90, intervalMs: 5, cgroupDir: h.cg, procDir: h.proc, root: 10, log: (m) => logs.push(m), kill: (p) => killed.push(p) });
-    await new Promise((r) => setTimeout(r, 40));
-    stop();
+    try {
+      if (h === below) await new Promise((r) => setTimeout(r, 40));
+      else {
+        const deadline = Date.now() + 2000;
+        while (!killed.length && Date.now() < deadline) await new Promise((r) => setTimeout(r, 10));
+      }
+    } finally { stop(); }
     if (h === below) assert.deepEqual(killed, []);
   }
   assert.ok(killed.length >= 1 && killed.every((p) => p === 41));

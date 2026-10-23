@@ -2,6 +2,7 @@
 import { readdir } from "node:fs/promises";
 import path from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { HarnessTuiChannel } from "./channels/tui.js";
 import { ConsoleChannel } from "./channels/console.js";
 import { MatrixChannel, matrixOptionsFromEnv } from "./channels/matrix.js";
 import { RunRegistry } from "./api/runs.js";
@@ -12,7 +13,7 @@ import { initialize, diagnose } from "./setup.js";
 import { Harness } from "./harness.js";
 import { startMemoryGuard } from "./memguard.js";
 import { loadPersona, personaSections } from "./persona.js";
-import { PiRuntime, runInteractive } from "./runtime/pi.js";
+import { PiRuntime } from "./runtime/pi.js";
 import { launchMode } from "./launch.js";
 import { Scheduler } from "./scheduler.js";
 import { StateStore } from "./state.js";
@@ -23,7 +24,7 @@ import { appendFileDurable } from "./durable.js";
 const USAGE = `VanillaCore Agent Harness ${VERSION}
 
 Usage:
-  vanillacore-harness                      Interactive PI TUI in the current directory
+  vanillacore-harness                      Interactive Harness TUI in the current directory
   vanillacore-harness run [--home <dir>]   Start the agent loop (console channel on stdin/stdout)
   vanillacore-harness init [--home <dir>] [--cwd <dir>] [--agent <name>] [--model <provider/model>]
   vanillacore-harness doctor [--home <dir>]
@@ -33,20 +34,9 @@ Home (default ~/.vanillacore-harness, env VANILLACORE_HARNESS_HOME): harness.yam
 personalities/<name>.md, skills/, cron/jobs.yaml (+ cron/scripts, cron/prompts), sessions/.`;
 
 async function main(argv: string[]): Promise<void> {
-  if (launchMode(argv) === "interactive") {
-    if (!process.stdin.isTTY || !process.stdout.isTTY) throw new Error("Interactive mode requires a terminal; use 'run' for the gateway or --help for commands.");
-    const config = await loadConfig();
-    const stopGuard = startMemoryGuard({ percent: config.memoryGuard.percent });
-    try {
-      await runInteractive({
-        cwd: process.cwd(), model: config.model, thinking: config.thinking,
-        tools: config.tools, skillPaths: config.skills.paths,
-        personaSections: async () => personaSections(await loadPersona(config.persona)),
-      });
-    } finally { stopGuard(); }
-    return;
-  }
-  const [cmd, ...rest] = argv;
+  const interactive = launchMode(argv) === "interactive";
+  if (interactive && (!process.stdin.isTTY || !process.stdout.isTTY)) throw new Error("Interactive mode requires a terminal; use 'run' for the gateway.");
+  const [cmd, ...rest] = interactive ? ["run"] : argv;
   if (cmd === "version" || cmd === "--version") return void console.log(VERSION);
   if (!["run", "init", "doctor"].includes(cmd ?? "")) return void console.log(USAGE);
   const allowed = cmd === "init" ? ["--home", "--cwd", "--agent", "--model"] : ["--home", ...(cmd === "run" ? ["--console"] : [])];
@@ -71,6 +61,9 @@ async function main(argv: string[]): Promise<void> {
     return;
   }
   const config = await loadConfig(values["--home"]);
+  if (interactive) config.cwd = process.cwd();
+  let tui: HarnessTuiChannel | undefined;
+  const log = (text: string) => tui ? tui.note(text) : console.error(text);
   const approvals = { mode: "off" as "off" | "manual", tools: [] as string[] };
   let personality: string | undefined;
   let skills: SkillInfo[] = [];
@@ -96,6 +89,7 @@ async function main(argv: string[]): Promise<void> {
     runtime,
     tickMs: config.loop.tickMs,
     busyMode: config.loop.busyMode,
+    log,
     // Permanently rejected replies (e.g. no permission in the room) are parked for manual follow-up.
     parkUndeliverable: (entry, error) =>
       appendFileDurable(path.join(config.home, "outbox-deadletter.jsonl"), `${JSON.stringify({ at: new Date().toISOString(), error, ...entry })}\n`),
@@ -131,7 +125,22 @@ async function main(argv: string[]): Promise<void> {
   }
   // Console: interactive use, or when nothing else would receive input. A daemon with Matrix or
   // the API (e.g. a container without a TTY) does not read stdin unless asked to.
-  if (process.stdin.isTTY || rest.includes("--console") || harness.channels.size === 0) harness.addChannel(new ConsoleChannel());
+  if (interactive) {
+    tui = new HarnessTuiChannel({
+      agent: config.agent,
+      models: () => runtime.models(),
+      login: (ui) => runtime.login(ui),
+      quit: () => void shutdown(0),
+      status: () => {
+        const sessions = [...harness.sessions.values()];
+        const active = sessions.filter((s) => s.running).length;
+        const queued = sessions.reduce((n, s) => n + s.queue.length, 0);
+        const model = harness.sessions.get("console:local")?.session?.status().model ?? config.model ?? "runtime default";
+        return `Model: ${model} · ${harness.paused ? "PAUSED" : "running"} · Active: ${active} · Queue: ${queued}\nGoals: ${sessions.filter((s) => s.goal).length} · Heartbeats: ${sessions.filter((s) => s.heartbeat).length} · Channels: ${[...harness.channels.keys()].join(", ")}`;
+      },
+    });
+    harness.addChannel(tui);
+  } else if (process.stdin.isTTY || rest.includes("--console") || harness.channels.size === 0) harness.addChannel(new ConsoleChannel());
   if (!harness.home && harness.channels.has("console")) harness.home = { channel: "console", target: "local" };
 
   const scheduler = new Scheduler(harness, { jobsFile: config.cron.jobsFile, timezone: config.timezone });
@@ -230,7 +239,7 @@ async function main(argv: string[]): Promise<void> {
   });
 
   // Kill the largest tool child before the kernel OOM-kills the whole container.
-  const stopGuard = startMemoryGuard({ percent: config.memoryGuard.percent });
+  const stopGuard = startMemoryGuard({ percent: config.memoryGuard.percent, log });
   process.on("exit", stopGuard);
   process.on("SIGINT", () => void shutdown(0));
   process.on("SIGTERM", () => void shutdown(0));

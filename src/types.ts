@@ -101,12 +101,19 @@ export interface OpenSessionOptions {
   fresh?: boolean;
 }
 
+export interface LoginUI {
+  prompt(message: string, secret?: boolean): Promise<string>;
+  select(message: string, options: Array<{ id: string; label: string }>): Promise<string>;
+  notify(message: string): void;
+}
+
 /** Agent runtime (currently PI). */
 export interface AgentRuntime {
   readonly name: string;
   open(sessionKey: string, options?: OpenSessionOptions): Promise<RuntimeSession>;
   /** Model refs ("provider/model") usable for per-turn overrides. */
   models?(): Promise<string[]>;
+  login?(ui: LoginUI): Promise<void>;
   /** Re-read persona/skills/config for sessions opened afterwards. */
   reload(): Promise<void>;
 }
