@@ -17,7 +17,8 @@ locates it. PI is a replaceable runtime adapter, not the product's identity.
 | PI tools/providers/hooks | PI extensions in its configured agent/project directories |
 | Harness commands, channels, tools, text panels and lifecycle | configured local ESM plugins, API v1; see plugins.md |
 | Interactive UI dialogs/widgets | local plugin command context.ui; see plugins.md |
-| Install/manage MCP/CLI tools | managed lifecycle not shipped yet; do not invent settings |
+| MCP servers | opt-in PI-backed MCP via mcp.enabled; see mcp.md |
+| Install/manage CLI tools | managed install lifecycle not shipped yet; do not invent settings |
 
 PI extensions are runtime-specific trusted code, separate from Harness-native
 plugins. API v1 exposes explicit command/channel/tool/text-panel registration and lifecycle cleanup without

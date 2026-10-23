@@ -8,6 +8,9 @@ import {
   type AgentSession,
   type AgentSessionEvent,
   createAgentSession,
+  createMcpExtension,
+  createCodemodeExtension,
+  createToolSearchExtension,
   DefaultResourceLoader,
   getAgentDir,
   ModelRuntime,
@@ -30,6 +33,7 @@ export interface PiRuntimeOptions {
   /** Explicit active tool names, including extension tools; [] disables all tools. */
   tools?: string[];
   pluginTools?: () => Iterable<PluginTool>;
+  mcp?: { enabled: boolean };
   skillPaths: string[];
   /** Returns persona sections, read on every session open (so persona edits apply to new sessions). */
   personaSections: () => Promise<string[]>;
@@ -194,8 +198,17 @@ export class PiSession implements RuntimeSession {
     };
   }
 
-  dispose(): void {
-    this.session.dispose();
+  private disposing?: Promise<void>;
+  dispose(): Promise<void> {
+    return this.disposing ??= (async () => {
+      let timer: NodeJS.Timeout | undefined;
+      try {
+        await Promise.race([
+          this.session.extensionRunner?.emit({ type: "session_shutdown", reason: "quit" }),
+          new Promise<void>((resolve) => { timer = setTimeout(resolve, 2000); }),
+        ]);
+      } finally { clearTimeout(timer); this.session.dispose(); }
+    })();
   }
 }
 
@@ -252,6 +265,10 @@ export class PiRuntime implements AgentRuntime {
       additionalSkillPaths: this.opts.skillPaths,
       appendSystemPromptOverride: (base) => [...base, ...sections],
       extensionFactories: [
+        // No MCP process/network connection unless explicitly enabled. Empty tool lists stay inert.
+        ...(this.opts.mcp?.enabled && this.opts.tools?.length !== 0
+          ? [createCodemodeExtension({ mode: "on" }), createToolSearchExtension(), createMcpExtension()]
+          : []),
         {
           name: "vanillacore-harness-plugin-tools",
           factory: (pi) => {
@@ -312,7 +329,7 @@ export class PiRuntime implements AgentRuntime {
       if (this.opts.model && wrapped.status().model !== this.opts.model) await wrapped.setModel(this.opts.model);
       if (this.opts.thinking) wrapped.setThinking(this.opts.thinking);
     } catch (err) {
-      session.dispose();
+      await wrapped.dispose();
       throw err;
     }
     return wrapped;

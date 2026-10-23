@@ -198,10 +198,17 @@ export class Harness {
       void aborting;
     }
     const unfinished = quiescent ? this.pendingInputs() : fallback;
-    for (const s of this.sessions.values()) {
+    const cleanup = [...this.sessions.values()].map((s) => {
       s.queue.length = 0;
-      s.session?.dispose();
-    }
+      return Promise.resolve().then(() => s.session?.dispose()).catch(() => this.log("session cleanup failed"));
+    });
+    let cleanupTimer: NodeJS.Timeout | undefined;
+    try {
+      await Promise.race([
+        Promise.all(cleanup),
+        new Promise<void>((resolve) => { cleanupTimer = setTimeout(resolve, Math.max(0, deadline - Date.now())); }),
+      ]);
+    } finally { clearTimeout(cleanupTimer); }
     // Channels get what is left of the deadline (at least 2s to flush their own state).
     const budget = Math.max(2000, deadline - Date.now());
     for (const ch of this.channels.values()) await ch.stop(budget).catch((err) => this.log(`stop ${ch.name}: ${err}`));
@@ -239,7 +246,7 @@ export class Harness {
   async sessionFor(key: string, fresh = false): Promise<RuntimeSession> {
     const s = this.state(key);
     if (fresh && s.session) {
-      s.session.dispose();
+      await s.session.dispose();
       s.session = undefined;
     }
     if (s.session) return s.session;

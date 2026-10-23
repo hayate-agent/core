@@ -12,6 +12,19 @@ function setup(answer?: (t: string, k: string) => string) {
   return { runtime, harness, ch };
 }
 
+test("stuck asynchronous session cleanup cannot block channel shutdown", async () => {
+  const { harness, ch } = setup();
+  await harness.submit(msg("hello"));
+  await harness.drained();
+  const state = [...harness.sessions.values()][0];
+  state.session!.dispose = () => new Promise<void>(() => {});
+  let stopped = false;
+  ch.stop = async () => { stopped = true; };
+  const deadline = new Promise<never>((_, reject) => { const timer = setTimeout(() => reject(Error("shutdown hung")), 1000); timer.unref(); });
+  await Promise.race([harness.stop(20), deadline]);
+  assert.equal(stopped, true);
+});
+
 test("messages are processed in order and replies delivered", async () => {
   const { harness, ch } = setup();
   await harness.submit(msg("one"));
