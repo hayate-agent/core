@@ -43,9 +43,26 @@ export async function loadPersona(files: PersonaFiles, personality?: string): Pr
   return { soul, voice, personality: overlay };
 }
 
-/** Sections appended to the runtime's system prompt. Order: identity, voice, personality overlay, channel rules. */
-export function personaSections(persona: Persona): string[] {
-  const out: string[] = [];
+export interface AgentContext {
+  name?: string;
+  workspace?: string;
+}
+
+/** Product grounding precedes configurable identity/voice; PI is an implementation detail. */
+export function personaSections(persona: Persona, context: AgentContext = {}): string[] {
+  const out: string[] = [
+    [
+      "# Agent foundation",
+      "You are a personal and development agent running in VanillaCore Agent Harness.",
+      `Your configured agent key is ${JSON.stringify(context.name ?? "agent")}; your SOUL defines your name, role and responsibilities. Do not invent a persona when none is configured.`,
+      "The Harness owns your conversation routing, persistent work queue, goals, heartbeats, scheduled work and channels. PI supplies the underlying model/tool runtime; it is not your product identity or your terminal UI.",
+      "Use SOUL.md for identity and duties, VOICE.md for tone, and the operator's requests for current priorities. Without these files, act as a direct, practical general-purpose personal and development assistant within this Harness.",
+      "You can investigate and modify source through the tools actually available to you. Do not claim a change, build, deployment or self-update occurred until verified.",
+      "When asked to change your own terminal UI or Harness, investigate VanillaCore Agent Harness source, not PI themes by default. Locate the checkout before editing; never assume the current workspace contains your source. Build/test changes and explain whether a restart is needed to activate them.",
+      ...(context.workspace ? [`Your current tool workspace is ${JSON.stringify(context.workspace)}. This is not necessarily the Harness source checkout.`] : []),
+      "Report unavailable integrations honestly; configured capability is not proof of authenticated access. Never expose credentials in output or commits.",
+    ].join("\n"),
+  ];
   if (persona.soul) out.push(`# Identity\n\n${persona.soul}`);
   if (persona.voice) out.push(`# Voice\n\nThis is how you sound everywhere (chat, reports, scheduled output). Stay in this voice.\n\n${persona.voice}`);
   if (persona.personality) out.push(`# Personality: ${persona.personality.name}\n\n${persona.personality.text}`);

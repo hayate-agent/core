@@ -23,7 +23,12 @@ memoryGuard:
 ```
 
 SOUL.md, VOICE.md and optional personalities belong in the harness home. These
-files describe identity and tone, not secrets. See README for Matrix settings.
+files describe identity and tone, not secrets. Every session also receives a generic
+Harness foundation: product identity, runtime distinction, task context and truthful
+self-development instructions. It does not hardcode a persona or claim unavailable
+integrations. SOUL and VOICE add your configured identity and writing style even when
+no named personality overlay is selected. Existing live sessions need a restart or
+`/new` to receive changed system context. See README for Matrix settings.
 
 ## Available tools
 

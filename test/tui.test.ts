@@ -19,6 +19,22 @@ function terminal() {
   return { t, type: (s: string) => { for (const ch of s) input(ch); }, output: () => output };
 }
 
+test("fullscreen layout keeps the editor at the bottom after long output", async () => {
+  const term = terminal();
+  const ui = new HarnessTuiChannel({ agent: "test", status: () => "running", quit: () => {}, terminal: term.t });
+  try {
+    await ui.start(async () => {});
+    await ui.send({ channel: "console", target: "local" }, Array.from({ length: 150 }, (_, i) => `Output line ${i}`).join("\n"));
+    await new Promise((r) => setTimeout(r, 30));
+    // Inspect the rendered viewport, not merely presence of terminal escape sequences.
+    const screen = (ui as unknown as { tui: { getScreenLines(): string[] } }).tui.getScreenLines();
+    assert.equal(screen.length, term.t.rows);
+    assert.match(screen.slice(0, 3).join("\n"), /VanillaCore Agent Harness/);
+    assert.match(screen.slice(-8).join("\n"), /\/help/);
+    assert.ok(!screen.some((line) => /Output line 0$/.test(line)));
+  } finally { await ui.stop(); }
+});
+
 test("TUI login masks secrets and does not submit credentials to the Harness", async () => {
   const term = terminal();
   let credential = "";

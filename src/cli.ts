@@ -81,7 +81,7 @@ async function main(argv: string[]): Promise<void> {
     thinking: config.thinking,
     tools: config.tools,
     skillPaths: config.skills.paths,
-    personaSections: async () => personaSections(await loadPersona(config.persona, personality)),
+    personaSections: async () => personaSections(await loadPersona(config.persona, personality), { name: config.agent, workspace: config.cwd }),
     approvals,
     requestApproval: (key, tool, input) => harness.requestApproval(key, tool, input),
   });
