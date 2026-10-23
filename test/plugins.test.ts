@@ -50,6 +50,22 @@ test("failed activation runs every cleanup in reverse order even after cleanup f
   });
 });
 
+test("plugins register tools and panels and reject duplicate or unsafe names", async () => {
+  const tool = `api.registerTool({name:'plugin_echo',description:'Echo',parameters:{type:'object'},async execute(){return 'ok'}});`;
+  await fixture(`export default {apiVersion:1,activate(api){${tool}api.registerPanel({name:'status',render:()=>['ready']})}}`, async (host, home) => {
+    await host.load(['plugin.mjs'], context(home), []);
+    assert.equal(await host.tools.get('plugin_echo')!.execute({}, {sessionKey:'test'}), 'ok');
+    assert.deepEqual(host.panels.get('status')!.render({agent:'test'}), ['ready']);
+  });
+  for (const body of [tool + tool, tool.replace("'plugin_echo'", "'bash'"), `api.registerPanel({name:null,render:()=>[]})`]) {
+    await fixture(`export default {apiVersion:1,activate(api){${body}}}`, async (host, home) => {
+      await assert.rejects(host.load(['plugin.mjs'], context(home), []), /conflict|Invalid plugin/);
+      assert.equal(host.tools.size, 0);
+      assert.equal(host.panels.size, 0);
+    });
+  }
+});
+
 test("incompatible plugin version fails startup", async () => {
   await fixture(`export default {apiVersion:2,activate(){}}`, async (host, home) => {
     await assert.rejects(host.load(["plugin.mjs"], context(home), []), /Invalid plugin API/);

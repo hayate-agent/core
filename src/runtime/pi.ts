@@ -1,6 +1,7 @@
 /**
  * PI runtime adapter. The only module that imports the PI SDK.
  */
+import type { PluginTool } from "../plugins.js";
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import {
@@ -28,6 +29,7 @@ export interface PiRuntimeOptions {
   thinking?: string;
   /** Explicit active tool names, including extension tools; [] disables all tools. */
   tools?: string[];
+  pluginTools?: () => Iterable<PluginTool>;
   skillPaths: string[];
   /** Returns persona sections, read on every session open (so persona edits apply to new sessions). */
   personaSections: () => Promise<string[]>;
@@ -250,6 +252,23 @@ export class PiRuntime implements AgentRuntime {
       additionalSkillPaths: this.opts.skillPaths,
       appendSystemPromptOverride: (base) => [...base, ...sections],
       extensionFactories: [
+        {
+          name: "vanillacore-harness-plugin-tools",
+          factory: (pi) => {
+            for (const tool of this.opts.pluginTools?.() ?? []) {
+              pi.registerTool({
+                name: tool.name, label: tool.name, description: tool.description,
+                // JSON Schema is the runtime-neutral contract; SDK consumes the same schema.
+                parameters: tool.parameters as import("@earendil-works/pi-coding-agent").ToolDefinition["parameters"],
+                execute: async (_id, input, signal) => {
+                  const text = await tool.execute(input as Record<string, unknown>, { sessionKey, signal });
+                  if (typeof text !== "string") throw new Error("Plugin tool must return text");
+                  return { content: [{ type: "text" as const, text }], details: {} };
+                },
+              });
+            }
+          },
+        },
         {
           name: "vanillacore-harness-turn",
           factory: (pi) => {

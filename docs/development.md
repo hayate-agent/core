@@ -15,14 +15,14 @@ locates it. PI is a replaceable runtime adapter, not the product's identity.
 | Reusable task instructions | skills/<name>/SKILL.md with name/description frontmatter |
 | Scheduled work | cron/jobs.yaml and /cron; /goal, /heartbeat, /loop for persistent work |
 | PI tools/providers/hooks | PI extensions in its configured agent/project directories |
-| Harness commands, channels and lifecycle | configured local ESM plugins, API v1; see plugins.md |
-| UI panels | source changes; plugin contract not shipped yet |
+| Harness commands, channels, tools, text panels and lifecycle | configured local ESM plugins, API v1; see plugins.md |
+| Interactive UI dialogs/widgets | local plugin command context.ui; see plugins.md |
 | Install/manage MCP/CLI tools | managed lifecycle not shipped yet; do not invent settings |
 
 PI extensions are runtime-specific trusted code, separate from Harness-native
-plugins. API v1 exposes explicit command/channel registration and lifecycle cleanup without
+plugins. API v1 exposes explicit command/channel/tool/text-panel registration and lifecycle cleanup without
 access to internal Harness objects or a second model loop. See plugins.md for the
-contract and roadmap.md for outstanding tool/UI extension requirements.
+contract and roadmap.md for outstanding deployment and integration requirements.
 
 ## Source map
 
