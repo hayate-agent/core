@@ -2,6 +2,7 @@
  * Hermes-compatible slash commands (gateway-relevant subset; TUI-only commands are left out).
  * Names and aliases follow hermes_cli/commands.py so operators can keep their habits.
  */
+import { developmentGuide } from "./development.js";
 import { randomUUID } from "node:crypto";
 import { formatInterval, parseInterval } from "./interval.js";
 import type { Harness } from "./harness.js";
@@ -437,6 +438,7 @@ export const COMMANDS: Command[] = [
     help: "Show available commands",
     run: async () => COMMANDS.map((c) => `/${c.name}${c.aliases?.length ? ` (${c.aliases.map((a) => `/${a}`).join(" ")})` : ""}: ${c.help}`).join("\n"),
   },
+  { name: "harness", help: "Locate built-in Harness customization/development guide", run: async () => `VanillaCore Agent Harness development guide: ${developmentGuide}\nRead this guide before changing the Harness. Identity/voice, tools and models are configurable; native plugin lifecycle and automatic runtime promotion remain planned.` },
   { name: "version", help: "Show version", run: async (_a, _i, ctx) => `vanillacore-harness ${VERSION} (runtime: ${ctx.harness.runtime.name})` },
 ];
 
