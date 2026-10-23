@@ -138,7 +138,7 @@ export class HarnessTuiChannel implements Channel {
     const argument = rest.join(" ");
     if (command === "/sessions") {
       const rows = await store.list();
-      this.note(`Sessions in ${store.workspace}:\n${rows.map((s) => `${s.id === store.current?.id ? "*" : " "} ${s.id} · ${s.title} · ${s.createdAt}`).join("\n")}\n/resume <id> to continue explicitly; /new [title] for a fresh conversation.`);
+      this.note(`Sessions in ${store.workspace}:\n${rows.map((s) => `${s.id === store.current?.id ? "*" : " "} ${s.title} · ${s.updatedAt ?? s.createdAt} · ${s.id}`).join("\n")}\n/resume <id> to continue explicitly; /new [title] for a fresh conversation.`);
       return;
     }
     if (this.opts.canSwitchSession && !this.opts.canSwitchSession()) throw new Error("Cannot switch sessions while work is running or queued. Finish it or use /stop first.");
@@ -149,14 +149,14 @@ export class HarnessTuiChannel implements Channel {
     }
     if (command === "/resume") {
       const rows = await store.list();
-      const id = argument || await this.select("Resume a session in this workspace", rows.map((s) => ({ id: s.id, label: `${s.title} · ${s.createdAt} · ${s.id}` })));
+      const id = argument || await this.select("Resume a session in this workspace", rows.map((s) => ({ id: s.id, label: `${s.title} · ${s.updatedAt ?? s.createdAt} · ${s.id.slice(0, 8)}` })));
       const row = rows.find((s) => s.id === id);
       if (!row) throw new Error("Session not found in this workspace; use /sessions");
       const history = await store.history(row);
       await store.resume(id);
       this.lines = history.slice(-80).map((text) => ({ kind: text.startsWith("You: ") ? "user" : "assistant", text: text.replace(/^(You|Agent): /, "") }));
       this.resetActivity();
-      this.note(`Resumed session: ${row.id} · ${row.title}\nWorkspace: ${store.workspace}${history.length > 80 ? "\nShowing the last 80 conversation messages; older context may remain in the model history." : ""}`);
+      this.note(`Resumed session: ${row.title} · ${row.id.slice(0, 8)}\nWorkspace: ${store.workspace}${history.length > 80 ? "\nShowing the last 80 conversation messages; older context may remain in the model history." : ""}`);
     } else {
       const row = await store.create(argument || "Untitled");
       this.lines = [];

@@ -17,6 +17,7 @@ export interface HarnessConfig {
   tools?: string[];
   /** Trusted local ESM plugin paths, relative to Harness home or absolute. */
   plugins?: string[];
+  sessions?: { provider: string; options?: unknown };
   /** Enable configured MCP servers; credentials and server definitions stay outside product code. */
   mcp?: { enabled: boolean };
   persona: {
@@ -63,6 +64,7 @@ export function defaultConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
   if (overrides.mcp !== undefined && (overrides.mcp === null || typeof overrides.mcp !== "object" || typeof overrides.mcp.enabled !== "boolean")) {
     throw new Error("mcp.enabled must be a boolean");
   }
+  if (overrides.sessions !== undefined && (!overrides.sessions || typeof overrides.sessions.provider !== "string" || !/^[a-z][a-z0-9_-]*$/.test(overrides.sessions.provider))) throw new Error("Invalid sessions.provider");
   const home = overrides.home ?? process.env.VANILLACORE_HARNESS_HOME ?? path.join(os.homedir(), ".vanillacore-harness");
   return {
     agent: overrides.agent ?? process.env.VANILLACORE_HARNESS_AGENT ?? "agent",
@@ -72,6 +74,7 @@ export function defaultConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
     model: overrides.model,
     thinking: overrides.thinking,
     plugins: overrides.plugins ?? [],
+    sessions: overrides.sessions ?? { provider: "filesystem" },
     tools: overrides.tools === undefined ? undefined : [...new Set(overrides.tools)],
     mcp: overrides.mcp ?? { enabled: false },
     persona: {

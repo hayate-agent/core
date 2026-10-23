@@ -243,6 +243,21 @@ export class Harness {
     return s;
   }
 
+  async resumeSession(key: string, id: string): Promise<void> {
+    const s = this.state(key);
+    if (s.running || s.opening || s.queue.length) throw new Error("Session has active or queued work");
+    if (s.session?.status().sessionId === id) return;
+    const previous = s.session;
+    s.session = undefined;
+    const opening = (async () => {
+      await previous?.dispose();
+      return this.runtime.open(key, { sessionId: id });
+    })();
+    s.opening = opening;
+    try { s.session = await opening; }
+    finally { if (s.opening === opening) s.opening = undefined; }
+  }
+
   async sessionFor(key: string, fresh = false): Promise<RuntimeSession> {
     const s = this.state(key);
     if (fresh && s.session) {

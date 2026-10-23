@@ -12,6 +12,23 @@ function setup(answer?: (t: string, k: string) => string) {
   return { runtime, harness, ch };
 }
 
+test("resume reserves session opening against concurrent resumes and inbound turns", async () => {
+  const { harness, runtime, ch } = setup();
+  const original = runtime.open.bind(runtime);
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  runtime.open = async (key, options) => { await gate; return original(key, options); };
+  const switching = harness.resumeSession("mem:room1", "chosen");
+  await assert.rejects(harness.resumeSession("mem:room1", "another"), /active or queued/);
+  const input = harness.submit(msg("during resume"));
+  release();
+  await switching;
+  await input;
+  await harness.drained();
+  assert.deepEqual(ch.texts(), ["echo: during resume"]);
+  await harness.stop(1000);
+});
+
 test("stuck asynchronous session cleanup cannot block channel shutdown", async () => {
   const { harness, ch } = setup();
   await harness.submit(msg("hello"));

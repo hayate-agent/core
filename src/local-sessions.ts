@@ -1,3 +1,4 @@
+import type { SessionProvider } from "./sessions.js";
 import { randomUUID, createHash } from "node:crypto";
 import { mkdir, open, readFile, readdir, realpath, unlink } from "node:fs/promises";
 import path from "node:path";
@@ -9,12 +10,14 @@ export interface LocalSession {
   workspace: string;
   title: string;
   createdAt: string;
+  updatedAt?: string;
 }
 
 /** Harness-owned interactive conversations. Never discover PI's global session store. */
 export class LocalSessions {
   private constructor(private readonly home: string, readonly workspace: string) {}
   private active?: LocalSession;
+  provider?: SessionProvider;
   private readonly locks = new Set<string>();
 
   static async open(home: string, cwd: string): Promise<LocalSessions> {
@@ -33,9 +36,17 @@ export class LocalSessions {
       if (!name.startsWith(this.prefix) || !name.endsWith(".json")) continue;
       const row = JSON.parse(await readFile(path.join(this.directory, name), "utf8")) as LocalSession;
       if (row.workspace !== this.workspace || row.key !== this.prefix + row.id || !/^[0-9a-f-]{36}$/.test(row.id)) throw new Error("Invalid local session metadata");
+      if (this.provider) {
+        const id = await this.provider.active(row.key);
+        if (id) {
+          const record = await this.provider.load(id);
+          if (row.title === "Untitled" && record.title !== "New conversation") row.title = record.title;
+          row.updatedAt = record.updated;
+        }
+      }
       rows.push(row);
     }
-    return rows.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    return rows.sort((a, b) => (b.updatedAt ?? b.createdAt).localeCompare(a.updatedAt ?? a.createdAt));
   }
 
   async create(title = "Untitled"): Promise<LocalSession> {
@@ -103,12 +114,20 @@ export class LocalSessions {
   /** Reconstruct the current runtime branch, not abandoned branches or tool/system messages. */
   async history(row: LocalSession): Promise<string[]> {
     if (row.workspace !== this.workspace || row.key !== this.prefix + row.id) throw new Error("Wrong workspace");
+    if (this.provider) {
+      const id = await this.provider.active(row.key);
+      if (id) return this.historyLines((await this.provider.load(id)).entries as Array<any>);
+    }
     const directory = path.join(this.home, "sessions", row.key);
     let files: string[];
     try { files = (await readdir(directory)).filter((f) => f.endsWith(".jsonl")).sort(); }
     catch (err) { if ((err as NodeJS.ErrnoException).code === "ENOENT") return []; throw err; }
     if (!files.length) return [];
     const entries = (await readFile(path.join(directory, files.at(-1)!), "utf8")).trim().split("\n").filter(Boolean).map((line) => JSON.parse(line));
+    return this.historyLines(entries);
+  }
+
+  private historyLines(entries: Array<any>): string[] {
     const byId = new Map(entries.filter((e) => e.id).map((e) => [e.id, e]));
     const lines: string[] = [];
     let entry = entries.at(-1);
