@@ -48,5 +48,26 @@ are best effort, not an isolation guarantee for malicious or stuck servers.
 
 Automated acceptance covers local stdio initialize/discovery/tool execution,
 opt-in disabled, empty tools, and child termination while the owner is alive.
-Live authenticated HTTP/OAuth servers are not covered by that test and must be
-validated with the target environment before deployment.
+A local Streamable HTTP integration test additionally covers authentication using an environment-referenced Bearer token, tool execution, session-ID continuity, DELETE on
+shutdown and denial of an invalid bearer without tool execution. Its credential
+is randomly generated per test and checked against child-process output.
+This does not validate OAuth, remote TLS/proxies or any production server;
+validate those in the target environment before deployment.
+
+Example HTTP server entry in the external mcp.json:
+
+```json
+{
+  "mcpServers": {
+    "example-http": {
+      "url": "https://example.com/mcp",
+      "headers": { "Authorization": "<REDACTED_AUTHORIZATION_HEADER>" },
+      "exposure": "direct"
+    }
+  }
+}
+```
+
+Replace the redacted header with the Bearer scheme followed by an environment
+reference such as `${EXAMPLE_MCP_TOKEN}`. Provide the token through the process
+environment using your secret-management system. Do not commit it in mcp.json or include it in diagnostic output.
