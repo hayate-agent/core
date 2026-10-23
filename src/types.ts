@@ -71,6 +71,7 @@ export type BusyMode = "queue" | "steer" | "interrupt";
 
 export interface RuntimeSessionStatus {
   sessionId: string;
+  title?: string;
   sessionFile?: string;
   model?: string;
   thinking?: string;
@@ -91,7 +92,7 @@ export interface RuntimeSession {
   compact(instructions?: string): Promise<void>;
   setModel(ref: string): Promise<void>;
   setThinking(level: string): void;
-  setTitle(title: string): void;
+  setTitle(title: string): void | Promise<void>;
   status(): RuntimeSessionStatus;
   dispose(): void | Promise<void>;
 }
@@ -99,6 +100,7 @@ export interface RuntimeSession {
 export interface OpenSessionOptions {
   /** Start a fresh conversation instead of resuming the stored one. */
   fresh?: boolean;
+  sessionId?: string;
 }
 
 export interface LoginUI {
@@ -113,6 +115,7 @@ export interface AgentRuntime {
   open(sessionKey: string, options?: OpenSessionOptions): Promise<RuntimeSession>;
   /** Model refs ("provider/model") usable for per-turn overrides. */
   models?(): Promise<string[]>;
+  sessions?(key: string, offset?: number): Promise<import("./sessions.js").SessionSummary[]>;
   login?(ui: LoginUI): Promise<void>;
   /** Re-read persona/skills/config for sessions opened afterwards. */
   reload(): Promise<void>;

@@ -98,6 +98,24 @@ function recurringCommand(kind: "heartbeat" | "loop"): Command["run"] {
 export const COMMANDS: Command[] = [
   // -- Session
   {
+    name: "sessions", help: "List conversation sessions: /sessions [page]",
+    run: async (args, input, ctx) => {
+      const page = args.trim() ? Number(args) : 1;
+      if (!Number.isInteger(page) || page < 1) return "usage: /sessions [page]";
+      const list = await ctx.harness.runtime.sessions?.(input.sessionKey, (page - 1) * 20) ?? [];
+      return list.length ? list.map((s) => `${s.title} · ${s.updated} · ${s.key}\n  /resume ${s.id}`).join("\n") : "No sessions on this page.";
+    },
+  },
+  {
+    name: "resume", help: "Resume a session by exact ID; /sessions lists titles",
+    run: async (args, input, ctx) => {
+      if (!args.trim()) return "Use /sessions or the local /resume picker to select a conversation.";
+      await ctx.harness.resumeSession(input.sessionKey, args.trim());
+      const status = ctx.harness.state(input.sessionKey).session!.status();
+      return `Resumed: ${status.title ?? status.sessionId}`;
+    },
+  },
+  {
     name: "new",
     aliases: ["reset"],
     help: "Start a new session (fresh history)",
@@ -120,7 +138,7 @@ export const COMMANDS: Command[] = [
     help: "Set a title for the current session",
     run: async (args, input, ctx) => {
       if (!args.trim()) return "usage: /title <text>";
-      (await ctx.harness.sessionFor(input.sessionKey)).setTitle(args.trim());
+      await (await ctx.harness.sessionFor(input.sessionKey)).setTitle(args.trim());
       return `title set: ${args.trim()}`;
     },
   },

@@ -189,6 +189,14 @@ Escape/Ctrl-C handling and restoration of the editor. Input/render errors cancel
 the dialog. Render/input handlers must be synchronous and fast. No SDK Component
 or internal terminal object is exposed. For background status use panels instead.
 
+## Session storage providers
+
+`api.registerSessionProvider(name, async ({home, options}) => provider)` registers
+an authoritative storage implementation selectable with sessions.provider.
+The bundled filesystem provider is the default. See sessions.md and the
+SessionProvider interface in src/sessions.ts for revision/durability semantics,
+legacy import and current large-history limits. This is separate from model tools.
+
 ## Deliberate limits
 
 Version 1 exposes commands, channels, model tools, text panels, interactive local

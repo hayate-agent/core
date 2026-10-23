@@ -1,0 +1,112 @@
+import assert from "node:assert/strict";
+import { mkdtemp, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { test } from "node:test";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { FilesystemSessionProvider } from "../src/sessions.js";
+
+const exec = promisify(execFile);
+test("filesystem provider persists bindings, revisions, pagination and conversation boundaries", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "session-provider-"));
+  try {
+    const provider = new FilesystemSessionProvider(dir);
+    const a = await provider.create("a/b", "fixture", []);
+    await provider.create("a_b", "fixture", []);
+    assert.equal(await provider.active("a/b"), undefined);
+    await provider.bind("a/b", a.id);
+    assert.equal(await provider.active("a/b"), a.id);
+    const saved = await provider.save({ ...a, title: "Readable subject" }, 0);
+    assert.equal(saved.revision, 1);
+    await assert.rejects(provider.save(a, 0), /revision conflict/);
+    await assert.rejects(provider.bind("a_b", a.id), /different conversation/);
+    await assert.rejects(provider.load("../escape"), /Invalid session ID/);
+    const reopened = new FilesystemSessionProvider(dir);
+    assert.equal((await reopened.list("a/b"))[0].title, "Readable subject");
+    assert.equal((await reopened.list("a/b", 1)).length, 0);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test("real PI runtime stores history externally, resumes exact sessions and imports legacy history", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "session-runtime-"));
+  try {
+    const code = `
+import assert from 'node:assert/strict';
+import {PiRuntime} from './src/runtime/pi.ts';
+import {FilesystemSessionProvider} from './src/sessions.ts';
+const home=process.env.TEST_HOME;
+const provider=new FilesystemSessionProvider(home+'/store');
+const options={cwd:home,sessionsDir:home+'/legacy',skillPaths:[],personaSections:async()=>[],approvals:{mode:'off',tools:[]}};
+const runtime=new PiRuntime({...options,sessionProvider:()=>provider});
+let wrapped=await runtime.open('conversation');
+const first=wrapped.status().sessionId;
+wrapped.session.sessionManager.appendMessage({role:'user',content:'Understandable conversation topic',timestamp:Date.now()});
+const save=provider.save.bind(provider);
+let fail=true;
+provider.save=async(...args)=>{if(fail)throw Error('transient');return save(...args)};
+await assert.rejects(wrapped.setTitle('First attempt'),/transient/);
+fail=false;
+await wrapped.setTitle('A readable title');
+let release;
+let entered;
+const started=new Promise(r=>entered=r);
+const gate=new Promise(r=>release=r);
+let gated=true;
+provider.save=async(...args)=>{if(gated){gated=false;entered();await gate}return save(...args)};
+wrapped.session.sessionManager.appendMessage({role:'user',content:'Background append',timestamp:Date.now()});
+await started;
+let writes=0;
+const gatedSave=provider.save;
+provider.save=async(...args)=>{writes++;return gatedSave(...args)};
+for(let i=0;i<100;i++)wrapped.session.sessionManager.appendMessage({role:'user',content:'Burst '+i,timestamp:Date.now()});
+const renamed=wrapped.setTitle('Title survives pending save');
+release();
+await renamed;
+assert.ok(writes<=3,'background callbacks must coalesce instead of writing every intermediate history');
+assert.equal((await provider.load(first)).title,'Title survives pending save');
+await wrapped.setTitle('A readable title');
+await wrapped.dispose();
+wrapped=await runtime.open('conversation');
+assert.equal(wrapped.status().sessionId,first);
+assert.equal(wrapped.status().title,'A readable title');
+assert.ok(wrapped.session.messages.some(m=>m.role==='user'));
+await wrapped.dispose();
+wrapped=await runtime.open('conversation',{fresh:true});
+assert.notEqual(wrapped.status().sessionId,first);
+await wrapped.dispose();
+wrapped=await runtime.open('conversation',{sessionId:first});
+assert.equal(wrapped.status().title,'A readable title');
+await wrapped.dispose();
+const legacy=await new PiRuntime(options).open('legacy');
+legacy.session.sessionManager.appendMessage({role:'user',content:'Legacy topic',timestamp:Date.now()});
+await legacy.setTitle('Imported legacy conversation');
+await legacy.dispose();
+const imported=await runtime.open('legacy');
+assert.equal(imported.status().title,'Imported legacy conversation');
+assert.ok(imported.session.messages.some(m=>m.role==='user'));
+await imported.dispose();
+assert.equal((await provider.list('conversation')).length,2);
+const {Harness}=await import('./src/harness.ts');
+const harness=new Harness({runtime,tickMs:60000,log:()=>{}});
+await harness.sessionFor('conversation');
+await harness.resumeSession('conversation',first);
+assert.equal(harness.state('conversation').session.status().sessionId,first);
+await harness.state('conversation').session.setTitle('Still usable');
+await harness.stop(1000);
+const activeBefore=await provider.active('conversation');
+await assert.rejects(new PiRuntime({...options,sessionProvider:()=>provider,personaSections:async()=>{throw Error('persona failed')}}).open('conversation',{fresh:true}),/persona failed/);
+assert.equal(await provider.active('conversation'),activeBefore);
+await assert.rejects(new PiRuntime({...options,sessionProvider:()=>provider,model:'missing/model'}).open('conversation',{fresh:true}),/unknown model/);
+assert.equal(await provider.active('conversation'),activeBefore);
+const failing={...provider,active:async()=>first,load:provider.load.bind(provider),save:async()=>{throw Error('initial save failure')}};
+await assert.rejects(new PiRuntime({...options,sessionProvider:()=>failing}).open('conversation'),/initial save failure/);
+const failingBind={active:provider.active.bind(provider),load:provider.load.bind(provider),save:provider.save.bind(provider),bind:async()=>{throw Error('binding failure')}};
+await assert.rejects(new PiRuntime({...options,sessionProvider:()=>failingBind}).open('conversation',{sessionId:first}),/binding failure/);
+console.log('PROVIDER_OK');`;
+    const result = await exec(process.execPath, ["--import", "tsx", "--input-type=module", "-e", code], {
+      env: { ...process.env, TEST_HOME: dir, PI_CODING_AGENT_DIR: dir }, timeout: 20000,
+    });
+    assert.match(result.stdout, /PROVIDER_OK/);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});

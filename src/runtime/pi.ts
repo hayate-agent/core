@@ -1,6 +1,7 @@
 /**
  * PI runtime adapter. The only module that imports the PI SDK.
  */
+import type { SessionProvider, SessionRecord, SessionSummary } from "../sessions.js";
 import type { PluginTool } from "../plugins.js";
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
@@ -33,6 +34,7 @@ export interface PiRuntimeOptions {
   /** Explicit active tool names, including extension tools; [] disables all tools. */
   tools?: string[];
   pluginTools?: () => Iterable<PluginTool>;
+  sessionProvider?: () => SessionProvider;
   mcp?: { enabled: boolean };
   skillPaths: string[];
   /** Returns persona sections, read on every session open (so persona edits apply to new sessions). */
@@ -92,6 +94,8 @@ export class PiSession implements RuntimeSession {
     private readonly session: AgentSession,
     private readonly models: ModelRuntime,
     private readonly slot: TurnSlot,
+    private readonly checkpoint?: () => Promise<void>,
+    private readonly record?: SessionRecord,
   ) {}
 
   get busy(): boolean {
@@ -129,6 +133,7 @@ export class PiSession implements RuntimeSession {
       if (turn.aborted) return "";
       await this.session.prompt(text, { source: "rpc" });
       await this.session.waitForIdle();
+      await this.checkpoint?.();
     } finally {
       if (this.turn === turn) this.turn = undefined;
       this.slot.instructions = undefined;
@@ -163,6 +168,7 @@ export class PiSession implements RuntimeSession {
 
   async compact(instructions?: string): Promise<void> {
     await this.session.compact(instructions);
+    await this.checkpoint?.();
   }
 
   async setModel(ref: string): Promise<void> {
@@ -178,8 +184,10 @@ export class PiSession implements RuntimeSession {
     this.session.setThinkingLevel(level as Thinking);
   }
 
-  setTitle(title: string): void {
+  async setTitle(title: string): Promise<void> {
     this.session.setSessionName(title);
+    if (this.record) this.record.title = title;
+    await this.checkpoint?.();
   }
 
   status(): RuntimeSessionStatus {
@@ -187,7 +195,8 @@ export class PiSession implements RuntimeSession {
     const usage = this.session.getContextUsage();
     const m = this.session.model;
     return {
-      sessionId: this.session.sessionId,
+      sessionId: this.record?.id ?? this.session.sessionId,
+      title: this.record?.title ?? this.session.sessionManager?.getSessionName(),
       sessionFile: this.session.sessionFile,
       model: m ? `${m.provider}/${m.id}` : undefined,
       thinking: this.session.thinkingLevel,
@@ -207,7 +216,10 @@ export class PiSession implements RuntimeSession {
           this.session.extensionRunner?.emit({ type: "session_shutdown", reason: "quit" }),
           new Promise<void>((resolve) => { timer = setTimeout(resolve, 2000); }),
         ]);
-      } finally { clearTimeout(timer); this.session.dispose(); }
+      } finally {
+        clearTimeout(timer);
+        try { await this.checkpoint?.(); } finally { this.session.dispose(); }
+      }
     })();
   }
 }
@@ -243,6 +255,10 @@ export class PiRuntime implements AgentRuntime {
     });
   }
 
+  async sessions(key: string, offset = 0): Promise<SessionSummary[]> {
+    return this.opts.sessionProvider?.().list(key, offset, 20) ?? [];
+  }
+
   async models(): Promise<string[]> {
     const runtime = await this.modelRuntime();
     return (await runtime.getAvailable()).map((m) => `${m.provider}/${m.id}`);
@@ -253,7 +269,24 @@ export class PiRuntime implements AgentRuntime {
     const models = await this.modelRuntime();
     const dir = path.join(sessionsDir, safeKey(sessionKey));
     await mkdir(dir, { recursive: true });
-    const sessionManager = options.fresh ? SessionManager.create(cwd, dir) : SessionManager.continueRecent(cwd, dir);
+    const provider = this.opts.sessionProvider?.();
+    let record: SessionRecord | undefined;
+    let sessionManager: SessionManager;
+    if (provider) {
+      const id = options.sessionId ?? (options.fresh ? undefined : await provider.active(sessionKey));
+      if (id) {
+        record = await provider.load(id);
+        if (record.key !== sessionKey || record.format !== "pi-session-v1") throw new Error("Session conversation or format mismatch");
+        sessionManager = SessionManager.inMemory(cwd, undefined, record.entries as Parameters<typeof SessionManager.inMemory>[2]);
+      } else {
+        // Import the previous latest session once; leave original files untouched.
+        const legacy = options.fresh ? SessionManager.inMemory(cwd) : SessionManager.continueRecent(cwd, dir);
+        const entries = [legacy.getHeader(), ...legacy.getEntries()].filter(Boolean);
+        record = await provider.create(sessionKey, "pi-session-v1", entries);
+        sessionManager = SessionManager.inMemory(cwd, undefined, entries as Parameters<typeof SessionManager.inMemory>[2]);
+        record.title = legacy.getSessionName() ?? "New conversation";
+      }
+    } else sessionManager = options.fresh ? SessionManager.create(cwd, dir) : SessionManager.continueRecent(cwd, dir);
 
     const sections = await this.opts.personaSections();
     const approvals = this.opts.approvals;
@@ -324,12 +357,48 @@ export class PiRuntime implements AgentRuntime {
     // Extensions may register providers (e.g. a custom AI gateway), so resolve the
     // configured model only after they are bound.
     await session.bindExtensions({});
-    const wrapped = new PiSession(session, models, slot);
+    let saving: Promise<void> = Promise.resolve();
+    const checkpoint = provider && record ? (): Promise<void> => {
+      const entries = structuredClone([sessionManager.getHeader(), ...sessionManager.getEntries()].filter(Boolean));
+      const title = record!.title;
+      const task = saving.catch(() => {}).then(async () => {
+      const snapshot = { ...record!, entries, title };
+      if (snapshot.title === "New conversation") {
+        const first = session.messages.find((m) => m.role === "user");
+        const text = first?.content;
+        const title = typeof text === "string" ? text : Array.isArray(text) ? text.filter((c) => c.type === "text").map((c) => c.text).join(" ") : "";
+        if (title.trim()) snapshot.title = title.replace(/\s+/g, " ").trim().slice(0, 90);
+      }
+      const saved = await provider.save(snapshot, record!.revision);
+      record!.revision = saved.revision;
+      record!.updated = saved.updated;
+      if (record!.title === title) record!.title = saved.title;
+      });
+      saving = task;
+      return task;
+    } : undefined;
+    if (checkpoint) {
+      let background: Promise<void> | undefined;
+      let dirty = false;
+      sessionManager._persist = () => {
+        dirty = true;
+        if (background) return;
+        background = (async () => {
+          while (dirty) {
+            dirty = false;
+            try { await checkpoint(); } catch { break; } // explicit barriers surface/retry failures
+          }
+        })().finally(() => { background = undefined; });
+      };
+    }
+    const wrapped = new PiSession(session, models, slot, checkpoint, record);
     try {
+      if (checkpoint) await checkpoint();
       if (this.opts.model && wrapped.status().model !== this.opts.model) await wrapped.setModel(this.opts.model);
       if (this.opts.thinking) wrapped.setThinking(this.opts.thinking);
+      if (provider && record) await provider.bind(sessionKey, record.id);
     } catch (err) {
-      await wrapped.dispose();
+      await wrapped.dispose().catch(() => {});
       throw err;
     }
     return wrapped;

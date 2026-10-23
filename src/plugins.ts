@@ -1,4 +1,5 @@
 import path from "node:path";
+import type { SessionProviderFactory } from "./sessions.js";
 import { pathToFileURL } from "node:url";
 import type { Address, Channel, Inbound, SendMeta, TurnEvent } from "./types.js";
 
@@ -93,6 +94,7 @@ export interface PluginAPI {
   registerCommand(command: PluginCommand): void;
   registerChannel(channel: PluginChannel): void;
   registerTool(tool: PluginTool): void;
+  registerSessionProvider(name: string, factory: SessionProviderFactory): void;
   registerPanel(panel: PluginPanel): void;
   /** Cleanup runs in reverse registration order, including failed initialization. */
   onStop(cleanup: () => Promise<void> | void): void;
@@ -108,6 +110,7 @@ export class PluginHost {
   readonly commands = new Map<string, PluginCommand>();
   readonly channels = new Map<string, Channel>();
   readonly tools = new Map<string, PluginTool>();
+  readonly sessionProviders = new Map<string, SessionProviderFactory>();
   readonly panels = new Map<string, PluginPanel>();
   private cleanups: Array<() => Promise<void> | void> = [];
   private closed = false;
@@ -132,6 +135,12 @@ export class PluginHost {
               if (names.has(command.name)) throw new Error(`Command conflict: /${command.name}`);
               names.add(command.name);
               this.commands.set(command.name, Object.freeze({ ...command, admin: command.admin ?? true }));
+            },
+            registerSessionProvider: (name: string, factory: SessionProviderFactory) => {
+              if (!registering) throw new Error("Plugin registration is closed");
+              if (typeof name !== "string" || !/^[a-z][a-z0-9_-]*$/.test(name) || typeof factory !== "function") throw new Error("Invalid session provider");
+              if (name === "filesystem" || this.sessionProviders.has(name)) throw new Error(`Session provider conflict: ${name}`);
+              this.sessionProviders.set(name, factory);
             },
             registerTool: (tool: PluginTool) => {
               if (!registering) throw new Error("Plugin registration is closed");
@@ -168,6 +177,7 @@ export class PluginHost {
       this.commands.clear();
       this.channels.clear();
       this.tools.clear();
+      this.sessionProviders.clear();
       this.panels.clear();
       throw err;
     }
