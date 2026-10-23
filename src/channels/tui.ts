@@ -1,4 +1,4 @@
-import { Editor, Input, SelectList, ProcessTerminal, Text, TuiMainScreen, matchesKey, truncateToWidth, type Component, type Terminal } from "@earendil-works/pi-tui";
+import { Editor, Input, SelectList, ProcessTerminal, Text, TuiAltScreen, VStack, ScrollView, matchesKey, truncateToWidth, type Component, type Terminal } from "@earendil-works/pi-tui";
 import type { Address, Channel, Inbound, TurnEvent, LoginUI } from "../types.js";
 
 export interface TuiOptions {
@@ -19,6 +19,8 @@ export class HarnessTuiChannel implements Channel {
   private readonly transcript = new Text();
   private readonly activity = new Text();
   private readonly editor;
+  private readonly layout;
+  private readonly bottom = new VStack();
   private lines: string[] = [];
   private partial = "";
   private timer?: NodeJS.Timeout;
@@ -28,16 +30,20 @@ export class HarnessTuiChannel implements Channel {
   private uiBusy = false;
 
   constructor(private readonly opts: TuiOptions) {
-    this.tui = new TuiMainScreen(opts.terminal ?? new ProcessTerminal());
+    this.tui = new TuiAltScreen(opts.terminal ?? new ProcessTerminal());
     const plain = (s: string) => s;
     this.editor = new Editor(this.tui, {
       borderColor: plain,
       selectList: { selectedPrefix: plain, selectedText: plain, description: plain, scrollInfo: plain, noMatch: plain },
     });
-    this.tui.addChild(this.header);
-    this.tui.addChild(this.transcript);
-    this.tui.addChild(this.activity);
-    this.tui.addChild(this.editor);
+    this.bottom.addChild(this.activity, { maxSize: 3 });
+    this.bottom.addChild(this.editor, { maxSize: 8 });
+    this.layout = new VStack([
+      { component: this.header, shrink: 0, maxSize: 4 },
+      { component: new ScrollView(this.transcript, { follow: "end", primary: true }), grow: 1, minSize: 1 },
+      { component: this.bottom, shrink: 0 },
+    ]);
+    this.tui.setLayoutRoot(this.layout);
     this.tui.setFocus(this.editor);
   }
 
@@ -82,8 +88,8 @@ export class HarnessTuiChannel implements Channel {
   private async dialogResult(message: string, component: Component, bind: (done: (value: string) => void, cancel: () => void) => void): Promise<string> {
     if (this.dialog) throw new Error("A dialog is already open");
     this.dialog = component;
-    this.tui.removeChild(this.editor);
-    this.tui.addChild(component);
+    this.bottom.removeChild(this.editor);
+    this.bottom.addChild(component, { maxSize: 12 });
     this.tui.setFocus(component);
     this.activity.setText(message);
     this.tui.requestRender();
@@ -96,8 +102,8 @@ export class HarnessTuiChannel implements Channel {
     } finally {
       this.cancelDialog = undefined;
       this.dialog = undefined;
-      this.tui.removeChild(component);
-      this.tui.addChild(this.editor);
+      this.bottom.removeChild(component);
+      this.bottom.addChild(this.editor, { maxSize: 8 });
       this.tui.setFocus(this.editor);
       this.render();
     }

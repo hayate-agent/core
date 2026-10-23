@@ -113,9 +113,10 @@ test("persona: SOUL + VOICE + personality become prompt sections", async () => {
   await writeFile(path.join(dir, "personalities", "warm.md"), "Etwas wärmer heute.");
   const files = { soul: path.join(dir, "SOUL.md"), voice: path.join(dir, "VOICE.md"), personalitiesDir: path.join(dir, "personalities") };
   const sections = personaSections(await loadPersona(files, "warm"));
-  assert.match(sections[0], /^# Identity[\s\S]*Example Agent/);
-  assert.match(sections[1], /^# Voice[\s\S]*ironisch/);
-  assert.match(sections[2], /^# Personality: warm/);
+  assert.match(sections[0], /^# Agent foundation[\s\S]*VanillaCore Agent Harness/);
+  assert.match(sections[1], /^# Identity[\s\S]*Example Agent/);
+  assert.match(sections[2], /^# Voice[\s\S]*ironisch/);
+  assert.match(sections[3], /^# Personality: warm/);
   assert.match(sections.at(-1)!, /NO_REPLY/);
   await assert.rejects(loadPersona(files, "../etc"), /invalid personality/);
   await assert.rejects(loadPersona(files, "nope"), /unknown personality/);
@@ -124,7 +125,12 @@ test("persona: SOUL + VOICE + personality become prompt sections", async () => {
 test("persona: missing files are fine", async () => {
   const dir = await tmp();
   const sections = personaSections(await loadPersona({ soul: path.join(dir, "a"), voice: path.join(dir, "b"), personalitiesDir: dir }));
-  assert.equal(sections.length, 1);
+  assert.equal(sections.length, 2);
+  assert.match(sections[0], /not your product identity/);
+  assert.match(sections[0], /not PI themes by default/);
+  const configured = personaSections({}, { name: "custom-agent", workspace: "/workspace" });
+  assert.match(configured[0], /custom-agent/);
+  assert.match(configured[0], /\/workspace/);
 });
 
 // ------------------------------------------------------------------ skills
