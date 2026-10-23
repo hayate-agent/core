@@ -10,8 +10,8 @@ Node 24.22.1 LTS is recommended and recorded in `.node-version`. No root executi
 Use a user-owned checkout and npm prefix; do not use sudo npm.
 
 ```sh
-git clone https://git.vanillacore.net/harness/core.git vanillacore-harness
-cd vanillacore-harness
+git clone https://git.vanillacore.net/harness/core.git "$HOME/vanillacore-harness"
+cd "$HOME/vanillacore-harness"
 npm ci
 npm run typecheck
 npm test
@@ -24,22 +24,35 @@ Persist that PATH entry in your shell profile if needed. The local global instal
 links this checkout: keep it at its installed location. `npm ci` builds the CLI via
 `prepare`. After pulling updates, run `npm ci` and restart the process.
 
-```sh
-mkdir -p "$HOME/.vanillacore-harness" "$HOME/.pi/agent"
-cp deploy/kubernetes/harness.yaml "$HOME/.vanillacore-harness/harness.yaml"
-cp deploy/kubernetes/SOUL.md "$HOME/.vanillacore-harness/SOUL.md"
-cp deploy/kubernetes/models.json "$HOME/.pi/agent/models.json"
-```
-
-Edit these examples: choose your identity, provider endpoint and actual model ID.
-Supply `MODEL_API_KEY` securely in the process environment (the example provider
-references it). Do not commit credentials. Then start interactively:
+### Start in any project
 
 ```sh
-vanillacore-harness run
+cd /path/to/your/project
+vanillacore-harness
 ```
 
-For a headless API service, set `API_SERVER_KEY` as well. Matrix is enabled through
+This opens the real PI TUI in the current directory. No `init`, `doctor`, model
+placeholder or copied example configuration is required. Existing PI login,
+provider, settings and extension configuration is reused from `~/.pi/agent`, or
+from `PI_CODING_AGENT_DIR` when set. Use the TUI's `/login` and `/model` controls
+as needed. Do not overwrite an existing `models.json` with the deployment example.
+Changes to shared PI settings can also affect your regular PI installation.
+Neither Hermes nor PI is uninstalled or stopped.
+
+You can also test without installing the command globally: after `npm ci`, run
+`node "$HOME/vanillacore-harness/dist/cli.js"` from your project directory.
+
+Optional `init` creates missing Harness persona/configuration files without
+replacing existing files; `doctor` checks local configuration, not provider
+connectivity. Neither is a prerequisite for interactive use. See
+[configuration](configuration.md) for a separate agent profile and
+[self-development](self-development.md) for using the agent on its own source.
+
+### Gateway / background service
+
+`vanillacore-harness run` starts the separate persistent gateway, not the PI TUI.
+Interactive mode does not concurrently run gateway channels or the Harness
+scheduler. For a headless API service, set `API_SERVER_KEY`. Matrix is enabled through
 `MATRIX_*` variables (see the main README). Slack is not implemented yet.
 For an always-on native service use your OS supervisor (systemd on Linux/WSL with
 systemd enabled, launchd on macOS), preserving HOME, PATH and your secret injection.
@@ -53,7 +66,10 @@ From the checkout:
 
 ```sh
 mkdir -p config
-cp deploy/kubernetes/{harness.yaml,SOUL.md,models.json} config/
+for file in harness.yaml SOUL.md models.json; do
+  # Exclusive creation: stop rather than overwrite an existing configuration.
+  (set -C; cat "deploy/kubernetes/$file" > "config/$file") || exit 1
+done
 ```
 
 Edit those files before starting. Set `API_SERVER_KEY` and `MODEL_API_KEY` in the
@@ -83,6 +99,8 @@ restart after changes. Provision a persistent volume usable by uid/gid 1000.
 ## Verification scope
 
 The TypeScript suite is runtime-independent where possible. Verified on macOS and
-WSL2: dependency installation, typecheck, all 171 tests and native CLI installation/version.
-The Linux container build and CLI version were also verified with Node 24.22.1.
-These packaging tests do not replace live provider/channel integration tests.
+Linux (WSL2): dependency installation, typecheck, all 176 tests and native CLI builds.
+The real interactive TUI was started in a pseudoterminal on macOS and Linux (WSL2),
+and `/quit` exited successfully. The Linux container build and CLI version were
+also verified with Node 24.22.1. These tests do not replace live model/provider
+or channel integration tests.
