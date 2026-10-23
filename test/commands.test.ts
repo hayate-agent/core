@@ -53,6 +53,20 @@ test("plugin commands use admin authorization, help and outbox instead of model 
   assert.equal(runtime.sessions.size, 0);
 });
 
+test("interactive plugin UI is available only to the attached local session", async () => {
+  const { ctx, harness, send, ch } = setup();
+  const ui = { prompt: async () => "value" } as any;
+  ctx.pluginUI = () => ui;
+  ctx.pluginCommands = new Map([["interactive", { name: "interactive", help: "UI test", admin: false,
+    run: async (_args, context) => context.ui ? "local UI" : "headless" }]]);
+  await send("/interactive");
+  assert.equal(ch.texts().at(-1), "headless");
+  let seen: unknown;
+  ctx.pluginCommands = new Map([["interactive", { name: "interactive", help: "UI test", run: async (_args, context) => { seen = context.ui; } }]]);
+  await harness.commandHandler!({ text: "/interactive", source: "channel", sessionKey: "console:local", replyTo: { channel: "console", target: "local" } });
+  assert.equal(seen, ui);
+});
+
 test("parseCommand handles args, bot suffix and non-commands", () => {
   assert.deepEqual(parseCommand("/goal ship v1"), { name: "goal", args: "ship v1" });
   assert.deepEqual(parseCommand("/status@agent"), { name: "status", args: "" });

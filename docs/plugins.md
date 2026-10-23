@@ -97,9 +97,101 @@ Stop may be called even when start did not complete: make it safe and idempotent
 Register activation-time resource cleanup with onStop. There is no transport
 sandbox or protection against malicious plugin code ignoring the API contract.
 
+## Model tools
+
+Register tools during activation with a runtime-neutral JSON Schema and async text
+result. Names must start with `plugin_`; duplicate plugin names fail startup.
+
+```js
+api.registerTool({
+  name: "plugin_echo",
+  description: "Echo the supplied text",
+  parameters: {
+    type: "object",
+    properties: { text: { type: "string" } },
+    required: ["text"],
+  },
+  async execute(input, { sessionKey, signal }) {
+    // Honor signal for cancellable work. Never return credentials.
+    return String(input.text);
+  },
+});
+```
+
+The PI adapter registers these in its normal tool pipeline: parameter validation,
+tool-call approval hooks and progress events still apply. `tools: []` disables
+active model tools; an explicit list must include the desired plugin tool names.
+With omitted tools, registered plugin tools join runtime defaults. Execution gets
+the Harness session key and cancellation signal, not SDK internals. A tool must
+return a string. Errors use the runtime's normal tool error handling; avoid secret
+values in exceptions. JSON Schema must be valid for the runtime; malformed schemas
+can fail session creation. Registration is not authorization to bypass approval.
+
+## TUI panels
+
+```js
+api.registerPanel({
+  name: "build-status",
+  render({ agent }) {
+    return [`${agent}: build ready`];
+  },
+});
+```
+
+Panels are synchronous plain-text status renderers, refreshed by the local TUI.
+The shared panel area above the editor has a four-row limit; earlier registrations
+have priority. Lines are truncated, control characters are removed, and renderer
+errors become a generic unavailable message. Panels never own focus, input,
+terminal escape output or the agent loop. Keep rendering fast and side-effect-free;
+perform asynchronous refresh in your lifecycle-managed code. Without a TUI panels
+are registered but not rendered. This is not an arbitrary interactive widget API.
+
+## Interactive local UI
+
+Local plugin commands receive `context.ui`; remote and headless commands receive
+undefined. Check availability rather than trying to open another terminal.
+
+```js
+api.registerCommand({
+  name: "configure-extension", help: "Configure locally",
+  async run(args, { ui }) {
+    if (!ui) return "Run this command in the attached Harness TUI.";
+    const name = await ui.prompt("Name");
+    const mode = await ui.select("Mode", [{ id: "fast", label: "Fast" }]);
+    if (await ui.confirm(`Save ${name}?`)) return `Selected ${mode}`;
+  },
+});
+```
+
+`prompt(message, secret?)` masks secret input; `select(message, choices)` returns
+a choice ID; `confirm(message)` defaults to No; `notify(message)` writes a local
+notice. Dialog rejection means cancellation (Escape/Ctrl-C or TUI shutdown).
+Only one dialog can be open at once. Await each before opening the next.
+Do not include secret input in returned messages or logs.
+
+For custom interactive forms, `await ui.custom(message, widget)` mounts a widget
+in the dialog area and gives it keyboard focus. Widget contract:
+
+```js
+const value = await ui.custom("Choose", {
+  render(width) { return ["Press y to accept, Escape to cancel"]; },
+  handleInput(data) {
+    if (data === "y") return { value: "accepted" };
+    // Return {cancel:true} to cancel, otherwise stay open.
+  },
+  invalidate() { /* optional synchronous render-cache invalidation */ },
+});
+```
+
+Custom widgets render up to twelve bounded plain-text rows. Control characters
+are removed; raw terminal escape output is not supported. The host owns focus,
+Escape/Ctrl-C handling and restoration of the editor. Input/render errors cancel
+the dialog. Render/input handlers must be synchronous and fast. No SDK Component
+or internal terminal object is exposed. For background status use panels instead.
+
 ## Deliberate limits
 
-Version 1 exposes commands, channels and lifecycle. Runtime-neutral model tools,
-UI panels, package installation and secret references still
-need dedicated contracts and tests. PI runtime extensions remain independent.
+Version 1 exposes commands, channels, model tools, text panels, interactive local
+dialogs/custom widgets and lifecycle. Package installation and secret references
+still need dedicated contracts and tests. PI runtime extensions remain independent.
 No plugin gets the internal Harness object or starts another agent loop.

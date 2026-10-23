@@ -74,6 +74,7 @@ async function main(argv: string[]): Promise<void> {
   };
   await reloadSkills();
 
+  const plugins = new PluginHost();
   let harness!: Harness;
   const runtime = new PiRuntime({
     cwd: config.cwd,
@@ -81,6 +82,7 @@ async function main(argv: string[]): Promise<void> {
     model: config.model,
     thinking: config.thinking,
     tools: config.tools,
+    pluginTools: () => plugins.tools.values(),
     skillPaths: config.skills.paths,
     personaSections: async () => personaSections(await loadPersona(config.persona, personality), { name: config.agent, workspace: config.cwd }),
     approvals,
@@ -128,6 +130,7 @@ async function main(argv: string[]): Promise<void> {
   // the API (e.g. a container without a TTY) does not read stdin unless asked to.
   if (interactive) {
     tui = new HarnessTuiChannel({
+      panels: () => plugins.panels.values(),
       agent: config.agent,
       models: () => runtime.models(),
       login: (ui) => runtime.login(ui),
@@ -188,7 +191,6 @@ async function main(argv: string[]): Promise<void> {
   }
   await scheduler.load();
 
-  const plugins = new PluginHost();
   await plugins.load(config.plugins ?? [], { agent: config.agent, home: config.home, cwd: config.cwd }, [...builtinCommandNames, ...skills.map((s) => s.name)], ["console", "api", "matrix", ...harness.channels.keys()]);
   for (const channel of plugins.channels.values()) harness.addChannel(channel);
 
@@ -215,6 +217,7 @@ async function main(argv: string[]): Promise<void> {
     approvals,
     skills: () => skills,
     pluginCommands: plugins.commands,
+    pluginUI: () => tui?.pluginUI(),
     reloadSkills,
     personality: {
       get current() {

@@ -2,6 +2,20 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import type { Address, Channel, Inbound, SendMeta, TurnEvent } from "./types.js";
 
+export interface PluginTool {
+  /** Must start with plugin_ to avoid overriding runtime tools. */
+  name: string;
+  description: string;
+  parameters: { type: "object"; properties?: Record<string, unknown>; required?: string[]; [key: string]: unknown };
+  execute(input: Record<string, unknown>, context: { sessionKey: string; signal?: AbortSignal }): Promise<string>;
+}
+
+/** Plain text only: no terminal escape sequences or focus/input ownership. */
+export interface PluginPanel {
+  name: string;
+  render(context: { agent: string }): string[];
+}
+
 /** Remote transport input; routing/source fields are owned by the host. */
 export interface PluginMessage {
   session: string;
@@ -48,12 +62,27 @@ function wrapChannel(channel: PluginChannel): Channel {
   };
 }
 
+export interface PluginWidget {
+  /** Synchronous terminal component, rendered inside the bounded dialog area. */
+  render(width: number): string[];
+  handleInput(data: string): { value: string } | { cancel: true } | void;
+  invalidate?(): void;
+}
+
+export interface PluginUI {
+  prompt(message: string, secret?: boolean): Promise<string>;
+  select(message: string, choices: Array<{ id: string; label: string }>): Promise<string>;
+  confirm(message: string): Promise<boolean>;
+  custom(message: string, widget: PluginWidget): Promise<string>;
+  notify(message: string): void;
+}
+
 export interface PluginCommand {
   name: string;
   help: string;
   /** Default true. Explicit false permits ordinary channel users. */
   admin?: boolean;
-  run(args: string, context: { sessionKey: string; sender?: string }): Promise<string | void>;
+  run(args: string, context: { sessionKey: string; sender?: string; ui?: PluginUI }): Promise<string | void>;
 }
 
 export interface PluginAPI {
@@ -63,6 +92,8 @@ export interface PluginAPI {
   readonly cwd: string;
   registerCommand(command: PluginCommand): void;
   registerChannel(channel: PluginChannel): void;
+  registerTool(tool: PluginTool): void;
+  registerPanel(panel: PluginPanel): void;
   /** Cleanup runs in reverse registration order, including failed initialization. */
   onStop(cleanup: () => Promise<void> | void): void;
 }
@@ -76,6 +107,8 @@ export interface PluginModule {
 export class PluginHost {
   readonly commands = new Map<string, PluginCommand>();
   readonly channels = new Map<string, Channel>();
+  readonly tools = new Map<string, PluginTool>();
+  readonly panels = new Map<string, PluginPanel>();
   private cleanups: Array<() => Promise<void> | void> = [];
   private closed = false;
 
@@ -100,6 +133,20 @@ export class PluginHost {
               names.add(command.name);
               this.commands.set(command.name, Object.freeze({ ...command, admin: command.admin ?? true }));
             },
+            registerTool: (tool: PluginTool) => {
+              if (!registering) throw new Error("Plugin registration is closed");
+              if (!tool || typeof tool.name !== "string" || !/^plugin_[a-z][a-z0-9_]*$/.test(tool.name) ||
+                  typeof tool.description !== "string" || !tool.description.trim() || typeof tool.execute !== "function" ||
+                  !tool.parameters || tool.parameters.type !== "object" || Array.isArray(tool.parameters)) throw new Error("Invalid plugin tool");
+              if (this.tools.has(tool.name)) throw new Error(`Tool conflict: ${tool.name}`);
+              this.tools.set(tool.name, Object.freeze({ ...tool, parameters: structuredClone(tool.parameters) }));
+            },
+            registerPanel: (panel: PluginPanel) => {
+              if (!registering) throw new Error("Plugin registration is closed");
+              if (!panel || typeof panel.name !== "string" || !/^[a-z][a-z0-9_-]*$/.test(panel.name) || typeof panel.render !== "function") throw new Error("Invalid plugin panel");
+              if (this.panels.has(panel.name)) throw new Error(`Panel conflict: ${panel.name}`);
+              this.panels.set(panel.name, Object.freeze({ ...panel }));
+            },
             registerChannel: (channel: PluginChannel) => {
               if (!registering) throw new Error("Plugin registration is closed");
               if (!channel || typeof channel.name !== "string" || !/^[a-z][a-z0-9_-]*$/.test(channel.name) ||
@@ -120,6 +167,8 @@ export class PluginHost {
       await this.stop().catch(() => {});
       this.commands.clear();
       this.channels.clear();
+      this.tools.clear();
+      this.panels.clear();
       throw err;
     }
   }

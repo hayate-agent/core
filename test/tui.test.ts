@@ -19,6 +19,55 @@ function terminal() {
   return { t, type: (s: string) => { for (const ch of s) input(ch); }, output: () => output };
 }
 
+test("plugin UI supports input, selection, custom keyboard widgets and abort", async () => {
+  const term = terminal();
+  const channel = new HarnessTuiChannel({ agent: "test", status: () => "running", quit: () => {}, terminal: term.t });
+  await assert.rejects(channel.pluginUI().prompt("offline"), /not running/);
+  await channel.start(async () => {});
+  const ui = channel.pluginUI();
+  try {
+    const input = ui.prompt("Enter value");
+    term.type("hello\r");
+    assert.equal(await input, "hello");
+    const choice = ui.select("Choose", [{ id: "a", label: "A" }, { id: "b", label: "B" }]);
+    term.type("\r");
+    assert.equal(await choice, "a");
+    const confirmation = ui.confirm("Confirm");
+    term.type("\r");
+    assert.equal(await confirmation, false);
+    const custom = ui.custom("Custom form", { render: () => ["Press x"], handleInput: (key) => key === "x" ? { value: "selected" } : undefined });
+    term.type("x");
+    assert.equal(await custom, "selected");
+    const cancelled = ui.custom("Cancel", { render: () => ["Escape cancels"], handleInput: () => {} });
+    term.type("\u001b");
+    await assert.rejects(cancelled, /cancelled/);
+    const pending = ui.prompt("Pending");
+    await channel.stop();
+    await assert.rejects(pending, /cancelled/);
+  } finally { await channel.stop(); }
+});
+
+test("plugin panels are bounded plain text and rendering failures do not break editor", async () => {
+  const term = terminal();
+  const ui = new HarnessTuiChannel({ agent: "test", status: () => "running", quit: () => {}, terminal: term.t,
+    panels: () => [
+      { name: "broken", render: () => { throw Error("private failure"); } },
+      { name: "status", render: () => ["Plugin status: ready\u001b[2J", "x".repeat(1000), "third", "overflow"] },
+    ],
+  });
+  try {
+    await ui.start(async () => {});
+    await new Promise((r) => setTimeout(r, 30));
+    const screen = (ui as any).tui.getScreenLines().join("\n");
+    assert.match(screen, /panel unavailable/);
+    assert.match(screen, /Plugin status: ready/);
+    assert.ok(!screen.includes("private failure"));
+    assert.ok(!screen.includes("overflow"));
+    assert.ok(!screen.includes("\u001b[2J"));
+    assert.match(screen, /\/help/);
+  } finally { await ui.stop(); }
+});
+
 test("fullscreen layout keeps the editor at the bottom after long output", async () => {
   const term = terminal();
   const ui = new HarnessTuiChannel({ agent: "test", status: () => "running", quit: () => {}, terminal: term.t });

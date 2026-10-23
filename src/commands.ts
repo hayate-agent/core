@@ -2,7 +2,7 @@
  * Hermes-compatible slash commands (gateway-relevant subset; TUI-only commands are left out).
  * Names and aliases follow hermes_cli/commands.py so operators can keep their habits.
  */
-import type { PluginCommand } from "./plugins.js";
+import type { PluginCommand, PluginUI } from "./plugins.js";
 import { developmentGuide } from "./development.js";
 import { randomUUID } from "node:crypto";
 import { formatInterval, parseInterval } from "./interval.js";
@@ -33,6 +33,7 @@ export interface CommandContext {
   approvers?: string[];
   agent: string;
   pluginCommands?: ReadonlyMap<string, PluginCommand>;
+  pluginUI?: () => PluginUI | undefined;
   /** Graceful restart (supervisor brings the process back). */
   restart: () => Promise<void>;
 }
@@ -440,7 +441,7 @@ export const COMMANDS: Command[] = [
     help: "Show available commands",
     run: async () => COMMANDS.map((c) => `/${c.name}${c.aliases?.length ? ` (${c.aliases.map((a) => `/${a}`).join(" ")})` : ""}: ${c.help}`).join("\n"),
   },
-  { name: "harness", help: "Locate built-in Harness customization/development guide", run: async () => `VanillaCore Agent Harness development guide: ${developmentGuide}\nRead this guide before changing the Harness. Identity/voice, tools and models are configurable; native plugins support commands/channels/lifecycle (see plugins.md); tool/UI plugin APIs and automatic runtime promotion remain planned.` },
+  { name: "harness", help: "Locate built-in Harness customization/development guide", run: async () => `VanillaCore Agent Harness development guide: ${developmentGuide}\nRead this guide before changing the Harness. Identity/voice, tools and models are configurable; native plugins support commands/channels/model tools/text panels/lifecycle (see plugins.md); interactive plugin dialogs are available locally; automatic runtime promotion remains planned.` },
   { name: "version", help: "Show version", run: async (_a, _i, ctx) => `vanillacore-harness ${VERSION} (runtime: ${ctx.harness.runtime.name})` },
 ];
 
@@ -489,7 +490,8 @@ export function installCommands(ctx: CommandContext): void {
         if (plugin.admin && !isAdmin(ctx, input)) reply(ctx, input, "⛔ admin only");
         else {
           try {
-            const text = await plugin.run(parsed.args, { sessionKey: input.sessionKey, sender: input.sender });
+            const text = await plugin.run(parsed.args, { sessionKey: input.sessionKey, sender: input.sender,
+              ui: input.replyTo?.channel === "console" && input.sessionKey === "console:local" ? ctx.pluginUI?.() : undefined });
             if (text) reply(ctx, input, text);
           } catch { reply(ctx, input, `⚠️ /${plugin.name}: plugin command failed (details withheld)`); }
         }

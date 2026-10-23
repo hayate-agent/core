@@ -1,8 +1,10 @@
 import { Editor, Input, SelectList, ProcessTerminal, Text, TuiAltScreen, VStack, ScrollView, matchesKey, truncateToWidth, type Component, type Terminal } from "@earendil-works/pi-tui";
+import type { PluginPanel, PluginUI, PluginWidget } from "../plugins.js";
 import type { Address, Channel, Inbound, TurnEvent, LoginUI } from "../types.js";
 
 export interface TuiOptions {
   agent: string;
+  panels?: () => Iterable<PluginPanel>;
   status: () => string;
   quit: () => void;
   terminal?: Terminal;
@@ -18,6 +20,7 @@ export class HarnessTuiChannel implements Channel {
   private readonly header = new Text();
   private readonly transcript = new Text();
   private readonly activity = new Text();
+  private readonly panelText = new Text();
   private readonly editor;
   private readonly layout;
   private readonly bottom = new VStack();
@@ -36,6 +39,7 @@ export class HarnessTuiChannel implements Channel {
       borderColor: plain,
       selectList: { selectedPrefix: plain, selectedText: plain, description: plain, scrollInfo: plain, noMatch: plain },
     });
+    this.bottom.addChild(this.panelText, { maxSize: 4 });
     this.bottom.addChild(this.activity, { maxSize: 3 });
     this.bottom.addChild(this.editor, { maxSize: 8 });
     this.layout = new VStack([
@@ -86,6 +90,7 @@ export class HarnessTuiChannel implements Channel {
   }
 
   private async dialogResult(message: string, component: Component, bind: (done: (value: string) => void, cancel: () => void) => void): Promise<string> {
+    if (!this.live) throw new Error("TUI is not running");
     if (this.dialog) throw new Error("A dialog is already open");
     this.dialog = component;
     this.bottom.removeChild(this.editor);
@@ -107,6 +112,43 @@ export class HarnessTuiChannel implements Channel {
       this.tui.setFocus(this.editor);
       this.render();
     }
+  }
+
+  /** Only supplied to commands originating at the attached local console. */
+  pluginUI(): PluginUI {
+    return {
+      prompt: (message, secret) => this.live ? this.prompt(message, secret) : Promise.reject(new Error("TUI is not running")),
+      select: (message, choices) => this.live ? this.select(message, choices) : Promise.reject(new Error("TUI is not running")),
+      confirm: async (message) => (await this.select(message, [{ id: "no", label: "No" }, { id: "yes", label: "Yes" }])) === "yes",
+      custom: (message, widget) => this.custom(message, widget),
+      notify: (message) => this.note(message),
+    };
+  }
+
+  private custom(message: string, widget: PluginWidget): Promise<string> {
+    if (!this.live) return Promise.reject(new Error("TUI is not running"));
+    let done: (value: string) => void = () => {};
+    let cancel: () => void = () => {};
+    const component: Component = {
+      render: (width) => {
+        try {
+          const lines = widget.render(width);
+          if (!Array.isArray(lines) || lines.some((line) => typeof line !== "string")) throw new Error("Invalid widget output");
+          return lines.slice(0, 12).map((line) => truncateToWidth(line.slice(0, 4000).replace(/[\x00-\x1f\x7f-\x9f]/g, " "), width));
+        } catch { cancel(); return ["Widget unavailable"]; }
+      },
+      invalidate: () => { try { widget.invalidate?.(); } catch { cancel(); } },
+      handleInput: (data) => {
+        if (matchesKey(data, "escape")) { cancel(); return; }
+        try {
+          const result = widget.handleInput(data);
+          if (result && "cancel" in result) cancel();
+          else if (result && "value" in result && typeof result.value === "string") done(result.value);
+          this.tui.requestRender();
+        } catch { cancel(); }
+      },
+    };
+    return this.dialogResult(message, component, (resolve, reject) => { done = resolve; cancel = reject; });
   }
 
   private prompt(message: string, secret = false): Promise<string> {
@@ -134,6 +176,16 @@ export class HarnessTuiChannel implements Channel {
 
   private render(): void {
     if (!this.live) return;
+    const panelLines: string[] = [];
+    for (const panel of this.opts.panels?.() ?? []) {
+      if (panelLines.length >= 4) break;
+      try {
+        const lines = panel.render({ agent: this.opts.agent });
+        if (!Array.isArray(lines) || lines.some((s) => typeof s !== "string")) throw new Error("Invalid panel output");
+        panelLines.push(...lines.slice(0, 4 - panelLines.length).map((s) => s.slice(0, 500).replace(/[\x00-\x1f\x7f-\x9f]/g, " ")));
+      } catch { panelLines.push(`[${panel.name}] panel unavailable`); }
+    }
+    this.panelText.setText(panelLines.join("\n"));
     this.header.setText(`VanillaCore Agent Harness · ${this.opts.agent}\n${this.opts.status()}`);
     this.transcript.setText(this.lines.join("\n\n"));
     if (!this.dialog) this.activity.setText(this.partial ? `${this.opts.agent}: ${this.partial.slice(-6000)}` : "/help · /status · /goal · /heartbeat · /cron · /quit");
