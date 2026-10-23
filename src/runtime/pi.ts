@@ -7,6 +7,13 @@ import {
   type AgentSession,
   type AgentSessionEvent,
   createAgentSession,
+  createAgentSessionRuntime,
+  createAgentSessionServices,
+  createAgentSessionFromServices,
+  createMcpExtension,
+  createCodemodeExtension,
+  createToolSearchExtension,
+  InteractiveMode,
   DefaultResourceLoader,
   getAgentDir,
   ModelRuntime,
@@ -194,6 +201,44 @@ export class PiSession implements RuntimeSession {
 
   dispose(): void {
     this.session.dispose();
+  }
+}
+
+/** Native PI UI, backed by one session runtime (including /new and /resume replacements). */
+export async function runInteractive(opts: Pick<PiRuntimeOptions, "cwd" | "model" | "thinking" | "tools" | "skillPaths" | "personaSections">): Promise<void> {
+  const agentDir = getAgentDir();
+  const runtime = await createAgentSessionRuntime(async ({ cwd, sessionManager, sessionStartEvent }) => {
+    const sections = await opts.personaSections();
+    const services = await createAgentSessionServices({
+      cwd, agentDir,
+      resourceLoaderOptions: {
+        additionalSkillPaths: opts.skillPaths,
+        appendSystemPromptOverride: (base) => [...base, ...sections],
+        extensionFactories: [createCodemodeExtension({ mode: "on" }), createToolSearchExtension(), createMcpExtension()],
+      },
+    });
+    let model;
+    if (opts.model) {
+      const ref = parseModelRef(opts.model);
+      model = services.modelRuntime.getModel(ref.provider, ref.id);
+      if (!model) throw new Error(`Unknown configured model: ${opts.model}`);
+    }
+    if (opts.thinking && !(THINKING as readonly string[]).includes(opts.thinking)) throw new Error(`Invalid thinking level: ${opts.thinking}`);
+    return {
+      ...(await createAgentSessionFromServices({
+        services, sessionManager, sessionStartEvent, model,
+        thinkingLevel: opts.thinking as Thinking | undefined,
+        tools: opts.tools,
+        noTools: opts.tools?.length === 0 ? "all" : undefined,
+      })),
+      services,
+      diagnostics: services.diagnostics,
+    };
+  }, { cwd: opts.cwd, agentDir, sessionManager: SessionManager.create(opts.cwd) });
+  try {
+    await new InteractiveMode(runtime, { startupDiagnostics: [...runtime.diagnostics] }).run();
+  } finally {
+    await runtime.dispose();
   }
 }
 

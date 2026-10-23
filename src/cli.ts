@@ -12,7 +12,8 @@ import { initialize, diagnose } from "./setup.js";
 import { Harness } from "./harness.js";
 import { startMemoryGuard } from "./memguard.js";
 import { loadPersona, personaSections } from "./persona.js";
-import { PiRuntime } from "./runtime/pi.js";
+import { PiRuntime, runInteractive } from "./runtime/pi.js";
+import { launchMode } from "./launch.js";
 import { Scheduler } from "./scheduler.js";
 import { StateStore } from "./state.js";
 import type { Inbound } from "./types.js";
@@ -22,6 +23,7 @@ import { appendFileDurable } from "./durable.js";
 const USAGE = `VanillaCore Agent Harness ${VERSION}
 
 Usage:
+  vanillacore-harness                      Interactive PI TUI in the current directory
   vanillacore-harness run [--home <dir>]   Start the agent loop (console channel on stdin/stdout)
   vanillacore-harness init [--home <dir>] [--cwd <dir>] [--agent <name>] [--model <provider/model>]
   vanillacore-harness doctor [--home <dir>]
@@ -31,6 +33,19 @@ Home (default ~/.vanillacore-harness, env VANILLACORE_HARNESS_HOME): harness.yam
 personalities/<name>.md, skills/, cron/jobs.yaml (+ cron/scripts, cron/prompts), sessions/.`;
 
 async function main(argv: string[]): Promise<void> {
+  if (launchMode(argv) === "interactive") {
+    if (!process.stdin.isTTY || !process.stdout.isTTY) throw new Error("Interactive mode requires a terminal; use 'run' for the gateway or --help for commands.");
+    const config = await loadConfig();
+    const stopGuard = startMemoryGuard({ percent: config.memoryGuard.percent });
+    try {
+      await runInteractive({
+        cwd: process.cwd(), model: config.model, thinking: config.thinking,
+        tools: config.tools, skillPaths: config.skills.paths,
+        personaSections: async () => personaSections(await loadPersona(config.persona)),
+      });
+    } finally { stopGuard(); }
+    return;
+  }
   const [cmd, ...rest] = argv;
   if (cmd === "version" || cmd === "--version") return void console.log(VERSION);
   if (!["run", "init", "doctor"].includes(cmd ?? "")) return void console.log(USAGE);
