@@ -15,6 +15,8 @@ export interface HarnessConfig {
   thinking?: string;
   /** Literal tool names exposed to the model; omitted = runtime defaults, [] = no tools. */
   tools?: string[];
+  /** Trusted local ESM plugin paths, relative to Harness home or absolute. */
+  plugins?: string[];
   persona: {
     /** Identity file (Hermes-compatible). */
     soul: string;
@@ -53,6 +55,9 @@ export function defaultConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
       overrides.tools.some((name) => typeof name !== "string" || !/^[a-zA-Z0-9_][a-zA-Z0-9_.:-]*$/.test(name)))) {
     throw new Error("tools must be an array of literal tool names (or [] for no tools)");
   }
+  if (overrides.plugins !== undefined && (!Array.isArray(overrides.plugins) || overrides.plugins.some((p) => typeof p !== "string" || !p.trim()))) {
+    throw new Error("plugins must be an array of local module paths");
+  }
   const home = overrides.home ?? process.env.VANILLACORE_HARNESS_HOME ?? path.join(os.homedir(), ".vanillacore-harness");
   return {
     agent: overrides.agent ?? process.env.VANILLACORE_HARNESS_AGENT ?? "agent",
@@ -61,6 +66,7 @@ export function defaultConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
     timezone: overrides.timezone ?? process.env.TZ ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
     model: overrides.model,
     thinking: overrides.thinking,
+    plugins: overrides.plugins ?? [],
     tools: overrides.tools === undefined ? undefined : [...new Set(overrides.tools)],
     persona: {
       soul: path.join(home, "SOUL.md"),

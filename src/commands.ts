@@ -2,6 +2,7 @@
  * Hermes-compatible slash commands (gateway-relevant subset; TUI-only commands are left out).
  * Names and aliases follow hermes_cli/commands.py so operators can keep their habits.
  */
+import type { PluginCommand } from "./plugins.js";
 import { developmentGuide } from "./development.js";
 import { randomUUID } from "node:crypto";
 import { formatInterval, parseInterval } from "./interval.js";
@@ -31,6 +32,7 @@ export interface CommandContext {
   /** Who may resolve approvals. Empty: same as admins. Independent of admin rights otherwise. */
   approvers?: string[];
   agent: string;
+  pluginCommands?: ReadonlyMap<string, PluginCommand>;
   /** Graceful restart (supervisor brings the process back). */
   restart: () => Promise<void>;
 }
@@ -438,12 +440,13 @@ export const COMMANDS: Command[] = [
     help: "Show available commands",
     run: async () => COMMANDS.map((c) => `/${c.name}${c.aliases?.length ? ` (${c.aliases.map((a) => `/${a}`).join(" ")})` : ""}: ${c.help}`).join("\n"),
   },
-  { name: "harness", help: "Locate built-in Harness customization/development guide", run: async () => `VanillaCore Agent Harness development guide: ${developmentGuide}\nRead this guide before changing the Harness. Identity/voice, tools and models are configurable; native plugin lifecycle and automatic runtime promotion remain planned.` },
+  { name: "harness", help: "Locate built-in Harness customization/development guide", run: async () => `VanillaCore Agent Harness development guide: ${developmentGuide}\nRead this guide before changing the Harness. Identity/voice, tools and models are configurable; native plugins support commands/lifecycle (see plugins.md); tool/channel/UI plugin APIs and automatic runtime promotion remain planned.` },
   { name: "version", help: "Show version", run: async (_a, _i, ctx) => `vanillacore-harness ${VERSION} (runtime: ${ctx.harness.runtime.name})` },
 ];
 
 const BY_NAME = new Map<string, Command>();
 for (const c of COMMANDS) for (const n of [c.name, ...(c.aliases ?? [])]) BY_NAME.set(n, c);
+export const builtinCommandNames = [...BY_NAME.keys()];
 
 function isAdmin(ctx: CommandContext, input: Inbound): boolean {
   // The attached local terminal is trusted independently of remote identity lists.
@@ -481,6 +484,17 @@ export function installCommands(ctx: CommandContext): void {
     if (!parsed) return false;
     const cmd = BY_NAME.get(parsed.name);
     if (!cmd) {
+      const plugin = ctx.pluginCommands?.get(parsed.name);
+      if (plugin) {
+        if (plugin.admin && !isAdmin(ctx, input)) reply(ctx, input, "⛔ admin only");
+        else {
+          try {
+            const text = await plugin.run(parsed.args, { sessionKey: input.sessionKey, sender: input.sender });
+            if (text) reply(ctx, input, text);
+          } catch { reply(ctx, input, `⚠️ /${plugin.name}: plugin command failed (details withheld)`); }
+        }
+        return true;
+      }
       const skill = ctx.skills().find((s) => s.name === parsed.name);
       if (!skill) return false;
       ctx.harness.enqueue({ ...input, text: skillInvocationPrompt(skill, parsed.args) });
@@ -494,6 +508,10 @@ export function installCommands(ctx: CommandContext): void {
       } catch (err) {
         out = `⚠️ /${cmd.name}: ${err instanceof Error ? err.message : String(err)}`;
       }
+    }
+    if (parsed.name === "help" || parsed.name === "commands") {
+      const extra = [...(ctx.pluginCommands?.values() ?? [])].map((c) => `/${c.name}: ${c.help}`).join("\n");
+      if (extra) out = `${out ?? ""}\n${extra}`;
     }
     if (out) reply(ctx, input, out);
     return true;
