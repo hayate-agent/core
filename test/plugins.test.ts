@@ -66,6 +66,18 @@ test("plugins register tools and panels and reject duplicate or unsafe names", a
   }
 });
 
+test("compaction plugin preserves class methods and receiver state", async () => {
+  await fixture(`export default {apiVersion:1,activate(api){
+    class Policy { prefix='Retain: '; async compact(ctx){await ctx.compactNative(this.prefix+ctx.instructions)} }
+    api.registerCompaction('policy',new Policy());
+  }}`, async (host, home) => {
+    await host.load(['plugin.mjs'], context(home), []);
+    let received = '';
+    await host.compactions.get('policy')!.compact({ instructions:'tasks', compactNative:async (text)=>{received=text!;} });
+    assert.equal(received,'Retain: tasks');
+  });
+});
+
 test("incompatible plugin version fails startup", async () => {
   await fixture(`export default {apiVersion:2,activate(){}}`, async (host, home) => {
     await assert.rejects(host.load(["plugin.mjs"], context(home), []), /Invalid plugin API/);

@@ -44,6 +44,10 @@ export class LocalSessions {
           row.updatedAt = record.updated;
         }
       }
+      if (row.title === "Untitled") {
+        const first = (await this.history(row)).find((line) => line.startsWith("You: "));
+        if (first) row.title = first.slice(5).replace(/\s+/g, " ").slice(0, 90);
+      }
       rows.push(row);
     }
     return rows.sort((a, b) => (b.updatedAt ?? b.createdAt).localeCompare(a.updatedAt ?? a.createdAt));
