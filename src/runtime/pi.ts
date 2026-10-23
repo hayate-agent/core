@@ -7,19 +7,12 @@ import {
   type AgentSession,
   type AgentSessionEvent,
   createAgentSession,
-  createAgentSessionRuntime,
-  createAgentSessionServices,
-  createAgentSessionFromServices,
-  createMcpExtension,
-  createCodemodeExtension,
-  createToolSearchExtension,
-  InteractiveMode,
   DefaultResourceLoader,
   getAgentDir,
   ModelRuntime,
   SessionManager,
 } from "@earendil-works/pi-coding-agent";
-import type { AgentRuntime, OpenSessionOptions, PromptOptions, RuntimeSession, RuntimeSessionStatus, TurnEvent } from "../types.js";
+import type { AgentRuntime, OpenSessionOptions, PromptOptions, RuntimeSession, RuntimeSessionStatus, TurnEvent, LoginUI } from "../types.js";
 
 const THINKING = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 type Thinking = (typeof THINKING)[number];
@@ -204,44 +197,6 @@ export class PiSession implements RuntimeSession {
   }
 }
 
-/** Native PI UI, backed by one session runtime (including /new and /resume replacements). */
-export async function runInteractive(opts: Pick<PiRuntimeOptions, "cwd" | "model" | "thinking" | "tools" | "skillPaths" | "personaSections">): Promise<void> {
-  const agentDir = getAgentDir();
-  const runtime = await createAgentSessionRuntime(async ({ cwd, sessionManager, sessionStartEvent }) => {
-    const sections = await opts.personaSections();
-    const services = await createAgentSessionServices({
-      cwd, agentDir,
-      resourceLoaderOptions: {
-        additionalSkillPaths: opts.skillPaths,
-        appendSystemPromptOverride: (base) => [...base, ...sections],
-        extensionFactories: [createCodemodeExtension({ mode: "on" }), createToolSearchExtension(), createMcpExtension()],
-      },
-    });
-    let model;
-    if (opts.model) {
-      const ref = parseModelRef(opts.model);
-      model = services.modelRuntime.getModel(ref.provider, ref.id);
-      if (!model) throw new Error(`Unknown configured model: ${opts.model}`);
-    }
-    if (opts.thinking && !(THINKING as readonly string[]).includes(opts.thinking)) throw new Error(`Invalid thinking level: ${opts.thinking}`);
-    return {
-      ...(await createAgentSessionFromServices({
-        services, sessionManager, sessionStartEvent, model,
-        thinkingLevel: opts.thinking as Thinking | undefined,
-        tools: opts.tools,
-        noTools: opts.tools?.length === 0 ? "all" : undefined,
-      })),
-      services,
-      diagnostics: services.diagnostics,
-    };
-  }, { cwd: opts.cwd, agentDir, sessionManager: SessionManager.create(opts.cwd) });
-  try {
-    await new InteractiveMode(runtime, { startupDiagnostics: [...runtime.diagnostics] }).run();
-  } finally {
-    await runtime.dispose();
-  }
-}
-
 export class PiRuntime implements AgentRuntime {
   readonly name = "pi";
   private modelsRuntime?: ModelRuntime;
@@ -255,6 +210,22 @@ export class PiRuntime implements AgentRuntime {
 
   async reload(): Promise<void> {
     this.modelsRuntime = undefined;
+  }
+
+  async login(ui: LoginUI): Promise<void> {
+    const models = await this.modelRuntime();
+    const choices = models.getProviders().flatMap((p) => [
+      ...(p.auth.oauth ? [{ id: `${p.id}:oauth`, label: `${p.name} (OAuth)` }] : []),
+      ...(p.auth.apiKey?.login ? [{ id: `${p.id}:api_key`, label: `${p.name} (API key)` }] : []),
+    ]);
+    const choice = await ui.select("Login provider", choices);
+    const split = choice.lastIndexOf(":");
+    await models.login(choice.slice(0, split), choice.slice(split + 1) as "oauth" | "api_key", {
+      prompt: (p) => p.type === "select"
+        ? ui.select(p.message, p.options.map((o) => ({ id: o.id, label: o.label })))
+        : ui.prompt(p.message, p.type === "secret"),
+      notify: (e) => ui.notify(e.type === "auth_url" ? e.url : e.type === "device_code" ? `${e.verificationUri} Code: ${e.userCode}` : e.message),
+    });
   }
 
   async models(): Promise<string[]> {

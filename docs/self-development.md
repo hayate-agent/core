@@ -1,8 +1,8 @@
 # Local use and developing the harness with itself
 
 This is an additive installation: it does not remove or stop Hermes or PI. The
-harness embeds PI as its model/tool runtime. Bare invocation opens PI's real
-interactive TUI in the current directory, including login/model/session UI. The
+harness embeds PI as its model/tool runtime. Bare invocation opens the Harness
+TUI in the current directory, with local login/model dialogs and Harness commands. The
 explicit `run` command remains the gateway with a line-based console. Matrix and the API provide the
 persistent gateway path. Slack, managed MCP/CLI installation and automatic runtime
 promotion/rollback remain unimplemented.
@@ -46,10 +46,11 @@ The selected read/bash/edit/write tools permit actual source edits and builds as
 your user. No root or immutable-image modification is needed. This is development
 capability, not isolation: tools have the permissions of your OS account.
 
-Interactive sessions use PI's workspace session store and UI, not the gateway inbox,
-scheduler or channel lifecycle. Configured persona and tools apply to new sessions.
-The built-in PI MCP extension reads PI's mcp.json in interactive mode; runtime-neutral
-Harness MCP lifecycle configuration is still future work.
+Interactive input uses the same Harness inbox, scheduler, commands and runtime as
+the gateway. Session history is under the Harness home. `/new` resets the active
+local session; a session-history picker and arbitrary PI extension UI dialogs are
+not yet supported. Native MCP extension discovery from the old PI-wrapper mode
+is not enabled here; runtime-neutral MCP support remains future work.
 
 The running Node process does not hot-replace imported code. After a successful
 build, use a second terminal to smoke-test `node dist/cli.js version` and

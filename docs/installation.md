@@ -31,7 +31,7 @@ cd /path/to/your/project
 vanillacore-harness
 ```
 
-This opens the real PI TUI in the current directory. No `init`, `doctor`, model
+This opens the Harness TUI (using PI terminal components) in the current directory. No `init`, `doctor`, model
 placeholder or copied example configuration is required. Existing PI login,
 provider, settings and extension configuration is reused from `~/.pi/agent`, or
 from `PI_CODING_AGENT_DIR` when set. Use the TUI's `/login` and `/model` controls
@@ -50,9 +50,8 @@ connectivity. Neither is a prerequisite for interactive use. See
 
 ### Gateway / background service
 
-`vanillacore-harness run` starts the separate persistent gateway, not the PI TUI.
-Interactive mode does not concurrently run gateway channels or the Harness
-scheduler. For a headless API service, set `API_SERVER_KEY`. Matrix is enabled through
+`vanillacore-harness run` starts the same persistent Harness without its TUI.
+Interactive mode runs the Harness scheduler and configured gateway channels too. For a headless API service, set `API_SERVER_KEY`. Matrix is enabled through
 `MATRIX_*` variables (see the main README). Slack is not implemented yet.
 For an always-on native service use your OS supervisor (systemd on Linux/WSL with
 systemd enabled, launchd on macOS), preserving HOME, PATH and your secret injection.
@@ -100,7 +99,7 @@ restart after changes. Provision a persistent volume usable by uid/gid 1000.
 
 The TypeScript suite is runtime-independent where possible. Verified on macOS and
 Linux (WSL2): dependency installation, typecheck, all 176 tests and native CLI builds.
-The real interactive TUI was started in a pseudoterminal on macOS and Linux (WSL2),
+The previous PI-wrapper TUI was started in a pseudoterminal on macOS and Linux (WSL2),
 and `/quit` exited successfully. The Linux container build and CLI version were
 also verified with Node 24.22.1. These tests do not replace live model/provider
 or channel integration tests.

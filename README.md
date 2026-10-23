@@ -68,8 +68,8 @@ is on (otherwise only the console).
 
 See [installation instructions](docs/installation.md) for Linux, macOS, Windows-WSL,
 Docker Compose and Kubernetes/GitOps. A Dockerfile and Compose example are included.
-Run `vanillacore-harness` in any project directory to open the native PI TUI; no init
-is required. Existing PI login/model settings are reused. `init` and `doctor` are optional
+Run `vanillacore-harness` in any project directory to open the Harness TUI; no init
+is required. Existing PI provider settings are reused; /login and /model open local dialogs. `init` and `doctor` are optional
 administrative helpers. `vanillacore-harness run` starts the separate gateway mode.
 See [local self-development](docs/self-development.md) to use the harness as a coding agent
 in its own user-owned checkout, or run it as a Linux user service.
