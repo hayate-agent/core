@@ -31,7 +31,11 @@ cd /path/to/your/project
 vanillacore-harness
 ```
 
-This opens the Harness TUI (using PI terminal components) in the current directory. No `init`, `doctor`, model
+This opens the Harness TUI (using PI terminal components) in the current directory.
+Each launch starts a fresh, workspace-scoped conversation. Use `/sessions` and
+`/resume` to explicitly select an earlier conversation, or `/new [title]` to start
+another. The active session is shown in the header; resumed history is displayed.
+See [session management](sessions.md) for storage, locking and migration details. No `init`, `doctor`, model
 placeholder or copied example configuration is required. Existing PI login,
 provider, settings and extension configuration is reused from `~/.pi/agent`, or
 from `PI_CODING_AGENT_DIR` when set. Use the TUI's `/login` and `/model` controls
