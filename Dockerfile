@@ -23,6 +23,8 @@ WORKDIR /opt/vanillacore-harness
 COPY --from=build /src/package.json ./
 COPY --from=build /src/node_modules ./node_modules
 COPY --from=build /src/dist ./dist
+COPY docs ./docs
+COPY LICENSE ./LICENSE
 RUN ln -s /opt/vanillacore-harness/dist/cli.js /usr/local/bin/vanillacore-harness \
     && chmod 0755 dist/cli.js
 

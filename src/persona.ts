@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { developmentContext } from "./development.js";
 
 /**
  * Persona = identity (SOUL.md) + voice (VOICE.md: personality, tone, style).
@@ -63,6 +64,7 @@ export function personaSections(persona: Persona, context: AgentContext = {}): s
       "Report unavailable integrations honestly; configured capability is not proof of authenticated access. Never expose credentials in output or commits.",
     ].join("\n"),
   ];
+  out.push(developmentContext());
   if (persona.soul) out.push(`# Identity\n\n${persona.soul}`);
   if (persona.voice) out.push(`# Voice\n\nThis is how you sound everywhere (chat, reports, scheduled output). Stay in this voice.\n\n${persona.voice}`);
   if (persona.personality) out.push(`# Personality: ${persona.personality.name}\n\n${persona.personality.text}`);
