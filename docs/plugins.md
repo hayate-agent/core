@@ -57,9 +57,49 @@ Cleanup must terminate promptly; there is no timeout/sandbox guarantee. Invalid
 plugins fail startup rather than silently disappear. External side effects are
 not transactional. Use /help to inspect registered commands.
 
+## Channels
+
+During activation, call `api.registerChannel(transport)` with a unique lowercase
+name, async `start(deliver)`, `send(to, text, meta?)`, and `stop(budgetMs?)` methods.
+Optional `typing(to, on)` and `turnEvent(to, event)` methods receive best-effort
+progress. Names console, api and matrix are reserved even when disabled.
+
+```js
+api.registerChannel({
+  name: "my-chat",
+  async start(deliver) {
+    // Subscribe using your transport; await deliver before acknowledging upstream:
+    // await deliver({session: roomId, target: roomId, text, sender, id: eventId});
+  },
+  async send(to, text, meta) {
+    // Send to to.target; use meta's stable delivery ID for upstream deduplication.
+  },
+  async stop(budgetMs) {
+    // Unsubscribe and close transport connections within the supplied budget.
+  },
+});
+```
+
+`deliver` accepts `{session, target, text, sender?, id?, thread?}`. Session/target
+must be nonempty strings. The host fixes source and reply-channel fields and
+namespaces session keys and message IDs; a transport cannot claim console trust
+through message metadata. IDs must be unique per channel, including across rooms.
+The namespace is stable across restarts, enabling normal durable inbox/outbox and
+dedup behavior. Do not rename a channel without considering its persisted work.
+Sender identity must come from authenticated upstream metadata, not message text.
+When any plugin channel is configured, empty admin lists fail closed for remote
+commands. Configure admins explicitly; local console access remains trusted.
+
+The Harness owns start/stop and response routing. Do not run another model loop.
+Start must establish the connection and return, not wait forever for messages.
+If any channel start fails, startup attempts Harness stop before plugin cleanup.
+Stop may be called even when start did not complete: make it safe and idempotent.
+Register activation-time resource cleanup with onStop. There is no transport
+sandbox or protection against malicious plugin code ignoring the API contract.
+
 ## Deliberate limits
 
-Version 1 exposes commands and lifecycle only. Runtime-neutral model tools,
-channel factories, UI panels, package installation and secret references still
+Version 1 exposes commands, channels and lifecycle. Runtime-neutral model tools,
+UI panels, package installation and secret references still
 need dedicated contracts and tests. PI runtime extensions remain independent.
 No plugin gets the internal Harness object or starts another agent loop.

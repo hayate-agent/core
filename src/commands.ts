@@ -440,7 +440,7 @@ export const COMMANDS: Command[] = [
     help: "Show available commands",
     run: async () => COMMANDS.map((c) => `/${c.name}${c.aliases?.length ? ` (${c.aliases.map((a) => `/${a}`).join(" ")})` : ""}: ${c.help}`).join("\n"),
   },
-  { name: "harness", help: "Locate built-in Harness customization/development guide", run: async () => `VanillaCore Agent Harness development guide: ${developmentGuide}\nRead this guide before changing the Harness. Identity/voice, tools and models are configurable; native plugins support commands/lifecycle (see plugins.md); tool/channel/UI plugin APIs and automatic runtime promotion remain planned.` },
+  { name: "harness", help: "Locate built-in Harness customization/development guide", run: async () => `VanillaCore Agent Harness development guide: ${developmentGuide}\nRead this guide before changing the Harness. Identity/voice, tools and models are configurable; native plugins support commands/channels/lifecycle (see plugins.md); tool/UI plugin APIs and automatic runtime promotion remain planned.` },
   { name: "version", help: "Show version", run: async (_a, _i, ctx) => `vanillacore-harness ${VERSION} (runtime: ${ctx.harness.runtime.name})` },
 ];
 
