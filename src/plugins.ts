@@ -149,7 +149,7 @@ export class PluginHost {
                   (command.admin !== undefined && typeof command.admin !== "boolean")) throw new Error("Invalid plugin command");
               if (names.has(command.name)) throw new Error(`Command conflict: /${command.name}`);
               names.add(command.name);
-              this.commands.set(command.name, Object.freeze({ ...command, admin: command.admin ?? true }));
+              this.commands.set(command.name, Object.freeze({ ...command, admin: command.admin ?? true, run: command.run.bind(command) }));
             },
             registerCompaction: (name: string, strategy: CompactionStrategy) => {
               if (!registering) throw new Error("Plugin registration is closed");
@@ -174,13 +174,13 @@ export class PluginHost {
                   typeof tool.description !== "string" || !tool.description.trim() || typeof tool.execute !== "function" ||
                   !tool.parameters || tool.parameters.type !== "object" || Array.isArray(tool.parameters)) throw new Error("Invalid plugin tool");
               if (this.tools.has(tool.name)) throw new Error(`Tool conflict: ${tool.name}`);
-              this.tools.set(tool.name, Object.freeze({ ...tool, parameters: structuredClone(tool.parameters) }));
+              this.tools.set(tool.name, Object.freeze({ ...tool, parameters: structuredClone(tool.parameters), execute: tool.execute.bind(tool) }));
             },
             registerPanel: (panel: PluginPanel) => {
               if (!registering) throw new Error("Plugin registration is closed");
               if (!panel || typeof panel.name !== "string" || !/^[a-z][a-z0-9_-]*$/.test(panel.name) || typeof panel.render !== "function") throw new Error("Invalid plugin panel");
               if (this.panels.has(panel.name)) throw new Error(`Panel conflict: ${panel.name}`);
-              this.panels.set(panel.name, Object.freeze({ ...panel }));
+              this.panels.set(panel.name, Object.freeze({ ...panel, render: panel.render.bind(panel) }));
             },
             registerChannel: (channel: PluginChannel) => {
               if (!registering) throw new Error("Plugin registration is closed");
