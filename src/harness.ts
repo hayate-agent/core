@@ -83,6 +83,7 @@ export interface HarnessOptions {
   goalMaxTurns?: number;
   /** Core lifecycle boundary; runs before the working agent starts. */
   beforeTurn?: (input: Inbound) => Promise<void>;
+  memory?: { recall(sessionKey: string, text: string): Promise<string>; capture(turn: import("./memory.js").MemoryTurn): Promise<void> };
   contextMaintenance?: {
     guidance(key: string, session: RuntimeSession): Promise<string>;
     boundary(key: string, session: RuntimeSession, rotate: (handover: import("./context-maintenance.js").ContextRecord["handover"]) => Promise<RuntimeSession>, target?: Address): Promise<string | undefined>;
@@ -608,6 +609,7 @@ export class Harness {
         if (replayable(input)) {
           // Durable before the turn runs, so a crash during it is charged to this input.
           input.started = true;
+          input.memoryRecordedAt ??= Date.now();
           let saved = true;
           await Promise.resolve(this.onStateChange?.()).catch((err) => {
             saved = false;
@@ -661,9 +663,11 @@ export class Harness {
     let telemetry = Promise.resolve().then(() => typingCh?.turnStatus?.(to!, input, "started")).catch(() => undefined);
     let telemetryEvents = 0;
     let telemetryTools = 0;
+    let memoryTools = 0;
     await typingCh?.typing?.(to!, true).catch(() => undefined);
-    const onEvent = typingCh?.turnEvent
-      ? (event: TurnEvent) => {
+    const onEvent = (event: TurnEvent) => {
+          if (event.type === "tool" && event.phase === "end") memoryTools++;
+          if (!typingCh?.turnEvent) return;
           // Only lifecycle-aware gateways need ordering; preserve live TUI/API streaming.
           if (typingCh.turnStatus) {
             const tool = event.type === "tool";
@@ -674,13 +678,13 @@ export class Harness {
             try { typingCh.turnEvent!(to!, event, input); } catch { /* best effort */ }
           }
         }
-      : undefined;
+      ;
     const abort = new AbortController();
     this.turnAbort.set(s.key, abort);
     try {
       await this.opts.beforeTurn?.(input);
       const session = await this.sessionFor(s.key);
-      const guidance = await this.opts.contextMaintenance?.guidance(s.key, session);
+      const guidance = (await this.opts.contextMaintenance?.guidance(s.key, session) ?? "") + (await this.opts.memory?.recall(s.key, input.text) ?? "");
       const text = input.replyOptional
         ? `${input.text}\n\n(Not addressed to you directly. Reply only if you have something useful to add; otherwise reply exactly ${NO_REPLY}.)`
         : input.text;
@@ -737,6 +741,10 @@ export class Harness {
     }
     if (this.frozen) throw new Error("shut down after inbox snapshot; input will replay");
     const finalStatus = outcome ?? "completed";
+    if (!this.frozen) {
+      try { await this.opts.memory?.capture({ id: input.id, sessionKey: s.key, text: input.text, reply, outcome: finalStatus, tools: memoryTools, recordedAt: input.memoryRecordedAt }); }
+      catch { this.log("memory capture failed; turn completion continues"); }
+    }
     void telemetry.then(() => typingCh?.turnStatus?.(to!, input, finalStatus)).catch(() => undefined);
     s.lastActivity = this.now();
     if (s.goal && input.source === "goal") {

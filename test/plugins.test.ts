@@ -66,6 +66,20 @@ test("plugins register tools and panels and reject duplicate or unsafe names", a
   }
 });
 
+test("memory provider registration is pluggable, reserves local and rolls back duplicates", async () => {
+  await fixture(`export default {apiVersion:1,activate(api){api.registerMemoryProvider('external',async ctx=>({label:ctx.home}))}}`, async (host, home) => {
+    await host.load(['plugin.mjs'], context(home), []);
+    const provider = await host.memoryProviders.get('external')!({ home, config: {} as any });
+    assert.equal((provider as any).label, home);
+  });
+  for (const names of [["local"], ["external", "external"]]) {
+    await fixture(`export default {apiVersion:1,activate(api){${names.map((name) => `api.registerMemoryProvider('${name}',async()=>({}));`).join('')}}}`, async (host, home) => {
+      await assert.rejects(host.load(['plugin.mjs'], context(home), []), /memory provider/);
+      assert.equal(host.memoryProviders.size, 0);
+    });
+  }
+});
+
 test("compaction plugin preserves class methods and receiver state", async () => {
   await fixture(`export default {apiVersion:1,activate(api){
     class Policy { prefix='Retain: '; async compact(ctx){await ctx.compactNative(this.prefix+ctx.instructions)} }
