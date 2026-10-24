@@ -46,6 +46,7 @@ interface NightState {
   done?: boolean;
   results: string[];
   reportQueued?: boolean;
+  nextNightRequested?: string;
 }
 const KEY = "improvement:nightly";
 /** Controller owns time/budget, while Harness owns execution, review, inbox and delivery. */
@@ -131,6 +132,10 @@ export class ImprovementController {
       await this.load();
       const p = await this.policy();
       const w = improvementWindow(this.now(), p);
+      if (cronStart && p.enabled && w.active && this.state && this.state.night !== w.night) {
+        this.state.nextNightRequested = w.night;
+        await this.save();
+      }
       const session = this.harness.sessions.get(KEY);
       const busy = session?.running || session?.queue.length || session?.outbox.length;
       // Report previous window even when disabled meanwhile. Outbox owns retry.
@@ -145,7 +150,7 @@ export class ImprovementController {
       }
       if (!p.enabled || !w.active) return;
       if (!this.state || this.state.night !== w.night) {
-        if (!cronStart) return;
+        if (!cronStart && this.state?.nextNightRequested !== w.night) return;
         if (this.state && !this.state.reportQueued) return;
         this.state = { version: 1, night: w.night, turns: 0, results: [] };
         await this.save(); // persist Cron intent even if interactive work delays execution
