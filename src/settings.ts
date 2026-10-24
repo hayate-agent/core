@@ -2,6 +2,7 @@ import { mkdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { parse, stringify } from "yaml";
 import { writeFileDurable } from "./durable.js";
+import { pruningPolicy, type PruningPolicy } from "./tool-result-pruning.js";
 import { contextPolicy, type ContextPolicy } from "./context-maintenance.js";
 import { validateModelSetting, type ModelSetting } from "./model-settings.js";
 
@@ -11,14 +12,18 @@ export interface LocalSettings {
   thinking?: string;
   review?: { model?: string; thinking?: string };
   contextMaintenance?: Partial<ContextPolicy>;
+  toolResultPruning?: Partial<PruningPolicy>;
 }
 export type SettingPath = "model" | "thinking" | "review.model" | "review.thinking";
 const keys: Record<SettingPath, ModelSetting> = { model: "model", thinking: "thinking", "review.model": "reviewModel", "review.thinking": "reviewThinking" };
-function validate(value: unknown, defaults: Partial<ContextPolicy> = {}): asserts value is LocalSettings {
+function validate(value: unknown, defaults: Partial<ContextPolicy> = {}, pruningDefaults: Partial<PruningPolicy> = {}): asserts value is LocalSettings {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid local settings overlay");
   const data = value as Record<string, unknown>;
   for (const [key, item] of Object.entries(data)) {
-    if (key === "contextMaintenance") {
+    if (key === "toolResultPruning") {
+      if (!item || typeof item !== "object" || Array.isArray(item)) throw new Error("Invalid pruning overlay");
+      pruningPolicy({ ...pruningDefaults, ...item });
+    } else if (key === "contextMaintenance") {
       if (!item || typeof item !== "object" || Array.isArray(item)) throw new Error("Invalid context policy overlay");
       const allowed = ["enabled", "checkEveryTurns", "assessPercent", "compactPercent", "cooldownTurns", "autoHandover"];
       if (Object.keys(item).some((k) => !allowed.includes(k))) throw new Error("Unsupported context setting");
@@ -45,13 +50,13 @@ export class SettingsService {
   async load(): Promise<void> {
     try {
       const data = parse(await readFile(this.file, "utf8"));
-      validate(data, this.defaults.contextMaintenance);
+      validate(data, this.defaults.contextMaintenance, this.defaults.toolResultPruning);
       this.overlay = data;
     } catch (err) { if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err; }
   }
   snapshot(): LocalSettings { return structuredClone(this.overlay); }
   effective(): LocalSettings {
-    return { ...this.defaults, ...this.overlay, review: { ...this.defaults.review, ...this.overlay.review }, contextMaintenance: { ...this.defaults.contextMaintenance, ...this.overlay.contextMaintenance } };
+    return { ...this.defaults, ...this.overlay, review: { ...this.defaults.review, ...this.overlay.review }, contextMaintenance: { ...this.defaults.contextMaintenance, ...this.overlay.contextMaintenance }, toolResultPruning: { ...this.defaults.toolResultPruning, ...this.overlay.toolResultPruning } };
   }
   source(key: SettingPath): "local overlay" | "installation/default" {
     const value = key.startsWith("review.") ? this.overlay.review?.[key.slice(7) as "model" | "thinking"] : this.overlay[key as "model" | "thinking"];
@@ -61,7 +66,7 @@ export class SettingsService {
     const next = this.writing.catch(() => {}).then(async () => {
       const updated = this.snapshot();
       updated.contextMaintenance = { ...updated.contextMaintenance, ...value };
-      validate(updated, this.defaults.contextMaintenance);
+      validate(updated, this.defaults.contextMaintenance, this.defaults.toolResultPruning);
       contextPolicy({ ...this.defaults.contextMaintenance, ...updated.contextMaintenance });
       await mkdir(path.dirname(this.file), { recursive: true });
       await writeFileDurable(this.file, stringify(updated));
@@ -84,7 +89,7 @@ export class SettingsService {
         const field = key as "model" | "thinking";
         if (value === undefined) delete updated[field]; else updated[field] = value;
       }
-      validate(updated, this.defaults.contextMaintenance);
+      validate(updated, this.defaults.contextMaintenance, this.defaults.toolResultPruning);
       await mkdir(path.dirname(this.file), { recursive: true });
       await writeFileDurable(this.file, stringify(updated));
       this.overlay = updated;
