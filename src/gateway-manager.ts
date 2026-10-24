@@ -48,7 +48,10 @@ export class GatewayManager {
       for (const [name, change] of this.pending) {
         try {
           await this.harness.replaceGateway(name, change.instance?.channel);
-          if (change.instance) this.active.set(name, change.instance); else this.active.delete(name);
+          if (change.instance) {
+            this.active.set(name, change.instance);
+            this.harness.home ??= change.instance.home;
+          } else this.active.delete(name);
           this.pending.delete(name); this.errors.delete(name);
         } catch (err) {
           const message = (err as Error).message;
@@ -62,7 +65,7 @@ export class GatewayManager {
   plugin(): PluginModule {
     return { apiVersion: 1, activate: (api) => {
       api.registerCommand({ name: "gateway-plugin", help: "Runtime gateway modules: status | reload <id> | use <id> <module-path> | disable <id> | baseline <id>", run: async (args) => {
-        const [action = "status", name, ...rest] = args.trim().split(/\s+/);
+        const [action = "status", name, ...rest] = args.trim().split(/\s+/).filter(Boolean);
         if (action === "status") return this.status();
         if (!name || !/^[a-z][a-z0-9_-]*$/.test(name) || ["console", "api"].includes(name)) throw Error("Invalid gateway ID");
         if (action === "use" && rest.length === 1) await this.settings.setGatewayPlugin(name, { module: rest[0] });

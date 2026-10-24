@@ -70,7 +70,11 @@ export class SettingsService {
   }
   snapshot(): LocalSettings { return structuredClone(this.overlay); }
   effective(): LocalSettings {
-    return { ...this.defaults, ...this.overlay, memory: { ...this.defaults.memory, ...this.overlay.memory }, gateways: { ...this.defaults.gateways, ...this.overlay.gateways, overrides: { ...this.defaults.gateways?.overrides, ...this.overlay.gateways?.overrides } }, review: { ...this.defaults.review, ...this.overlay.review }, contextMaintenance: { ...this.defaults.contextMaintenance, ...this.overlay.contextMaintenance }, toolResultPruning: { ...this.defaults.toolResultPruning, ...this.overlay.toolResultPruning } };
+    const overrides: NonNullable<GatewayConfig["overrides"]> = {};
+    for (const name of new Set([...Object.keys(this.defaults.gateways?.overrides ?? {}), ...Object.keys(this.overlay.gateways?.overrides ?? {})])) {
+      overrides[name] = { ...this.defaults.gateways?.overrides?.[name], ...this.overlay.gateways?.overrides?.[name] };
+    }
+    return { ...this.defaults, ...this.overlay, memory: { ...this.defaults.memory, ...this.overlay.memory }, gateways: { ...this.defaults.gateways, ...this.overlay.gateways, overrides }, review: { ...this.defaults.review, ...this.overlay.review }, contextMaintenance: { ...this.defaults.contextMaintenance, ...this.overlay.contextMaintenance }, toolResultPruning: { ...this.defaults.toolResultPruning, ...this.overlay.toolResultPruning } };
   }
   source(key: SettingPath): "local overlay" | "installation/default" {
     const value = key.startsWith("review.") ? this.overlay.review?.[key.slice(7) as "model" | "thinking"] : this.overlay[key as "model" | "thinking"];

@@ -19,6 +19,9 @@ test("gateway plugin override activation, disable, baseline and failed-start rol
   const harness = new Harness({ runtime: new FakeRuntime(), tickMs: 60000 });
   const manager = new GatewayManager(harness, settings, { home, agent: "test", approvers: [] }, { test: path.join(home, "baseline.mjs") });
   await manager.load();
+  let command: any;
+  await manager.plugin().activate({ registerCommand: (c: any) => { command = c; } } as any, {} as any);
+  assert.equal(await command.run(""), manager.status());
   assert.equal((harness.channels.get("test") as any).label, "base");
   await settings.setGatewayPlugin("test", { module: "custom.mjs" });
   await manager.request("test"); await manager.tick();
@@ -35,6 +38,22 @@ test("gateway plugin override activation, disable, baseline and failed-start rol
   assert.equal((harness.channels.get("test") as any).label, "base");
   const restored = new SettingsService(settings.file, {}); await restored.load();
   assert.deepEqual(restored.effective().gatewayPlugins, {});
+});
+
+test("runtime activation adopts missing home without overwriting an explicit destination", async (t) => {
+  const home = await mkdtemp(path.join(os.tmpdir(), "gateway-home-"));
+  t.after(() => rm(home, { recursive: true, force: true }));
+  await writeFile(path.join(home, "gateway.mjs"), `export default {apiVersion:1,async create(){return {home:{channel:'test',target:'room'},channel:{name:'test',async start(){},async stop(){},async send(){}}}}}`);
+  for (const explicit of [false, true]) {
+    const settings = new SettingsService(path.join(home, `settings-${explicit}.yaml`), {}); await settings.load();
+    await settings.setGatewayPlugin("test", { disabled: true });
+    const harness = new Harness({ runtime: new FakeRuntime(), tickMs: 60000 });
+    if (explicit) harness.home = { channel: "other", target: "operator" };
+    const manager = new GatewayManager(harness, settings, { home, agent: "test", approvers: [] }, { test: path.join(home, "gateway.mjs") });
+    await manager.load();
+    await settings.setGatewayPlugin("test", undefined); await manager.request("test"); await manager.tick();
+    assert.deepEqual(harness.home, explicit ? { channel: "other", target: "operator" } : { channel: "test", target: "room" });
+  }
 });
 
 test("replacement is refused during an active turn", async () => {
