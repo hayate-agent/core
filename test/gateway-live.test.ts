@@ -31,6 +31,14 @@ test("gateway command persists and live applies settings, invalid changes have n
   assert.equal(restored.effective().gateways?.statusReactions, true);
 });
 
+test("partial channel overlays preserve baseline privacy and reaction fields", async (t) => {
+  const home = await mkdtemp(path.join(os.tmpdir(), "gateway-inheritance-"));
+  t.after(() => rm(home, { recursive: true, force: true }));
+  const settings = new SettingsService(path.join(home, "settings.yaml"), { gateways: { progress: "full", overrides: { matrix: { progress: "off", statusReactions: true } } } });
+  await settings.load(); await settings.setGateways({ overrides: { matrix: { statusReactions: false } } });
+  assert.deepEqual(settings.effective().gateways?.overrides?.matrix, { progress: "off", statusReactions: false });
+});
+
 test("memory embedding settings persist without secret values and reject invalid overlays", async (t) => {
   const home = await mkdtemp(path.join(os.tmpdir(), "memory-settings-"));
   t.after(() => rm(home, { recursive: true, force: true }));
