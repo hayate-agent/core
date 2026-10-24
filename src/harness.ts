@@ -152,8 +152,9 @@ export class Harness {
 
   /** Refuse replacement while any turn or delivery is using the adapter. Caller retries at a safe boundary. */
   private gatewayChanging = false;
+  private activeDeliveries = 0;
   async replaceGateway(name: string, candidate?: Channel): Promise<void> {
-    if (this.gatewayChanging || this.stopping) throw Error("Gateway replacement requires an idle turn boundary; retry after current work completes");
+    if (this.gatewayChanging || this.activeDeliveries || this.stopping) throw Error("Gateway replacement requires an idle turn boundary; retry after current work completes");
     if ([...this.sessions.values()].some((s) => s.running) || this.inbox.accepting.size) throw Error("Gateway replacement requires an idle turn boundary; retry after current work completes");
     if (candidate && candidate.name !== name) throw Error("Gateway channel name mismatch");
     const old = this.channels.get(name);
@@ -855,9 +856,14 @@ export class Harness {
       this.log(`no address for reply, handled locally: ${text.slice(0, 80)}`);
       return;
     }
+    // Reserve synchronously with replacement's idle check: no adapter can be
+    // stopped while send() is pending, and no new send enters during activation.
+    if (this.gatewayChanging) throw new Error("Gateway replacement in progress; retry delivery");
     const ch = this.channels.get(target.channel);
     if (!ch) throw new Error(`unknown channel ${target.channel}`);
-    await ch.send(target, text, meta);
+    this.activeDeliveries++;
+    try { await ch.send(target, text, meta); }
+    finally { this.activeDeliveries--; }
   }
 
   // ---------------------------------------------------------------- loop tick
