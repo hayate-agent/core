@@ -34,6 +34,7 @@ export interface ContextRecord {
   pending?: Request;
   handover?: { phase: "prepared" | "switched"; from: string; to?: string; text: string; archiveId?: string };
   lastError?: string;
+  completionNotice?: string;
 }
 const preserve = "Preserve operator intent and corrections, decisions and rejected alternatives, verified results versus assumptions, branch/commits/PR/deployment status, unfinished work, review findings and budget references, exact relevant paths and next steps. Never include credentials. Do not claim builds activate deployments. Do not repeat completed side effects.";
 
@@ -89,6 +90,10 @@ export class ContextMaintenance {
         await session.seedHandover(state.handover.text);
         state.handover.phase = "switched";
         state.handover.to = id;
+        if (state.handover.archiveId) await this.archives.link(key, state.handover.archiveId, id);
+        state.completionNotice = state.handover.archiveId
+          ? "🔄 Neue Sitzung übernommen; Rückschau gespeichert."
+          : "🔄 Neue Sitzung übernommen.";
         state.sessionId = id;
         await this.save(key, state);
       } else if (state.sessionId !== id && state.handover?.phase !== "prepared") {
@@ -103,12 +108,18 @@ export class ContextMaintenance {
     if (!policy.enabled || percent === undefined || percent < policy.assessPercent || state.turns % policy.checkEveryTurns !== 0) return "";
     return `Context usage is ${Math.round(percent)}%. Assess whether compaction is useful at this task boundary. If needed request plugin_context_maintenance with what to preserve and how to resume. Continue normally if continuity is more important. ${preserve}`;
   }
-  async boundary(key: string, session: RuntimeSession, rotate: (handover: ContextRecord["handover"]) => Promise<RuntimeSession>): Promise<void> {
-    await this.serial(async () => {
+  async boundary(key: string, session: RuntimeSession, rotate: (handover: ContextRecord["handover"]) => Promise<RuntimeSession>): Promise<string | undefined> {
+    return this.serial(async () => {
       const policy = this.policy();
       if (!policy.enabled) return;
       const state = await this.load(key);
       const id = session.status().sessionId;
+      if (state.completionNotice) {
+        const notice = state.completionNotice;
+        state.completionNotice = undefined;
+        await this.save(key, state);
+        return notice;
+      }
       // Recover prepared transitions before considering a new maintenance action.
       if (state.handover?.phase === "prepared") {
         if (id === state.handover.from) {
@@ -128,7 +139,9 @@ export class ContextMaintenance {
         if (state.handover.archiveId) await this.archives.link(key, state.handover.archiveId, state.handover.to!);
         state.sessionId = state.handover.to;
         await this.save(key, state);
-        return;
+        return state.handover.archiveId
+          ? "🔄 Neue Sitzung übernommen; Rückschau gespeichert."
+          : "🔄 Neue Sitzung übernommen.";
       }
       state.sessionId = id;
       state.turns++;
@@ -139,6 +152,7 @@ export class ContextMaintenance {
       state.pending = undefined;
       state.lastMaintenance = state.turns;
       await this.save(key, state); // cooldown reserved even if summarization fails
+      let notice: string;
       try {
         const instructions = `${preserve}\nPreserve additionally: ${request?.preserve ?? "current task state"}\nResume: ${request?.resume ?? "continue with the next queued operator request"}`;
         const handover = request?.action === "handover" || (policy.autoHandover && percent !== undefined && percent >= 90);
@@ -152,10 +166,18 @@ export class ContextMaintenance {
           state.handover = { ...state.handover, phase: "switched", to: next.status().sessionId };
           state.sessionId = next.status().sessionId;
           await this.archives.link(key, prepared.archiveId, state.sessionId);
-        } else await session.compact(instructions);
+          notice = "🔄 Neue Sitzung übernommen; Rückschau gespeichert.";
+        } else {
+          await session.compact(instructions);
+          notice = "♻️ Kontext kompaktiert.";
+        }
         state.lastError = undefined;
-      } catch (err) { state.lastError = "Context maintenance failed; original session or prepared handover retained"; }
+      } catch (err) {
+        state.lastError = "Context maintenance failed; original session or prepared handover retained";
+        notice = "⚠️ Kontextwartung nicht vollständig abgeschlossen; kein bestätigter Abschluss. Wiederherstellungsstand bleibt erhalten.";
+      }
       await this.save(key, state);
+      return notice;
     });
   }
 }
