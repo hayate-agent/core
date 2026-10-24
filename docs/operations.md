@@ -12,9 +12,11 @@ The command requires administrator access, including status queries.
 which tools require approval. `/yolo` preserves that tool selection. Consequently,
 `/yolo off` enables approvals for the configured selection (all tools when empty).
 
-`/help` (alias `/commands`) lists Harness commands separately from registered
-plugin commands, marks administrative commands with `[admin]`, and explains the
-YOLO scope. Migration: scripts relying on bare `/yolo` toggling must use explicit
+`/help` (alias `/commands`) groups general and administrative commands separately,
+sorting each group alphabetically by primary command name. Registered plugin
+commands are included in their corresponding group; `[Harness]` and `[Plugin]`
+identify origin. Administrative commands carry `[admin]`; aliases appear beside
+the primary command, not as duplicate entries. Help also explains the YOLO scope. Migration: scripts relying on bare `/yolo` toggling must use explicit
 `/yolo on` or `/yolo off` instead.
 
 ## Memory pressure
