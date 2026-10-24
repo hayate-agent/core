@@ -12,6 +12,33 @@ function setup(answer?: (t: string, k: string) => string) {
   return { runtime, harness, ch };
 }
 
+test("startup adopts a pending maintenance notice durably with its stable delivery ID", async () => {
+  let acknowledged = false;
+  let saves = 0;
+  const notice = { id: "maintenance-stable-id", sessionKey: "mem:room1", to: ROOM, text: "♻️ Kontext kompaktiert." };
+  const harness = new Harness({ runtime: new FakeRuntime(), tickMs: 60_000, log: () => {}, contextMaintenance: {
+    guidance: async () => "", boundary: async () => undefined,
+    flushNotices: async (deliver) => {
+      if (acknowledged) return;
+      await deliver(notice);
+      assert.ok(saves > 0);
+      acknowledged = true;
+    },
+  } });
+  harness.onStateChange = async () => { saves++; };
+  // Crash after outbox save but before notice acknowledgement: entry already restored.
+  harness.restoreOutbox([notice]);
+  const ch = new MemoryChannel(); harness.addChannel(ch);
+  await harness.start();
+  assert.equal(harness.outboxEntries().length, 1);
+  assert.equal(harness.outboxEntries()[0].id, notice.id);
+  assert.equal(acknowledged, true);
+  harness.releaseRestored();
+  await harness.drained();
+  assert.deepEqual(ch.texts(), [notice.text]);
+  await harness.stop(1000);
+});
+
 test("maintenance notices follow the working reply, including silent turns and failures", async () => {
   for (const answer of ["work done", NO_REPLY]) {
     for (const fails of [false, true]) {

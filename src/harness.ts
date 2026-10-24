@@ -85,7 +85,8 @@ export interface HarnessOptions {
   beforeTurn?: (input: Inbound) => Promise<void>;
   contextMaintenance?: {
     guidance(key: string, session: RuntimeSession): Promise<string>;
-    boundary(key: string, session: RuntimeSession, rotate: (handover: import("./context-maintenance.js").ContextRecord["handover"]) => Promise<RuntimeSession>): Promise<string | undefined>;
+    boundary(key: string, session: RuntimeSession, rotate: (handover: import("./context-maintenance.js").ContextRecord["handover"]) => Promise<RuntimeSession>, target?: Address): Promise<string | undefined>;
+    flushNotices?(deliver: (notice: { id: string; sessionKey: string; to: Address; text: string }) => Promise<void>): Promise<void>;
   };
   /** May feed review findings back into the same serialized working turn. */
   afterTurn?: (input: Inbound, reply: string, session: RuntimeSession, promptOptions: PromptOptions, signal: AbortSignal) => Promise<string>;
@@ -150,6 +151,7 @@ export class Harness {
   async start(): Promise<void> {
     const pins = { pin: (ids: Iterable<string>) => this.pinSeen(ids), unpin: (ids: Iterable<string>) => this.unpinSeen(ids) };
     for (const ch of this.channels.values()) await ch.start((input) => this.accept(input), pins);
+    await this.flushMaintenanceNotices();
     this.timer = setInterval(() => void this.tick(), this.opts.tickMs);
     this.timer.unref?.();
     this.log(`running: runtime=${this.runtime.name} channels=${[...this.channels.keys()].join(",") || "none"}`);
@@ -704,10 +706,11 @@ export class Harness {
               s.session = next;
               await old.dispose();
               return next;
-              });
+              }, input.replyTo ?? s.replyTo ?? this.home);
             } catch {
               maintenanceNotice = "⚠️ Kontextwartung nicht vollständig abgeschlossen; kein bestätigter Abschluss. Wiederherstellungsstand prüfen.";
             }
+            await this.flushMaintenanceNotices();
             if (maintenanceNotice) {
               reply = !reply || reply === NO_REPLY ? maintenanceNotice : `${reply}\n\n${maintenanceNotice}`;
             }
@@ -806,7 +809,24 @@ export class Harness {
   // ---------------------------------------------------------------- loop tick
 
   /** Re-enter idle sessions: heartbeat, /loop, standing goal. Public for tests. */
+  private async flushMaintenanceNotices(): Promise<void> {
+    try {
+      await this.opts.contextMaintenance?.flushNotices?.(async (notice) => {
+        const s = this.state(notice.sessionKey);
+        if (!s.outbox.some((entry) => entry.id === notice.id)) {
+          const entry = { ...notice };
+          s.outbox.push(entry);
+          this.outbox.block(entry);
+        }
+        await this.outbox.barrier();
+      });
+    } catch (err) {
+      this.log(`maintenance notice retained for retry: ${err instanceof Error ? err.message : err}`);
+    }
+  }
+
   async tick(at = this.now()): Promise<void> {
+    await this.flushMaintenanceNotices();
     // Retry loop for undelivered replies / unsaved completions (homeserver or disk back),
     // independent of new input; the tick interval (default 15s) is the backoff. Also while paused.
     if (this.inbox.unsaved.size) void this.persistQueued();
