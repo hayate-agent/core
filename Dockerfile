@@ -38,6 +38,11 @@ COPY --from=build /src/node_modules ./node_modules
 COPY --from=build /src/dist ./dist
 COPY docs ./docs
 COPY LICENSE ./LICENSE
+ARG HARNESS_VERSION=0.1.0
+ARG HARNESS_REVISION=0000000000000000000000000000000000000000
+RUN HARNESS_VERSION="$HARNESS_VERSION" HARNESS_REVISION="$HARNESS_REVISION" node -e 'const fs=require("fs"); const version=process.env.HARNESS_VERSION, revision=process.env.HARNESS_REVISION; if(!/^\d+\.\d+\.\d+$/.test(version)|| !/^[a-f0-9]{40}$/.test(revision)) process.exit(1); fs.writeFileSync("build-info.json", JSON.stringify({version,revision}));'
+LABEL org.opencontainers.image.version=$HARNESS_VERSION \
+      org.opencontainers.image.revision=$HARNESS_REVISION
 RUN ln -s /opt/vanillacore-harness/dist/cli.js /usr/local/bin/vanillacore-harness \
     && chmod 0755 dist/cli.js
 
