@@ -85,7 +85,7 @@ export interface HarnessOptions {
   beforeTurn?: (input: Inbound) => Promise<void>;
   contextMaintenance?: {
     guidance(key: string, session: RuntimeSession): Promise<string>;
-    boundary(key: string, session: RuntimeSession, rotate: (handover: import("./context-maintenance.js").ContextRecord["handover"]) => Promise<RuntimeSession>): Promise<void>;
+    boundary(key: string, session: RuntimeSession, rotate: (handover: import("./context-maintenance.js").ContextRecord["handover"]) => Promise<RuntimeSession>): Promise<string | undefined>;
   };
   /** May feed review findings back into the same serialized working turn. */
   afterTurn?: (input: Inbound, reply: string, session: RuntimeSession, promptOptions: PromptOptions, signal: AbortSignal) => Promise<string>;
@@ -691,7 +691,9 @@ export class Harness {
           reply = (await session.prompt(text, promptOptions)).trim();
           if (s.cancelling !== input && this.opts.afterTurn) reply = await this.opts.afterTurn(input, reply, session, promptOptions, abort.signal);
           if (s.cancelling !== input && !this.stopping && this.opts.contextMaintenance) {
-            await this.opts.contextMaintenance.boundary(s.key, session, async (handover) => {
+            let maintenanceNotice: string | undefined;
+            try {
+              maintenanceNotice = await this.opts.contextMaintenance.boundary(s.key, session, async (handover) => {
               if (!handover) throw new Error("Missing handover");
               const old = s.session!;
               const next = await this.runtime.open(s.key, { fresh: true });
@@ -702,7 +704,13 @@ export class Harness {
               s.session = next;
               await old.dispose();
               return next;
-            });
+              });
+            } catch {
+              maintenanceNotice = "⚠️ Kontextwartung nicht vollständig abgeschlossen; kein bestätigter Abschluss. Wiederherstellungsstand prüfen.";
+            }
+            if (maintenanceNotice) {
+              reply = !reply || reply === NO_REPLY ? maintenanceNotice : `${reply}\n\n${maintenanceNotice}`;
+            }
           }
         } finally {
           s.prompting = false;

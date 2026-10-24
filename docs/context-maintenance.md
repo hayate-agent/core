@@ -29,6 +29,20 @@ checkpoint. Native summaries retain intent/corrections, decisions, verified resu
 Git/PR/deployment state, open work and next steps. Never include secrets. Compaction
 may lose details; persistent review state, inbox and authorization are not summaries.
 
+## Completion notices
+
+After a successful maintenance boundary and saved state, Harness appends a short
+completion notice to the working reply: `♻️ Kontext kompaktiert.` or
+`🔄 Neue Sitzung übernommen; Rückschau gespeichert.`. Recovered older handovers
+without an archive announce only the session switch. A normally silent `NO_REPLY`
+turn still delivers the notice through the normal reply destination/durable outbox.
+No-op checks and cooldowns do not announce success. Failures report that maintenance
+has not fully completed, without exposing model/runtime exception details or claiming
+that the original session is necessarily still active. A pre-prompt recovery reports
+its completion at the next boundary. Notices are not an exactly-once event journal:
+a process crash between maintenance state persistence and reply persistence can lose
+a notice. Builds/merges do not activate this behavior in already running instances.
+
 ## Handover archives and retrospective access
 
 Each handover now captures the original active branch's text entries **before** native

@@ -12,6 +12,27 @@ function setup(answer?: (t: string, k: string) => string) {
   return { runtime, harness, ch };
 }
 
+test("maintenance notices follow the working reply, including silent turns and failures", async () => {
+  for (const answer of ["work done", NO_REPLY]) {
+    for (const fails of [false, true]) {
+      const runtime = new FakeRuntime(() => answer);
+      const harness = new Harness({ runtime, tickMs: 60_000, log: () => {}, contextMaintenance: {
+        guidance: async () => "",
+        boundary: async () => { if (fails) throw Error("private detail"); return "♻️ Kontext kompaktiert."; },
+      } });
+      const ch = new MemoryChannel(); harness.addChannel(ch);
+      await harness.submit(msg("do work"));
+      await harness.drained();
+      assert.equal(ch.texts().length, 1);
+      const text = ch.texts()[0];
+      assert.equal(text.startsWith("work done"), answer !== NO_REPLY);
+      assert.match(text, fails ? /kein bestätigter Abschluss/ : /Kontext kompaktiert/);
+      assert.doesNotMatch(text, /NO_REPLY|private detail/);
+      await harness.stop(1000);
+    }
+  }
+});
+
 test("resume reserves session opening against concurrent resumes and inbound turns", async () => {
   const { harness, runtime, ch } = setup();
   const original = runtime.open.bind(runtime);
