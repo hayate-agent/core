@@ -63,9 +63,20 @@ export class LocalMemory implements MemoryProvider {
     if (this.closed) return;
     try { await this.call("close", []); } finally {
       this.closed = true;
-      const exited = new Promise<void>((resolve) => this.child.once("exit", () => resolve()));
-      this.child.kill("SIGTERM");
-      await Promise.race([exited, new Promise<void>((resolve) => { const t = setTimeout(() => { this.child.kill("SIGKILL"); resolve(); }, 2000); t.unref(); })]);
+      if (this.child.exitCode === null && this.child.signalCode === null) await new Promise<void>((resolve) => {
+        const finish = () => {
+          clearTimeout(timer);
+          this.child.removeListener("exit", finish);
+          resolve();
+        };
+        const timer = setTimeout(() => {
+          if (this.child.exitCode === null && this.child.signalCode === null) this.child.kill("SIGKILL");
+          finish();
+        }, 2000);
+        timer.unref();
+        this.child.once("exit", finish);
+        this.child.kill("SIGTERM");
+      });
     }
   }
 }
