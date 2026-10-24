@@ -10,6 +10,7 @@ export class LocalMemory implements MemoryProvider {
   private readonly pending = new Map<number, { resolve: (value: any) => void; reject: (error: Error) => void; timer: NodeJS.Timeout }>();
   private sequence = 0;
   private closed = false;
+  private closing?: Promise<void>;
   private failure?: Error;
   private constructor(private readonly child: ChildProcess, config: MemoryConfig) {
     this.capabilities = { semantic: Boolean(config.embedding), revisions: true };
@@ -59,7 +60,10 @@ export class LocalMemory implements MemoryProvider {
   forget(context: MemoryContext, id: string, revision: string): Promise<void> { return this.call("forget", [context, id, revision]); }
   status(): Promise<MemoryStatus> { return this.call("status", []); }
   reindex(): Promise<void> { return this.call("reindex", []); }
-  async close(): Promise<void> {
+  close(): Promise<void> {
+    return this.closing ??= this.closeOnce();
+  }
+  private async closeOnce(): Promise<void> {
     if (this.closed) return;
     try { await this.call("close", []); } finally {
       this.closed = true;

@@ -15,6 +15,24 @@ function fake() {
   child.kill = (signal: string) => { signals.push(signal); return true; };
   return { child, signals, memory: new (LocalMemory as any)(child, memoryConfig()) as LocalMemory };
 }
+test("concurrent memory closes share one request and lifecycle", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const { child, signals, memory } = fake();
+  const requests: any[] = [];
+  child.send = (message: any, callback: any) => { requests.push(message); callback(null); };
+  const first = memory.close(); const second = memory.close();
+  assert.equal(first, second);
+  assert.equal(requests.length, 1);
+  child.emit("message", { id: requests[0].id, value: undefined });
+  for (let i = 0; i < 5; i++) await Promise.resolve();
+  assert.deepEqual(signals, ["SIGTERM"]);
+  child.exitCode = 0; child.emit("exit", 0);
+  await Promise.all([first, second]);
+  assert.equal(memory.close(), first);
+  t.mock.timers.tick(30000);
+  assert.deepEqual(signals, ["SIGTERM"]);
+});
+
 test("memory close cancels escalation when worker exits", async (t) => {
   t.mock.timers.enable({ apis: ["setTimeout"] });
   const { child, signals, memory } = fake();
