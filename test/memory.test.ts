@@ -36,6 +36,22 @@ test("memory durable write, restart, idempotency and isolation", async (t) => {
   try { assert.equal((await restored.search(ctx, "artifact"))[0].entry.id, entry.id); }
   finally { await restored.close(); }
 });
+test("memory text preserves trailing whitespace through reads, reindex and restart", async (t) => {
+  const { store, dir } = await setup(t);
+  const text = "Operator correction  \n\n";
+  const entry = await store.put(ctx, { ...input, text });
+  assert.equal((await store.get(ctx, entry.id))?.text, text);
+  await store.reindex();
+  assert.equal((await store.get(ctx, entry.id))?.text, text);
+  await store.close();
+  const restored = new FileMemoryStore(dir, memoryConfig()); await restored.start();
+  try {
+    assert.equal((await restored.get(ctx, entry.id))?.text, text);
+    const revised = await restored.revise(ctx, entry.id, entry.revision, { text: "Updated\t \n" });
+    assert.equal((await restored.get(ctx, revised.id))?.text, "Updated\t \n");
+  } finally { await restored.close(); }
+});
+
 test("expiry, revoke and manual changes are enforced even against stale index", async (t) => {
   const { store, dir } = await setup(t);
   const entry = await store.put(ctx, input);

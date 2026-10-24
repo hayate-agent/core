@@ -81,7 +81,7 @@ export class FileMemoryStore implements MemoryProvider {
       const match = /^---\n([\s\S]*?)\n---\n([\s\S]*)$/.exec(raw);
       if (!match) throw Error("Invalid memory Markdown");
       const meta = parse(match[1]);
-      const entry = { ...meta, text: match[2].trimEnd() } as MemoryEntry;
+      const entry = { ...meta, text: match[2].endsWith("\n") ? match[2].slice(0, -1) : match[2] } as MemoryEntry;
       delete (entry as any).inputHash;
       validate(entry);
       if (entry.id !== id) throw Error("Memory ID mismatch");
