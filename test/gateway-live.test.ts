@@ -31,6 +31,20 @@ test("gateway command persists and live applies settings, invalid changes have n
   assert.equal(restored.effective().gateways?.statusReactions, true);
 });
 
+test("memory embedding settings persist without secret values and reject invalid overlays", async (t) => {
+  const home = await mkdtemp(path.join(os.tmpdir(), "memory-settings-"));
+  t.after(() => rm(home, { recursive: true, force: true }));
+  const file = path.join(home, "settings.local.yaml");
+  const settings = new SettingsService(file, {}); await settings.load();
+  await settings.setMemory({ embedding: { url: "https://embedding.example/v1/embeddings", model: "embedding-model", dimensions: 768, tokenEnv: "MODEL_API_KEY" } });
+  await settings.setGateways({ progress: "reduced", statusReactions: true });
+  const restored = new SettingsService(file, {}); await restored.load();
+  assert.equal(restored.effective().memory?.embedding?.dimensions, 768);
+  assert.equal(restored.effective().gateways?.progress, "reduced");
+  await assert.rejects(settings.setMemory({ embedding: { url: "file:///secret", model: "bad" } }));
+  await assert.rejects(settings.setMemory({ secret: "not-allowed" } as any));
+});
+
 test("receipt is emitted after durable acceptance even while work is paused; duplicates do not repeat", async () => {
   const events: string[] = [];
   const harness = new Harness({ runtime: {} as any, tickMs: 60000 }); harness.paused = true;

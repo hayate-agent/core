@@ -25,7 +25,9 @@ memory:
   #   dimensions: 768
 ```
 
-Changes require restart. Token values are never stored in Markdown or snapshots.
+The same partial `memory` object can be configured in persistent
+`settings.local.yaml`, overriding installation defaults without modifying a
+ConfigMap. Changes require restart. Token values are never stored in Markdown or snapshots.
 With no embedding endpoint semantic search is **disabled**, not simulated with
 keyword hashing. Full-text token search remains available. Endpoint failure keeps
 lexical search available and reports semantic degradation. Configuring an endpoint

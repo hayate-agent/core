@@ -10,6 +10,7 @@ import { RunRegistry } from "./api/runs.js";
 import { API_CHANNEL, ApiChannel } from "./api/server.js";
 import { nativeCompaction, type CompactionStrategy } from "./compaction.js";
 import { FilesystemSessionProvider, type SessionProvider } from "./sessions.js";
+import { memoryConfig } from "./memory.js";
 import { LocalMemory } from "./memory-local.js";
 import { MemoryService, memoryPlugin } from "./memory-plugin.js";
 import { gatewayPlugin } from "./gateway-plugin.js";
@@ -101,7 +102,7 @@ async function main(argv: string[]): Promise<void> {
   await reloadSkills();
 
   const plugins = new PluginHost();
-  const memory = new MemoryService(config.memory, log, config.home);
+  let memory!: MemoryService;
   let sessionProvider: SessionProvider | undefined;
   let compaction = nativeCompaction as CompactionStrategy;
   let harness!: Harness;
@@ -110,11 +111,14 @@ async function main(argv: string[]): Promise<void> {
   const settings = new SettingsService(path.join(config.home, "settings.local.yaml"), {
     model: config.model, thinking: config.thinking,
     gateways: config.gateways,
+    memory: config.memory,
     contextMaintenance: contextPolicy(config.contextMaintenance),
     toolResultPruning: pruningPolicy(config.toolResultPruning),
     review: { model: config.review?.model, thinking: config.review?.thinking ?? "medium" },
   });
   await settings.load();
+  config.memory = memoryConfig(settings.effective().memory);
+  memory = new MemoryService(config.memory, log, config.home);
   const maintenance = new ContextMaintenance(config.home, () => contextPolicy(settings.effective().contextMaintenance));
   const effectiveModels = () => {
     const values = settings.effective();
