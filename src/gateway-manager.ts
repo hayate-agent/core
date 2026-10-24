@@ -40,8 +40,18 @@ export class GatewayManager {
   async request(name: string): Promise<void> {
     const generation = (this.generations.get(name) ?? 0) + 1;
     this.generations.set(name, generation);
+    this.pending.delete(name);
+    this.errors.delete(name);
     // Prepare without touching the running adapter. Modules must not start receiving in create().
-    const instance = await this.prepare(name);
+    let instance: GatewayInstance | undefined;
+    try {
+      instance = await this.prepare(name);
+    } catch (error) {
+      if (this.generations.get(name) === generation) {
+        this.errors.set(name, "Preparation failed; running gateway unchanged by this request");
+      }
+      throw error;
+    }
     if (this.generations.get(name) !== generation) return;
     this.pending.set(name, { instance, label: this.settings.effective().gatewayPlugins?.[name]?.module ?? "baseline" });
   }
@@ -49,7 +59,11 @@ export class GatewayManager {
     if (this.changing) return;
     this.changing = true;
     try {
-      for (const [name, change] of this.pending) {
+      // Snapshot the boundary: deleting/reinserting a name during an await must
+      // not activate its newer request in the same iteration.
+      for (const [name, change] of [...this.pending]) {
+        if (this.pending.get(name) !== change) continue;
+        const generation = this.generations.get(name);
         try {
           await this.harness.replaceGateway(name, change.instance?.channel);
           if (change.instance) {
@@ -57,12 +71,14 @@ export class GatewayManager {
             this.harness.home ??= change.instance.home;
           } else this.active.delete(name);
           if (this.pending.get(name) === change) this.pending.delete(name);
-          this.errors.delete(name);
+          if (this.generations.get(name) === generation) this.errors.delete(name);
         } catch (err) {
           const message = (err as Error).message;
           if (message.includes("idle turn boundary")) continue;
           if (this.pending.get(name) === change) this.pending.delete(name);
-          this.errors.set(name, "Activation failed; inspect local logs and previous gateway health");
+          if (this.generations.get(name) === generation) {
+            this.errors.set(name, "Activation failed; inspect local logs and previous gateway health");
+          }
         }
       }
     } finally { this.changing = false; }
