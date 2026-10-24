@@ -133,6 +133,21 @@ export class MatrixChannel implements Channel {
     this.progress.get(this.progressKey(to, input))?.event(event);
   }
 
+  async received(to: Address, input: Inbound): Promise<void> {
+    this.react(to, input, "received", "📥");
+  }
+
+  private react(to: Address, input: Inbound, status: string, emoji: string): void {
+    if (!(this.o.statusReactions ?? this.gateway.statusReactions)) return;
+    const ids = input.parts?.map((part) => part.id) ?? (input.id ? [input.id] : []);
+    for (const id of ids) {
+      const txn = createHash("sha256").update(JSON.stringify([to.target, id, status])).digest("hex");
+      this.enqueueTelemetry(() => this.api("PUT", `/rooms/${encodeURIComponent(to.target)}/send/m.reaction/${txn}`, {
+        "m.relates_to": { rel_type: "m.annotation", event_id: id, key: emoji },
+      }).then(() => undefined));
+    }
+  }
+
   async turnStatus(to: Address, input: Inbound, status: "started" | "completed" | "failed" | "cancelled"): Promise<void> {
     const key = this.progressKey(to, input);
     if (status === "started") {
@@ -142,15 +157,7 @@ export class MatrixChannel implements Channel {
       this.progress.delete(key);
       await progress?.finish();
     }
-    if (!(this.o.statusReactions ?? this.gateway.statusReactions)) return;
-    const emoji = { started: "👀", completed: "✅", failed: "❌", cancelled: "⏹️" }[status];
-    const ids = input.parts?.map((part) => part.id) ?? (input.id ? [input.id] : []);
-    for (const id of ids) {
-      const txn = createHash("sha256").update(JSON.stringify([to.target, id, status])).digest("hex");
-      this.enqueueTelemetry(() => this.api("PUT", `/rooms/${encodeURIComponent(to.target)}/send/m.reaction/${txn}`, {
-        "m.relates_to": { rel_type: "m.annotation", event_id: id, key: emoji },
-      }).then(() => undefined));
-    }
+    this.react(to, input, status, { started: "👀", completed: "✅", failed: "❌", cancelled: "⏹️" }[status]);
   }
 
   constructor(private readonly o: MatrixOptions) {

@@ -312,6 +312,11 @@ export class Harness {
    * Channel entry point: resolves once the input is durably recorded (pending inbox in the
    * state file), so the channel may acknowledge it upstream. Commands run in the background.
    */
+  configureGateways(config: GatewayConfig): void {
+    this.opts.gateways = config;
+    for (const channel of this.channels.values()) channel.configureGateway?.(gatewaySettings(config, channel.name));
+  }
+
   async accept(input: Inbound): Promise<void> {
     if (this.stopping) throw new Error("shutting down");
     // Drop what was already accepted before (redelivery after a cursor rewind or crash).
@@ -332,6 +337,7 @@ export class Harness {
       await this.submit(input, true);
       applied = true;
       await this.outbox.barrier(); // throws if not durable → channel does not acknowledge
+      if (input.replyTo) void this.channels.get(input.replyTo.channel)?.received?.(input.replyTo, input).catch(() => {});
     } catch (err) {
       const queued = this.sessions.get(input.sessionKey)?.queue.includes(input);
       if (applied && !queued) {

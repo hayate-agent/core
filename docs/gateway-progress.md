@@ -15,6 +15,16 @@ gateways:
       progress: off
 ```
 
+Runtime changes (admin-only, persisted in `settings.local.yaml`, no restart):
+
+- `/gateway progress reduced` (or `off` / `full`)
+- `/gateway reactions on` (or `off`)
+- `/gateway status`
+
+Local settings override installation defaults. Existing per-channel and explicit
+Matrix environment overrides retain precedence. Active progress collectors adopt
+changed progress mode on the next turn; reaction settings apply immediately.
+
 Defaults: progress off, statusReactions false. Each omitted override field
 inherits the global setting. Explicit off/false disables an inherited setting.
 Names are channel names, including plugin gateways. This does not install an
@@ -31,7 +41,7 @@ If unset, they do not mask inherited YAML settings.
 - MATRIX_PROGRESS=reduced: one brief activity notice per tool name per turn.
 - MATRIX_PROGRESS=full: tool starts/ends, bounded arguments/results. No private
   model reasoning is exported. Final assistant text uses the normal durable reply.
-- MATRIX_STATUS_REACTIONS=true: 👀 at turn start; ✅ when processing completes,
+- MATRIX_STATUS_REACTIONS=true: 📥 after durable receipt (including queued messages), 👀 at turn start; ✅ when processing completes,
   ❌ on failure, ⏹️ on cancellation. Default false. For batched inputs each original
   message is annotated. Completion does not assert successful delivery of replies.
 

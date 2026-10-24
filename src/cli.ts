@@ -12,6 +12,7 @@ import { nativeCompaction, type CompactionStrategy } from "./compaction.js";
 import { FilesystemSessionProvider, type SessionProvider } from "./sessions.js";
 import { LocalMemory } from "./memory-local.js";
 import { MemoryService, memoryPlugin } from "./memory-plugin.js";
+import { gatewayPlugin } from "./gateway-plugin.js";
 import { PluginHost } from "./plugins.js";
 import { builtinCommandNames, installCommands, VERSION } from "./commands.js";
 import { loadConfig } from "./config.js";
@@ -108,6 +109,7 @@ async function main(argv: string[]): Promise<void> {
   const reviewSettings = reviewConfig(config.review);
   const settings = new SettingsService(path.join(config.home, "settings.local.yaml"), {
     model: config.model, thinking: config.thinking,
+    gateways: config.gateways,
     contextMaintenance: contextPolicy(config.contextMaintenance),
     toolResultPruning: pruningPolicy(config.toolResultPruning),
     review: { model: config.review?.model, thinking: config.review?.thinking ?? "medium" },
@@ -157,7 +159,7 @@ async function main(argv: string[]): Promise<void> {
     afterTurn: (input, reply, session, options, signal) => finishWithReview(review, config.cwd, input, reply, session, options, signal),
     tickMs: config.loop.tickMs,
     busyMode: config.loop.busyMode,
-    gateways: config.gateways,
+    gateways: settings.effective().gateways,
     log,
     // Permanently rejected replies (e.g. no permission in the room) are parked for manual follow-up.
     parkUndeliverable: (entry, error) =>
@@ -275,7 +277,7 @@ async function main(argv: string[]): Promise<void> {
   }
   await scheduler.load();
 
-  await plugins.load(config.plugins ?? [], { agent: config.agent, home: config.home, cwd: config.cwd }, [...builtinCommandNames, "sessions", "resume", ...skills.map((s) => s.name)], ["console", "api", "matrix", ...harness.channels.keys()], [contextPlugin(maintenance, settings), ...(config.memory.enabled ? [memoryPlugin(memory)] : []), ...(reviewSettings.enabled ? [reviewPlugin(review, config.cwd)] : [])]);
+  await plugins.load(config.plugins ?? [], { agent: config.agent, home: config.home, cwd: config.cwd }, [...builtinCommandNames, "sessions", "resume", ...skills.map((s) => s.name)], ["console", "api", "matrix", ...harness.channels.keys()], [gatewayPlugin(settings, harness), contextPlugin(maintenance, settings), ...(config.memory.enabled ? [memoryPlugin(memory)] : []), ...(reviewSettings.enabled ? [reviewPlugin(review, config.cwd)] : [])]);
   let memoryConnecting = false;
   let memoryStopping = false;
   const connectMemory = async () => {
