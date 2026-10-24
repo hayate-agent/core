@@ -6,6 +6,33 @@ import { test } from "node:test";
 import { ContextMaintenance, contextPolicy } from "../src/context-maintenance.js";
 import type { RuntimeSession } from "../src/types.js";
 
+test("slow maintenance serializes its conversation without blocking another conversation", async (t) => {
+  const home = await mkdtemp(path.join(os.tmpdir(), "context-parallel-"));
+  t.after(() => rm(home, { recursive: true, force: true }));
+  const maintenance = new ContextMaintenance(home, () => contextPolicy());
+  let release!: () => void, entered!: () => void;
+  const gate = new Promise<void>((r) => { release = r; });
+  const started = new Promise<void>((r) => { entered = r; });
+  const slow = { status: () => ({ sessionId: "slow", contextPercent: 80 }), compact: async () => { entered(); await gate; } } as unknown as RuntimeSession;
+  const other = { status: () => ({ sessionId: "other", contextPercent: 0 }) } as RuntimeSession;
+  const compacting = maintenance.boundary("slow", slow, async () => { throw Error("unexpected rotation"); });
+  await started;
+  let sameFinished = false;
+  const same = maintenance.request("slow", { action: "compact", preserve: "same", resume: "later" }).then(() => { sameFinished = true; });
+  try {
+    await Promise.race([
+      (async () => {
+        await maintenance.guidance("other", other);
+        await maintenance.request("other", { action: "compact", preserve: "other", resume: "next" });
+        await maintenance.flushNotices(async () => {});
+      })(),
+      new Promise<never>((_, reject) => { const timer = setTimeout(() => reject(Error("unrelated conversation blocked")), 1000); timer.unref(); }),
+    ]);
+    assert.equal(sameFinished, false);
+  } finally { release(); await compacting; await same; }
+  assert.equal(sameFinished, true);
+});
+
 test("context policy validates ordered thresholds", () => {
   assert.equal(contextPolicy().autoHandover, true);
   assert.throws(() => contextPolicy({ compactPercent: 50 }));
