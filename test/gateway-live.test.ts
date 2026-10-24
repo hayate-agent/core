@@ -45,6 +45,26 @@ test("memory embedding settings persist without secret values and reject invalid
   await assert.rejects(settings.setMemory({ secret: "not-allowed" } as any));
 });
 
+test("gateway replacement excludes pending sends and delivery retries during activation", async () => {
+  const harness = new Harness({ runtime: {} as any, tickMs: 60000 });
+  let releaseSend!: () => void, releaseStop!: () => void;
+  const sendGate = new Promise<void>((resolve) => { releaseSend = resolve; });
+  const stopGate = new Promise<void>((resolve) => { releaseStop = resolve; });
+  let stopped = false, sent = 0;
+  harness.addChannel({ name: "mem", async start() {}, async stop() { stopped = true; await stopGate; }, async send() { await sendGate; } });
+  const to = { channel: "mem", target: "room" };
+  const sending = harness.deliver(to, "old reply");
+  await assert.rejects(harness.replaceGateway("mem"), /idle turn boundary/);
+  assert.equal(stopped, false);
+  releaseSend(); await sending;
+  const replacement = harness.replaceGateway("mem", { name: "mem", async start() {}, async stop() {}, async send() { sent++; } });
+  assert.equal(stopped, true);
+  await assert.rejects(harness.deliver(to, "retry me"), /retry delivery/);
+  releaseStop(); await replacement;
+  await harness.deliver(to, "retry me");
+  assert.equal(sent, 1);
+});
+
 test("receipt is emitted after durable acceptance even while work is paused; duplicates do not repeat", async () => {
   const events: string[] = [];
   const harness = new Harness({ runtime: {} as any, tickMs: 60000 }); harness.paused = true;
