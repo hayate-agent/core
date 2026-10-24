@@ -7,7 +7,7 @@
 import { gatewaySettings, type GatewayConfig } from "./gateway-settings.js";
 import { randomUUID } from "node:crypto";
 import type { PersistedSession } from "./state.js";
-import type { Address, AgentRuntime, BusyMode, Channel, Inbound, RuntimeSession, SendMeta, TurnEvent, TurnOutcome } from "./types.js";
+import type { Address, AgentRuntime, BusyMode, Channel, Inbound, PromptOptions, RuntimeSession, SendMeta, TurnEvent, TurnOutcome } from "./types.js";
 import { InboxLedger, idsOf, replayable } from "./delivery/inbox.js";
 import { OutboxDelivery, type OutboxEntry } from "./delivery/outbox.js";
 import { SeenWindow } from "./delivery/seen.js";
@@ -81,6 +81,10 @@ export interface HarnessOptions {
   gateways?: GatewayConfig;
   /** Max automatic goal continuation turns before the goal pauses itself. */
   goalMaxTurns?: number;
+  /** Core lifecycle boundary; runs before the working agent starts. */
+  beforeTurn?: (input: Inbound) => Promise<void>;
+  /** May feed review findings back into the same serialized working turn. */
+  afterTurn?: (input: Inbound, reply: string, session: RuntimeSession, promptOptions: PromptOptions, signal: AbortSignal) => Promise<string>;
   now?: () => number;
   log?: (msg: string) => void;
   /** Durably records a reply that can never be delivered (before it leaves the outbox). */
@@ -114,6 +118,7 @@ export class Harness {
   /** Shutdown chose its final inbox snapshot; late turn results are discarded. */
   private frozen = false;
   private restoredReleased = false;
+  private readonly turnAbort = new Map<string, AbortController>();
 
   constructor(readonly opts: HarnessOptions) {
     this.busyMode = opts.busyMode;
@@ -178,6 +183,7 @@ export class Harness {
     // Freeze queue advancement and retain a safe fallback before asking runtime calls to stop.
     // Abort/quiescence shares the original drain deadline, so shutdown cannot become unbounded.
     this.halting = true;
+    for (const controller of this.turnAbort.values()) controller.abort();
     // From here on, finishing turns record no reply (their input stays in the inbox and
     // replays), so the inbox snapshot and the outbox are always consistent.
     this.frozen = true;
@@ -279,7 +285,10 @@ export class Harness {
 
   async resetSession(key: string): Promise<void> {
     const s = this.state(key);
-    if (s.running) await s.session?.abort();
+    if (s.running) {
+      this.turnAbort.get(s.key)?.abort();
+      await s.session?.abort();
+    }
     s.queue.length = 0;
     await this.sessionFor(key, true);
   }
@@ -432,6 +441,7 @@ export class Harness {
       }
       if (this.busyMode === "interrupt" && s.session) {
         s.queue.unshift(input);
+        this.turnAbort.get(s.key)?.abort();
         await s.session.abort();
         return;
       }
@@ -454,6 +464,7 @@ export class Harness {
       if (s.cancelling === s.current) return "running";
       if (s.prompted === s.current) return false; // prompt already returned: completes normally
       s.cancelling = s.current;
+      this.turnAbort.get(sessionKey)?.abort();
       // Before the prompt (session still opening) runTurn sees `cancelling` and never starts it.
       if (s.prompting && s.session) await s.session.abort();
       return "running";
@@ -652,7 +663,10 @@ export class Harness {
           }
         }
       : undefined;
+    const abort = new AbortController();
+    this.turnAbort.set(s.key, abort);
     try {
+      await this.opts.beforeTurn?.(input);
       const session = await this.sessionFor(s.key);
       const text = input.replyOptional
         ? `${input.text}\n\n(Not addressed to you directly. Reply only if you have something useful to add; otherwise reply exactly ${NO_REPLY}.)`
@@ -662,7 +676,9 @@ export class Harness {
       } else {
         s.prompting = true;
         try {
-          reply = (await session.prompt(text, { ...input.turn, onEvent })).trim();
+          const promptOptions = { ...input.turn, onEvent };
+          reply = (await session.prompt(text, promptOptions)).trim();
+          if (s.cancelling !== input && this.opts.afterTurn) reply = await this.opts.afterTurn(input, reply, session, promptOptions, abort.signal);
         } finally {
           s.prompting = false;
           s.prompted = input;
@@ -674,6 +690,7 @@ export class Harness {
       outcome = "failed";
       if (s.cancelling !== input) this.log(`turn failed in ${s.key}: ${reply}`);
     } finally {
+      this.turnAbort.delete(s.key);
       await typingCh?.typing?.(to!, false).catch(() => undefined);
     }
     s.prompted = undefined;

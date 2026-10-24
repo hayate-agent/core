@@ -22,7 +22,14 @@ import { launchMode } from "./launch.js";
 import { Scheduler } from "./scheduler.js";
 import { StateStore } from "./state.js";
 import type { Inbound } from "./types.js";
-import { discoverSkills, type SkillInfo } from "./skills.js";
+import { type SkillInfo } from "./skills.js";
+import { SkillCatalog } from "./skill-catalog.js";
+import { ReviewService } from "./review.js";
+import { runtimeReviewer } from "./runtime/reviewer.js";
+import { reviewConfig } from "./review-config.js";
+import { reviewPlugin } from "./review-plugin.js";
+import { finishWithReview } from "./review-lifecycle.js";
+import { guardReviewTool } from "./review-guard.js";
 import { appendFileDurable } from "./durable.js";
 
 const USAGE = `VanillaCore Agent Harness ${VERSION}
@@ -77,8 +84,11 @@ async function main(argv: string[]): Promise<void> {
   let personality: string | undefined;
   let skills: SkillInfo[] = [];
   const skillDirs = () => [...config.skills.paths, path.join(config.cwd, ".pi", "skills"), path.join(getAgentDir(), "skills")];
+  const skillCatalog = new SkillCatalog(path.join(config.home, "skills", "index.json"), skillDirs);
   const reloadSkills = async () => {
-    skills = await discoverSkills(skillDirs());
+    const snapshot = await skillCatalog.refresh();
+    skills = skillCatalog.skills;
+    for (const diagnostic of snapshot.diagnostics) log(`[skills] ${diagnostic.filePath}: ${diagnostic.message}`);
   };
   await reloadSkills();
 
@@ -86,24 +96,37 @@ async function main(argv: string[]): Promise<void> {
   let sessionProvider: SessionProvider | undefined;
   let compaction = nativeCompaction as CompactionStrategy;
   let harness!: Harness;
+  let review!: ReviewService;
+  const reviewSettings = reviewConfig(config.review);
   const runtime = new PiRuntime({
     cwd: config.cwd,
     sessionsDir: path.join(config.home, "sessions"),
     model: config.model,
     thinking: config.thinking,
-    tools: config.tools,
+    tools: reviewSettings.enabled && config.tools?.length ? [...new Set([...config.tools, "plugin_review"])] : config.tools,
     pluginTools: () => plugins.tools.values(),
     sessionProvider: () => sessionProvider,
     legacySessionProvider: new FilesystemSessionProvider(path.join(config.home, "session-store")),
     compaction: () => compaction,
     mcp: config.mcp,
     skillPaths: config.skills.paths,
+    skillContext: async () => {
+      await reloadSkills();
+      return `Available skills (metadata only; read the named SKILL.md when relevant):\n${JSON.stringify(skills)}\n${reviewSettings.enabled ? "Core review is enabled. Use plugin_review to inspect, critically assess and review code changes. P0/P1 block publication and completion. Budget cannot be reset by starting another session." : ""}`;
+    },
+    toolGuard: (_key, tool, input) => guardReviewTool(review, config.cwd, tool, input),
     personaSections: async () => personaSections(await loadPersona(config.persona, personality), { name: config.agent, workspace: config.cwd }),
     approvals,
     requestApproval: (key, tool, input) => harness.requestApproval(key, tool, input),
   });
+  review = new ReviewService(config.home, reviewSettings, runtimeReviewer(runtime), async (sessionKey, message, origin) => {
+    log(`[review] ${message}`);
+    harness.post({ sessionKey, text: "", source: "channel", replyTo: origin ?? harness.home }, `⚠️ Operator escalation: ${message}`);
+  });
   harness = new Harness({
     runtime,
+    beforeTurn: (input) => review.prepare(config.cwd, input.replyTo, input.sessionKey),
+    afterTurn: (input, reply, session, options, signal) => finishWithReview(review, config.cwd, input, reply, session, options, signal),
     tickMs: config.loop.tickMs,
     busyMode: config.loop.busyMode,
     gateways: config.gateways,
@@ -223,7 +246,7 @@ async function main(argv: string[]): Promise<void> {
   }
   await scheduler.load();
 
-  await plugins.load(config.plugins ?? [], { agent: config.agent, home: config.home, cwd: config.cwd }, [...builtinCommandNames, "sessions", "resume", ...skills.map((s) => s.name)], ["console", "api", "matrix", ...harness.channels.keys()]);
+  await plugins.load(config.plugins ?? [], { agent: config.agent, home: config.home, cwd: config.cwd }, [...builtinCommandNames, "sessions", "resume", ...skills.map((s) => s.name)], ["console", "api", "matrix", ...harness.channels.keys()], reviewSettings.enabled ? [reviewPlugin(review, config.cwd)] : []);
   const strategyName = config.compaction?.strategy ?? "native";
   if (strategyName !== "native") {
     const strategy = plugins.compactions.get(strategyName);

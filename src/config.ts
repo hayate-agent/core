@@ -3,6 +3,19 @@ import os from "node:os";
 import path from "node:path";
 import { parse } from "yaml";
 import { validateGatewayConfig, type GatewayConfig } from "./gateway-settings.js";
+import { reviewConfig } from "./review-config.js";
+
+export interface ReviewConfig {
+  enabled: boolean;
+  shellGuard: boolean;
+  scope: { mode: "risk" | "all"; nonBlockingPaths: string[]; requiredPaths: string[] };
+  model?: string;
+  thinking: string;
+  maxTurns: number;
+  mandatory: { local: boolean; publish: boolean; merge: boolean };
+  /** Branch/PR merge-base; default uses upstream merge-base or HEAD before local work. */
+  baseRef?: string;
+}
 
 export interface HarnessConfig {
   /** Agent identity key (e.g. "example-agent"). */
@@ -14,6 +27,7 @@ export interface HarnessConfig {
   timezone: string;
   model?: string;
   thinking?: string;
+  review?: Partial<Omit<ReviewConfig, "mandatory" | "scope">> & { mandatory?: Partial<ReviewConfig["mandatory"]>; scope?: Partial<ReviewConfig["scope"]> };
   /** Literal tool names exposed to the model; omitted = runtime defaults, [] = no tools. */
   tools?: string[];
   /** Trusted local ESM plugin paths, relative to Harness home or absolute. */
@@ -69,6 +83,7 @@ export function defaultConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
   }
   if (overrides.sessions !== undefined && (!overrides.sessions || typeof overrides.sessions.provider !== "string" || !/^[a-z][a-z0-9_-]*$/.test(overrides.sessions.provider))) throw new Error("Invalid sessions.provider");
   if (overrides.compaction !== undefined && (!overrides.compaction || typeof overrides.compaction.strategy !== "string" || !/^[a-z][a-z0-9_-]*$/.test(overrides.compaction.strategy))) throw new Error("Invalid compaction.strategy");
+  reviewConfig(overrides.review); // validate before startup
   validateGatewayConfig(overrides.gateways);
   const home = overrides.home ?? process.env.VANILLACORE_HARNESS_HOME ?? path.join(os.homedir(), ".vanillacore-harness");
   return {
@@ -78,6 +93,7 @@ export function defaultConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
     timezone: overrides.timezone ?? process.env.TZ ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
     model: overrides.model,
     thinking: overrides.thinking,
+    review: reviewConfig(overrides.review),
     plugins: overrides.plugins ?? [],
     sessions: overrides.sessions ?? { provider: "native" },
     compaction: overrides.compaction ?? { strategy: "native" },

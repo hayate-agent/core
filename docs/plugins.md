@@ -1,6 +1,10 @@
 # Harness plugins (API version 1)
 
-Plugins are explicitly enabled local ESM modules. They execute trusted JavaScript
+The Harness also ships a default-enabled [changeset review plugin](review.md).
+It is activated from product code, before local plugins, and does not need a module
+path in configuration. Its lifecycle and durable policy live in the core.
+
+Other plugins are explicitly enabled local ESM modules. They execute trusted JavaScript
 with the process user's permissions: this is NOT a sandbox. Review code and pin
 its dependencies. No discovery/download/installation from incoming chat messages.
 
