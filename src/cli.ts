@@ -22,6 +22,7 @@ import { Harness } from "./harness.js";
 import { startMemoryGuard } from "./memguard.js";
 import { loadPersona, personaSections } from "./persona.js";
 import { ProtectedContent } from "./protected-content.js";
+import { ImprovementController } from "./improvement.js";
 import { PiRuntime } from "./runtime/pi.js";
 import { launchMode } from "./launch.js";
 import { Scheduler } from "./scheduler.js";
@@ -162,15 +163,22 @@ async function main(argv: string[]): Promise<void> {
     log(`[review] ${message}`);
     harness.post({ sessionKey, text: "", source: "channel", replyTo: origin ?? harness.home }, `⚠️ Operator escalation: ${message}`);
   });
+  let improvement: ImprovementController | undefined;
+  let improvementTimer: NodeJS.Timeout | undefined;
   harness = new Harness({
     runtime,
     contextMaintenance: maintenance,
     memory,
     beforeTurn: async (input) => {
       await protectedContent.verify();
+      await improvement?.before(input);
       await review.prepare(config.cwd, input.replyTo, input.sessionKey);
     },
-    afterTurn: (input, reply, session, options, signal) => finishWithReview(review, config.cwd, input, reply, session, options, signal),
+    afterTurn: async (input, reply, session, options, signal) => {
+      const result = await finishWithReview(review, config.cwd, input, reply, session, options, signal);
+      await improvement?.completed(input, result);
+      return result;
+    },
     tickMs: config.loop.tickMs,
     busyMode: config.loop.busyMode,
     gateways: settings.effective().gateways,
@@ -187,7 +195,10 @@ async function main(argv: string[]): Promise<void> {
   const gatewayApprovers = gatewayManager.approvers;
   const admins = config.admins.length ? config.admins : gatewayApprovers;
   const approvers = config.approvers.length ? config.approvers : gatewayApprovers.length ? gatewayApprovers : admins;
-  const gatewayTimer = setInterval(() => { void gatewayManager.tick().catch(() => log("[gateway] activation failed")); }, 2000);
+  improvement = new ImprovementController(config.home, harness, config.timezone);
+  const gatewayTimer = setInterval(() => {
+    void gatewayManager.tick().catch(() => log("[gateway] activation failed"));
+  }, 2000);
   gatewayTimer.unref();
   // Hermes-compatible HTTP API (AgentOS hermes_gateway adapter); enabled by API_SERVER_KEY.
   const runs = new RunRegistry(path.join(config.home, "runs.json"));
@@ -335,6 +346,7 @@ async function main(argv: string[]): Promise<void> {
     // Like Hermes restart_drain_timeout: stop input, finish in-flight work for up to
     // drainSeconds, abort the rest, then persist state (user's /pause flag untouched).
     scheduler.stop();
+    clearInterval(improvementTimer);
     const unfinished = await harness.stop(config.loop.drainSeconds * 1000);
     harness.onStateChange = undefined;
     // A graceful stop is not the turn's fault: only crashes (OOM, kill) count towards giving up.
@@ -406,7 +418,11 @@ async function main(argv: string[]): Promise<void> {
   process.on("exit", stopGuard);
   process.on("SIGINT", () => void shutdown(0));
   process.on("SIGTERM", () => void shutdown(0));
-  try { await harness.start(); }
+  try {
+    await harness.start();
+    improvementTimer = setInterval(() => { void improvement!.tick().catch(() => log("[improvement] check failed; inspect configuration/state")); }, config.loop.tickMs);
+    improvementTimer.unref();
+  }
   catch (err) {
     await harness.stop(0).catch(() => {});
     clearInterval(gatewayTimer);
