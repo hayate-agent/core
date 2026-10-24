@@ -12,14 +12,28 @@ export class GatewayProgress {
   private scheduled?: NodeJS.Timeout;
   private sending: Promise<void> = Promise.resolve();
   private count = 0;
-  private tools = new Set<string>();
-  constructor(private mode: ProgressMode, private send: (text: string) => Promise<void>) {}
+  private active = new Map<string, number>();
+  private heartbeat?: NodeJS.Timeout;
+  private closed = false;
+  constructor(private mode: ProgressMode, private send: (text: string) => Promise<void>, private heartbeatMs = 15000) {
+    if (mode !== "off") {
+      this.heartbeat = setInterval(() => {
+        if (this.closed || !this.active.size) return;
+        const now = Date.now();
+        this.pending.push([...this.active].map(([name, since]) => `⏳ ${name} läuft weiterhin (${Math.floor((now - since) / 1000)} s); noch kein Ergebnis.`).join("\n"));
+        this.flush();
+      }, heartbeatMs);
+      this.heartbeat.unref?.();
+    }
+  }
   event(event: TurnEvent): void {
-    if (this.mode === "off" || event.type !== "tool" || this.count >= 50) return;
+    if (this.closed || this.mode === "off" || event.type !== "tool") return;
+    if (event.phase === "start") {
+      if (this.active.size < 50) this.active.set(event.name, Date.now());
+    } else this.active.delete(event.name);
+    if (this.count >= 50) return;
     if (this.mode === "reduced") {
-      if (event.phase !== "start" || this.tools.has(event.name)) return;
-      this.tools.add(event.name);
-      this.pending.push(`Working: ${event.name}`);
+      this.pending.push(event.phase === "start" ? `▶ ${event.name} gestartet` : `${event.error ? "⚠" : "✓"} ${event.name} beendet`);
     } else {
       this.pending.push(`${event.phase === "start" ? "▶" : event.error ? "⚠" : "✓"} ${event.name}${event.detail ? `\n${event.detail.slice(0, 2000)}` : ""}`);
     }
@@ -32,6 +46,9 @@ export class GatewayProgress {
     this.sending = this.sending.then(() => this.send(text)).catch(() => undefined);
   }
   async finish(): Promise<void> {
+    this.closed = true;
+    clearInterval(this.heartbeat);
+    this.active.clear();
     clearTimeout(this.scheduled);
     this.scheduled = undefined;
     this.flush();

@@ -15,9 +15,23 @@ test("off emits nothing; reduced summarizes tools without outputs", async () => 
     p.event({type:"tool",phase:"end",name:"bash",detail:"private result"});
     p.event({type:"tool",phase:"start",name:"bash"});
     await p.finish();
-    assert.deepEqual(sent, mode === "off" ? [] : ["Working: bash"]);
+    assert.deepEqual(sent, mode === "off" ? [] : ["▶ bash gestartet\n\n✓ bash beendet\n\n▶ bash gestartet"]);
   }
 });
+test("long reviews emit truthful heartbeats and stop after completion", async () => {
+  const sent: string[] = [];
+  const p = new GatewayProgress("reduced", async (text) => { sent.push(text); }, 10);
+  p.event({ type: "tool", phase: "start", name: "plugin_review", detail: "private" });
+  await new Promise((r) => setTimeout(r, 35));
+  assert.ok(sent.some((s) => s.includes("plugin_review läuft weiterhin")));
+  assert.ok(sent.every((s) => !s.includes("private")));
+  p.event({ type: "tool", phase: "end", name: "plugin_review" });
+  await p.finish();
+  const count = sent.length;
+  await new Promise((r) => setTimeout(r, 25));
+  assert.equal(sent.length, count);
+});
+
 test("full bounds output and events; telemetry failures do not reject finish", async () => {
   const sent: string[] = [];
   const p = new GatewayProgress("full", async (text) => { sent.push(text); throw new Error("network"); });
