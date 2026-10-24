@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { parse } from "yaml";
+import { validateGatewayConfig, type GatewayConfig } from "./gateway-settings.js";
 
 export interface HarnessConfig {
   /** Agent identity key (e.g. "example-agent"). */
@@ -19,6 +20,7 @@ export interface HarnessConfig {
   plugins?: string[];
   sessions?: { provider: string; options?: unknown };
   compaction?: { strategy: string };
+  gateways?: GatewayConfig;
   /** Enable configured MCP servers; credentials and server definitions stay outside product code. */
   mcp?: { enabled: boolean };
   persona: {
@@ -67,6 +69,7 @@ export function defaultConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
   }
   if (overrides.sessions !== undefined && (!overrides.sessions || typeof overrides.sessions.provider !== "string" || !/^[a-z][a-z0-9_-]*$/.test(overrides.sessions.provider))) throw new Error("Invalid sessions.provider");
   if (overrides.compaction !== undefined && (!overrides.compaction || typeof overrides.compaction.strategy !== "string" || !/^[a-z][a-z0-9_-]*$/.test(overrides.compaction.strategy))) throw new Error("Invalid compaction.strategy");
+  validateGatewayConfig(overrides.gateways);
   const home = overrides.home ?? process.env.VANILLACORE_HARNESS_HOME ?? path.join(os.homedir(), ".vanillacore-harness");
   return {
     agent: overrides.agent ?? process.env.VANILLACORE_HARNESS_AGENT ?? "agent",
@@ -78,6 +81,7 @@ export function defaultConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
     plugins: overrides.plugins ?? [],
     sessions: overrides.sessions ?? { provider: "native" },
     compaction: overrides.compaction ?? { strategy: "native" },
+    gateways: overrides.gateways ?? { progress: "off", statusReactions: false },
     tools: overrides.tools === undefined ? undefined : [...new Set(overrides.tools)],
     mcp: overrides.mcp ?? { enabled: false },
     persona: {

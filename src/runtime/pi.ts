@@ -63,14 +63,42 @@ interface TurnSlot {
   instructions?: string;
 }
 
+/** Only inspect bounded own data properties; omit images and never invoke getters. */
+function toolDetail(value: unknown): string {
+  let budget = 1800;
+  const visit = (v: unknown, depth: number): unknown => {
+    if (budget <= 0 || depth > 3) return "…";
+    if (typeof v === "string") { const s = v.slice(0, Math.min(budget, 600)); budget -= s.length; return s; }
+    if (v === null || typeof v === "boolean" || typeof v === "number") return v;
+    if (typeof v !== "object") return undefined;
+    const out: Record<string, unknown> = {};
+    let count = 0;
+    for (const key in v) {
+      if (++count > 8 || budget <= 0) break;
+      if (key === "data" || key === "image" || key === "images") continue;
+      const descriptor = Object.getOwnPropertyDescriptor(v, key);
+      if (!descriptor || !("value" in descriptor)) continue;
+      budget -= key.length;
+      out[key.slice(0, 80)] = visit(descriptor.value, depth + 1);
+    }
+    return out;
+  };
+  try { return JSON.stringify(visit(value, 0))?.slice(0, 2000) ?? ""; } catch { return "[unavailable]"; }
+}
+
+function withDetail<T extends object>(event: T, value: unknown): T {
+  if (value !== undefined) Object.defineProperty(event, "detail", { enumerable: true, get: () => toolDetail(value) });
+  return event;
+}
+
 /** PI session event → harness turn event (undefined: not relevant). */
 export function toTurnEvent(event: AgentSessionEvent): TurnEvent | undefined {
   if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
     return { type: "text", delta: event.assistantMessageEvent.delta };
   }
-  if (event.type === "tool_execution_start") return { type: "tool", phase: "start", name: event.toolName };
+  if (event.type === "tool_execution_start") return withDetail({ type: "tool", phase: "start", name: event.toolName } as const, event.args);
   if (event.type === "tool_execution_end") {
-    return { type: "tool", phase: "end", name: event.toolName, ...(event.isError ? { error: true } : {}) };
+    return withDetail({ type: "tool", phase: "end", name: event.toolName, ...(event.isError ? { error: true } : {}) } as const, event.result);
   }
   if (event.type === "message_end" && event.message.role === "assistant") {
     const m = event.message;

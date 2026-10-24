@@ -30,10 +30,12 @@ export interface PluginMessage {
 
 export interface PluginChannel {
   readonly name: string;
+  configureGateway?(settings: import("./gateway-settings.js").GatewaySettings): void;
+  turnStatus?(to: Address, input: Inbound, status: "started" | "completed" | "failed" | "cancelled"): Promise<void>;
   start(deliver: (message: PluginMessage) => Promise<void>): Promise<void>;
   send(to: Address, text: string, meta?: SendMeta): Promise<void>;
   stop(budgetMs?: number): Promise<void>;
-  turnEvent?(to: Address, event: TurnEvent): void;
+  turnEvent?(to: Address, event: TurnEvent, input?: Inbound): void;
   typing?(to: Address, on: boolean): Promise<void>;
 }
 
@@ -59,7 +61,9 @@ function wrapChannel(channel: PluginChannel): Channel {
     }),
     send: (to, text, meta) => channel.send(to, text, meta),
     stop: (budget) => channel.stop(budget),
-    ...(channel.turnEvent ? { turnEvent: (to: Address, event: TurnEvent) => channel.turnEvent!(to, event) } : {}),
+    ...(channel.configureGateway ? { configureGateway: (settings: import("./gateway-settings.js").GatewaySettings) => channel.configureGateway!(settings) } : {}),
+    ...(channel.turnStatus ? { turnStatus: (to: Address, input: Inbound, status: "started" | "completed" | "failed" | "cancelled") => channel.turnStatus!(to, input, status) } : {}),
+    ...(channel.turnEvent ? { turnEvent: (to: Address, event: TurnEvent, input?: Inbound) => channel.turnEvent!(to, event, input) } : {}),
     ...(channel.typing ? { typing: (to: Address, on: boolean) => channel.typing!(to, on) } : {}),
   };
 }
