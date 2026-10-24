@@ -30,6 +30,8 @@ export interface Inbound {
   turn?: TurnOptions;
   /** Its turn started and has not finished (persisted: a crash while set counts as a replay). */
   started?: boolean;
+  /** Stable first-start timestamp, persisted before execution for replay-safe memory capture. */
+  memoryRecordedAt?: number;
   /** Crashes (OOM, kill) that interrupted this input's turn so far. */
   replays?: number;
 }

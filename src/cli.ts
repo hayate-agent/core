@@ -10,6 +10,8 @@ import { RunRegistry } from "./api/runs.js";
 import { API_CHANNEL, ApiChannel } from "./api/server.js";
 import { nativeCompaction, type CompactionStrategy } from "./compaction.js";
 import { FilesystemSessionProvider, type SessionProvider } from "./sessions.js";
+import { LocalMemory } from "./memory-local.js";
+import { MemoryService, memoryPlugin } from "./memory-plugin.js";
 import { PluginHost } from "./plugins.js";
 import { builtinCommandNames, installCommands, VERSION } from "./commands.js";
 import { loadConfig } from "./config.js";
@@ -98,6 +100,7 @@ async function main(argv: string[]): Promise<void> {
   await reloadSkills();
 
   const plugins = new PluginHost();
+  const memory = new MemoryService(config.memory, log, config.home);
   let sessionProvider: SessionProvider | undefined;
   let compaction = nativeCompaction as CompactionStrategy;
   let harness!: Harness;
@@ -126,7 +129,7 @@ async function main(argv: string[]): Promise<void> {
     thinking: config.thinking,
     pruning: () => pruningPolicy(settings.effective().toolResultPruning),
     modelDefaults: () => ({ revision: settings.revision, model: effectiveModels().model, thinking: effectiveModels().thinking }),
-    tools: config.tools?.length ? [...new Set([...config.tools, "plugin_context_maintenance", "plugin_session_history", ...(reviewSettings.enabled ? ["plugin_review"] : [])])] : config.tools,
+    tools: config.tools?.length ? [...new Set([...config.tools, "plugin_context_maintenance", "plugin_session_history", ...(config.memory.enabled ? ["plugin_memory"] : []), ...(reviewSettings.enabled ? ["plugin_review"] : [])])] : config.tools,
     pluginTools: () => plugins.tools.values(),
     sessionProvider: () => sessionProvider,
     legacySessionProvider: new FilesystemSessionProvider(path.join(config.home, "session-store")),
@@ -149,6 +152,7 @@ async function main(argv: string[]): Promise<void> {
   harness = new Harness({
     runtime,
     contextMaintenance: maintenance,
+    memory,
     beforeTurn: (input) => review.prepare(config.cwd, input.replyTo, input.sessionKey),
     afterTurn: (input, reply, session, options, signal) => finishWithReview(review, config.cwd, input, reply, session, options, signal),
     tickMs: config.loop.tickMs,
@@ -271,7 +275,28 @@ async function main(argv: string[]): Promise<void> {
   }
   await scheduler.load();
 
-  await plugins.load(config.plugins ?? [], { agent: config.agent, home: config.home, cwd: config.cwd }, [...builtinCommandNames, "sessions", "resume", ...skills.map((s) => s.name)], ["console", "api", "matrix", ...harness.channels.keys()], [contextPlugin(maintenance, settings), ...(reviewSettings.enabled ? [reviewPlugin(review, config.cwd)] : [])]);
+  await plugins.load(config.plugins ?? [], { agent: config.agent, home: config.home, cwd: config.cwd }, [...builtinCommandNames, "sessions", "resume", ...skills.map((s) => s.name)], ["console", "api", "matrix", ...harness.channels.keys()], [contextPlugin(maintenance, settings), ...(config.memory.enabled ? [memoryPlugin(memory)] : []), ...(reviewSettings.enabled ? [reviewPlugin(review, config.cwd)] : [])]);
+  let memoryConnecting = false;
+  let memoryStopping = false;
+  const connectMemory = async () => {
+    if (!config.memory.enabled || memoryConnecting || memoryStopping) return;
+    memoryConnecting = true;
+    try {
+      if (memory.provider) {
+        try { await memory.provider.status(); return; }
+        catch { await memory.provider.close().catch(() => {}); memory.provider = undefined; }
+      }
+      const factory = config.memory.provider === "local" ? undefined : plugins.memoryProviders.get(config.memory.provider);
+      if (config.memory.provider !== "local" && !factory) throw Error("Unknown memory provider");
+      const provider = factory ? await factory({ home: config.home, config: config.memory }) : await LocalMemory.open(config.home, config.memory);
+      if (memoryStopping) await provider.close(); else memory.provider = provider;
+    } catch { log("[memory] provider unavailable; retrying on next maintenance tick"); }
+    finally { memoryConnecting = false; }
+  };
+  await connectMemory();
+  const memoryTimer = config.memory.enabled ? setInterval(() => { void connectMemory().then(() => memory.flush()).catch(() => log("[memory] capture backlog retained")); }, 30000) : undefined;
+  memoryTimer?.unref();
+  void memory.flush().catch(() => log("[memory] capture backlog retained"));
   const strategyName = config.compaction?.strategy ?? "native";
   if (strategyName !== "native") {
     const strategy = plugins.compactions.get(strategyName);
@@ -301,6 +326,9 @@ async function main(argv: string[]): Promise<void> {
     for (const input of unfinished) input.started = undefined;
     await persist(unfinished).catch((err) => console.error(`[state] save failed: ${err}`));
     if (unfinished.length) console.error(`[harness] ${unfinished.length} unfinished input(s) saved for replay`);
+    memoryStopping = true;
+    clearInterval(memoryTimer);
+    await memory.provider?.close().catch(() => console.error("[memory] cleanup failed"));
     await plugins.stop().catch(() => console.error("[plugins] cleanup failed"));
     await sessionOwnership.release();
     process.exit(code);
@@ -365,6 +393,9 @@ async function main(argv: string[]): Promise<void> {
   try { await harness.start(); }
   catch (err) {
     await harness.stop(0).catch(() => {});
+    memoryStopping = true;
+    clearInterval(memoryTimer);
+    await memory.provider?.close().catch(() => {});
     await plugins.stop().catch(() => {});
     throw err;
   }

@@ -5,6 +5,7 @@ import { parse } from "yaml";
 import { validateGatewayConfig, type GatewayConfig } from "./gateway-settings.js";
 import { pruningPolicy } from "./tool-result-pruning.js";
 import { contextPolicy } from "./context-maintenance.js";
+import { memoryConfig, type MemoryConfig } from "./memory.js";
 import { reviewConfig } from "./review-config.js";
 
 export interface ReviewConfig {
@@ -39,6 +40,7 @@ export interface HarnessConfig {
   contextMaintenance?: Partial<import("./context-maintenance.js").ContextPolicy>;
   toolResultPruning?: Partial<import("./tool-result-pruning.js").PruningPolicy>;
   gateways?: GatewayConfig;
+  memory: MemoryConfig;
   /** Enable configured MCP servers; credentials and server definitions stay outside product code. */
   mcp?: { enabled: boolean };
   persona: {
@@ -118,6 +120,7 @@ export function defaultConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
     cron: { jobsFile: path.join(home, "cron", "jobs.yaml"), ...overrides.cron },
     loop: { tickMs: 15_000, busyMode: "queue", drainSeconds: 60, ...overrides.loop },
     memoryGuard: { percent: 90, ...overrides.memoryGuard },
+    memory: memoryConfig(overrides.memory),
     admins: overrides.admins ?? [],
     approvers: overrides.approvers ?? [],
     home_address: overrides.home_address,
