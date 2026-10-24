@@ -25,7 +25,8 @@ import type { Inbound } from "./types.js";
 import { type SkillInfo } from "./skills.js";
 import { SkillCatalog } from "./skill-catalog.js";
 import { ReviewService } from "./review.js";
-import { validateModelSetting, type ModelSettings } from "./model-settings.js";
+import { type ModelSettings } from "./model-settings.js";
+import { SettingsService, type SettingPath } from "./settings.js";
 import { runtimeReviewer } from "./runtime/reviewer.js";
 import { reviewConfig } from "./review-config.js";
 import { reviewPlugin } from "./review-plugin.js";
@@ -99,14 +100,15 @@ async function main(argv: string[]): Promise<void> {
   let harness!: Harness;
   let review!: ReviewService;
   const reviewSettings = reviewConfig(config.review);
-  const modelSettings: ModelSettings = {};
-  let modelRevision = 0;
-  const effectiveModels = () => ({
-    model: modelSettings.model ?? config.model,
-    thinking: modelSettings.thinking ?? config.thinking,
-    reviewModel: modelSettings.reviewModel ?? config.review?.model ?? modelSettings.model ?? config.model,
-    reviewThinking: modelSettings.reviewThinking ?? config.review?.thinking ?? "medium",
+  const settings = new SettingsService(path.join(config.home, "settings.local.yaml"), {
+    model: config.model, thinking: config.thinking,
+    review: { model: config.review?.model, thinking: config.review?.thinking ?? "medium" },
   });
+  await settings.load();
+  const effectiveModels = () => {
+    const values = settings.effective();
+    return { model: values.model, thinking: values.thinking, reviewModel: values.review?.model ?? values.model, reviewThinking: values.review?.thinking ?? "medium" };
+  };
   const updateReviewDefaults = () => {
     reviewSettings.model = effectiveModels().reviewModel;
     reviewSettings.thinking = effectiveModels().reviewThinking;
@@ -116,7 +118,7 @@ async function main(argv: string[]): Promise<void> {
     sessionsDir: path.join(config.home, "sessions"),
     model: config.model,
     thinking: config.thinking,
-    modelDefaults: () => ({ revision: modelRevision, model: effectiveModels().model, thinking: effectiveModels().thinking }),
+    modelDefaults: () => ({ revision: settings.revision, model: effectiveModels().model, thinking: effectiveModels().thinking }),
     tools: reviewSettings.enabled && config.tools?.length ? [...new Set([...config.tools, "plugin_review"])] : config.tools,
     pluginTools: () => plugins.tools.values(),
     sessionProvider: () => sessionProvider,
@@ -228,11 +230,6 @@ async function main(argv: string[]): Promise<void> {
     if (saved.home && harness.channels.has(saved.home.channel)) harness.home = saved.home;
     if (saved.approvals) Object.assign(approvals, saved.approvals);
     personality = saved.personality;
-    for (const [key, value] of Object.entries(saved.modelSettings ?? {})) {
-      if (!["model", "thinking", "reviewModel", "reviewThinking"].includes(key) || typeof value !== "string") throw new Error("Invalid persisted model settings");
-      validateModelSetting(key as keyof ModelSettings, value);
-    }
-    Object.assign(modelSettings, saved.modelSettings);
     for (const [name, on] of Object.entries(saved.cronOverrides ?? {})) scheduler.overrides.set(name, on);
     harness.restoreSessions(saved.sessions);
     harness.restoreSeen(saved.seen ?? []);
@@ -247,7 +244,6 @@ async function main(argv: string[]): Promise<void> {
       home: harness.home,
       approvals: { ...approvals },
       personality,
-      modelSettings: { ...modelSettings },
       cronOverrides: Object.fromEntries(scheduler.overrides),
       sessions: harness.snapshotSessions(),
       pending: pending.length ? pending : undefined,
@@ -308,16 +304,14 @@ async function main(argv: string[]): Promise<void> {
     approvals,
     modelSettings: {
       get: effectiveModels,
+      source: (key) => {
+        const paths = { model: "model", thinking: "thinking", reviewModel: "review.model", reviewThinking: "review.thinking" } as const;
+        return settings.source(key === "reviewModel" && settings.effective().review?.model === undefined ? "model" : paths[key]);
+      },
       set: async (key, value) => {
-        if (value !== undefined) {
-          validateModelSetting(key, value);
-          if ((key === "model" || key === "reviewModel") && !(await runtime.models()).includes(value)) throw new Error("Model is not available; configure provider credentials and model first");
-        }
-        const previous = { ...modelSettings };
-        if (value === undefined) delete modelSettings[key]; else modelSettings[key] = value;
-        try { await persist(); }
-        catch (err) { for (const k of Object.keys(modelSettings)) delete modelSettings[k as keyof ModelSettings]; Object.assign(modelSettings, previous); throw err; }
-        if (key === "model" || key === "thinking") modelRevision++;
+        if (value !== undefined && (key === "model" || key === "reviewModel") && !(await runtime.models()).includes(value)) throw new Error("Model is not available; configure provider credentials and model first");
+        const paths: Record<keyof ModelSettings, SettingPath> = { model: "model", thinking: "thinking", reviewModel: "review.model", reviewThinking: "review.thinking" };
+        await settings.set(paths[key], value);
         updateReviewDefaults();
       },
     },

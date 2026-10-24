@@ -46,11 +46,14 @@ test("global and reviewer model commands require admin for changes and support r
     get: () => settings,
     set: async (key, value) => { settings[key] = value; },
   };
-  await send("/model --global p/a", "other");
+  await send("/model p/a --global", "other");
   assert.match(ch.texts().at(-1)!, /admin only/);
   assert.equal(settings.model, undefined);
   await send("/model --global p/a", "owner");
-  await send("/reasoning --global high", "owner");
+  assert.match(ch.texts().at(-1)!, /at the end/);
+  assert.equal(settings.model, undefined);
+  await send("/model p/a --global", "owner");
+  await send("/reasoning high --global", "owner");
   await send("/review-model p/b", "owner");
   await send("/review-reasoning medium", "owner");
   assert.deepEqual(settings, { model: "p/a", thinking: "high", reviewModel: "p/b", reviewThinking: "medium" });

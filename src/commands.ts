@@ -17,6 +17,7 @@ export interface CommandContext {
   harness: Harness;
   modelSettings?: {
     get: () => import("./model-settings.js").ModelSettings;
+    source?: (key: import("./model-settings.js").ModelSetting) => string;
     set: (key: import("./model-settings.js").ModelSetting, value?: string) => Promise<void>;
   };
   scheduler?: Scheduler;
@@ -51,11 +52,18 @@ interface Command {
   run: (args: string, input: Inbound, ctx: CommandContext) => Promise<string | void>;
 }
 
+function globalArgument(args: string): string | undefined {
+  const parts = args.trim().split(/\s+/);
+  if (!parts.includes("--global")) return undefined;
+  if (parts.at(-1) !== "--global" || parts.slice(0, -1).includes("--global") || parts.length > 2) throw new Error("Place --global at the end: /model provider/model --global or /reasoning medium --global");
+  return parts.slice(0, -1).join(" ");
+}
+
 async function globalSetting(key: import("./model-settings.js").ModelSetting, value: string, input: Inbound, ctx: CommandContext): Promise<string> {
   if (value && !isAdmin(ctx, input)) return "⛔ admin only";
   if (!ctx.modelSettings) throw new Error("Global model settings are unavailable");
   if (value) await ctx.modelSettings.set(key, value === "reset" ? undefined : value);
-  return `global ${key}: ${ctx.modelSettings.get()[key] ?? "runtime default"}${value ? " (applies on next turn; active turns unchanged)" : ""}`;
+  return `global ${key}: ${ctx.modelSettings.get()[key] ?? "runtime default"} [${ctx.modelSettings.source?.(key) ?? "defaults"}]${value ? " (applies on next turn; active turns unchanged)" : ""}`;
 }
 
 const BUSY_MODES: BusyMode[] = ["queue", "steer", "interrupt"];
@@ -322,9 +330,10 @@ export const COMMANDS: Command[] = [
   },
   {
     name: "model",
-    help: "Model for this session, or --global <provider/model|reset> for instance defaults",
+    help: "Model for this session, or <provider/model|reset> --global for instance defaults",
     run: async (args, input, ctx) => {
-      if (/^--global(?:\s|$)/.test(args.trim())) return globalSetting("model", args.trim().slice(8).trim(), input, ctx);
+      const global = globalArgument(args);
+      if (global !== undefined) return globalSetting("model", global, input, ctx);
       const session = await ctx.harness.sessionFor(input.sessionKey);
       if (!args.trim()) return `model: ${session.status().model ?? "default"}`;
       await session.setModel(args.trim());
@@ -333,9 +342,10 @@ export const COMMANDS: Command[] = [
   },
   {
     name: "reasoning",
-    help: "Session reasoning, or --global <level|reset> for instance defaults",
+    help: "Session reasoning, or <level|reset> --global for instance defaults",
     run: async (args, input, ctx) => {
-      if (/^--global(?:\s|$)/.test(args.trim())) return globalSetting("thinking", args.trim().slice(8).trim(), input, ctx);
+      const global = globalArgument(args);
+      if (global !== undefined) return globalSetting("thinking", global, input, ctx);
       const session = await ctx.harness.sessionFor(input.sessionKey);
       if (!args.trim()) return `reasoning: ${session.status().thinking ?? "default"}`;
       session.setThinking(args.trim());
