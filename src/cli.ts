@@ -129,6 +129,7 @@ async function main(argv: string[]): Promise<void> {
     afterTurn: (input, reply, session, options, signal) => finishWithReview(review, config.cwd, input, reply, session, options, signal),
     tickMs: config.loop.tickMs,
     busyMode: config.loop.busyMode,
+    gateways: config.gateways,
     log,
     // Permanently rejected replies (e.g. no permission in the room) are parked for manual follow-up.
     parkUndeliverable: (entry, error) =>

@@ -3,16 +3,19 @@
  * Configured through the same MATRIX_* environment as the Hermes Matrix adapter, so
  * existing AgentOS manifests (MatrixAgent secrets, params) keep working.
  */
+import { GatewayProgress, progressMode, type ProgressMode } from "./progress.js";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { marked } from "marked";
 import { writeFileDurable } from "../durable.js";
-import { type Address, type Channel, type DedupPins, type Inbound, PermanentDeliveryError, type SendMeta } from "../types.js";
+import { type Address, type Channel, type DedupPins, type Inbound, PermanentDeliveryError, type SendMeta, type TurnEvent } from "../types.js";
 import { type MatrixEvent, MatrixSyncRecovery } from "./matrix-sync.js";
 
 export interface MatrixOptions {
   homeserver: string;
+  progress?: ProgressMode;
+  statusReactions?: boolean;
   accessToken?: string;
   userId?: string;
   password?: string;
@@ -47,6 +50,8 @@ export function matrixOptionsFromEnv(env: NodeJS.ProcessEnv, home: string): Matr
   return {
     homeserver: env.MATRIX_HOMESERVER.replace(/\/+$/, ""),
     accessToken: env.MATRIX_ACCESS_TOKEN,
+    progress: env.MATRIX_PROGRESS === undefined ? undefined : progressMode(env.MATRIX_PROGRESS),
+    statusReactions: env.MATRIX_STATUS_REACTIONS === undefined ? undefined : truthy(env.MATRIX_STATUS_REACTIONS, false),
     userId: env.MATRIX_USER_ID,
     password: env.MATRIX_PASSWORD,
     deviceId: env.MATRIX_DEVICE_ID,
@@ -107,7 +112,46 @@ export class MatrixChannel implements Channel {
   private readonly pendingInvites = new Map<string, any>();
   private readonly batches = new Map<string, { input: Inbound; timer: NodeJS.Timeout; since: number }>();
   private readonly typingTimers = new Map<string, NodeJS.Timeout>();
+  private gateway: import("../gateway-settings.js").GatewaySettings = { progress: "off", statusReactions: false };
+  configureGateway(settings: import("../gateway-settings.js").GatewaySettings): void {
+    this.gateway = { progress: this.o.progress ?? settings.progress, statusReactions: this.o.statusReactions ?? settings.statusReactions };
+  }
+  private readonly progress = new Map<string, GatewayProgress>();
+  private telemetry: Promise<void> = Promise.resolve();
+  private telemetryPending = 0;
   userId = "";
+
+  private enqueueTelemetry(work: () => Promise<void>): void {
+    if (this.telemetryPending >= 50) return;
+    this.telemetryPending++;
+    this.telemetry = this.telemetry.then(work).catch(() => undefined).finally(() => { this.telemetryPending--; });
+  }
+
+  private progressKey(to: Address, input?: Inbound): string { return JSON.stringify([to.target, to.thread, input?.sessionKey, input?.id]); }
+
+  turnEvent(to: Address, event: TurnEvent, input?: Inbound): void {
+    this.progress.get(this.progressKey(to, input))?.event(event);
+  }
+
+  async turnStatus(to: Address, input: Inbound, status: "started" | "completed" | "failed" | "cancelled"): Promise<void> {
+    const key = this.progressKey(to, input);
+    if (status === "started") {
+      this.progress.set(key, new GatewayProgress(this.o.progress ?? this.gateway.progress, async (text) => { this.enqueueTelemetry(() => this.send(to, text)); }));
+    } else {
+      const progress = this.progress.get(key);
+      this.progress.delete(key);
+      await progress?.finish();
+    }
+    if (!(this.o.statusReactions ?? this.gateway.statusReactions)) return;
+    const emoji = { started: "👀", completed: "✅", failed: "❌", cancelled: "⏹️" }[status];
+    const ids = input.parts?.map((part) => part.id) ?? (input.id ? [input.id] : []);
+    for (const id of ids) {
+      const txn = createHash("sha256").update(JSON.stringify([to.target, id, status])).digest("hex");
+      this.enqueueTelemetry(() => this.api("PUT", `/rooms/${encodeURIComponent(to.target)}/send/m.reaction/${txn}`, {
+        "m.relates_to": { rel_type: "m.annotation", event_id: id, key: emoji },
+      }).then(() => undefined));
+    }
+  }
 
   constructor(private readonly o: MatrixOptions) {
     this.fetch = o.fetch ?? fetch;

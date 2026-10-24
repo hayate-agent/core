@@ -1,133 +1,155 @@
 # VanillaCore Agent Harness
 
-Package and CLI: `vanillacore-harness`.
-Repository: `https://git.vanillacore.net/harness/core`.
+A persistent AI agent for your terminal and messaging gateways. Use it to work on
+code interactively, or keep it running to handle conversations, scheduled tasks
+and longer-term goals.
 
-Agent configuration: `VANILLACORE_HARNESS_HOME` and `VANILLACORE_HARNESS_AGENT`.
-The default state directory is `~/.vanillacore-harness`.
+The Harness owns scheduling, queues and message delivery. PI is the current model
+and tool runtime; you do not need a separate PI installation to install the Harness.
+Existing PI provider configuration can be reused.
 
-Lightweight, persistent personal agent: a general Hermes replacement. PI is the current runtime
-(`src/runtime/pi.ts` is the only module that imports the PI SDK).
+## Install and start
 
-Status: core loop, Matrix (without E2EE) and a Hermes-compatible HTTP run API are implemented.
-E2EE and Web UI are not implemented. MCP/CLI management and self-modifying runtime activation
-are planned, not shipped features.
-
-## What it does
-
-- **Loop**: one long-running process. A FIFO queue per conversation (session key); one turn at a time
-  per conversation; conversations run in parallel. A periodic tick (`loop.tickMs`) re-enters idle
-  sessions for `/heartbeat`, `/loop` and standing `/goal`s.
-- **Busy handling** (`/busy`): `queue` (default), `steer` (inject into the running turn), `interrupt`.
-- **Persona & voice**: `SOUL.md` (identity) + `VOICE.md` (personality, tone, style; voice in the writing
-  sense, not audio) + optional `personalities/<name>.md` (`/personality`). Appended to the system prompt.
-- **Skills**: PI's skill discovery (global `~/.pi/agent/skills`, project `.pi/skills`) plus `<home>/skills`.
-  `/skills` lists them, `/<skill-name> [task]` invokes one.
-- **Cron**: Hermes `cron/jobs.yaml` format (`schedule`, `script`, `no_agent`, `prompt_file`, `deliver`,
-  `origin`, `enabled`, `absent`). Timezone-aware. `NO_REPLY` stays silent.
-- **Approvals**: off by default (no nannying). `/approvals manual [tool...]` or `/yolo` toggles; `/approve`, `/deny`.
-- **Hermes slash commands** (gateway-relevant subset): `/new /reset /retry /title /compress /compact /stop
-  /queue /steer /bg /btw /agents /goal /subgoal /heartbeat /loop /status /context /whoami /profile /sethome
-  /model /reasoning /personality /busy /yolo /approvals /approve /deny /pause /restart /skills /reload-skills
-  /reload-mcp /cron /help /commands /version`. Unknown `/words` go to the agent.
-
-- **State**: heartbeats, loops, goals, reply addresses, `/busy`, `/sethome`, approvals, personality,
-  `/pause` and `/cron pause` survive restarts (`<home>/state.json`, 0600). History is kept by the runtime.
-
-## Matrix
-
-Enabled when `MATRIX_HOMESERVER` and `MATRIX_ACCESS_TOKEN` (or `MATRIX_USER_ID` + `MATRIX_PASSWORD`) are set.
-Same variables and defaults as the Hermes Matrix adapter, so AgentOS manifests carry over:
-
-| Variable | Meaning (default) |
-|---|---|
-| `MATRIX_ALLOWED_USERS`, `MATRIX_ALLOW_ALL_USERS` | who may talk to the agent; invites from them are accepted |
-| `MATRIX_ALLOWED_ROOMS` | group-room whitelist (DMs exempt) |
-| `MATRIX_REQUIRE_MENTION` | groups need an @mention, `/command` or bot thread (`true`) |
-| `MATRIX_FREE_RESPONSE_ROOMS` | no mention needed; unaddressed messages may be answered with silence |
-| `MATRIX_OPTIONAL_REPLY_ROOMS` | coordination rooms: answering is always optional |
-| `MATRIX_AUTO_THREAD`, `MATRIX_DM_AUTO_THREAD` | reply in a thread per mention (`true`) / in DMs (`false`) |
-| `MATRIX_HOME_ROOM` | home for cron output and notices |
-| `MATRIX_APPROVAL_APPROVERS` | only these MXIDs approve (✅/❌ reaction or `/approve`); also admins if `admins` is empty |
-| `MATRIX_TEXT_BATCH_DELAY_SECONDS` | merge rapid messages of one sender (`0.6`) |
-| `MATRIX_PROCESS_NOTICES`, `MATRIX_DISPLAY_NAME` | handle `m.notice` (`false`); name for plain-text mentions (agent name) |
-
-Rooms with ≤2 members count as DMs. Every turn shows a typing indicator. Not yet: E2EE, media, edits
-of own messages, reactions as acknowledgements.
-
-**Delivery guarantees.** Inputs are saved (`<home>/state.json`) before the Matrix cursor
-(`<home>/matrix-sync.json`) advances; replies go through a durable outbox with stable transaction ids.
-With password login the access token is kept in `<home>/matrix-session.json` (0600), because Matrix
-dedups retries per token. Transient errors retry forever. An event that keeps failing permanently is
-parked after 5 attempts in `<home>/matrix-deadletter.jsonl`; a reply the homeserver permanently rejects
-(4xx, e.g. no permission) goes to `<home>/outbox-deadletter.jsonl`. Both need a manual look. Limits: a turn
-interrupted by a crash is replayed (at least once), and admins fall back to the approvers when Matrix
-is on (otherwise only the console).
-
-## Installation
-
-See [installation instructions](docs/installation.md) for Linux, macOS, Windows-WSL,
-Docker Compose and Kubernetes/GitOps. A Dockerfile and Compose example are included.
-Run `vanillacore-harness` in any project directory to open the Harness TUI; no init
-is required. Existing PI provider settings are reused; /login and /model open local dialogs. `init` and `doctor` are optional
-administrative helpers. `vanillacore-harness run` starts the separate gateway mode.
-See [local self-development](docs/self-development.md) to use the harness as a coding agent
-in its own user-owned checkout, or run it as a Linux user service.
-
-## Run
+You need **Git and Node.js with npm**. Node **24.22.1 LTS** is recommended;
+the native CLI requires at least Node 22.19.0. Linux, macOS and Windows through
+WSL2 are supported.
 
 ```sh
-npm install
-VANILLACORE_HARNESS_HOME=~/.vanillacore-harness npm start      # console (stdin/stdout); with MATRIX_* also Matrix
-                                             # (console then only on a TTY or with --console)
-npm test && npm run typecheck
+git clone https://git.vanillacore.net/harness/core.git "$HOME/vanillacore-harness"
+cd "$HOME/vanillacore-harness"
+npm ci
+npm install --global --prefix "$HOME/.local" .
+export PATH="$HOME/.local/bin:$PATH"
+
+cd /path/to/your/project
+vanillacore-harness
 ```
 
-`<home>/harness.yaml`:
+Keep the checkout: this local installation links to it. Add the PATH line to your
+shell profile to make the command available in future terminals. No `sudo` or
+initialization wizard is required. `npm ci` also builds the CLI.
+
+In the terminal interface, use **`/login`** to connect a supported provider and
+**`/model`** to select a model. Custom providers use PI's `models.json`; see
+[configuration](docs/configuration.md). Existing PI settings in `~/.pi/agent`
+are reused, so changes there can affect other PI-based applications.
+
+**Your first session:** ask the agent to inspect your project, use `/help` to
+browse commands, and `/sessions` or `/resume` to return to an earlier conversation.
+Each interactive launch starts a fresh conversation scoped to the current workspace.
+
+For Docker Compose, Kubernetes and background services, see
+[installation](docs/installation.md). Native Windows outside WSL2 is not supported.
+
+## What you can do
+
+| Capability | What it means in practice |
+|---|---|
+| **Interactive coding** | A fullscreen terminal interface with streaming answers, tool activity and a fixed input area. Configure which tools the model may use. |
+| **Persistent conversations** | Keep history across restarts, name sessions, and explicitly resume work. Native PI session storage is the default. |
+| **Always-on work** | Run heartbeats, recurring loops, cron jobs and standing goals without keeping a terminal open. |
+| **Parallel conversations** | Separate conversations can run concurrently; each conversation processes its own queue in order. |
+| **Matrix gateway** | Talk to the same Harness through DMs or rooms, with allowlists, mention rules, threads and approval handling. |
+| **HTTP run API** | Submit runs programmatically and stream progress through a Hermes-compatible API. AgentOS integration is optional. |
+| **Identity and skills** | Use `SOUL.md` for identity, `VOICE.md` for tone, and discoverable skills for reusable procedures. |
+| **Trusted plugins** | Add commands, channels, tools, terminal panels and interactive dialogs through local ESM modules. Storage and manual compaction also have extension points. |
+| **Optional MCP** | Enable PI-backed MCP integration when needed; it is not a required service. |
+
+Approvals are **off by default**. You can enable manual approval for selected
+tools. Plugins are trusted process code, not sandboxed extensions.
+
+## Everyday commands
+
+- **Sessions:** `/new`, `/title`, `/sessions`, `/resume`, `/compact`.
+- **While working:** `/stop`, `/queue`, `/steer`, `/busy`.
+- **Ongoing tasks:** `/goal`, `/heartbeat`, `/loop`, `/cron`.
+- **Configuration:** `/model`, `/reasoning`, `/personality`, `/skills`.
+- **Discoverability:** `/help`, `/status`, `/harness` (bundled development guide).
+
+Not every command is available on every channel. Use `/help` in your current
+interface rather than memorizing the full command list.
+
+## Run as a gateway
+
+```sh
+vanillacore-harness run
+```
+
+This starts the same Harness without the interactive TUI. Configure Matrix with
+`MATRIX_HOMESERVER` and either `MATRIX_ACCESS_TOKEN` or password-login settings.
+Set `MATRIX_ALLOWED_USERS` and the room/approval policy before connecting it to
+other people. A configured model provider is required to answer messages.
+
+The HTTP API is enabled with `API_SERVER_KEY`; supply secrets through your runtime
+environment, not source control. Use a supervisor or container deployment for an
+always-on service. `/restart` drains work and exits with status 75; the supervisor
+is responsible for starting it again.
+
+See [configuration](docs/configuration.md) for settings and
+[operations](docs/operations.md) for durable delivery, retries, memory pressure
+and shutdown behavior.
+
+## Configuration and data
+
+Harness state defaults to **`~/.vanillacore-harness`**. Use
+`VANILLACORE_HARNESS_HOME` for a separate agent home. A minimal optional
+`harness.yaml` looks like this:
 
 ```yaml
 agent: example-agent
-model: example-provider/example-model     # configure provider/model in PI
-thinking: high
 timezone: Europe/Berlin
-loop: { tickMs: 15000, busyMode: queue }
-admins: ["@owner:example.org"]             # privileged command senders; see Matrix fallback above
+loop:
+  busyMode: queue
+  drainSeconds: 60
 ```
 
-Model credentials, providers and extensions come from PI's normal configuration (`~/.pi/agent`).
-`/restart` exits with code 75 after draining; the supervisor restarts the process.
+Model/provider credentials and PI settings live separately in `~/.pi/agent`
+(or `PI_CODING_AGENT_DIR`). Persistent installations need to retain both locations.
+`init` creates missing starter files; `doctor` checks local configuration. Neither
+is required for normal interactive use.
 
-## Container
+The container runs as UID/GID 1000 and includes Chromium runtime libraries,
+Python virtual environments and native build tools. Agents can install their own
+CLI tools in writable persistent storage; no particular browser CLI is required.
+See [browser tooling](docs/browser-tools.md). Kubernetes examples use immutable
+image digests and expect private configuration and secrets to be supplied separately.
 
-`./agent` is the PI config (`models.json` with providers, `settings.json`); `./home` holds
-`harness.yaml`, `SOUL.md`, `VOICE.md`, state and sessions.
+## Current boundaries
+
+- **Matrix E2EE is not yet supported.** Do not use encrypted rooms expecting the
+  current released adapter to decrypt or answer them.
+- **Slack and Telegram adapters are not included.** The plugin channel interface
+  supports additional transports, but does not implement them automatically.
+- A Web UI and automatic activation/rollback of agent-built runtime versions are
+  not shipped features.
+- Matrix supports optional [gateway progress and status reactions](docs/gateway-progress.md),
+  with global defaults and per-gateway overrides. A generic secret-manager context
+  is still under development.
+- Durable queues reduce lost work, but crash recovery is **at least once**, not
+  exactly once. External tool effects may be repeated after a crash.
+
+## Documentation
+
+- [Installation](docs/installation.md) — native, Compose and Kubernetes
+- [Configuration](docs/configuration.md) — models, tools, identity and access settings
+- [Sessions](docs/sessions.md) — resume, storage providers and compaction
+- [MCP](docs/mcp.md) · [Plugins](docs/plugins.md) — integrations and extension APIs
+- [Operations](docs/operations.md) — recovery and service operation
+- [Self-development](docs/self-development.md) · [Development guide](docs/development.md)
+
+## Contribute
+
+Use a user-owned checkout, make changes on a feature branch, and run:
 
 ```sh
-docker build -t vanillacore-harness .
-docker run -p 8642:8642 -e API_SERVER_KEY=... -e GATEWAY_KEY=... \
-  -v ./agent:/home/node/.pi/agent \
-  -v ./home:/home/node/.vanillacore-harness \
-  vanillacore-harness
+npm ci
+npm run typecheck
+npm test
+npm run build
 ```
 
-Runs as uid 1000 under tini (SIGTERM drains in-flight turns for `loop.drainSeconds`).
-
-Identity and provider configuration are supplied at runtime; state lives in the home volume.
-See [operations](docs/operations.md) for memory pressure, crash recovery and console behavior,
-and [configuration](docs/configuration.md) for provider credentials and memory-guard settings.
-
-`GET /v1/models` lists `provider/model` refs plus each bare model id that is unique across
-providers (Hermes-style alias); `POST /v1/runs` accepts either, and an optional `provider`
-(`custom:` prefix ignored) must match the resolved one.
-
-## Kubernetes
-
-`deploy/kubernetes` is a standalone Kustomize example with a persistent home and a
-non-root container. Supply your built image by immutable digest, create the referenced
-Secret outside Git, and configure a provider in `models.json`. No credentials or tenant
-configuration are included. Render with `kubectl kustomize deploy/kubernetes` and deploy
-through your GitOps controller. The HTTP run API also supports AgentOS's `hermes_gateway`
-adapter; AgentOS is optional.
+Submit changes through a pull request. Keep deployment identities, internal
+endpoints and credentials out of the public repository.
 
 ## License
 

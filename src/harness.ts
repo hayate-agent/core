@@ -4,6 +4,7 @@
  * for heartbeats, /loop prompts and standing goals, which is what keeps the agent
  * "alive" between messages.
  */
+import { gatewaySettings, type GatewayConfig } from "./gateway-settings.js";
 import { randomUUID } from "node:crypto";
 import type { PersistedSession } from "./state.js";
 import type { Address, AgentRuntime, BusyMode, Channel, Inbound, PromptOptions, RuntimeSession, SendMeta, TurnEvent, TurnOutcome } from "./types.js";
@@ -77,6 +78,7 @@ export interface HarnessOptions {
   runtime: AgentRuntime;
   tickMs: number;
   busyMode: BusyMode;
+  gateways?: GatewayConfig;
   /** Max automatic goal continuation turns before the goal pauses itself. */
   goalMaxTurns?: number;
   /** Core lifecycle boundary; runs before the working agent starts. */
@@ -137,6 +139,7 @@ export class Harness {
   // ---------------------------------------------------------------- lifecycle
 
   addChannel(channel: Channel): void {
+    channel.configureGateway?.(gatewaySettings(this.opts.gateways, channel.name));
     this.channels.set(channel.name, channel);
   }
 
@@ -643,13 +646,20 @@ export class Harness {
     let outcome: TurnOutcome | undefined;
     const to = input.replyTo ?? (input.source === "cron" ? undefined : s.replyTo);
     const typingCh = to ? this.channels.get(to.channel) : undefined;
+    let telemetry = Promise.resolve().then(() => typingCh?.turnStatus?.(to!, input, "started")).catch(() => undefined);
+    let telemetryEvents = 0;
+    let telemetryTools = 0;
     await typingCh?.typing?.(to!, true).catch(() => undefined);
     const onEvent = typingCh?.turnEvent
       ? (event: TurnEvent) => {
-          try {
-            typingCh.turnEvent!(to!, event);
-          } catch {
-            // progress is best effort
+          // Only lifecycle-aware gateways need ordering; preserve live TUI/API streaming.
+          if (typingCh.turnStatus) {
+            const tool = event.type === "tool";
+            if (tool ? telemetryTools >= 50 : telemetryEvents >= 1000) return;
+            if (tool) telemetryTools++; else telemetryEvents++;
+            telemetry = telemetry.then(() => { typingCh.turnEvent!(to!, event, input); }).catch(() => undefined).finally(() => { if (tool) telemetryTools--; else telemetryEvents--; });
+          } else {
+            try { typingCh.turnEvent!(to!, event, input); } catch { /* best effort */ }
           }
         }
       : undefined;
@@ -690,6 +700,8 @@ export class Harness {
       if (outcome === "cancelled" && reply.startsWith("⚠️")) reply = "";
     }
     if (this.frozen) throw new Error("shut down after inbox snapshot; input will replay");
+    const finalStatus = outcome ?? "completed";
+    void telemetry.then(() => typingCh?.turnStatus?.(to!, input, finalStatus)).catch(() => undefined);
     s.lastActivity = this.now();
     if (s.goal && input.source === "goal") {
       s.goal.turns++;

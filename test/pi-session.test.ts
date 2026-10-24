@@ -111,6 +111,16 @@ test("PiSession: provider error stop surfaces as a failure", async () => {
   await assert.rejects(session.prompt("x"), /429 upstream/);
 });
 
+test("tool details are lazy, bounded and do not invoke payload getters", () => {
+  let inspected = false;
+  const payload = { body: "x".repeat(1_000_000), get secret() { inspected = true; throw new Error("getter"); } };
+  const event = toTurnEvent({type:"tool_execution_end",toolName:"bash",result:payload,isError:false} as any)!;
+  assert.equal(inspected,false);
+  if (event.type !== "tool") throw new Error("wrong event");
+  assert.ok(event.detail!.length <= 2000);
+  assert.equal(inspected,false);
+});
+
 test("toTurnEvent maps text deltas, tools and per-message usage", () => {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const ev = (e: unknown) => toTurnEvent(e as any);

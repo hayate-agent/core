@@ -46,7 +46,7 @@ export interface TurnOptions {
 /** Progress of a running turn, for channels that stream it (API runs). */
 export type TurnEvent =
   | { type: "text"; delta: string }
-  | { type: "tool"; phase: "start" | "end"; name: string; error?: boolean }
+  | { type: "tool"; phase: "start" | "end"; name: string; error?: boolean; detail?: string }
   /** One assistant message finished; usage is for that message only. */
   | {
       type: "usage";
@@ -152,11 +152,15 @@ export interface DedupPins {
 /** A messaging channel (Matrix, console, ...). */
 export interface Channel {
   readonly name: string;
+  /** Resolved global/per-gateway policy, applied before start. */
+  configureGateway?(settings: import("./gateway-settings.js").GatewaySettings): void;
   /** `deliverInbound` resolves once the input is durably accepted (safe to acknowledge upstream). */
   start(deliverInbound: (input: Inbound) => Promise<void>, dedup?: DedupPins): Promise<void>;
   send(to: Address, text: string, meta?: SendMeta): Promise<void>;
   /** Optional live progress of the turn answering `to` (best effort, not durable). */
-  turnEvent?(to: Address, event: TurnEvent): void;
+  turnEvent?(to: Address, event: TurnEvent, input?: Inbound): void;
+  /** Best-effort status on the original input; completed means processing, not delivery. */
+  turnStatus?(to: Address, input: Inbound, status: "started" | "completed" | "failed" | "cancelled"): Promise<void>;
   /** Optional "is typing" indicator while a turn runs. */
   typing?(to: Address, on: boolean): Promise<void>;
   /** `budgetMs`: give up waiting for in-flight work after this long (bounded shutdown). */
