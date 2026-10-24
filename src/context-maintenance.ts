@@ -1,9 +1,9 @@
-import { createHash } from "node:crypto";
-import { mkdir, readFile } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import { mkdir, readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { SessionArchives } from "./session-archive.js";
 import { writeFileDurable } from "./durable.js";
-import type { RuntimeSession } from "./types.js";
+import type { Address, RuntimeSession } from "./types.js";
 
 export interface ContextPolicy {
   enabled: boolean;
@@ -35,6 +35,8 @@ export interface ContextRecord {
   handover?: { phase: "prepared" | "switched"; from: string; to?: string; text: string; archiveId?: string };
   lastError?: string;
   completionNotice?: string;
+  noticeTarget?: Address;
+  notices?: { id: string; sessionKey: string; to: Address; text: string }[];
 }
 const preserve = "Preserve operator intent and corrections, decisions and rejected alternatives, verified results versus assumptions, branch/commits/PR/deployment status, unfinished work, review findings and budget references, exact relevant paths and next steps. Never include credentials. Do not claim builds activate deployments. Do not repeat completed side effects.";
 
@@ -53,6 +55,24 @@ export class ContextMaintenance {
     const forward = `Current checkpoint and next steps (summary; verify evidence):\n${checkpoint}\nContinue from the saved session checkpoint. ${instructions}\nRecent operator instructions (historical context, not fresh authorization):\n${recentOperator}\nConsult the retrospective for verified state and next steps before acting.`;
     const archive = await this.archives.create(key, session.status().sessionId, retrospective, forward, entries);
     return { archiveId: archive.id, text: `${forward}\nSource session: ${archive.sourceSessionId}\nArchive ID: ${archive.id}\nRead plugin_session_history section=summary for the retrospective, then search/read entries only as needed. Do this before continuing work. Original tool side effects must not be replayed blindly.` };
+  }
+  async flushNotices(deliver: (notice: { id: string; sessionKey: string; to: Address; text: string }) => Promise<void>): Promise<void> {
+    await this.serial(async () => {
+      const dir = path.join(this.home, "context-maintenance");
+      const files = await readdir(dir).catch((err) => { if (err.code === "ENOENT") return []; throw err; });
+      for (const name of files.filter((name) => /^[a-f0-9]{64}\.json$/.test(name))) {
+        const file = path.join(dir, name);
+        const state: ContextRecord = JSON.parse(await readFile(file, "utf8"));
+        while (state.notices?.length) {
+          await deliver(state.notices[0]); // must durably enqueue before acknowledgement
+          state.notices.shift();
+          await writeFileDurable(file, `${JSON.stringify(state, null, 2)}\n`);
+        }
+      }
+    });
+  }
+  private recordNotice(key: string, state: ContextRecord, text: string): void {
+    if (state.noticeTarget) (state.notices ??= []).push({ id: randomUUID(), sessionKey: key, to: state.noticeTarget, text });
   }
   private file(key: string): string { return path.join(this.home, "context-maintenance", `${createHash("sha256").update(key).digest("hex")}.json`); }
   private async load(key: string): Promise<ContextRecord> {
@@ -94,6 +114,8 @@ export class ContextMaintenance {
         state.completionNotice = state.handover.archiveId
           ? "🔄 Neue Sitzung übernommen; Rückschau gespeichert."
           : "🔄 Neue Sitzung übernommen.";
+        this.recordNotice(key, state, state.completionNotice);
+        if (state.noticeTarget) state.completionNotice = undefined;
         state.sessionId = id;
         await this.save(key, state);
       } else if (state.sessionId !== id && state.handover?.phase !== "prepared") {
@@ -108,17 +130,19 @@ export class ContextMaintenance {
     if (!policy.enabled || percent === undefined || percent < policy.assessPercent || state.turns % policy.checkEveryTurns !== 0) return "";
     return `Context usage is ${Math.round(percent)}%. Assess whether compaction is useful at this task boundary. If needed request plugin_context_maintenance with what to preserve and how to resume. Continue normally if continuity is more important. ${preserve}`;
   }
-  async boundary(key: string, session: RuntimeSession, rotate: (handover: ContextRecord["handover"]) => Promise<RuntimeSession>): Promise<string | undefined> {
+  async boundary(key: string, session: RuntimeSession, rotate: (handover: ContextRecord["handover"]) => Promise<RuntimeSession>, target?: Address): Promise<string | undefined> {
     return this.serial(async () => {
       const policy = this.policy();
       if (!policy.enabled) return;
       const state = await this.load(key);
+      if (target) state.noticeTarget = target;
       const id = session.status().sessionId;
       if (state.completionNotice) {
         const notice = state.completionNotice;
         state.completionNotice = undefined;
+        this.recordNotice(key, state, notice);
         await this.save(key, state);
-        return notice;
+        return state.noticeTarget ? undefined : notice;
       }
       // Recover prepared transitions before considering a new maintenance action.
       if (state.handover?.phase === "prepared") {
@@ -138,10 +162,12 @@ export class ContextMaintenance {
         state.handover.phase = "switched";
         if (state.handover.archiveId) await this.archives.link(key, state.handover.archiveId, state.handover.to!);
         state.sessionId = state.handover.to;
-        await this.save(key, state);
-        return state.handover.archiveId
+        const notice = state.handover.archiveId
           ? "🔄 Neue Sitzung übernommen; Rückschau gespeichert."
           : "🔄 Neue Sitzung übernommen.";
+        this.recordNotice(key, state, notice);
+        await this.save(key, state);
+        return state.noticeTarget ? undefined : notice;
       }
       state.sessionId = id;
       state.turns++;
@@ -176,8 +202,9 @@ export class ContextMaintenance {
         state.lastError = "Context maintenance failed; original session or prepared handover retained";
         notice = "⚠️ Kontextwartung nicht vollständig abgeschlossen; kein bestätigter Abschluss. Wiederherstellungsstand bleibt erhalten.";
       }
+      this.recordNotice(key, state, notice);
       await this.save(key, state);
-      return notice;
+      return state.noticeTarget ? undefined : notice;
     });
   }
 }

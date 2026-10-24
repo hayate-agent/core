@@ -27,6 +27,30 @@ test("boundary compacts with preservation instructions and cooldown survives res
   assert.equal(summaries.length, 1);
 });
 
+test("completion and durable notice survive restart and failed outbox adoption", async (t) => {
+  const home = await mkdtemp(path.join(os.tmpdir(), "context-test-"));
+  t.after(() => rm(home, { recursive: true, force: true }));
+  const policy = () => contextPolicy();
+  const maintenance = new ContextMaintenance(home, policy);
+  let compactions = 0;
+  const session = { status: () => ({ sessionId: "old", contextPercent: 80 }), compact: async () => { compactions++; } } as unknown as RuntimeSession;
+  const rotate = async () => { throw Error("unexpected"); };
+  const target = { channel: "matrix", target: "room" };
+  assert.equal(await maintenance.boundary("chat", session, rotate, target), undefined);
+  const restarted = new ContextMaintenance(home, policy);
+  let id = "";
+  await assert.rejects(restarted.flushNotices(async (notice) => { id = notice.id; throw Error("outbox save failed"); }));
+  await new ContextMaintenance(home, policy).flushNotices(async (notice) => {
+    assert.equal(notice.id, id);
+    assert.equal(notice.sessionKey, "chat");
+    assert.deepEqual(notice.to, target);
+    assert.match(notice.text, /Kontext kompaktiert/);
+  });
+  await restarted.flushNotices(async () => { assert.fail("already acknowledged"); });
+  await restarted.boundary("chat", session, rotate, target);
+  assert.equal(compactions, 1);
+});
+
 test("unknown usage does not trigger automatic compaction; handover is explicit", async (t) => {
   const home = await mkdtemp(path.join(os.tmpdir(), "context-test-"));
   t.after(() => rm(home, { recursive: true, force: true }));
