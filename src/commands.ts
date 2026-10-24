@@ -93,6 +93,7 @@ function recurringCommand(kind: "heartbeat" | "loop"): Command["run"] {
       case "clear":
       case "stop":
         s[kind] = undefined;
+        if (kind === "heartbeat") s.heartbeatDisabled = true;
         return `${kind} cleared`;
     }
     // heartbeat: "every <interval> <prompt>"; loop: "[interval] <prompt> [--times N]"
@@ -110,6 +111,7 @@ function recurringCommand(kind: "heartbeat" | "loop"): Command["run"] {
     const prompt = words.join(" ").trim();
     if (!prompt) return `usage: /${kind} ${kind === "heartbeat" ? "every <interval> <prompt>" : "[interval] <prompt> [--times N]"}`;
     if (everyMs < 60_000) return "minimum interval is 1m";
+    if (kind === "heartbeat") s.heartbeatDisabled = false;
     s[kind] = { prompt, everyMs, nextAt: Date.now() + (kind === "loop" ? 0 : everyMs), paused: false, remaining };
     return `${kind} set: every ${formatInterval(everyMs)}: ${prompt}`;
   };

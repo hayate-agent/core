@@ -13,6 +13,7 @@ export interface PersistedSession {
   key: string;
   replyTo?: Address;
   heartbeat?: Recurring;
+  heartbeatDisabled?: boolean;
   loop?: Recurring;
   goal?: Goal;
 }

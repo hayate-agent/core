@@ -43,6 +43,7 @@ export interface SessionState {
   running: boolean;
   replyTo?: Address;
   heartbeat?: Recurring;
+  heartbeatDisabled?: boolean;
   loop?: Recurring;
   goal?: Goal;
   /** Last user/channel input (for /retry). */
@@ -901,6 +902,12 @@ export class Harness {
     if (this.paused) return;
     for (const s of this.sessions.values()) {
       if (s.running || s.queue.length || s.outbox.length || s.unsaved) continue;
+      // Only established conversations: never create recurring work for API runs
+      // or destinationless internal sessions. Existing sessions migrate lazily.
+      if (!s.heartbeat && !s.heartbeatDisabled && s.replyTo && s.replyTo.channel !== "api") {
+        s.heartbeat = { everyMs: 300_000, nextAt: at + 300_000, paused: false, prompt: DEFAULT_WORK_HEARTBEAT };
+        await this.onStateChange?.();
+      }
       if (s.loop && !s.loop.paused && at >= s.loop.nextAt) {
         s.loop.nextAt = at + s.loop.everyMs;
         if (s.loop.remaining !== undefined && --s.loop.remaining <= 0) {
@@ -934,8 +941,8 @@ export class Harness {
   snapshotSessions(): PersistedSession[] {
     const out: PersistedSession[] = [];
     for (const s of this.sessions.values()) {
-      if (!s.heartbeat && !s.loop && !s.goal && !s.replyTo) continue;
-      out.push({ key: s.key, replyTo: s.replyTo, heartbeat: s.heartbeat, loop: s.loop, goal: s.goal });
+      if (!s.heartbeat && !s.heartbeatDisabled && !s.loop && !s.goal && !s.replyTo) continue;
+      out.push({ key: s.key, replyTo: s.replyTo, heartbeat: s.heartbeat, heartbeatDisabled: s.heartbeatDisabled, loop: s.loop, goal: s.goal });
     }
     return out;
   }
@@ -945,6 +952,7 @@ export class Harness {
       const s = this.state(p.key);
       s.replyTo = p.replyTo;
       s.heartbeat = p.heartbeat;
+      s.heartbeatDisabled = p.heartbeatDisabled;
       s.loop = p.loop;
       s.goal = p.goal;
     }
@@ -984,6 +992,8 @@ export class Harness {
   static APPROVAL_SEND_ATTEMPTS = 8;
   static APPROVAL_RETRY_MS = 1000;
 }
+
+export const DEFAULT_WORK_HEARTBEAT = "Prüfe ausdrücklich beauftragte, noch offene Arbeit in diesem Gespräch und verfügbare Task-/Run-Zustände. Führe bei einem klaren sicheren nächsten Schritt die Arbeit fort. Starte laufende Arbeit nicht doppelt; umgehe weder Freigaben noch Blockaden. Reaktiviere keine abgeschlossenen, abgebrochenen oder pausierten Aufgaben. Frühere Berichte sind keine neue Autorisierung; behaupte keine nicht geprüften Zustände. Wenn nichts sicher fortzusetzen ist, antworte exakt NO_REPLY.";
 
 export function goalPrompt(goal: Goal): string {
   const criteria = goal.criteria.length ? `\nAdditional criteria:\n${goal.criteria.map((c) => `- ${c}`).join("\n")}` : "";

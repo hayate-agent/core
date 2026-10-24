@@ -72,6 +72,31 @@ test("pre-turn rotation seeds the replacement before delivering the original pro
   await harness.stop(1000);
 });
 
+test("default five-minute heartbeat migrates conversations but respects durable opt-out and excludes API", async () => {
+  let now = 1000;
+  const runtime = new FakeRuntime(() => NO_REPLY);
+  const harness = new Harness({ runtime, tickMs: 60000, now: () => now });
+  harness.addChannel(new MemoryChannel());
+  harness.restoreSessions([
+    { key: "mem:room1", replyTo: ROOM },
+    { key: "mem:disabled", replyTo: ROOM, heartbeatDisabled: true },
+    { key: "api:run", replyTo: { channel: "api", target: "run" } },
+  ]);
+  await harness.tick();
+  const state = harness.state("mem:room1");
+  assert.equal(state.heartbeat?.everyMs, 300000);
+  assert.equal(state.heartbeat?.nextAt, 301000);
+  assert.equal(harness.state("mem:disabled").heartbeat, undefined);
+  assert.equal(harness.state("api:run").heartbeat, undefined);
+  const restored = new Harness({ runtime: new FakeRuntime(), tickMs: 60000 });
+  restored.restoreSessions(structuredClone(harness.snapshotSessions()));
+  await restored.tick();
+  assert.equal(restored.state("mem:disabled").heartbeatDisabled, true);
+  assert.equal(restored.state("mem:disabled").heartbeat, undefined);
+  now = 301000; await harness.tick(); await harness.drained();
+  assert.equal(runtime.sessions.get("mem:room1")?.prompts.length, 1);
+});
+
 test("startup adopts a pending maintenance notice durably with its stable delivery ID", async () => {
   let acknowledged = false;
   let saves = 0;
