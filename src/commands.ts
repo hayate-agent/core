@@ -492,7 +492,15 @@ export const COMMANDS: Command[] = [
     name: "help",
     aliases: ["commands"],
     help: "Show Harness commands and registered plugin commands",
-    run: async () => "VanillaCore Agent Harness commands ([admin] requires administrator access):\n" + COMMANDS.map((c) => `/${c.name}${c.aliases?.length ? ` (${c.aliases.map((a) => `/${a}`).join(" ")})` : ""}${c.admin ? " [admin]" : ""}: ${c.help}`).join("\n"),
+    run: async (_args, _input, ctx) => {
+      const commands = [
+        ...COMMANDS.map((c) => ({ ...c, origin: "Harness" })),
+        ...[...(ctx.pluginCommands?.values() ?? [])].map((c) => ({ ...c, aliases: undefined, origin: "Plugin" })),
+      ].sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+      const group = (admin: boolean) => commands.filter((c) => Boolean(c.admin) === admin)
+        .map((c) => `/${c.name}${c.aliases?.length ? ` (${c.aliases.map((a) => `/${a}`).join(" ")})` : ""}${c.admin ? " [admin]" : ""} [${c.origin}]: ${c.help}`).join("\n");
+      return `VanillaCore Agent Harness commands ([admin] requires administrator access):\n\nGeneral commands:\n${group(false)}\n\nAdmin commands:\n${group(true)}`;
+    },
   },
   { name: "harness", help: "Locate built-in Harness customization/development guide", run: async () => `VanillaCore Agent Harness development guide: ${developmentGuide}\nRead this guide before changing the Harness. Identity/voice, tools and models are configurable; native plugins support commands/channels/model tools/text panels/lifecycle (see plugins.md); interactive plugin dialogs are available locally; automatic runtime promotion remains planned.` },
   { name: "version", help: "Show version", run: async (_a, _i, ctx) => `vanillacore-harness ${VERSION} (runtime: ${ctx.harness.runtime.name})` },
@@ -564,10 +572,6 @@ export function installCommands(ctx: CommandContext): void {
       } catch (err) {
         out = `⚠️ /${cmd.name}: ${err instanceof Error ? err.message : String(err)}`;
       }
-    }
-    if (parsed.name === "help" || parsed.name === "commands") {
-      const extra = [...(ctx.pluginCommands?.values() ?? [])].map((c) => `/${c.name}${c.admin ? " [admin]" : ""}: ${c.help}`).join("\n");
-      if (extra) out = `${out ?? ""}\n\nRegistered plugin commands:\n${extra}`;
     }
     if (out) reply(ctx, input, out);
     return true;

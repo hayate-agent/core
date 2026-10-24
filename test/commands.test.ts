@@ -74,7 +74,7 @@ test("plugin commands use admin authorization, help and outbox instead of model 
   await send("/extension", "owner");
   assert.equal(ch.texts().at(-1), "plugin reply");
   await send("/help", "owner");
-  assert.match(ch.texts().at(-1)!, /\/extension \[admin\]: Extension command/);
+  assert.match(ch.texts().at(-1)!, /\/extension \[admin\] \[Plugin\]: Extension command/);
   assert.equal(runtime.sessions.size, 0);
 });
 
@@ -192,15 +192,32 @@ test("YOLO uses explicit idempotent settings and shares approval configuration",
 
 test("help identifies Harness and plugin commands, admin access and YOLO scope", async () => {
   const { send, ch, ctx } = setup();
-  ctx.pluginCommands = new Map([["extension", { name: "extension", help: "Extension command", admin: true, run: async () => {} }]]);
+  ctx.pluginCommands = new Map([
+    ["z-extension", { name: "z-extension", help: "Admin extension", admin: true, run: async () => {} }],
+    ["a-extension", { name: "a-extension", help: "General extension", run: async () => {} }],
+    ["extension", { name: "extension", help: "Extension command", admin: true, run: async () => {} }],
+  ]);
   for (const command of ["/help", "/commands"]) {
     await send(command);
     const text = ch.texts().at(-1)!;
     assert.match(text, /^VanillaCore Agent Harness commands/);
-    assert.match(text, /\/yolo \[admin\]: on\|off\|status/);
+    assert.match(text, /\/yolo \[admin\] \[Harness\]: on\|off\|status/);
     assert.match(text, /does not bypass permissions or review/);
     assert.match(text, /same state as \/yolo/);
-    assert.match(text, /Registered plugin commands:\n\/extension \[admin\]: Extension command/);
+    assert.match(text, /\/extension \[admin\] \[Plugin\]: Extension command/);
+    const [general, admin] = text.split("General commands:\n")[1].split("\n\nAdmin commands:\n");
+    const names = (section: string) => section.split("\n").map((line) => line.split(" ")[0].split(":")[0]);
+    for (const section of [general, admin]) {
+      const list = names(section);
+      assert.deepEqual(list, [...list].sort());
+      assert.equal(new Set(list).size, list.length);
+    }
+    assert.ok(names(general).includes("/a-extension"));
+    assert.ok(!general.includes("[admin]"));
+    assert.ok(names(admin).includes("/z-extension"));
+    assert.ok(admin.split("\n").every((line) => line.includes("[admin]")));
+    assert.match(general, /\/help \(\/commands\) \[Harness\]/);
+    assert.ok(!names(general).includes("/commands"));
   }
 });
 
