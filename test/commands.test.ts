@@ -74,7 +74,7 @@ test("plugin commands use admin authorization, help and outbox instead of model 
   await send("/extension", "owner");
   assert.equal(ch.texts().at(-1), "plugin reply");
   await send("/help", "owner");
-  assert.match(ch.texts().at(-1)!, /\/extension: Extension command/);
+  assert.match(ch.texts().at(-1)!, /\/extension \[admin\]: Extension command/);
   assert.equal(runtime.sessions.size, 0);
 });
 
@@ -167,12 +167,49 @@ test("/model and /reasoning act on the session", async () => {
   assert.deepEqual([s.model, s.thinking], ["example-provider/claude-opus-5-5", "high"]);
 });
 
+test("YOLO uses explicit idempotent settings and shares approval configuration", async () => {
+  const { send, ch, approvals } = setup();
+  await send("/yolo");
+  assert.equal(approvals.mode, "off");
+  assert.match(ch.texts().at(-1)!, /YOLO on/);
+  await send("/approvals manual bash");
+  for (const command of ["/yolo", "/yolo status", "/yolo toggle", "/yolo on extra"]) {
+    await send(command);
+    assert.equal(approvals.mode, "manual");
+    assert.deepEqual(approvals.tools, ["bash"]);
+  }
+  assert.equal(ch.texts().at(-1), "usage: /yolo on|off|status");
+  for (const command of ["/yolo on", "/yolo on", "/yolo status", "/yolo"]) {
+    await send(command);
+    assert.equal(approvals.mode, "off");
+  }
+  for (const command of ["/yolo off", "/yolo off", "/yolo status", "/yolo"]) {
+    await send(command);
+    assert.equal(approvals.mode, "manual");
+  }
+  assert.deepEqual(approvals.tools, ["bash"]);
+});
+
+test("help identifies Harness and plugin commands, admin access and YOLO scope", async () => {
+  const { send, ch, ctx } = setup();
+  ctx.pluginCommands = new Map([["extension", { name: "extension", help: "Extension command", admin: true, run: async () => {} }]]);
+  for (const command of ["/help", "/commands"]) {
+    await send(command);
+    const text = ch.texts().at(-1)!;
+    assert.match(text, /^VanillaCore Agent Harness commands/);
+    assert.match(text, /\/yolo \[admin\]: on\|off\|status/);
+    assert.match(text, /does not bypass permissions or review/);
+    assert.match(text, /same state as \/yolo/);
+    assert.match(text, /Registered plugin commands:\n\/extension \[admin\]: Extension command/);
+  }
+});
+
 test("admin-only commands are guarded when admins are configured", async () => {
   const { send, ch, approvals } = setup({ admins: ["@owner:x"] });
   await send("/yolo", "@stranger:x");
   assert.equal(ch.texts().at(-1), "⛔ admin only");
   assert.equal(approvals.mode, "off");
-  await send("/yolo", "@owner:x");
+  await send("/yolo off", "@owner:x");
   assert.equal(approvals.mode, "manual");
 });
 
@@ -187,14 +224,14 @@ test("local console remains admin when remote admins are configured", async () =
   });
   await harness.submit({
     sessionKey: "console:local",
-    text: "/yolo",
+    text: "/yolo off",
     source: "channel",
     sender: "local-user",
     replyTo: { channel: "console", target: "local" },
   });
   await harness.drained(); // replies go through the durable outbox
   assert.equal(approvals.mode, "manual");
-  assert.match(replies.at(-1)!, /approvals on/);
+  assert.match(replies.at(-1)!, /manual tool approvals on/);
 });
 
 test("approvals: request is posted, /approve resolves it", async () => {
@@ -298,14 +335,14 @@ test("a failed command acknowledgement is retried from the outbox without re-run
     return realSend(to, text);
   };
   harness.onStateChange = async () => {};
-  await harness.accept({ ...msg("/yolo"), id: "$y1" }); // acknowledged: effect + reply saved
+  await harness.accept({ ...msg("/yolo off"), id: "$y1" }); // acknowledged: effect + reply saved
   assert.equal(approvals.mode, "manual");
   assert.equal(harness.outboxEntries().length, 1);
-  await harness.accept({ ...msg("/yolo"), id: "$y1" }); // redelivery: deduplicated
+  await harness.accept({ ...msg("/yolo off"), id: "$y1" }); // redelivery: deduplicated
   fail = false;
   harness.tick();
   await harness.drained();
-  assert.equal(approvals.mode, "manual", "toggled exactly once");
+  assert.equal(approvals.mode, "manual", "explicit mode retained on redelivery");
   assert.equal(ch.texts().length, 1);
 });
 
@@ -320,7 +357,7 @@ test("command replies wait for the durable save, also while another pump runs", 
   harness.onStateChange = async () => {
     if (fail) throw new Error("disk full");
   };
-  await assert.rejects(harness.accept({ ...msg("/yolo"), id: "$y" }), /disk full/);
+  await assert.rejects(harness.accept({ ...msg("/yolo off"), id: "$y" }), /disk full/);
   release();
   await new Promise((r) => setTimeout(r, 10));
   assert.ok(!ch.texts().some((t) => t.includes("YOLO")), "no ack before durable save");
