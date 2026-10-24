@@ -30,6 +30,28 @@ integrations. SOUL and VOICE add your configured identity and writing style even
 no named personality overlay is selected. Existing live sessions need a restart or
 `/new` to receive changed system context. See README for Matrix settings.
 
+## Skill catalog
+
+The Harness maintains a derived index at `<home>/skills/index.json`, owned by the
+single Harness process holding that home. It is rebuilt from configured
+`skills.paths` (default `<home>/skills`), workspace `.pi/skills`, and the PI agent
+`skills` directory, in that priority order. First directory wins on name collisions.
+The index stores validated metadata, canonical paths, SHA-256 content hashes,
+diagnostics, a schema version and a catalog generation. Body-only edits also change
+the generation; unchanged sources preserve it across restarts.
+
+The index is not a source of trusted paths. Each refresh reads the allowed source
+roots again; missing or corrupt indexes are rebuilt. Symlinks within a root are
+supported, but symlinks escaping that root are excluded. Invalid skills and duplicate
+names produce diagnostics in the Harness log. Skill scripts are never executed by
+indexing. The index is replaced atomically and refreshes within the process serialize.
+Do not edit the index manually or share one writable home between Harness processes.
+
+This first implementation reconciles on startup and `/reload-skills`. It does **not**
+yet watch for changes or update the resources of existing PI sessions automatically.
+The index supplies Harness command discovery; PI still loads its own resources when
+a session opens. A new session is needed for changed runtime skill context.
+
 ## Available tools
 
 An optional top-level `tools` list selects actual runtime tools, not just prompt guidance:

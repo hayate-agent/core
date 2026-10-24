@@ -22,7 +22,8 @@ import { launchMode } from "./launch.js";
 import { Scheduler } from "./scheduler.js";
 import { StateStore } from "./state.js";
 import type { Inbound } from "./types.js";
-import { discoverSkills, type SkillInfo } from "./skills.js";
+import { type SkillInfo } from "./skills.js";
+import { SkillCatalog } from "./skill-catalog.js";
 import { appendFileDurable } from "./durable.js";
 
 const USAGE = `VanillaCore Agent Harness ${VERSION}
@@ -77,8 +78,11 @@ async function main(argv: string[]): Promise<void> {
   let personality: string | undefined;
   let skills: SkillInfo[] = [];
   const skillDirs = () => [...config.skills.paths, path.join(config.cwd, ".pi", "skills"), path.join(getAgentDir(), "skills")];
+  const skillCatalog = new SkillCatalog(path.join(config.home, "skills", "index.json"), skillDirs);
   const reloadSkills = async () => {
-    skills = await discoverSkills(skillDirs());
+    const snapshot = await skillCatalog.refresh();
+    skills = skillCatalog.skills;
+    for (const diagnostic of snapshot.diagnostics) log(`[skills] ${diagnostic.filePath}: ${diagnostic.message}`);
   };
   await reloadSkills();
 
