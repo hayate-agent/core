@@ -39,6 +39,31 @@ function setup(opts: { admins?: string[]; approvers?: string[]; skills?: SkillIn
   return { runtime, harness, ch, ctx, send, approvals };
 }
 
+test("global and reviewer model commands require admin for changes and support reset", async () => {
+  const { ctx, send, ch, runtime } = setup({ admins: ["owner"] });
+  const settings: Record<string, string | undefined> = {};
+  ctx.modelSettings = {
+    get: () => settings,
+    set: async (key, value) => { settings[key] = value; },
+  };
+  await send("/model p/a --global", "other");
+  assert.match(ch.texts().at(-1)!, /admin only/);
+  assert.equal(settings.model, undefined);
+  await send("/model --global p/a", "owner");
+  assert.match(ch.texts().at(-1)!, /at the end/);
+  assert.equal(settings.model, undefined);
+  await send("/model p/a --global", "owner");
+  await send("/reasoning high --global", "owner");
+  await send("/review-model p/b", "owner");
+  await send("/review-reasoning medium", "owner");
+  assert.deepEqual(settings, { model: "p/a", thinking: "high", reviewModel: "p/b", reviewThinking: "medium" });
+  await send("/review-model", "other");
+  assert.match(ch.texts().at(-1)!, /p\/b/);
+  await send("/review-model reset", "owner");
+  assert.equal(settings.reviewModel, undefined);
+  assert.equal(runtime.sessions.size, 0, "global commands do not mutate busy sessions directly");
+});
+
 test("plugin commands use admin authorization, help and outbox instead of model turns", async () => {
   const { ctx, send, ch, runtime } = setup({ admins: ["owner"] });
   let calls = 0;

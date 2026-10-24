@@ -75,6 +75,56 @@ changes to existing sessions. This selection is not an OS security sandbox: a ba
 or extension tool can provide broader capabilities, and extensions execute trusted code.
 MCP and CLI lifecycle management are not implemented by this setting.
 
+## Chat model settings
+
+Core commands (global changes require administrator rights):
+
+- `/model provider/model`: change only this session; `/model` shows it.
+- `/reasoning medium`: change only this session.
+- `/model provider/model --global`: persistent default for this Harness instance.
+- `/reasoning medium --global`: persistent reasoning default for this instance.
+- `/review-model provider/model`: persistent reviewer model; without arguments shows the effective value.
+- `/review-reasoning medium`: persistent reviewer reasoning; without arguments shows it.
+- Use `reset` instead of a value on the global/reviewer commands to remove the chat override.
+- `/model --global` and `/reasoning --global` show the effective defaults.
+
+Chat overrides live in `<home>/settings.local.yaml`, not `state.json` or the
+potentially read-only `harness.yaml`. Only explicit overrides are stored, not a copy
+of all defaults. Setters validate and serialize updates, atomically save, then publish
+the new effective values. Output identifies whether a value comes from the local
+overlay or installation/default. `--global` must be the final argument.
+
+Precedence is product defaults, installation configuration, persistent local overlay,
+session selection, then per-run overrides (more specific wins). A new global change
+reapplies working defaults on the next turn; later session selections remain local.
+The current writable allowlist covers model/reasoning and reviewer model/reasoning.
+Unknown keys, secrets, plugin paths and security policy are rejected, not merged.
+The same mechanism works in containers and local installations under Harness home.
+
+Example local overlay:
+
+```yaml
+model: homelab/gpt-6.1-sol
+thinking: medium
+review:
+  thinking: high
+```
+
+`reset` deletes the relevant key and restores inheritance. The overlay is loaded at
+startup; external manual edits require restart. Working defaults take effect next
+turn, reviewer settings next call, without interrupting in-flight work. The reviewer
+uses its explicit model override/configuration, otherwise the global working model;
+reviewer reasoning defaults to medium independently of working-session reasoning.
+Model setters validate availability against the runtime registry before saving.
+
+Global working defaults apply to existing sessions at their next turn and to new
+sessions. Active turns are not interrupted. A later session-specific `/model` or
+`/reasoning` remains in force until another global change occurs. Reset restores
+the configured fallback; if no model/reasoning fallback exists, existing sessions
+retain their current setting and new sessions use the runtime default. Reviewer
+changes apply on the next review call; an in-flight review keeps its original model.
+These settings affect this Harness instance only, not other agents or GitOps files.
+
 ## Models and credentials
 
 Provider definitions live in PI's `models.json`; examples are in

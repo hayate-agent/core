@@ -25,6 +25,8 @@ import type { Inbound } from "./types.js";
 import { type SkillInfo } from "./skills.js";
 import { SkillCatalog } from "./skill-catalog.js";
 import { ReviewService } from "./review.js";
+import { type ModelSettings } from "./model-settings.js";
+import { SettingsService, type SettingPath } from "./settings.js";
 import { runtimeReviewer } from "./runtime/reviewer.js";
 import { reviewConfig } from "./review-config.js";
 import { reviewPlugin } from "./review-plugin.js";
@@ -98,11 +100,25 @@ async function main(argv: string[]): Promise<void> {
   let harness!: Harness;
   let review!: ReviewService;
   const reviewSettings = reviewConfig(config.review);
+  const settings = new SettingsService(path.join(config.home, "settings.local.yaml"), {
+    model: config.model, thinking: config.thinking,
+    review: { model: config.review?.model, thinking: config.review?.thinking ?? "medium" },
+  });
+  await settings.load();
+  const effectiveModels = () => {
+    const values = settings.effective();
+    return { model: values.model, thinking: values.thinking, reviewModel: values.review?.model ?? values.model, reviewThinking: values.review?.thinking ?? "medium" };
+  };
+  const updateReviewDefaults = () => {
+    reviewSettings.model = effectiveModels().reviewModel;
+    reviewSettings.thinking = effectiveModels().reviewThinking;
+  };
   const runtime = new PiRuntime({
     cwd: config.cwd,
     sessionsDir: path.join(config.home, "sessions"),
     model: config.model,
     thinking: config.thinking,
+    modelDefaults: () => ({ revision: settings.revision, model: effectiveModels().model, thinking: effectiveModels().thinking }),
     tools: reviewSettings.enabled && config.tools?.length ? [...new Set([...config.tools, "plugin_review"])] : config.tools,
     pluginTools: () => plugins.tools.values(),
     sessionProvider: () => sessionProvider,
@@ -160,7 +176,7 @@ async function main(argv: string[]): Promise<void> {
         runs,
         cancel: (key, id) => harness.cancel(key, id),
         models: () => runtime.models(),
-        defaultModel: () => config.model,
+        defaultModel: () => effectiveModels().model,
       }),
     );
   }
@@ -218,6 +234,7 @@ async function main(argv: string[]): Promise<void> {
     harness.restoreSessions(saved.sessions);
     harness.restoreSeen(saved.seen ?? []);
   }
+  updateReviewDefaults();
   // The state file doubles as the inbox: unfinished user/cron inputs are part of every save.
   const persist = (pending: Inbound[] = harness.pendingInputs()) =>
     store.save({
@@ -285,6 +302,19 @@ async function main(argv: string[]): Promise<void> {
     harness,
     scheduler,
     approvals,
+    modelSettings: {
+      get: effectiveModels,
+      source: (key) => {
+        const paths = { model: "model", thinking: "thinking", reviewModel: "review.model", reviewThinking: "review.thinking" } as const;
+        return settings.source(key === "reviewModel" && settings.effective().review?.model === undefined ? "model" : paths[key]);
+      },
+      set: async (key, value) => {
+        if (value !== undefined && (key === "model" || key === "reviewModel") && !(await runtime.models()).includes(value)) throw new Error("Model is not available; configure provider credentials and model first");
+        const paths: Record<keyof ModelSettings, SettingPath> = { model: "model", thinking: "thinking", reviewModel: "review.model", reviewThinking: "review.thinking" };
+        await settings.set(paths[key], value);
+        updateReviewDefaults();
+      },
+    },
     skills: () => skills,
     pluginCommands: plugins.commands,
     pluginUI: () => tui?.pluginUI(),
