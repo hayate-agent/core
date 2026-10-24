@@ -87,7 +87,10 @@ test("matrix progress and status reactions are optional and target original batc
   assert.equal(reactions.length, 4);
   assert.deepEqual(reactions.map((call) => call.body["m.relates_to"].key), ["👀", "👀", "✅", "✅"]);
   assert.deepEqual(reactions.slice(0, 2).map((call) => call.body["m.relates_to"].event_id), ["$one", "$two"]);
-  assert.ok(server.calls.some((call) => call.path.includes("/send/m.room.message/") && call.body.body.includes("echo hello")));
+  const progress = server.calls.find((call) => call.path.includes("/send/m.room.message/") && call.body.body.includes("echo hello"));
+  assert.ok(progress);
+  assert.equal(progress.body.format, "org.matrix.custom.html");
+  assert.match(progress.body.formatted_body, /^<em>[\s\S]*<\/em>$/);
   await ch.turnStatus(to, input, "completed");
   await (ch as any).telemetry;
   assert.equal(server.calls.filter((call) => call.path.includes("/send/m.reaction/")).at(-1)!.path, reactions.at(-1)!.path);
@@ -96,6 +99,19 @@ test("matrix progress and status reactions are optional and target original batc
   off.ch.turnEvent(to, { type: "tool", phase: "start", name: "bash" }, input);
   await off.ch.turnStatus(to, input, "failed");
   assert.ok(!off.server.calls.some((call) => call.path.includes("/send/")));
+});
+
+test("progress presentation escapes plain text while preserving threads and normal Markdown", async () => {
+  const { ch, server } = await setup();
+  const to = { channel: "matrix", target: DM, thread: "$thread" };
+  await ch.send(to, '<script>alert("x")</script> & **not markup**\nnext', { presentation: "progress", deliveryId: "progress-test" });
+  const sent = server.calls.filter((call) => call.path.includes("/send/m.room.message/")).at(-1)!;
+  assert.equal(sent.body.formatted_body, '<em>&lt;script&gt;alert("x")&lt;/script&gt; &amp; **not markup**<br>next</em>');
+  assert.equal(sent.body.body, '<script>alert("x")</script> & **not markup**\nnext');
+  assert.equal(sent.body["m.relates_to"].event_id, "$thread");
+  assert.ok(sent.path.includes("progress-test.0"));
+  await ch.send(to, "**normal**");
+  assert.equal(server.calls.filter((call) => call.path.includes("/send/m.room.message/")).at(-1)!.body.formatted_body, "<p><strong>normal</strong></p>");
 });
 
 test("Matrix inherits gateway policy unless an explicit Matrix override is present", async () => {

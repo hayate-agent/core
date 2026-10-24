@@ -51,6 +51,13 @@ not persisted or replayed; delivery failures do not fail the agent turn. Notices
 are batched for 1.5 seconds, at most 50 entries per turn and 8000 characters per
 batch (2000 per detail). Final replies retain durable outbox semantics.
 
+Progress messages carry transport-neutral `SendMeta.presentation: "progress"`.
+Their text is plain text, not preformatted Matrix/Slack/Telegram markup. Matrix
+renders it as escaped italic HTML (`<em>`), keeping a plain-text fallback; ordinary
+replies retain Markdown rendering. Adapters may translate this intent into their
+own native formatting or fall back to plain text. No Slack/Telegram adapters are
+implemented by this presentation change. Byte-budget chunking includes formatting.
+
 Channel.turnEvent and Channel.turnStatus are optional transport-neutral hooks;
 GatewayProgress can be reused by future Slack and other adapters. There is no
 Slack implementation in this change. Status reactions use deterministic Matrix
