@@ -79,6 +79,8 @@ export interface RuntimeSessionStatus {
   messages?: number;
   tokens?: { input: number; output: number };
   contextPercent?: number;
+  /** Effective runtime system prompt size; excludes conversation history and tool schemas. */
+  systemPrompt?: { characters: number; bytes: number };
 }
 
 /** One live conversation inside an agent runtime. */

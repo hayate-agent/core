@@ -308,7 +308,7 @@ export const COMMANDS: Command[] = [
     help: "Show context window usage",
     run: async (_a, input, ctx) => {
       const st = (await ctx.harness.sessionFor(input.sessionKey)).status();
-      return `context: ${st.contextPercent !== undefined ? `${Math.round(st.contextPercent)}%` : "unknown"} · messages: ${st.messages ?? "?"}`;
+      return `context: ${st.contextPercent !== undefined ? `${Math.round(st.contextPercent)}%` : "unknown"} · messages: ${st.messages ?? "?"}${st.systemPrompt ? `\nsystem prompt: ${st.systemPrompt.characters} characters · ${st.systemPrompt.bytes} UTF-8 bytes (history/tool schemas excluded; no token estimate)` : ""}`;
     },
   },
   {
