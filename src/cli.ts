@@ -26,6 +26,8 @@ import { type SkillInfo } from "./skills.js";
 import { SkillCatalog } from "./skill-catalog.js";
 import { ReviewService } from "./review.js";
 import { type ModelSettings } from "./model-settings.js";
+import { ContextMaintenance, contextPolicy } from "./context-maintenance.js";
+import { contextPlugin } from "./context-plugin.js";
 import { SettingsService, type SettingPath } from "./settings.js";
 import { runtimeReviewer } from "./runtime/reviewer.js";
 import { reviewConfig } from "./review-config.js";
@@ -102,9 +104,11 @@ async function main(argv: string[]): Promise<void> {
   const reviewSettings = reviewConfig(config.review);
   const settings = new SettingsService(path.join(config.home, "settings.local.yaml"), {
     model: config.model, thinking: config.thinking,
+    contextMaintenance: contextPolicy(config.contextMaintenance),
     review: { model: config.review?.model, thinking: config.review?.thinking ?? "medium" },
   });
   await settings.load();
+  const maintenance = new ContextMaintenance(config.home, () => contextPolicy(settings.effective().contextMaintenance));
   const effectiveModels = () => {
     const values = settings.effective();
     return { model: values.model, thinking: values.thinking, reviewModel: values.review?.model ?? values.model, reviewThinking: values.review?.thinking ?? "medium" };
@@ -119,7 +123,7 @@ async function main(argv: string[]): Promise<void> {
     model: config.model,
     thinking: config.thinking,
     modelDefaults: () => ({ revision: settings.revision, model: effectiveModels().model, thinking: effectiveModels().thinking }),
-    tools: reviewSettings.enabled && config.tools?.length ? [...new Set([...config.tools, "plugin_review"])] : config.tools,
+    tools: config.tools?.length ? [...new Set([...config.tools, "plugin_context_maintenance", ...(reviewSettings.enabled ? ["plugin_review"] : [])])] : config.tools,
     pluginTools: () => plugins.tools.values(),
     sessionProvider: () => sessionProvider,
     legacySessionProvider: new FilesystemSessionProvider(path.join(config.home, "session-store")),
@@ -141,6 +145,7 @@ async function main(argv: string[]): Promise<void> {
   });
   harness = new Harness({
     runtime,
+    contextMaintenance: maintenance,
     beforeTurn: (input) => review.prepare(config.cwd, input.replyTo, input.sessionKey),
     afterTurn: (input, reply, session, options, signal) => finishWithReview(review, config.cwd, input, reply, session, options, signal),
     tickMs: config.loop.tickMs,
@@ -263,7 +268,7 @@ async function main(argv: string[]): Promise<void> {
   }
   await scheduler.load();
 
-  await plugins.load(config.plugins ?? [], { agent: config.agent, home: config.home, cwd: config.cwd }, [...builtinCommandNames, "sessions", "resume", ...skills.map((s) => s.name)], ["console", "api", "matrix", ...harness.channels.keys()], reviewSettings.enabled ? [reviewPlugin(review, config.cwd)] : []);
+  await plugins.load(config.plugins ?? [], { agent: config.agent, home: config.home, cwd: config.cwd }, [...builtinCommandNames, "sessions", "resume", ...skills.map((s) => s.name)], ["console", "api", "matrix", ...harness.channels.keys()], [contextPlugin(maintenance, settings), ...(reviewSettings.enabled ? [reviewPlugin(review, config.cwd)] : [])]);
   const strategyName = config.compaction?.strategy ?? "native";
   if (strategyName !== "native") {
     const strategy = plugins.compactions.get(strategyName);
