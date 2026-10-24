@@ -1,3 +1,4 @@
+import { validateGatewayOverlay, type GatewayOverlay, type GatewayOverride } from "./gateway-provider.js";
 import { memoryConfig, type MemoryConfig } from "./memory.js";
 import { validateGatewayConfig, type GatewayConfig } from "./gateway-settings.js";
 import { mkdir, readFile } from "node:fs/promises";
@@ -11,6 +12,7 @@ import { validateModelSetting, type ModelSetting } from "./model-settings.js";
 /** Explicit runtime-writable allowlist; security policy and secrets are deliberately excluded. */
 export interface LocalSettings {
   gateways?: GatewayConfig;
+  gatewayPlugins?: GatewayOverlay;
   memory?: Partial<MemoryConfig>;
   model?: string;
   thinking?: string;
@@ -24,7 +26,9 @@ function validate(value: unknown, defaults: Partial<ContextPolicy> = {}, pruning
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid local settings overlay");
   const data = value as Record<string, unknown>;
   for (const [key, item] of Object.entries(data)) {
-    if (key === "memory") {
+    if (key === "gatewayPlugins") {
+      validateGatewayOverlay(item);
+    } else if (key === "memory") {
       if (!item || typeof item !== "object" || Array.isArray(item)) throw Error("Invalid memory overlay");
       if (Object.keys(item).some((k) => !["enabled", "provider", "autoCapture", "autoRecall", "scanSeconds", "maxEntries", "maxIndexBytes", "embedding"].includes(k))) throw Error("Unsupported memory setting");
       memoryConfig(item);
@@ -71,6 +75,19 @@ export class SettingsService {
   source(key: SettingPath): "local overlay" | "installation/default" {
     const value = key.startsWith("review.") ? this.overlay.review?.[key.slice(7) as "model" | "thinking"] : this.overlay[key as "model" | "thinking"];
     return value === undefined ? "installation/default" : "local overlay";
+  }
+  setGatewayPlugin(name: string, spec?: GatewayOverride): Promise<void> {
+    const next = this.writing.catch(() => {}).then(async () => {
+      validateGatewayOverlay({ [name]: spec ?? {} });
+      const updated = this.snapshot();
+      updated.gatewayPlugins = { ...updated.gatewayPlugins };
+      if (spec) updated.gatewayPlugins[name] = spec; else delete updated.gatewayPlugins[name];
+      await mkdir(path.dirname(this.file), { recursive: true });
+      await writeFileDurable(this.file, stringify(updated));
+      this.overlay = updated;
+    });
+    this.writing = next;
+    return next;
   }
   setMemory(value: Partial<MemoryConfig>): Promise<void> {
     const next = this.writing.catch(() => {}).then(async () => {
