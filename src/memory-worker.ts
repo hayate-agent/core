@@ -32,6 +32,8 @@ export class FileMemoryStore implements MemoryProvider {
   private config: MemoryConfig;
   private timer?: NodeJS.Timeout;
   private embeddingBusy = false;
+  private embeddingBudget = 16;
+  private embeddingBudgetAt = Date.now();
   private stopped = false;
   private dirty = false;
   private lastScan?: string;
@@ -236,12 +238,19 @@ export class FileMemoryStore implements MemoryProvider {
   }
   private async embedPending(): Promise<void> {
     if (this.embeddingBusy || !this.config.embedding || this.stopped) return;
+    const now = Date.now();
+    if (now - this.embeddingBudgetAt >= this.config.scanSeconds * 1000) {
+      this.embeddingBudget = 16;
+      this.embeddingBudgetAt = now;
+    }
+    if (!this.embeddingBudget) return;
     this.embeddingBusy = true;
     let completed = false;
     try {
       // Bounded work per pass, network awaits outside serial write queue.
-      for (const [id, row] of [...this.rows].filter(([, r]) => !r.vector || r.model !== this.modelKey()).slice(0, 16)) {
+      for (const [id, row] of [...this.rows].filter(([, r]) => !r.vector || r.model !== this.modelKey()).slice(0, this.embeddingBudget)) {
         if (this.stopped) break;
+        this.embeddingBudget--; // failed requests consume budget too
         const vector = await this.embed(row.entry.title + "\n" + row.entry.text);
         await this.serial(async () => {
           const current = this.rows.get(id);
@@ -256,7 +265,7 @@ export class FileMemoryStore implements MemoryProvider {
       this.embeddingBusy = false;
       // Continue bounded batches, including writes made during a network await.
       // On failure leave retries to the periodic scan instead of spinning.
-      if (completed && !this.stopped && [...this.rows.values()].some((r) => !r.vector || r.model !== this.modelKey())) {
+      if (completed && this.embeddingBudget > 0 && !this.stopped && [...this.rows.values()].some((r) => !r.vector || r.model !== this.modelKey())) {
         setImmediate(() => { void this.embedPending(); });
       }
     }
