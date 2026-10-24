@@ -126,7 +126,7 @@ async function main(argv: string[]): Promise<void> {
     thinking: config.thinking,
     pruning: () => pruningPolicy(settings.effective().toolResultPruning),
     modelDefaults: () => ({ revision: settings.revision, model: effectiveModels().model, thinking: effectiveModels().thinking }),
-    tools: config.tools?.length ? [...new Set([...config.tools, "plugin_context_maintenance", ...(reviewSettings.enabled ? ["plugin_review"] : [])])] : config.tools,
+    tools: config.tools?.length ? [...new Set([...config.tools, "plugin_context_maintenance", "plugin_session_history", ...(reviewSettings.enabled ? ["plugin_review"] : [])])] : config.tools,
     pluginTools: () => plugins.tools.values(),
     sessionProvider: () => sessionProvider,
     legacySessionProvider: new FilesystemSessionProvider(path.join(config.home, "session-store")),

@@ -29,6 +29,31 @@ checkpoint. Native summaries retain intent/corrections, decisions, verified resu
 Git/PR/deployment state, open work and next steps. Never include secrets. Compaction
 may lose details; persistent review state, inbox and authorization are not summaries.
 
+## Handover archives and retrospective access
+
+Each handover now captures the original active branch's text entries **before** native
+compaction. It stores a backward-looking retrospective and a forward checkpoint in
+`<home>/session-archives/<conversation-hash>/<archive-id>.json`. The archive records
+source session ID, target ID after switching, entry IDs and timestamps for the archive.
+The forward seed includes the current/next-steps section and the latest three operator
+messages (bounded), plus the archive ID. Native compaction generates the retrospective
+without a separate autonomous agent turn; model compliance with section instructions
+is not guaranteed, so the checkpoint uses a bounded fallback when the label is absent.
+
+`plugin_session_history` reads `section: summary` or paginates/searches original text
+entries by archive ID, `query`, `offset`, `limit` and `charOffset`. Access is scoped to
+the current Harness conversation key; archive IDs cannot address another conversation
+or arbitrary files. Reads are bounded. The seed explicitly asks the new agent to read
+the retrospective before continuing. This is model guidance, not a guaranteed read
+acknowledgement; short forward state is already in the seed. Summary responses are
+bounded to 20,000 characters; full text remains on disk. Images and non-text blocks
+are not duplicated into the text archive; the native session remains the original.
+
+Historical instructions are context, not new authorization. Archives may contain
+sensitive task data just like session history; protect Harness home. No automatic
+archive retention/deletion is implemented yet. A failed refreshed handover can leave
+an unreferenced archive; it is retained rather than deleting possible recovery data.
+
 ## Handover
 
 Explicit tool requests can hand over even when automatic handover is disabled.
