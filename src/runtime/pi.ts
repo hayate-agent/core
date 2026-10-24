@@ -1,6 +1,7 @@
 /**
  * PI runtime adapter. The only module that imports the PI SDK.
  */
+import { pruneToolResults, type PruningPolicy } from "../tool-result-pruning.js";
 import { nativeCompaction, type CompactionStrategy } from "../compaction.js";
 import type { SessionProvider, SessionRecord, SessionSummary } from "../sessions.js";
 import type { PluginTool } from "../plugins.js";
@@ -33,6 +34,7 @@ export interface PiRuntimeOptions {
   model?: string;
   thinking?: string;
   modelDefaults?: () => { revision: number; model?: string; thinking?: string };
+  pruning?: () => PruningPolicy;
   /** Explicit active tool names, including extension tools; [] disables all tools. */
   tools?: string[];
   pluginTools?: () => Iterable<PluginTool>;
@@ -397,6 +399,10 @@ export class PiRuntime implements AgentRuntime {
           factory: (pi) => {
             // Sent as this request's leading system prompt, not recorded in the transcript:
             // the instructions apply to this one run only.
+            pi.on("context", (event) => {
+              const policy = this.opts.pruning?.();
+              return policy ? { messages: pruneToolResults(event.messages, policy) } : undefined;
+            });
             pi.on("before_agent_start", (event) => {
               const extra = [skillContext, slot.instructions ? `<run_instructions>\n${slot.instructions}\n</run_instructions>` : ""].filter(Boolean).join("\n\n");
               return extra ? { systemPrompt: `${event.systemPrompt}\n\n${extra}` } : undefined;

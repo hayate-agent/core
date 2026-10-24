@@ -26,6 +26,7 @@ import { type SkillInfo } from "./skills.js";
 import { SkillCatalog } from "./skill-catalog.js";
 import { ReviewService } from "./review.js";
 import { type ModelSettings } from "./model-settings.js";
+import { pruningPolicy } from "./tool-result-pruning.js";
 import { ContextMaintenance, contextPolicy } from "./context-maintenance.js";
 import { contextPlugin } from "./context-plugin.js";
 import { SettingsService, type SettingPath } from "./settings.js";
@@ -105,6 +106,7 @@ async function main(argv: string[]): Promise<void> {
   const settings = new SettingsService(path.join(config.home, "settings.local.yaml"), {
     model: config.model, thinking: config.thinking,
     contextMaintenance: contextPolicy(config.contextMaintenance),
+    toolResultPruning: pruningPolicy(config.toolResultPruning),
     review: { model: config.review?.model, thinking: config.review?.thinking ?? "medium" },
   });
   await settings.load();
@@ -122,6 +124,7 @@ async function main(argv: string[]): Promise<void> {
     sessionsDir: path.join(config.home, "sessions"),
     model: config.model,
     thinking: config.thinking,
+    pruning: () => pruningPolicy(settings.effective().toolResultPruning),
     modelDefaults: () => ({ revision: settings.revision, model: effectiveModels().model, thinking: effectiveModels().thinking }),
     tools: config.tools?.length ? [...new Set([...config.tools, "plugin_context_maintenance", ...(reviewSettings.enabled ? ["plugin_review"] : [])])] : config.tools,
     pluginTools: () => plugins.tools.values(),

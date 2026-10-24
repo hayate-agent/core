@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { parse } from "yaml";
 import { validateGatewayConfig, type GatewayConfig } from "./gateway-settings.js";
+import { pruningPolicy } from "./tool-result-pruning.js";
 import { contextPolicy } from "./context-maintenance.js";
 import { reviewConfig } from "./review-config.js";
 
@@ -36,6 +37,7 @@ export interface HarnessConfig {
   sessions?: { provider: string; options?: unknown };
   compaction?: { strategy: string };
   contextMaintenance?: Partial<import("./context-maintenance.js").ContextPolicy>;
+  toolResultPruning?: Partial<import("./tool-result-pruning.js").PruningPolicy>;
   gateways?: GatewayConfig;
   /** Enable configured MCP servers; credentials and server definitions stay outside product code. */
   mcp?: { enabled: boolean };
@@ -87,6 +89,7 @@ export function defaultConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
   if (overrides.compaction !== undefined && (!overrides.compaction || typeof overrides.compaction.strategy !== "string" || !/^[a-z][a-z0-9_-]*$/.test(overrides.compaction.strategy))) throw new Error("Invalid compaction.strategy");
   reviewConfig(overrides.review); // validate before startup
   contextPolicy(overrides.contextMaintenance);
+  pruningPolicy(overrides.toolResultPruning);
   validateGatewayConfig(overrides.gateways);
   const home = overrides.home ?? process.env.VANILLACORE_HARNESS_HOME ?? path.join(os.homedir(), ".vanillacore-harness");
   return {
@@ -101,6 +104,7 @@ export function defaultConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
     sessions: overrides.sessions ?? { provider: "native" },
     compaction: overrides.compaction ?? { strategy: "native" },
     contextMaintenance: contextPolicy(overrides.contextMaintenance),
+    toolResultPruning: pruningPolicy(overrides.toolResultPruning),
     gateways: overrides.gateways ?? { progress: "off", statusReactions: false },
     tools: overrides.tools === undefined ? undefined : [...new Set(overrides.tools)],
     mcp: overrides.mcp ?? { enabled: false },
