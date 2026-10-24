@@ -82,7 +82,11 @@ The existing Harness home ownership mechanism is separate and unchanged.
 
 Each worker accepts at most 64 in-flight requests, requests time out after 30s,
 embedding HTTP calls after 10s. Timeout may leave a committed write; retry using
-the same key. Background embedding work is limited to 16 entries per scan. The
+the same key. Background embedding work is limited to 16 entries per scan.
+Queued rows are checked against the current index immediately before each HTTP
+request, so a completed forget or content revision prevents dispatch of the old
+queued text. An already dispatched request cannot be recalled; manual Markdown
+edits are not reflected in this check until reconciliation updates the index. The
 worker is in the same container/resource envelope as the agent; process isolation
 does not provide independent CPU/memory quotas.
 

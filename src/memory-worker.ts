@@ -250,6 +250,11 @@ export class FileMemoryStore implements MemoryProvider {
       // Bounded work per pass, network awaits outside serial write queue.
       for (const [id, row] of [...this.rows].filter(([, r]) => !r.vector || r.model !== this.modelKey()).slice(0, this.embeddingBudget)) {
         if (this.stopped) break;
+        // Earlier network awaits allow forget/revise/reindex to supersede captured rows.
+        // Check immediately before dispatch; already in-flight requests cannot be recalled.
+        const current = this.rows.get(id);
+        if (!current || current.contentHash !== row.contentHash) continue;
+        if (current.vector && current.model === this.modelKey()) continue;
         this.embeddingBudget--; // failed requests consume budget too
         const vector = await this.embed(row.entry.title + "\n" + row.entry.text);
         await this.serial(async () => {
