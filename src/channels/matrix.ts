@@ -151,7 +151,7 @@ export class MatrixChannel implements Channel {
   async turnStatus(to: Address, input: Inbound, status: "started" | "completed" | "failed" | "cancelled"): Promise<void> {
     const key = this.progressKey(to, input);
     if (status === "started") {
-      this.progress.set(key, new GatewayProgress(this.o.progress ?? this.gateway.progress, async (text) => { this.enqueueTelemetry(() => this.send(to, text)); }));
+      this.progress.set(key, new GatewayProgress(this.o.progress ?? this.gateway.progress, async (text) => { this.enqueueTelemetry(() => this.send(to, text, { presentation: "progress" })); }));
     } else {
       const progress = this.progress.get(key);
       this.progress.delete(key);
@@ -580,9 +580,9 @@ export class MatrixChannel implements Channel {
   async send(to: Address, text: string, meta?: SendMeta): Promise<void> {
     // Same reply → same transaction ids, so a retry after a lost response is deduplicated
     // by the homeserver and already-sent chunks of a multi-part reply are not posted twice.
-    const parts = fitChunks(text, MAX_CHUNK, (chunk) => renderContent(chunk));
+    const parts = fitChunks(text, MAX_CHUNK, (chunk) => renderContent(chunk, meta));
     for (const [n, chunk] of parts.entries()) {
-      const content = renderContent(chunk);
+      const content = renderContent(chunk, meta);
       if (to.thread) content["m.relates_to"] = { rel_type: "m.thread", event_id: to.thread, is_falling_back: true, "m.in_reply_to": { event_id: to.thread } };
       const r = await this.api("PUT", `/rooms/${encodeURIComponent(to.target)}/send/m.room.message/${encodeURIComponent(meta?.deliveryId ? `${meta.deliveryId}.${n}` : randomUUID())}`, content).catch((err) => {
         // 4xx other than 429 (and 401: token may be renewed) cannot succeed by retrying.
@@ -631,8 +631,12 @@ function escapeRe(s: string): string {
 }
 
 /** Matrix event content for a text chunk (plain + Markdown-rendered HTML when it differs). */
-function renderContent(chunk: string): Record<string, unknown> {
+function renderContent(chunk: string, meta?: SendMeta): Record<string, unknown> {
   const content: Record<string, unknown> = { msgtype: "m.text", body: chunk };
+  if (meta?.presentation === "progress") {
+    const escaped = chunk.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\n/g, "<br>");
+    return { ...content, format: "org.matrix.custom.html", formatted_body: `<em>${escaped}</em>` };
+  }
   const html = (marked.parse(chunk, { async: false, gfm: true, breaks: true }) as string).trim();
   if (html !== `<p>${chunk}</p>`) Object.assign(content, { format: "org.matrix.custom.html", formatted_body: html });
   return content;

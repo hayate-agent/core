@@ -140,6 +140,10 @@ export class PermanentDeliveryError extends Error {}
 
 /** Extra info for outbound messages. */
 export interface SendMeta {
+  /** Transport-neutral presentation intent. Adapters render progress subtly (e.g. italic).
+   * Progress text is plain text, not channel-specific markup; unsupported adapters may ignore it.
+   */
+  presentation?: "progress";
   /** Message is an approval prompt; channels may resolve it via reactions (→ /approve|/deny <id>). */
   approvalId?: string;
   /** Stable delivery id: retries of the same reply reuse it (channels derive idempotency keys). */
