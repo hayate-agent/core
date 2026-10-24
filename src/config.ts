@@ -35,6 +35,7 @@ export interface HarnessConfig {
   tools?: string[];
   /** Trusted local ESM plugin paths, relative to Harness home or absolute. */
   plugins?: string[];
+  protectedContent?: import("./protected-content.js").ProtectedContentConfig;
   sessions?: { provider: string; options?: unknown };
   compaction?: { strategy: string };
   contextMaintenance?: Partial<import("./context-maintenance.js").ContextPolicy>;

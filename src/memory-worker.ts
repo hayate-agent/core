@@ -100,6 +100,9 @@ export class FileMemoryStore implements MemoryProvider {
     this.indexCost = cost;
     this.removeTerms(row.entry.id);
     this.rows.set(row.entry.id, row); this.dirty = true; this.addTerms(row.entry.id, row);
+    // Start derived indexing after acknowledging durable Markdown; never wait for
+    // network access while holding the serialized write queue.
+    setImmediate(() => { void this.embedPending(); });
   }
   private removeTerms(id: string): void {
     const old = this.rows.get(id);
@@ -234,6 +237,7 @@ export class FileMemoryStore implements MemoryProvider {
   private async embedPending(): Promise<void> {
     if (this.embeddingBusy || !this.config.embedding || this.stopped) return;
     this.embeddingBusy = true;
+    let completed = false;
     try {
       // Bounded work per pass, network awaits outside serial write queue.
       for (const [id, row] of [...this.rows].filter(([, r]) => !r.vector || r.model !== this.modelKey()).slice(0, 16)) {
@@ -246,8 +250,16 @@ export class FileMemoryStore implements MemoryProvider {
       }
       this.semanticError = false;
       await this.serial(() => this.snapshot());
+      completed = true;
     } catch { this.semanticError = true; }
-    finally { this.embeddingBusy = false; }
+    finally {
+      this.embeddingBusy = false;
+      // Continue bounded batches, including writes made during a network await.
+      // On failure leave retries to the periodic scan instead of spinning.
+      if (completed && !this.stopped && [...this.rows.values()].some((r) => !r.vector || r.model !== this.modelKey())) {
+        setImmediate(() => { void this.embedPending(); });
+      }
+    }
   }
   async status(): Promise<MemoryStatus> {
     return { provider: "local", entries: this.rows.size, indexed: this.rows.size, ready: Boolean(this.lastScan || this.rows.size),

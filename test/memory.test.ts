@@ -116,10 +116,12 @@ test("semantic retrieval finds nonlexical matches, persists vectors and degrades
   const config = memoryConfig({ embedding: { url: `http://127.0.0.1:${address.port}`, model: "test", dimensions: 3 } });
   const store = new FileMemoryStore(dir, config); await store.start();
   const entry = await store.put(ctx, input);
-  await store.reindex();
   for (let i = 0; i < 100 && (await store.status()).semantic !== "ready"; i++) await new Promise((r) => setTimeout(r, 10));
-  assert.equal((await store.status()).semantic, "ready");
-  assert.equal((await store.search(ctx, "unrelated paraphrase"))[0].entry.id, entry.id);
+  assert.equal((await store.status()).semantic, "ready", "write indexes without explicit reindex");
+  const revised = await store.revise(ctx, entry.id, entry.revision, { text: "Changed artifact verification lesson" });
+  for (let i = 0; i < 100 && (await store.status()).semantic !== "ready"; i++) await new Promise((r) => setTimeout(r, 10));
+  assert.equal((await store.status()).semantic, "ready", "revision indexes without explicit reindex");
+  assert.equal((await store.search(ctx, "unrelated paraphrase"))[0].entry.revision, revised.revision);
   await store.close();
   const restored = new FileMemoryStore(dir, config); await restored.start();
   try {

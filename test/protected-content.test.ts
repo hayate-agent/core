@@ -1,0 +1,40 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { ProtectedContent } from "../src/protected-content.js";
+import { SettingsService } from "../src/settings.js";
+
+test("protected content pins detect mutation, deletion and recovery without exposing text", async (t) => {
+  const home = await mkdtemp(path.join(os.tmpdir(), "protected-content-"));
+  t.after(() => rm(home, { recursive: true, force: true }));
+  const file = path.join(home, "SOUL.md");
+  const text = "infrastructure identity";
+  const sha256 = createHash("sha256").update(text).digest("hex");
+  await writeFile(file, text);
+  const policy = new ProtectedContent(home, { files: [{ path: "SOUL.md", sha256 }] });
+  await policy.verify();
+  await writeFile(file, "modified by tool");
+  await assert.rejects(policy.verify(), /integrity check failed/);
+  assert.equal(JSON.stringify(await policy.inspect()).includes("modified by tool"), false);
+  await rm(file); await assert.rejects(policy.verify(), /integrity check failed/);
+  await writeFile(file, text); await policy.verify();
+});
+test("protected content rejects invalid pins and duplicate paths; inspection command is admin-only", async () => {
+  assert.throws(() => new ProtectedContent("/tmp", { files: [{ path: "SOUL.md", sha256: "bad" }] }));
+  const pin = { path: "SOUL.md", sha256: "a".repeat(64) };
+  assert.throws(() => new ProtectedContent("/tmp", { files: [pin, pin] }), /Duplicate/);
+  let command: any;
+  await new ProtectedContent("/tmp").plugin().activate({ registerCommand: (c: any) => { command = c; } } as any, {} as any);
+  assert.equal(command.admin, true);
+  assert.deepEqual(JSON.parse(await command.run("status")).files, []);
+});
+test("local settings cannot override infrastructure protected-content manifest", async (t) => {
+  const home = await mkdtemp(path.join(os.tmpdir(), "protected-overlay-"));
+  t.after(() => rm(home, { recursive: true, force: true }));
+  const file = path.join(home, "settings.local.yaml");
+  await writeFile(file, "protectedContent:\n  files: []\n");
+  await assert.rejects(new SettingsService(file, {}).load(), /Unsupported local setting/);
+});
