@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, readFile, rm, symlink, utimes, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, realpath, rm, symlink, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test, type TestContext } from "node:test";
@@ -67,7 +67,7 @@ test("invalid skills and collisions produce diagnostics; first root wins", async
   const catalog = new SkillCatalog(index, () => [root, second, path.join(home, "missing")]);
   const snapshot = await catalog.refresh();
   assert.equal(snapshot.entries.length, 1);
-  assert.equal(snapshot.entries[0].filePath, path.join(root, "search", "SKILL.md"));
+  assert.equal(snapshot.entries[0].filePath, await realpath(path.join(root, "search", "SKILL.md")));
   assert.equal(snapshot.diagnostics.length, 3);
   assert.match(snapshot.diagnostics.map((d) => d.message).join("\n"), /Duplicate skill name/);
 });
