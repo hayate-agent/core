@@ -46,5 +46,16 @@ test("persistent improvement budget, early completion and unsolicited morning re
   assert.equal(channel.texts().filter((x) => x.startsWith("Nachtbericht")).length, 1);
   await controller.tick(); await harness.drained();
   assert.equal(channel.texts().filter((x) => x.startsWith("Nachtbericht")).length, 1);
+  // Skip a morning report: an old report adopted at the next Cron start must
+  // not consume that next night's start intent, including across restart.
+  now = Date.parse("2026-10-25T23:00:00Z");
+  await controller.tick(true); await harness.drained();
+  now = Date.parse("2026-10-26T23:00:00Z");
+  await controller.tick(true); await harness.drained();
+  controller = new ImprovementController(home, harness, "UTC", () => now);
+  await controller.tick(false); await harness.drained();
+  const state = JSON.parse(await (await import("node:fs/promises")).readFile(path.join(home, "improvement", "state.json"), "utf8"));
+  assert.equal(state.night, "2026-10-26");
+  assert.equal(state.turns, 1);
   await harness.stop(1000);
 });
