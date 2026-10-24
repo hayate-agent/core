@@ -90,6 +90,28 @@ test("activation preserves a newer request arriving during replacement on succes
   }
 });
 
+test("slow older preparation cannot overwrite a newer desired gateway", async (t) => {
+  const home = await mkdtemp(path.join(os.tmpdir(), "gateway-order-"));
+  t.after(() => rm(home, { recursive: true, force: true }));
+  const settings = new SettingsService(path.join(home, "settings.yaml"), {}); await settings.load();
+  const harness = new Harness({ runtime: new FakeRuntime(), tickMs: 60000 });
+  const manager = new GatewayManager(harness, settings, { home, agent: "test", approvers: [] }, {});
+  let release!: () => void, entered!: () => void;
+  const gate = new Promise<void>((r) => { release = r; });
+  const started = new Promise<void>((r) => { entered = r; });
+  let calls = 0;
+  (manager as any).prepare = async () => {
+    const label = ++calls === 1 ? "old" : "new";
+    if (label === "old") { entered(); await gate; }
+    return { channel: { name: "test", label, async start() {}, async stop() {}, async send() {} } };
+  };
+  const older = manager.request("test"); await started;
+  await manager.request("test"); release(); await older;
+  await manager.tick();
+  assert.equal((harness.channels.get("test") as any).label, "new");
+  assert.deepEqual(JSON.parse(manager.status()).pending, []);
+});
+
 test("replacement is refused during an active turn", async () => {
   const runtime = new FakeRuntime();
   const harness = new Harness({ runtime, tickMs: 60000 });

@@ -36,9 +36,13 @@ export class GatewayManager {
   }
   get approvers(): string[] { return [...new Set([...this.active.values()].flatMap((x) => x.approvers ?? []))]; }
   get remote(): boolean { return this.active.size > 0; }
+  private readonly generations = new Map<string, number>();
   async request(name: string): Promise<void> {
+    const generation = (this.generations.get(name) ?? 0) + 1;
+    this.generations.set(name, generation);
     // Prepare without touching the running adapter. Modules must not start receiving in create().
     const instance = await this.prepare(name);
+    if (this.generations.get(name) !== generation) return;
     this.pending.set(name, { instance, label: this.settings.effective().gatewayPlugins?.[name]?.module ?? "baseline" });
   }
   async tick(): Promise<void> {
