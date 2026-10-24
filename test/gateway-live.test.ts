@@ -1,0 +1,44 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { mkdtemp, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { SettingsService } from "../src/settings.js";
+import { PluginHost } from "../src/plugins.js";
+import { gatewayPlugin } from "../src/gateway-plugin.js";
+import { Harness } from "../src/harness.js";
+
+test("gateway command persists and live applies settings, invalid changes have no effect", async (t) => {
+  const home = await mkdtemp(path.join(os.tmpdir(), "gateway-live-"));
+  t.after(() => rm(home, { recursive: true, force: true }));
+  const file = path.join(home, "settings.local.yaml");
+  const settings = new SettingsService(file, {}); await settings.load();
+  const seen: unknown[] = [];
+  const harness = new Harness({ runtime: {} as any, tickMs: 60000 });
+  harness.addChannel({ name: "matrix", configureGateway: (s) => { seen.push(s); }, async start() {}, async stop() {}, async send() {} });
+  const host = new PluginHost();
+  await host.load([], { home, cwd: home, agent: "test" }, [], [], [gatewayPlugin(settings, harness)]);
+  t.after(() => host.stop());
+  const command = host.commands.get("gateway")!;
+  assert.equal(command.admin, true);
+  const ctx = { sessionKey: "test" };
+  await command.run("progress reduced", ctx);
+  await command.run("reactions on", ctx);
+  assert.deepEqual(seen.at(-1), { progress: "reduced", statusReactions: true });
+  await assert.rejects(command.run("reactions perhaps", ctx));
+  const restored = new SettingsService(file, {}); await restored.load();
+  assert.equal(restored.effective().gateways?.progress, "reduced");
+  assert.equal(restored.effective().gateways?.statusReactions, true);
+});
+
+test("receipt is emitted after durable acceptance even while work is paused; duplicates do not repeat", async () => {
+  const events: string[] = [];
+  const harness = new Harness({ runtime: {} as any, tickMs: 60000 }); harness.paused = true;
+  harness.onStateChange = async () => { events.push("save"); };
+  harness.addChannel({ name: "mem", async start() {}, async stop() {}, async send() {}, async received() { events.push("received"); } });
+  const input = { id: "event1", sessionKey: "mem:room", text: "work", source: "channel" as const, replyTo: { channel: "mem", target: "room" } };
+  await harness.accept(input);
+  assert.ok(events.indexOf("save") < events.indexOf("received"));
+  await harness.accept(input);
+  assert.equal(events.filter((x) => x === "received").length, 1);
+});

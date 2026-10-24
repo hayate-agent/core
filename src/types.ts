@@ -168,6 +168,8 @@ export interface Channel {
   /** Optional live progress of the turn answering `to` (best effort, not durable). */
   turnEvent?(to: Address, event: TurnEvent, input?: Inbound): void;
   /** Best-effort status on the original input; completed means processing, not delivery. */
+  /** Best-effort receipt signal, independent of when queued work starts. */
+  received?(to: Address, input: Inbound): Promise<void>;
   turnStatus?(to: Address, input: Inbound, status: "started" | "completed" | "failed" | "cancelled"): Promise<void>;
   /** Optional "is typing" indicator while a turn runs. */
   typing?(to: Address, on: boolean): Promise<void>;
