@@ -52,11 +52,13 @@ export class GatewayManager {
             this.active.set(name, change.instance);
             this.harness.home ??= change.instance.home;
           } else this.active.delete(name);
-          this.pending.delete(name); this.errors.delete(name);
+          if (this.pending.get(name) === change) this.pending.delete(name);
+          this.errors.delete(name);
         } catch (err) {
           const message = (err as Error).message;
           if (message.includes("idle turn boundary")) continue;
-          this.pending.delete(name); this.errors.set(name, "Activation failed; inspect local logs and previous gateway health");
+          if (this.pending.get(name) === change) this.pending.delete(name);
+          this.errors.set(name, "Activation failed; inspect local logs and previous gateway health");
         }
       }
     } finally { this.changing = false; }
