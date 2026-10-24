@@ -31,6 +31,9 @@ export interface PluginMessage {
 
 export interface PluginChannel {
   readonly name: string;
+  /** Implements SendMeta.progressId resolution, ordered edits and final replacement. */
+  readonly editableProgress?: boolean;
+  progressEnabled?(): boolean;
   configureGateway?(settings: import("./gateway-settings.js").GatewaySettings): void;
   turnStatus?(to: Address, input: Inbound, status: "started" | "completed" | "failed" | "cancelled"): Promise<void>;
   start(deliver: (message: PluginMessage) => Promise<void>): Promise<void>;
@@ -60,6 +63,8 @@ function wrapChannel(channel: PluginChannel): Channel {
       };
       await deliver(input);
     }),
+    editableProgress: channel.editableProgress === true,
+    ...(channel.progressEnabled ? { progressEnabled: () => channel.progressEnabled!() } : {}),
     send: (to, text, meta) => channel.send(to, text, meta),
     stop: (budget) => channel.stop(budget),
     ...(channel.configureGateway ? { configureGateway: (settings: import("./gateway-settings.js").GatewaySettings) => channel.configureGateway!(settings) } : {}),

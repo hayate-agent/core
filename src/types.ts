@@ -32,6 +32,8 @@ export interface Inbound {
   started?: boolean;
   /** Stable first-start timestamp, persisted before execution for replay-safe memory capture. */
   memoryRecordedAt?: number;
+  /** Durable logical message identity used by edit-capable gateways across restarts. */
+  progressId?: string;
   /** Crashes (OOM, kill) that interrupted this input's turn so far. */
   replays?: number;
 }
@@ -144,6 +146,8 @@ export interface SendMeta {
    * Progress text is plain text, not channel-specific markup; unsupported adapters may ignore it.
    */
   presentation?: "progress";
+  /** Logical identity: adapter resolves it idempotently to its native message reference. */
+  progressId?: string;
   /** Message is an approval prompt; channels may resolve it via reactions (→ /approve|/deny <id>). */
   approvalId?: string;
   /** Stable delivery id: retries of the same reply reuse it (channels derive idempotency keys). */
@@ -169,6 +173,9 @@ export interface Channel {
   /** `deliverInbound` resolves once the input is durably accepted (safe to acknowledge upstream). */
   start(deliverInbound: (input: Inbound) => Promise<void>, dedup?: DedupPins): Promise<void>;
   send(to: Address, text: string, meta?: SendMeta): Promise<void>;
+  /** Supports stable logical progress IDs and final replacement through send(). */
+  editableProgress?: boolean;
+  progressEnabled?(): boolean;
   /** Optional live progress of the turn answering `to` (best effort, not durable). */
   turnEvent?(to: Address, event: TurnEvent, input?: Inbound): void;
   /** Best-effort status on the original input; completed means processing, not delivery. */

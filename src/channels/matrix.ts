@@ -116,6 +116,8 @@ export class MatrixChannel implements Channel {
   configureGateway(settings: import("../gateway-settings.js").GatewaySettings): void {
     this.gateway = { progress: this.o.progress ?? settings.progress, statusReactions: this.o.statusReactions ?? settings.statusReactions };
   }
+  readonly editableProgress = true;
+  progressEnabled(): boolean { return (this.o.progress ?? this.gateway.progress) !== "off"; }
   private readonly progress = new Map<string, GatewayProgress>();
   private telemetry: Promise<void> = Promise.resolve();
   private telemetryPending = 0;
@@ -151,7 +153,7 @@ export class MatrixChannel implements Channel {
   async turnStatus(to: Address, input: Inbound, status: "started" | "completed" | "failed" | "cancelled"): Promise<void> {
     const key = this.progressKey(to, input);
     if (status === "started") {
-      this.progress.set(key, new GatewayProgress(this.o.progress ?? this.gateway.progress, async (text) => { this.enqueueTelemetry(() => this.send(to, text, { presentation: "progress" })); }));
+      this.progress.set(key, new GatewayProgress(this.o.progress ?? this.gateway.progress, async (text) => { this.enqueueTelemetry(() => this.send(to, text, { presentation: "progress", progressId: input.progressId })); }));
     } else {
       const progress = this.progress.get(key);
       this.progress.delete(key);
@@ -578,6 +580,15 @@ export class MatrixChannel implements Channel {
   // ---------------------------------------------------------------- outbound
 
   async send(to: Address, text: string, meta?: SendMeta): Promise<void> {
+    if (meta?.progressId) {
+      if (meta.presentation !== "progress") await this.telemetry;
+      try { await this.sendEditable(to, text, meta); }
+      catch (err) {
+        if (err instanceof HttpError && err.status >= 400 && err.status < 500 && err.status !== 429 && err.status !== 401) throw new PermanentDeliveryError(err.message);
+        throw err;
+      }
+      return;
+    }
     // Same reply → same transaction ids, so a retry after a lost response is deduplicated
     // by the homeserver and already-sent chunks of a multi-part reply are not posted twice.
     const parts = fitChunks(text, MAX_CHUNK, (chunk) => renderContent(chunk, meta));
@@ -598,6 +609,45 @@ export class MatrixChannel implements Channel {
         if (this.approvalEvents.size > 500) this.approvalEvents.delete(this.approvalEvents.keys().next().value!);
       }
     }
+  }
+
+  private async sendEditable(to: Address, text: string, meta: SendMeta): Promise<void> {
+    const logical = createHash("sha256").update(JSON.stringify([to.target, to.thread, meta.progressId])).digest("hex");
+    const relation = to.thread ? { "m.relates_to": { rel_type: "m.thread", event_id: to.thread, is_falling_back: true, "m.in_reply_to": { event_id: to.thread } } } : {};
+    // Reusing this transaction resolves the native reference even after restart or a lost response.
+    const seed = await this.api("PUT", `/rooms/${encodeURIComponent(to.target)}/send/m.room.message/${logical}.seed`, {
+      ...renderContent("⏳ Wird bearbeitet …", { presentation: "progress" }), ...relation,
+    });
+    if (typeof seed.event_id !== "string") throw Error("Matrix progress reference missing");
+    if (meta.presentation !== "progress") {
+      try {
+        const original = await this.api("GET", `/rooms/${encodeURIComponent(to.target)}/event/${encodeURIComponent(seed.event_id)}`);
+        if (original.unsigned?.redacted_because || (original.content && !original.content.msgtype)) {
+          await this.send(to, text, { ...meta, progressId: undefined });
+          return;
+        }
+      } catch (err) {
+        if (!(err instanceof HttpError && [403, 404].includes(err.status))) throw err;
+        await this.send(to, text, { ...meta, progressId: undefined });
+        return;
+      }
+    }
+    const renderEdit = (chunk: string) => {
+      const content = renderContent(chunk, meta);
+      return { ...content, body: `* ${chunk}`, "m.new_content": { ...content, ...relation }, "m.relates_to": { rel_type: "m.replace", event_id: seed.event_id } };
+    };
+    const parts = fitChunks(text || (meta.outcome === "cancelled" ? "⏹️ Abgebrochen." : meta.outcome === "failed" ? "❌ Fehlgeschlagen." : "✅ Bearbeitung abgeschlossen."), MAX_CHUNK, renderEdit);
+    const txn = meta.deliveryId ?? randomUUID();
+    try {
+      await this.api("PUT", `/rooms/${encodeURIComponent(to.target)}/send/m.room.message/${logical}.${encodeURIComponent(txn)}.edit`, renderEdit(parts[0]!));
+    } catch (err) {
+      if (!(err instanceof HttpError && [403, 404].includes(err.status))) throw err;
+      await this.send(to, text, { ...meta, progressId: undefined });
+      return;
+    }
+    if (to.thread) this.botThreads.add(to.thread);
+    // Long final answers keep the first chunk in place; remaining chunks use normal durable IDs.
+    if (parts.length > 1) await this.send(to, parts.slice(1).join("\n"), { ...meta, progressId: undefined, deliveryId: `${logical}.${txn}.tail` });
   }
 
   /** Typing indicator; refreshed every 25s for long turns. */

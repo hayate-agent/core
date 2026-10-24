@@ -12,6 +12,35 @@ function setup(answer?: (t: string, k: string) => string) {
   return { runtime, harness, ch };
 }
 
+test("editable gateway final references survive durable outbox restore and follow finished telemetry", async () => {
+  const runtime = new FakeRuntime(() => "done");
+  const harness = new Harness({ runtime, tickMs: 60000, gateways: { progress: "reduced" } });
+  const order: string[] = [];
+  let finished = false;
+  let fail = true;
+  harness.addChannel({ name: "mem", editableProgress: true, async start() {}, async stop() {},
+    async turnStatus(_to, input, status) {
+      assert.ok(input.progressId);
+      if (status === "completed") { await new Promise((r) => setTimeout(r, 5)); finished = true; order.push("finished"); }
+    },
+    async send(_to, _text, meta) { assert.ok(finished); assert.ok(meta?.progressId); order.push("send"); if (fail) throw Error("network"); },
+  });
+  harness.onStateChange = async () => {};
+  await harness.accept({ ...msg("work"), id: "editable-input" });
+  for (let i = 0; i < 100 && !order.includes("send"); i++) await new Promise((r) => setTimeout(r, 5));
+  const entries = harness.outboxEntries();
+  assert.equal(entries.length, 1);
+  assert.ok(entries[0].progressId);
+  assert.deepEqual(order.slice(0, 2), ["finished", "send"]);
+  fail = false;
+  const restored = new Harness({ runtime: new FakeRuntime(), tickMs: 60000 });
+  let metaSeen: any;
+  restored.addChannel({ name: "mem", async start() {}, async stop() {}, async send(_to, _text, meta) { metaSeen = meta; } });
+  restored.restoreOutbox(JSON.parse(JSON.stringify(entries))); restored.releaseRestored();
+  await restored.drained();
+  assert.equal(metaSeen.progressId, entries[0].progressId);
+});
+
 test("startup adopts a pending maintenance notice durably with its stable delivery ID", async () => {
   let acknowledged = false;
   let saves = 0;

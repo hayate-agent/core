@@ -493,7 +493,7 @@ export class Harness {
     const [input] = s.queue.splice(i, 1);
     this.inbox.unsaved.delete(input!);
     if (input!.replyTo) {
-      s.outbox.push(this.outbox.create(s.key, input!.replyTo, "", "cancelled"));
+      s.outbox.push({ ...this.outbox.create(s.key, input!.replyTo, "", "cancelled"), ...(input!.progressId ? { progressId: input!.progressId } : {}) });
       s.unsaved = true;
     }
     this.saveSoon();
@@ -616,6 +616,7 @@ export class Harness {
           // Durable before the turn runs, so a crash during it is charged to this input.
           input.started = true;
           input.memoryRecordedAt ??= Date.now();
+          if (input.replyTo && this.channels.get(input.replyTo.channel)?.editableProgress && (this.channels.get(input.replyTo.channel)?.progressEnabled?.() ?? (gatewaySettings(this.opts.gateways, input.replyTo.channel).progress !== "off"))) input.progressId ??= randomUUID();
           let saved = true;
           await Promise.resolve(this.onStateChange?.()).catch((err) => {
             saved = false;
@@ -751,7 +752,9 @@ export class Harness {
       try { await this.opts.memory?.capture({ id: input.id, sessionKey: s.key, text: input.text, reply, outcome: finalStatus, tools: memoryTools, recordedAt: input.memoryRecordedAt }); }
       catch { this.log("memory capture failed; turn completion continues"); }
     }
-    void telemetry.then(() => typingCh?.turnStatus?.(to!, input, finalStatus)).catch(() => undefined);
+    const finishTelemetry = telemetry.then(() => typingCh?.turnStatus?.(to!, input, finalStatus)).catch(() => undefined);
+    // Editable gateways finish pending progress before the durable final replacement.
+    if (typingCh?.editableProgress) await finishTelemetry;
     s.lastActivity = this.now();
     if (s.goal && input.source === "goal") {
       s.goal.turns++;
@@ -769,10 +772,13 @@ export class Harness {
     }
     // An API run always gets its result (even empty): that is how the run finishes.
     if (input.source === "api" && input.replyTo) {
-      s.outbox.push(this.outbox.create(s.key, input.replyTo, reply === NO_REPLY ? "" : reply, outcome));
+      s.outbox.push({ ...this.outbox.create(s.key, input.replyTo, reply === NO_REPLY ? "" : reply, outcome), ...(input.progressId ? { progressId: input.progressId } : {}) });
       return;
     }
-    if (!reply || reply === NO_REPLY) return;
+    if (!reply || reply === NO_REPLY) {
+      if (input.progressId && input.replyTo) s.outbox.push({ ...this.outbox.create(s.key, input.replyTo, outcome === "cancelled" ? "⏹️ Abgebrochen." : outcome === "failed" ? "❌ Fehlgeschlagen." : "✅ Bearbeitung abgeschlossen.", outcome), progressId: input.progressId });
+      return;
+    }
     if (input.source === "cron" && !input.replyTo) {
       this.log(`[${s.key}] ${reply.slice(0, 500)}`); // deliver: local
       return;
@@ -783,7 +789,7 @@ export class Harness {
       return;
     }
     // Recorded together with the turn's completion; pump delivers it (and retries on failure).
-    s.outbox.push(this.outbox.create(s.key, dest, reply, outcome));
+    s.outbox.push({ ...this.outbox.create(s.key, dest, reply, outcome), ...(input.progressId ? { progressId: input.progressId } : {}) });
   }
 
   /**

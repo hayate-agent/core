@@ -114,6 +114,38 @@ test("progress presentation escapes plain text while preserving threads and norm
   assert.equal(server.calls.filter((call) => call.path.includes("/send/m.room.message/")).at(-1)!.body.formatted_body, "<p><strong>normal</strong></p>");
 });
 
+test("editable progress uses stable seed transaction and final replacement with normal formatting", async () => {
+  const { ch, server } = await setup();
+  const to = { channel: "matrix", target: DM, thread: "$thread" };
+  await ch.send(to, "Working: bash", { progressId: "turn-one", presentation: "progress" });
+  await ch.send(to, "**Finished**", { progressId: "turn-one", deliveryId: "durable-final" });
+  const calls = server.calls.filter((c) => c.path.includes("/send/m.room.message/"));
+  assert.equal(calls.length, 4);
+  assert.equal(calls[0].path, calls[2].path, "idempotent seed recovers reference on retry/restart");
+  assert.equal(calls[1].body["m.relates_to"].rel_type, "m.replace");
+  assert.equal(calls[1].body["m.new_content"].formatted_body, "<em>Working: bash</em>");
+  assert.equal(calls[3].body["m.new_content"].formatted_body, "<p><strong>Finished</strong></p>");
+  assert.equal(calls[3].body["m.new_content"]["m.relates_to"].event_id, "$thread");
+  assert.ok(calls[3].path.includes("durable-final.edit"));
+  await ch.send(to, "**Finished**", { progressId: "turn-one", deliveryId: "durable-final" });
+  assert.equal(server.calls.filter((c) => c.path.includes("/send/m.room.message/")).at(-1)!.path, calls[3].path);
+});
+
+test("final edit falls back when original progress message was redacted", async () => {
+  const server = fakeServer({ [DM]: 2 });
+  const fetcher = (async (url: any, init: any) => {
+    if (String(url).includes("/event/")) return new Response(JSON.stringify({ unsigned: { redacted_because: { type: "m.room.redaction" } }, content: {} }), { status: 200 });
+    return server.fetch(url, init);
+  }) as typeof fetch;
+  const { ch } = await setup({ fetch: fetcher });
+  await ch.send({ channel: "matrix", target: DM }, "Final answer", { progressId: "redacted", deliveryId: "final" });
+  const messages = server.calls.filter((c) => c.path.includes("/send/m.room.message/"));
+  assert.equal(messages.length, 2);
+  assert.equal(messages[1].body.body, "Final answer");
+  assert.equal(messages[1].body["m.new_content"], undefined);
+  assert.ok(messages[1].path.includes("final.0"));
+});
+
 test("Matrix inherits gateway policy unless an explicit Matrix override is present", async () => {
   for (const explicit of [false, true]) {
     const { ch, server } = await setup(explicit ? {progress:"off",statusReactions:false} : {});
