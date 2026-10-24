@@ -134,6 +134,31 @@ test("semantic retrieval finds nonlexical matches, persists vectors and degrades
   } finally { await restored.close(); }
 });
 
+test("background embedding budget spans eager writes and reindex calls", async (t) => {
+  let requests = 0;
+  const server = createServer(async (req, res) => {
+    for await (const _ of req) { /* drain */ }
+    requests++;
+    res.setHeader("content-type", "application/json");
+    res.end(JSON.stringify({ data: [{ embedding: [1, 0, 0] }] }));
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
+  const dir = await mkdtemp(path.join(os.tmpdir(), "memory-request-budget-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const port = (server.address() as { port: number }).port;
+  const store = new FileMemoryStore(dir, memoryConfig({ scanSeconds: 60, embedding: { url: `http://127.0.0.1:${port}`, model: "test", dimensions: 3 } }));
+  await store.start();
+  try {
+    for (let i = 0; i < 24; i++) await store.put(ctx, { ...input, key: `budget-${i}` });
+    for (let i = 0; i < 200 && requests < 16; i++) await new Promise((r) => setTimeout(r, 10));
+    await store.reindex(); await store.reindex();
+    await new Promise((r) => setTimeout(r, 100));
+    assert.equal(requests, 16, "reindex and eager continuation cannot reset request budget");
+    assert.equal((await store.status()).semantic, "degraded", "remaining vectors wait for next interval");
+  } finally { await store.close(); }
+});
+
 test("capture backlog survives provider failure and retries across service restart", async (t) => {
   const { store } = await setup(t);
   const home = await mkdtemp(path.join(os.tmpdir(), "memory-backlog-"));
