@@ -134,6 +134,7 @@ export class PiSession implements RuntimeSession {
     private readonly record?: SessionRecord,
     private readonly compaction: CompactionStrategy = nativeCompaction,
     private readonly beforePrompt?: () => Promise<void>,
+    private readonly onSessionSelection?: () => void,
   ) {}
 
   get busy(): boolean {
@@ -216,11 +217,13 @@ export class PiSession implements RuntimeSession {
     if (!model) throw new Error(`unknown model: ${ref}`);
     await this.session.setModel(model);
     this.restore = undefined;
+    if (!this.turn) this.onSessionSelection?.();
   }
 
   setThinking(level: string): void {
     if (!(THINKING as readonly string[]).includes(level)) throw new Error(`thinking must be one of ${THINKING.join(", ")}`);
     this.session.setThinkingLevel(level as Thinking);
+    if (!this.turn) this.onSessionSelection?.();
   }
 
   async setTitle(title: string): Promise<void> {
@@ -447,7 +450,7 @@ export class PiRuntime implements AgentRuntime {
         appliedDefaults = defaults;
       }
       if (!options.ephemeral && this.opts.skillContext) skillContext = await this.opts.skillContext();
-    });
+    }, () => { appliedDefaults = this.opts.modelDefaults?.(); });
     try {
       if (checkpoint) await checkpoint();
       const defaultModel = appliedDefaults?.model ?? this.opts.model;
