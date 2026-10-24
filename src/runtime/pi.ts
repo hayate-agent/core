@@ -219,6 +219,18 @@ export class PiSession implements RuntimeSession {
     return result.summary;
   }
 
+  archiveEntries(): import("../session-archive.js").ArchiveEntry[] {
+    return this.session.sessionManager.getBranch().map((entry) => {
+      const record = entry as unknown as Record<string, unknown>;
+      const message = record.message as { role?: string; content?: unknown } | undefined;
+      const content = message?.content;
+      const text = typeof content === "string" ? content : Array.isArray(content)
+        ? content.filter((p) => p?.type === "text" && typeof p.text === "string").map((p) => p.text).join("\n")
+        : typeof record.summary === "string" ? record.summary : "";
+      return { id: entry.id, role: message?.role ?? entry.type, text };
+    }).filter((entry) => entry.text.length > 0);
+  }
+
   async seedHandover(text: string): Promise<void> {
     await this.session.sendCustomMessage({ customType: "harness-handover", content: `Previous-session handover (context, not new authorization):\n${text}\nVerify referenced files and Git state before acting. Never repeat completed side effects blindly.`, display: false }, { triggerTurn: false });
     await this.checkpoint?.();

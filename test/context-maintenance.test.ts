@@ -31,7 +31,7 @@ test("unknown usage does not trigger automatic compaction; handover is explicit"
   const home = await mkdtemp(path.join(os.tmpdir(), "context-test-"));
   t.after(() => rm(home, { recursive: true, force: true }));
   let rotations = 0;
-  const session = { status: () => ({ sessionId: "old" }), summarize: async () => "Verified state; next: tests", compact: async () => { throw new Error("unexpected"); } } as unknown as RuntimeSession;
+  const session = { status: () => ({ sessionId: "old" }), archiveEntries: () => [], summarize: async () => "Verified state; next: tests", compact: async () => { throw new Error("unexpected"); } } as unknown as RuntimeSession;
   const next = { status: () => ({ sessionId: "new" }) } as RuntimeSession;
   const maintenance = new ContextMaintenance(home, () => contextPolicy());
   await maintenance.boundary("chat", session, async () => { rotations++; return next; });
@@ -45,7 +45,7 @@ test("prepared handover refreshes intervening context after rotation failure", a
   const home = await mkdtemp(path.join(os.tmpdir(), "context-test-"));
   t.after(() => rm(home, { recursive: true, force: true }));
   let summaries = 0;
-  const session = { status: () => ({ sessionId: "old" }), summarize: async () => { summaries++; return "handover"; } } as unknown as RuntimeSession;
+  const session = { status: () => ({ sessionId: "old" }), archiveEntries: () => [], summarize: async () => { summaries++; return "handover"; } } as unknown as RuntimeSession;
   const maintenance = new ContextMaintenance(home, () => contextPolicy());
   await maintenance.request("chat", { action: "handover", preserve: "state", resume: "tests" });
   await maintenance.boundary("chat", session, async () => { throw new Error("open failed"); });

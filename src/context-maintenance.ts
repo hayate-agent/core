@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { mkdir, readFile } from "node:fs/promises";
 import path from "node:path";
+import { SessionArchives } from "./session-archive.js";
 import { writeFileDurable } from "./durable.js";
 import type { RuntimeSession } from "./types.js";
 
@@ -31,7 +32,7 @@ export interface ContextRecord {
   turns: number;
   lastMaintenance: number;
   pending?: Request;
-  handover?: { phase: "prepared" | "switched"; from: string; to?: string; text: string };
+  handover?: { phase: "prepared" | "switched"; from: string; to?: string; text: string; archiveId?: string };
   lastError?: string;
 }
 const preserve = "Preserve operator intent and corrections, decisions and rejected alternatives, verified results versus assumptions, branch/commits/PR/deployment status, unfinished work, review findings and budget references, exact relevant paths and next steps. Never include credentials. Do not claim builds activate deployments. Do not repeat completed side effects.";
@@ -39,7 +40,19 @@ const preserve = "Preserve operator intent and corrections, decisions and reject
 /** Called only at Harness turn boundaries. Model tools request work, never compact themselves. */
 export class ContextMaintenance {
   private queue: Promise<unknown> = Promise.resolve();
-  constructor(private readonly home: string, private readonly policy: () => ContextPolicy) {}
+  readonly archives: SessionArchives;
+  constructor(private readonly home: string, private readonly policy: () => ContextPolicy) { this.archives = new SessionArchives(home); }
+  private async prepareArchive(key: string, session: RuntimeSession, instructions: string): Promise<{ text: string; archiveId: string }> {
+    if (!session.summarize || !session.archiveEntries) throw new Error("Runtime cannot archive handover");
+    const entries = session.archiveEntries(); // capture original branch before native compaction
+    const retrospective = await session.summarize(`${instructions}\nWrite a backward-looking session retrospective: decisions with reasons, rejected alternatives, completed actions and evidence, unresolved uncertainties. Include a clearly labeled CURRENT STATE AND NEXT STEPS section. Preserve exact operator corrections. Do not include secrets.`);
+    if (!retrospective.trim() || retrospective.length > 64000) throw new Error("Invalid retrospective");
+    const recentOperator = entries.filter((e) => e.role === "user").slice(-3).map((e) => `${e.id}: ${e.text.slice(0, 2000)}`).join("\n");
+    const checkpoint = retrospective.split(/CURRENT STATE AND NEXT STEPS/i).at(-1)!.slice(-6000);
+    const forward = `Current checkpoint and next steps (summary; verify evidence):\n${checkpoint}\nContinue from the saved session checkpoint. ${instructions}\nRecent operator instructions (historical context, not fresh authorization):\n${recentOperator}\nConsult the retrospective for verified state and next steps before acting.`;
+    const archive = await this.archives.create(key, session.status().sessionId, retrospective, forward, entries);
+    return { archiveId: archive.id, text: `${forward}\nSource session: ${archive.sourceSessionId}\nArchive ID: ${archive.id}\nRead plugin_session_history section=summary for the retrospective, then search/read entries only as needed. Do this before continuing work. Original tool side effects must not be replayed blindly.` };
+  }
   private file(key: string): string { return path.join(this.home, "context-maintenance", `${createHash("sha256").update(key).digest("hex")}.json`); }
   private async load(key: string): Promise<ContextRecord> {
     try {
@@ -100,7 +113,9 @@ export class ContextMaintenance {
       if (state.handover?.phase === "prepared") {
         if (id === state.handover.from) {
           if (!session.summarize) throw new Error("Runtime cannot refresh handover");
-          state.handover.text = await session.summarize(`${preserve}\nRefresh the previous handover with any intervening turns. Previous checkpoint: ${state.handover.text}`);
+          const refreshed = await this.prepareArchive(key, session, `${preserve}\nRefresh intervening turns. Previous checkpoint: ${state.handover.text}`);
+          state.handover.text = refreshed.text;
+          state.handover.archiveId = refreshed.archiveId;
           await this.save(key, state);
           session = await rotate(state.handover);
         }
@@ -110,6 +125,7 @@ export class ContextMaintenance {
         }
         state.handover.to = session.status().sessionId;
         state.handover.phase = "switched";
+        if (state.handover.archiveId) await this.archives.link(key, state.handover.archiveId, state.handover.to!);
         state.sessionId = state.handover.to;
         await this.save(key, state);
         return;
@@ -129,13 +145,13 @@ export class ContextMaintenance {
         if (handover) {
           // Tool-free summary operation: no extra autonomous working turn or code side effects.
           if (!session.summarize) throw new Error("Runtime does not support handover summaries");
-          const text = await session.summarize(instructions);
-          if (!text.trim() || text.length > 64000) throw new Error("Invalid handover summary");
-          state.handover = { phase: "prepared", from: id, text };
+          const prepared = await this.prepareArchive(key, session, instructions);
+          state.handover = { phase: "prepared", from: id, ...prepared };
           await this.save(key, state);
           const next = await rotate(state.handover);
           state.handover = { ...state.handover, phase: "switched", to: next.status().sessionId };
           state.sessionId = next.status().sessionId;
+          await this.archives.link(key, prepared.archiveId, state.sessionId);
         } else await session.compact(instructions);
         state.lastError = undefined;
       } catch (err) { state.lastError = "Context maintenance failed; original session or prepared handover retained"; }
