@@ -104,6 +104,7 @@ export function defaultConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
     thinking: overrides.thinking,
     review: reviewConfig(overrides.review),
     plugins: overrides.plugins ?? [],
+    protectedContent: overrides.protectedContent,
     sessions: overrides.sessions ?? { provider: "native" },
     compaction: overrides.compaction ?? { strategy: "native" },
     contextMaintenance: contextPolicy(overrides.contextMaintenance),

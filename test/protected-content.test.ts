@@ -6,6 +6,27 @@ import os from "node:os";
 import path from "node:path";
 import { ProtectedContent } from "../src/protected-content.js";
 import { SettingsService } from "../src/settings.js";
+import { defaultConfig, loadConfig } from "../src/config.js";
+
+test("configured pins survive defaults and YAML loading and enforce integrity", async (t) => {
+  const home = await mkdtemp(path.join(os.tmpdir(), "protected-config-"));
+  t.after(() => rm(home, { recursive: true, force: true }));
+  const text = "operator-controlled identity";
+  const sha256 = createHash("sha256").update(text).digest("hex");
+  const manifest = { files: [{ path: "SOUL.md", sha256 }] };
+  assert.deepEqual(defaultConfig({ home, protectedContent: manifest }).protectedContent, manifest);
+  await writeFile(path.join(home, "harness.yaml"), `protectedContent:\n  files:\n    - path: SOUL.md\n      sha256: ${sha256}\n`);
+  const config = await loadConfig(home);
+  assert.deepEqual(config.protectedContent, manifest);
+  const policy = new ProtectedContent(config.home, config.protectedContent);
+  const file = path.join(home, "SOUL.md");
+  await writeFile(file, text); await policy.verify();
+  assert.equal((await policy.inspect()).length, 1);
+  await writeFile(file, "tampered");
+  await assert.rejects(policy.verify(), /integrity check failed/);
+  await rm(file);
+  await assert.rejects(policy.verify(), /integrity check failed/);
+});
 
 test("protected content pins detect mutation, deletion and recovery without exposing text", async (t) => {
   const home = await mkdtemp(path.join(os.tmpdir(), "protected-content-"));
