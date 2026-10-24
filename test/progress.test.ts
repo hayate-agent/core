@@ -32,6 +32,55 @@ test("long reviews emit truthful heartbeats and stop after completion", async ()
   assert.equal(sent.length, count);
 });
 
+test("blocked delivery coalesces heartbeat backlog and retains the final batch", async (t) => {
+  t.mock.timers.enable({ apis: ["setInterval", "setTimeout"] });
+  const sent: string[] = [];
+  let release!: () => void;
+  const blocked = new Promise<void>((resolve) => { release = resolve; });
+  const p = new GatewayProgress("reduced", async (text) => {
+    sent.push(text);
+    if (sent.length === 1) await blocked;
+  }, 10);
+  p.event({ type: "tool", phase: "start", name: "bash" });
+  for (let i = 0; i < 100; i++) {
+    t.mock.timers.tick(10);
+    await Promise.resolve();
+  }
+  assert.equal(sent.length, 1);
+  p.event({ type: "tool", phase: "end", name: "bash" });
+  let finished = false;
+  const finishing = p.finish().then(() => { finished = true; });
+  await Promise.resolve();
+  assert.equal(finished, false);
+  release();
+  await finishing;
+  assert.equal(sent.length, 2, "retain only in-flight and latest pending batch");
+  assert.match(sent[1], /✓ bash beendet/);
+});
+
+test("a failed blocked send still drains the latest batch", async (t) => {
+  t.mock.timers.enable({ apis: ["setInterval", "setTimeout"] });
+  const sent: string[] = [];
+  let reject!: (error: Error) => void;
+  const blocked = new Promise<void>((_resolve, fail) => { reject = fail; });
+  const p = new GatewayProgress("reduced", async (text) => {
+    sent.push(text);
+    if (sent.length === 1) await blocked;
+  }, 10);
+  p.event({ type: "tool", phase: "start", name: "bash" });
+  t.mock.timers.tick(10);
+  p.event({ type: "tool", phase: "end", name: "bash" });
+  const finishing = p.finish();
+  reject(new Error("offline"));
+  await finishing;
+  assert.equal(sent.length, 2);
+  assert.match(sent[1], /✓ bash beendet/);
+  p.event({ type: "tool", phase: "start", name: "ignored" });
+  t.mock.timers.tick(2000);
+  await p.finish();
+  assert.equal(sent.length, 2);
+});
+
 test("full bounds output and events; telemetry failures do not reject finish", async () => {
   const sent: string[] = [];
   const p = new GatewayProgress("full", async (text) => { sent.push(text); throw new Error("network"); });

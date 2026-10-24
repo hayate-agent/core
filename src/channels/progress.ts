@@ -11,6 +11,8 @@ export class GatewayProgress {
   private pending: string[] = [];
   private scheduled?: NodeJS.Timeout;
   private sending: Promise<void> = Promise.resolve();
+  private queuedText?: string;
+  private draining = false;
   private count = 0;
   private active = new Map<string, number>();
   private heartbeat?: NodeJS.Timeout;
@@ -42,8 +44,22 @@ export class GatewayProgress {
   }
   private flush(): void {
     if (!this.pending.length) return;
-    const text = this.pending.splice(0).join("\n\n").slice(0, 8000);
-    this.sending = this.sending.then(() => this.send(text)).catch(() => undefined);
+    // Progress is ephemeral: keep only the newest batch behind a slow sender.
+    this.queuedText = this.pending.splice(0).join("\n\n").slice(0, 8000);
+    if (this.draining) return;
+    this.draining = true;
+    this.sending = this.drain();
+  }
+  private async drain(): Promise<void> {
+    try {
+      while (this.queuedText !== undefined) {
+        const text = this.queuedText;
+        this.queuedText = undefined;
+        try { await this.send(text); } catch { /* Best-effort telemetry. */ }
+      }
+    } finally {
+      this.draining = false;
+    }
   }
   async finish(): Promise<void> {
     this.closed = true;
