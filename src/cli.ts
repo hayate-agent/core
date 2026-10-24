@@ -22,6 +22,7 @@ import { Harness } from "./harness.js";
 import { startMemoryGuard } from "./memguard.js";
 import { loadPersona, personaSections } from "./persona.js";
 import { ProtectedContent } from "./protected-content.js";
+import { workflowTools } from "./workflow-tools.js";
 import { continuationPlugin } from "./continuation-plugin.js";
 import { ImprovementController } from "./improvement.js";
 import { PiRuntime } from "./runtime/pi.js";
@@ -141,7 +142,7 @@ async function main(argv: string[]): Promise<void> {
     thinking: config.thinking,
     pruning: () => pruningPolicy(settings.effective().toolResultPruning),
     modelDefaults: () => ({ revision: settings.revision, model: effectiveModels().model, thinking: effectiveModels().thinking }),
-    tools: config.tools?.length ? [...new Set([...config.tools, "plugin_context_maintenance", "plugin_session_history", ...(config.memory.enabled ? ["plugin_memory"] : []), ...(reviewSettings.enabled ? ["plugin_review"] : [])])] : config.tools,
+    tools: workflowTools(config.tools, config.memory.enabled, reviewSettings.enabled),
     pluginTools: () => plugins.tools.values(),
     sessionProvider: () => sessionProvider,
     legacySessionProvider: new FilesystemSessionProvider(path.join(config.home, "session-store")),
