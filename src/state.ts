@@ -24,6 +24,8 @@ export interface PersistedState {
   home?: Address;
   approvals?: { mode: "off" | "manual"; tools: string[] };
   personality?: string;
+  /** Chat overrides; configuration remains the fallback. */
+  modelSettings?: import("./model-settings.js").ModelSettings;
   /** /cron pause|resume overrides of jobs.yaml `enabled` (name → enabled). */
   cronOverrides?: Record<string, boolean>;
   sessions: PersistedSession[];

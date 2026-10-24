@@ -32,6 +32,7 @@ export interface PiRuntimeOptions {
   sessionsDir: string;
   model?: string;
   thinking?: string;
+  modelDefaults?: () => { revision: number; model?: string; thinking?: string };
   /** Explicit active tool names, including extension tools; [] disables all tools. */
   tools?: string[];
   pluginTools?: () => Iterable<PluginTool>;
@@ -437,13 +438,22 @@ export class PiRuntime implements AgentRuntime {
       return task;
     } : undefined;
     // External providers checkpoint at explicit durability barriers, never by replacing SDK internals.
+    let appliedDefaults = this.opts.modelDefaults?.();
     const wrapped = new PiSession(session, models, slot, checkpoint, record, this.opts.compaction?.(), async () => {
+      const defaults = this.opts.modelDefaults?.();
+      if (!options.ephemeral && defaults && defaults.revision !== appliedDefaults?.revision) {
+        if (defaults.model) await wrapped.setModel(defaults.model);
+        if (defaults.thinking) wrapped.setThinking(defaults.thinking);
+        appliedDefaults = defaults;
+      }
       if (!options.ephemeral && this.opts.skillContext) skillContext = await this.opts.skillContext();
     });
     try {
       if (checkpoint) await checkpoint();
-      if (this.opts.model && wrapped.status().model !== this.opts.model) await wrapped.setModel(this.opts.model);
-      if (this.opts.thinking) wrapped.setThinking(this.opts.thinking);
+      const defaultModel = appliedDefaults?.model ?? this.opts.model;
+      const defaultThinking = appliedDefaults?.thinking ?? this.opts.thinking;
+      if (defaultModel && wrapped.status().model !== defaultModel) await wrapped.setModel(defaultModel);
+      if (defaultThinking) wrapped.setThinking(defaultThinking);
       if (provider && record) await provider.bind(sessionKey, record.id);
     } catch (err) {
       await wrapped.dispose().catch(() => {});

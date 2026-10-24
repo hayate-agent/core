@@ -15,6 +15,10 @@ export const VERSION = "0.1.0";
 
 export interface CommandContext {
   harness: Harness;
+  modelSettings?: {
+    get: () => import("./model-settings.js").ModelSettings;
+    set: (key: import("./model-settings.js").ModelSetting, value?: string) => Promise<void>;
+  };
   scheduler?: Scheduler;
   /** Mutable approval settings shared with the runtime. */
   approvals: { mode: "off" | "manual"; tools: string[] };
@@ -45,6 +49,13 @@ interface Command {
   help: string;
   admin?: boolean;
   run: (args: string, input: Inbound, ctx: CommandContext) => Promise<string | void>;
+}
+
+async function globalSetting(key: import("./model-settings.js").ModelSetting, value: string, input: Inbound, ctx: CommandContext): Promise<string> {
+  if (value && !isAdmin(ctx, input)) return "⛔ admin only";
+  if (!ctx.modelSettings) throw new Error("Global model settings are unavailable");
+  if (value) await ctx.modelSettings.set(key, value === "reset" ? undefined : value);
+  return `global ${key}: ${ctx.modelSettings.get()[key] ?? "runtime default"}${value ? " (applies on next turn; active turns unchanged)" : ""}`;
 }
 
 const BUSY_MODES: BusyMode[] = ["queue", "steer", "interrupt"];
@@ -311,8 +322,9 @@ export const COMMANDS: Command[] = [
   },
   {
     name: "model",
-    help: "Switch model for this session: <provider/model>",
+    help: "Model for this session, or --global <provider/model|reset> for instance defaults",
     run: async (args, input, ctx) => {
+      if (/^--global(?:\s|$)/.test(args.trim())) return globalSetting("model", args.trim().slice(8).trim(), input, ctx);
       const session = await ctx.harness.sessionFor(input.sessionKey);
       if (!args.trim()) return `model: ${session.status().model ?? "default"}`;
       await session.setModel(args.trim());
@@ -321,13 +333,22 @@ export const COMMANDS: Command[] = [
   },
   {
     name: "reasoning",
-    help: "Reasoning effort: off|minimal|low|medium|high|xhigh|max",
+    help: "Session reasoning, or --global <level|reset> for instance defaults",
     run: async (args, input, ctx) => {
+      if (/^--global(?:\s|$)/.test(args.trim())) return globalSetting("thinking", args.trim().slice(8).trim(), input, ctx);
       const session = await ctx.harness.sessionFor(input.sessionKey);
       if (!args.trim()) return `reasoning: ${session.status().thinking ?? "default"}`;
       session.setThinking(args.trim());
       return `reasoning: ${args.trim()}`;
     },
+  },
+  {
+    name: "review-model", help: "Instance reviewer model: <provider/model|reset>",
+    run: (args, input, ctx) => globalSetting("reviewModel", args.trim(), input, ctx),
+  },
+  {
+    name: "review-reasoning", help: "Instance reviewer reasoning: <level|reset>",
+    run: (args, input, ctx) => globalSetting("reviewThinking", args.trim(), input, ctx),
   },
   {
     name: "personality",

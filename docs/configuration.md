@@ -75,6 +75,33 @@ changes to existing sessions. This selection is not an OS security sandbox: a ba
 or extension tool can provide broader capabilities, and extensions execute trusted code.
 MCP and CLI lifecycle management are not implemented by this setting.
 
+## Chat model settings
+
+Core commands (global changes require administrator rights):
+
+- `/model provider/model`: change only this session; `/model` shows it.
+- `/reasoning medium`: change only this session.
+- `/model --global provider/model`: persistent default for this Harness instance.
+- `/reasoning --global medium`: persistent reasoning default for this instance.
+- `/review-model provider/model`: persistent reviewer model; without arguments shows the effective value.
+- `/review-reasoning medium`: persistent reviewer reasoning; without arguments shows it.
+- Use `reset` instead of a value on the global/reviewer commands to remove the chat override.
+- `/model --global` and `/reasoning --global` show the effective defaults.
+
+Chat overrides live in `<home>/state.json`, not the read-only `harness.yaml`.
+Precedence is chat override, then configuration, then runtime default. The reviewer
+uses its explicit model override/configuration, otherwise the global working model;
+reviewer reasoning defaults to medium independently of working-session reasoning.
+Model setters validate availability against the runtime registry before saving.
+
+Global working defaults apply to existing sessions at their next turn and to new
+sessions. Active turns are not interrupted. A later session-specific `/model` or
+`/reasoning` remains in force until another global change occurs. Reset restores
+the configured fallback; if no model/reasoning fallback exists, existing sessions
+retain their current setting and new sessions use the runtime default. Reviewer
+changes apply on the next review call; an in-flight review keeps its original model.
+These settings affect this Harness instance only, not other agents or GitOps files.
+
 ## Models and credentials
 
 Provider definitions live in PI's `models.json`; examples are in
