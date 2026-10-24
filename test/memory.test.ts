@@ -83,7 +83,11 @@ test("write budget rejects before committing and accepted memories survive rebui
   const store = new FileMemoryStore(dir, memoryConfig({ maxIndexBytes: 65536 }));
   await store.start();
   t.after(async () => { await store.close(); await rm(dir, { recursive: true, force: true }); });
-  let accepted = 0;
+  let revisionEntry = await store.put(ctx, { ...input, key: "revision-budget" });
+  const cost = (store as any).indexCost;
+  for (let i = 0; i < 20; i++) revisionEntry = await store.revise(ctx, revisionEntry.id, revisionEntry.revision, { text: input.text });
+  assert.equal((store as any).indexCost, cost, "revision hashes must not cause budget drift");
+  let accepted = 1;
   for (let i = 0; i < 20; i++) {
     try { await store.put(ctx, { ...input, key: `large-${i}`, text: "artifact ".repeat(1300) }); accepted++; }
     catch (err) { assert.match(String(err), /budget/); break; }

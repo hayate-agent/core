@@ -1,3 +1,4 @@
+import { memoryConfig, type MemoryConfig } from "./memory.js";
 import { validateGatewayConfig, type GatewayConfig } from "./gateway-settings.js";
 import { mkdir, readFile } from "node:fs/promises";
 import path from "node:path";
@@ -10,6 +11,7 @@ import { validateModelSetting, type ModelSetting } from "./model-settings.js";
 /** Explicit runtime-writable allowlist; security policy and secrets are deliberately excluded. */
 export interface LocalSettings {
   gateways?: GatewayConfig;
+  memory?: Partial<MemoryConfig>;
   model?: string;
   thinking?: string;
   review?: { model?: string; thinking?: string };
@@ -22,7 +24,11 @@ function validate(value: unknown, defaults: Partial<ContextPolicy> = {}, pruning
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid local settings overlay");
   const data = value as Record<string, unknown>;
   for (const [key, item] of Object.entries(data)) {
-    if (key === "gateways") {
+    if (key === "memory") {
+      if (!item || typeof item !== "object" || Array.isArray(item)) throw Error("Invalid memory overlay");
+      if (Object.keys(item).some((k) => !["enabled", "provider", "autoCapture", "autoRecall", "scanSeconds", "maxEntries", "maxIndexBytes", "embedding"].includes(k))) throw Error("Unsupported memory setting");
+      memoryConfig(item);
+    } else if (key === "gateways") {
       validateGatewayConfig(item);
     } else if (key === "toolResultPruning") {
       if (!item || typeof item !== "object" || Array.isArray(item)) throw new Error("Invalid pruning overlay");
@@ -60,11 +66,23 @@ export class SettingsService {
   }
   snapshot(): LocalSettings { return structuredClone(this.overlay); }
   effective(): LocalSettings {
-    return { ...this.defaults, ...this.overlay, gateways: { ...this.defaults.gateways, ...this.overlay.gateways, overrides: { ...this.defaults.gateways?.overrides, ...this.overlay.gateways?.overrides } }, review: { ...this.defaults.review, ...this.overlay.review }, contextMaintenance: { ...this.defaults.contextMaintenance, ...this.overlay.contextMaintenance }, toolResultPruning: { ...this.defaults.toolResultPruning, ...this.overlay.toolResultPruning } };
+    return { ...this.defaults, ...this.overlay, memory: { ...this.defaults.memory, ...this.overlay.memory }, gateways: { ...this.defaults.gateways, ...this.overlay.gateways, overrides: { ...this.defaults.gateways?.overrides, ...this.overlay.gateways?.overrides } }, review: { ...this.defaults.review, ...this.overlay.review }, contextMaintenance: { ...this.defaults.contextMaintenance, ...this.overlay.contextMaintenance }, toolResultPruning: { ...this.defaults.toolResultPruning, ...this.overlay.toolResultPruning } };
   }
   source(key: SettingPath): "local overlay" | "installation/default" {
     const value = key.startsWith("review.") ? this.overlay.review?.[key.slice(7) as "model" | "thinking"] : this.overlay[key as "model" | "thinking"];
     return value === undefined ? "installation/default" : "local overlay";
+  }
+  setMemory(value: Partial<MemoryConfig>): Promise<void> {
+    const next = this.writing.catch(() => {}).then(async () => {
+      const updated = this.snapshot();
+      updated.memory = { ...updated.memory, ...value };
+      validate(updated, this.defaults.contextMaintenance, this.defaults.toolResultPruning);
+      await mkdir(path.dirname(this.file), { recursive: true });
+      await writeFileDurable(this.file, stringify(updated));
+      this.overlay = updated;
+    });
+    this.writing = next;
+    return next;
   }
   setGateways(value: GatewayConfig): Promise<void> {
     const next = this.writing.catch(() => {}).then(async () => {

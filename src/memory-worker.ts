@@ -24,7 +24,8 @@ export class FileMemoryStore implements MemoryProvider {
   private indexCost = 64;
   private rowCost(row: Row): number {
     // Reserve vector JSON space before acknowledging a source write, including future embeddings.
-    const { vector: _vector, model: _model, ...base } = row;
+    const { vector: _vector, model: _model, ...rest } = row;
+    const base = { ...rest, entry: { ...rest.entry, revision: "0".repeat(64) } };
     return Buffer.byteLength(JSON.stringify(base)) + 256 + (this.config.embedding ? (this.config.embedding.dimensions ?? 8192) * 32 : 0);
   }
   private inverted = new Map<string, Set<string>>();
