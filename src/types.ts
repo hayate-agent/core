@@ -92,6 +92,7 @@ export interface RuntimeSession {
   compact(instructions?: string): Promise<void>;
   /** Tool-free native summary for handover (may compact the source session). */
   summarize?(instructions: string): Promise<string>;
+  archiveEntries?(): import("./session-archive.js").ArchiveEntry[];
   seedHandover?(text: string): Promise<void>;
   setModel(ref: string): Promise<void>;
   setThinking(level: string): void;
