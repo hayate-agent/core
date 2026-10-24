@@ -56,6 +56,40 @@ test("runtime activation adopts missing home without overwriting an explicit des
   }
 });
 
+test("activation preserves a newer request arriving during replacement on success and failure", async (t) => {
+  const home = await mkdtemp(path.join(os.tmpdir(), "gateway-pending-"));
+  t.after(() => rm(home, { recursive: true, force: true }));
+  for (const label of ["first", "newer"]) {
+    await writeFile(path.join(home, `${label}.mjs`), `export default {apiVersion:1,async create(){return {channel:{name:'test',label:'${label}',async start(){},async stop(){},async send(){}}}}}`);
+  }
+  for (const fails of [false, true]) {
+    const settings = new SettingsService(path.join(home, `settings-${fails}.yaml`), {}); await settings.load();
+    const harness = new Harness({ runtime: new FakeRuntime(), tickMs: 60000 });
+    const manager = new GatewayManager(harness, settings, { home, agent: "test", approvers: [] }, {});
+    let entered!: () => void, release!: () => void;
+    const started = new Promise<void>((r) => { entered = r; });
+    const gate = new Promise<void>((r) => { release = r; });
+    const replace = harness.replaceGateway.bind(harness);
+    let calls = 0;
+    harness.replaceGateway = async (name, candidate) => {
+      if (++calls === 1) {
+        entered(); await gate;
+        if (fails) throw Error("first activation failed");
+      }
+      await replace(name, candidate);
+    };
+    await settings.setGatewayPlugin("test", { module: "first.mjs" }); await manager.request("test");
+    const activation = manager.tick(); await started;
+    await settings.setGatewayPlugin("test", { module: "newer.mjs" }); await manager.request("test");
+    release(); await activation;
+    assert.deepEqual(JSON.parse(manager.status()).pending, ["test"]);
+    await manager.tick();
+    assert.equal((harness.channels.get("test") as any).label, "newer");
+    assert.deepEqual(JSON.parse(manager.status()).pending, []);
+    assert.deepEqual(JSON.parse(manager.status()).errors, {});
+  }
+});
+
 test("replacement is refused during an active turn", async () => {
   const runtime = new FakeRuntime();
   const harness = new Harness({ runtime, tickMs: 60000 });
