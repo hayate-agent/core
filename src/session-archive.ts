@@ -43,9 +43,18 @@ export class SessionArchives {
   }
   async read(key: string, id: string, options: { query?: string; offset?: number; limit?: number; section?: string; charOffset?: number }): Promise<string> {
     const archive = await this.load(key, id);
-    if (options.section === "summary") return JSON.stringify({ id, sourceSessionId: archive.sourceSessionId, targetSessionId: archive.targetSessionId, retrospective: archive.retrospective, forward: archive.forward }).slice(0, 20000);
     const offset = options.offset ?? 0; const limit = options.limit ?? 10; const charOffset = options.charOffset ?? 0;
     if (!Number.isInteger(charOffset) || charOffset < 0 || !Number.isInteger(offset) || offset < 0 || !Number.isInteger(limit) || limit < 1 || limit > 30 || (options.query?.length ?? 0) > 500) throw new Error("Invalid archive read bounds");
+    if (options.section === "summary") return JSON.stringify({
+      id, sourceSessionId: archive.sourceSessionId, targetSessionId: archive.targetSessionId,
+      retrospective: archive.retrospective.slice(charOffset, charOffset + 1500),
+      forward: archive.forward.slice(charOffset, charOffset + 1500),
+      charOffset,
+      retrospectiveTotalChars: archive.retrospective.length,
+      forwardTotalChars: archive.forward.length,
+      retrospectiveTruncated: archive.retrospective.length > charOffset + 1500,
+      forwardTruncated: archive.forward.length > charOffset + 1500,
+    });
     const entries = options.query ? archive.entries.filter((e: ArchiveEntry) => e.text.toLowerCase().includes(options.query!.toLowerCase())) : archive.entries;
     return JSON.stringify({ id, sourceSessionId: archive.sourceSessionId, total: entries.length, offset, entries: entries.slice(offset, offset + limit).map((e: ArchiveEntry) => ({ ...e, text: e.text.slice(charOffset, charOffset + 1500), charOffset, totalChars: e.text.length, truncated: e.text.length > charOffset + 1500 })) });
   }
