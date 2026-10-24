@@ -18,6 +18,31 @@ test("improvement defaults off with 20 turns; overnight date and DST use local c
   assert.deepEqual(improvementWindow(Date.parse("2026-10-25T02:30:00Z"), p), { night: "2026-10-24", active: true });
   assert.equal(improvementWindow(Date.parse("2026-10-25T04:00:00Z"), p).active, false);
 });
+test("startup catches up missed Cron only within the enabled night window and preserves budget", async (t) => {
+  const home = await mkdtemp(path.join(os.tmpdir(), "improvement-catchup-"));
+  t.after(() => rm(home, { recursive: true, force: true }));
+  await writeFile(path.join(home, "improvement.yaml"), "enabled: true\nmaxTurns: 1\ntimezone: Europe/Berlin\n");
+  let now = Date.parse("2026-10-24T21:42:00Z");
+  const harness = new Harness({ runtime: new FakeRuntime(() => "measured checkpoint"), tickMs: 60000 });
+  const channel = new MemoryChannel(); harness.addChannel(channel); harness.home = ROOM;
+  let controller = new ImprovementController(home, harness, "Europe/Berlin", () => now);
+  const opts = (harness as any).opts;
+  opts.beforeTurn = (input: any) => controller.before(input);
+  opts.afterTurn = async (input: any, reply: string) => { await controller.completed(input, reply); return reply; };
+  try {
+    await controller.start(); await harness.drained(); controller.stop();
+    assert.equal(harness.sessions.get("improvement:nightly")?.session?.status().messages, 2);
+    controller = new ImprovementController(home, harness, "Europe/Berlin", () => now);
+    await controller.start(); await harness.drained(); controller.stop();
+    assert.equal(harness.sessions.get("improvement:nightly")?.session?.status().messages, 2, "restart cannot reset budget");
+    now = Date.parse("2026-10-25T04:00:00Z"); // 05:00 CET after DST change
+    controller = new ImprovementController(home, harness, "Europe/Berlin", () => now);
+    await controller.start(); await harness.drained(); controller.stop();
+    assert.equal(harness.sessions.get("improvement:nightly")?.session?.status().messages, 2);
+    assert.equal(channel.texts().filter((s) => s.startsWith("Nachtbericht")).length, 1);
+  } finally { controller.stop(); await harness.stop(1000); }
+});
+
 test("persistent improvement budget, early completion and unsolicited morning report", async (t) => {
   const home = await mkdtemp(path.join(os.tmpdir(), "improvement-"));
   t.after(() => rm(home, { recursive: true, force: true }));
