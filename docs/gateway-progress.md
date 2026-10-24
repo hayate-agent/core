@@ -38,12 +38,16 @@ environment > per-gateway YAML > global YAML > defaults.
 If unset, they do not mask inherited YAML settings.
 
 - MATRIX_PROGRESS=off: typing indicator only.
-- MATRIX_PROGRESS=reduced: one brief activity notice per tool name per turn.
+- MATRIX_PROGRESS=reduced: tool starts/ends without arguments/results; active tools
+  emit a truthful elapsed-time heartbeat every 15 seconds, including long reviews.
 - MATRIX_PROGRESS=full: tool starts/ends, bounded arguments/results. No private
   model reasoning is exported. Final assistant text uses the normal durable reply.
 - MATRIX_STATUS_REACTIONS=true: 📥 after durable receipt (including queued messages), 👀 at turn start; ✅ when processing completes,
   ❌ on failure, ⏹️ on cancellation. Default false. For batched inputs each original
-  message is annotated. Completion does not assert successful delivery of replies.
+  message is annotated. Obsolete receipt/start reactions are redacted when the
+  status advances, so only the terminal status remains. Completion does not assert
+  successful delivery of replies. Reaction cleanup is best effort and requires the
+  homeserver to allow redacting the bot's own events.
 
 Full mode may disclose command arguments, paths and tool results to room members.
 Enable only in rooms appropriate for those contents. Progress is best effort,

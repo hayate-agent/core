@@ -139,14 +139,31 @@ export class MatrixChannel implements Channel {
     this.react(to, input, "received", "📥");
   }
 
+  private readonly reactionStates = new Map<string, string>();
   private react(to: Address, input: Inbound, status: string, emoji: string): void {
     if (!(this.o.statusReactions ?? this.gateway.statusReactions)) return;
     const ids = input.parts?.map((part) => part.id) ?? (input.id ? [input.id] : []);
     for (const id of ids) {
-      const txn = createHash("sha256").update(JSON.stringify([to.target, id, status])).digest("hex");
-      this.enqueueTelemetry(() => this.api("PUT", `/rooms/${encodeURIComponent(to.target)}/send/m.reaction/${txn}`, {
-        "m.relates_to": { rel_type: "m.annotation", event_id: id, key: emoji },
-      }).then(() => undefined));
+      const stateKey = JSON.stringify([to.target, id]);
+      const previous = this.reactionStates.get(stateKey);
+      const terminal = ["completed", "failed", "cancelled"];
+      if (previous && (terminal.includes(previous) || (previous === "started" && status === "received"))) continue;
+      this.reactionStates.set(stateKey, status);
+      if (this.reactionStates.size > 5000) this.reactionStates.delete(this.reactionStates.keys().next().value!);
+      const txnFor = (stage: string) => createHash("sha256").update(JSON.stringify([to.target, id, stage])).digest("hex");
+      this.enqueueTelemetry(async () => {
+        await this.api("PUT", `/rooms/${encodeURIComponent(to.target)}/send/m.reaction/${txnFor(status)}`, {
+          "m.relates_to": { rel_type: "m.annotation", event_id: id, key: emoji },
+        });
+        // Resolve previous reaction IDs through their stable transactions, including after restart.
+        const obsolete = status === "started" ? ["received"] : terminal.includes(status) ? ["received", "started"] : [];
+        for (const stage of obsolete) {
+          const old = await this.api("PUT", `/rooms/${encodeURIComponent(to.target)}/send/m.reaction/${txnFor(stage)}`, {
+            "m.relates_to": { rel_type: "m.annotation", event_id: id, key: stage === "received" ? "📥" : "👀" },
+          });
+          if (typeof old.event_id === "string") await this.api("PUT", `/rooms/${encodeURIComponent(to.target)}/redact/${encodeURIComponent(old.event_id)}/${txnFor(stage)}.clear`, {});
+        }
+      });
     }
   }
 
