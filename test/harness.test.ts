@@ -29,6 +29,17 @@ test("resume reserves session opening against concurrent resumes and inbound tur
   await harness.stop(1000);
 });
 
+test("hung channels share a single bounded shutdown deadline", async () => {
+  const {harness,ch} = setup();
+  await harness.submit(msg("hello"));
+  await harness.drained();
+  ch.stop = async () => new Promise<void>(() => {});
+  harness.addChannel({name:"hung-second",async start(){},async send(){},async stop(){await new Promise<void>(()=>{});}});
+  const started = Date.now();
+  await Promise.race([harness.stop(30),new Promise<never>((_,reject)=>{const timer=setTimeout(()=>reject(Error("shutdown exceeded limit")),500);timer.unref();})]);
+  assert.ok(Date.now()-started<500);
+});
+
 test("stuck asynchronous session cleanup cannot block channel shutdown", async () => {
   const { harness, ch } = setup();
   await harness.submit(msg("hello"));

@@ -222,9 +222,15 @@ export class Harness {
         new Promise<void>((resolve) => { cleanupTimer = setTimeout(resolve, Math.max(0, deadline - Date.now())); }),
       ]);
     } finally { clearTimeout(cleanupTimer); }
-    // Channels get what is left of the deadline (at least 2s to flush their own state).
-    const budget = Math.max(2000, deadline - Date.now());
-    for (const ch of this.channels.values()) await ch.stop(budget).catch((err) => this.log(`stop ${ch.name}: ${err}`));
+    // One shared deadline, not a fresh allowance per channel. A hung transport
+    // must never turn a bounded upgrade into an unbounded drain.
+    let channelTimer: NodeJS.Timeout | undefined;
+    const budget = Math.max(0, deadline - Date.now());
+    const stopping = Promise.all([...this.channels.values()].map(ch =>
+      Promise.resolve().then(() => ch.stop(budget)).catch(() => this.log(`stop ${ch.name} failed`))));
+    try {
+      await Promise.race([stopping, new Promise<void>(resolve => { channelTimer = setTimeout(resolve, budget); })]);
+    } finally { clearTimeout(channelTimer); }
     return unfinished;
   }
 
