@@ -5,6 +5,7 @@ import { mkdtemp, mkdir, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { writeFileDurable } from "./durable.js";
+import { runExperimentProcess } from "./experiment-process.js";
 
 const exec = promisify(execFile);
 export interface ExperimentSpec {
@@ -24,6 +25,8 @@ export interface ExperimentResult {
   candidate?: Measurement;
   verdict: "improved" | "rejected" | "inconclusive";
   reason: string;
+  /** Internal recovery paths only; never runner output or raw error messages. */
+  cleanup?: { complete: boolean; remainingWorktrees: string[]; retainedRoot?: string };
 }
 function measurement(stdout: string): Measurement {
   const value = JSON.parse(stdout);
@@ -63,9 +66,9 @@ export class ExperimentEvaluator {
       for (const side of ["baseline", "candidate"] as const) {
         await git(["cat-file", "-e", spec[side] + "^{commit}"]);
         const directory = path.join(root, side);
+        worktrees.push(directory); // add can register before a later checkout failure
         await git(["worktree", "add", "--detach", directory, spec[side]]);
-        worktrees.push(directory);
-        const { stdout } = await exec(process.execPath, [evaluator, directory, spec.metric], { cwd: root, timeout: this.timeoutMs, maxBuffer: 65536 });
+        const { stdout } = await runExperimentProcess(process.execPath, [evaluator, directory, spec.metric], { cwd: root, timeout: this.timeoutMs, maxBuffer: 65536 });
         result[side] = measurement(stdout);
       }
       if (!result.baseline!.checksPassed) result.reason = "Baseline checks failed; comparison invalid";
@@ -77,10 +80,30 @@ export class ExperimentEvaluator {
       }
     } catch { result.verdict = "inconclusive"; result.reason = "Evaluator failed, timed out or returned invalid evidence"; }
     finally {
-      try {
-        for (const directory of worktrees) await git(["worktree", "remove", "--force", directory]);
-        if (root) await rm(root, { recursive: true, force: true });
-      } finally { /* outer reservation includes cleanup and evidence persistence */ }
+      const remainingWorktrees: string[] = [];
+      for (const directory of worktrees) {
+        try { await git(["worktree", "remove", "--force", directory]); }
+        catch {
+          // A failed add may never have registered the path. Only discard its
+          // recovery entry when the authoritative registry proves it absent.
+          try {
+            const { stdout } = await git(["worktree", "list", "--porcelain", "-z"]);
+            const registered = stdout.split("\0").filter((field) => field.startsWith("worktree ")).map((field) => path.resolve(field.slice(9)));
+            if (!registered.length || registered.includes(path.resolve(directory))) remainingWorktrees.push(directory);
+          } catch { remainingWorktrees.push(directory); }
+        }
+      }
+      let retainedRoot = root;
+      if (!remainingWorktrees.length && root) {
+        try { await rm(root, { recursive: true, force: true }); retainedRoot = undefined; }
+        catch { /* Preserve recovery location without leaking subprocess errors. */ }
+      }
+      const complete = !remainingWorktrees.length && !retainedRoot;
+      result.cleanup = { complete, remainingWorktrees, ...(retainedRoot ? { retainedRoot } : {}) };
+      if (!complete) {
+        result.verdict = "inconclusive";
+        result.reason = "Experiment cleanup incomplete; operator recovery required";
+      }
     }
     await writeFileDurable(path.join(this.evidenceDir, result.id + ".json"), JSON.stringify(result));
     return result;
