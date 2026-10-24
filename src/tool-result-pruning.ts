@@ -52,6 +52,15 @@ export function pruneToolResults<T extends ProjectionMessage>(messages: T[], pol
         const head = Math.floor(room * 0.65);
         projected = `${marker}\n${body.slice(0, head)}\n[… middle omitted …]\n${room - head > 0 ? body.slice(-(room - head)) : ""}`;
       }
+      // Metadata and duplicate references count toward the cap too. Tool identity
+      // remains in the message fields even if a long textual marker is shortened.
+      if (projected.length > policy.maxResultChars) {
+        const suffix = " [truncated]";
+        let end = policy.maxResultChars - suffix.length;
+        const code = projected.charCodeAt(end - 1);
+        if (code >= 0xd800 && code <= 0xdbff) end--;
+        projected = projected.slice(0, end) + suffix;
+      }
       replacements.set(index, { ...m, content: [{ type: "text", text: projected }] } as T);
     }
     if (!previous) seen.set(digest, m.toolCallId);

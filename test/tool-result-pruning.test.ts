@@ -31,6 +31,24 @@ test("errors, images, short results and non-tool messages remain untouched", () 
   const result = pruneToolResults(messages, policy);
   assert.equal(result, messages);
 });
+test("minimum cap bounds metadata and duplicate references even with long IDs", () => {
+  const cap = { ...policy, maxResultChars: 256 };
+  const id = "call_" + "😀".repeat(500);
+  const body = "x".repeat(6000);
+  const messages = [tool(id, body), tool("duplicate", body), tool("recent", body)];
+  const result = pruneToolResults(messages, cap);
+  for (const message of result.slice(0, 2)) {
+    const projected = message.content[0].text;
+    assert.ok(projected.length <= 256);
+    assert.equal(projected.isWellFormed(), true);
+    assert.match(projected, /truncated/);
+  }
+  assert.equal(result[0].toolCallId, id);
+  assert.equal(result[2], messages[2]);
+  const ordinary = pruneToolResults([tool("call_example_123456789", body), tool("recent", body)], cap);
+  assert.ok(ordinary[0].content[0].text.length <= 256);
+});
+
 test("disabled or below-budget pruning returns unchanged context", () => {
   const messages = [tool("old", "x".repeat(6000)), tool("new", "new")];
   assert.equal(pruneToolResults(messages, { ...policy, enabled: false }), messages);
