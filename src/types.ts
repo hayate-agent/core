@@ -21,6 +21,9 @@ export interface Inbound {
   sessionKey: string;
   text: string;
   source: InputSource;
+  /** Durable, bounded continuation plan supplied during this turn. */
+  continuation?: { state: "continue" | "waiting" | "blocked" | "completed"; next?: string };
+  continuationDepth?: number;
   sender?: string;
   /** Where replies for this input are delivered. */
   replyTo?: Address;

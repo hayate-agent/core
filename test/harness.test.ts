@@ -72,29 +72,33 @@ test("pre-turn rotation seeds the replacement before delivering the original pro
   await harness.stop(1000);
 });
 
-test("default five-minute heartbeat migrates conversations but respects durable opt-out and excludes API", async () => {
-  let now = 1000;
-  const runtime = new FakeRuntime(() => NO_REPLY);
-  const harness = new Harness({ runtime, tickMs: 60000, now: () => now });
+test("turn-end continuation checkpoints one bounded follow-up and does not install a polling heartbeat", async () => {
+  let harness!: Harness;
+  let calls = 0;
+  const runtime = new FakeRuntime(() => {
+    calls++;
+    harness.planContinuation("mem:room1", { state: "continue", next: "authorized next step" });
+    return "checkpoint";
+  });
+  harness = new Harness({ runtime, tickMs: 60000 });
   harness.addChannel(new MemoryChannel());
-  harness.restoreSessions([
-    { key: "mem:room1", replyTo: ROOM },
-    { key: "mem:disabled", replyTo: ROOM, heartbeatDisabled: true },
-    { key: "api:run", replyTo: { channel: "api", target: "run" } },
-  ]);
-  await harness.tick();
-  const state = harness.state("mem:room1");
-  assert.equal(state.heartbeat?.everyMs, 300000);
-  assert.equal(state.heartbeat?.nextAt, 301000);
-  assert.equal(harness.state("mem:disabled").heartbeat, undefined);
-  assert.equal(harness.state("api:run").heartbeat, undefined);
-  const restored = new Harness({ runtime: new FakeRuntime(), tickMs: 60000 });
-  restored.restoreSessions(structuredClone(harness.snapshotSessions()));
-  await restored.tick();
-  assert.equal(restored.state("mem:disabled").heartbeatDisabled, true);
-  assert.equal(restored.state("mem:disabled").heartbeat, undefined);
-  now = 301000; await harness.tick(); await harness.drained();
+  const snapshots: any[] = [];
+  harness.onStateChange = async () => { snapshots.push(structuredClone(harness.pendingInputs())); };
+  await harness.submit(msg("authorized task")); await harness.drained();
+  assert.equal(calls, 21, "initial turn plus at most 20 follow-ups");
+  assert.ok(snapshots.some((s) => s.some((i: any) => i.continuationDepth === 1 && !i.started)));
+  await harness.tick(); await harness.drained();
+  assert.equal(harness.state("mem:room1").heartbeat, undefined);
+  assert.equal(calls, 21);
+  await harness.stop(1000);
+});
+
+test("replayed turn does not inherit an interrupted execution's continuation plan", async () => {
+  const { harness, runtime } = setup(() => "finished");
+  harness.restorePending([{ ...msg("resume"), id: "interrupted", started: true, continuation: { state: "continue", next: "obsolete step" } }]);
+  harness.releaseRestored(); await harness.drained();
   assert.equal(runtime.sessions.get("mem:room1")?.prompts.length, 1);
+  await harness.stop(1000);
 });
 
 test("startup adopts a pending maintenance notice durably with its stable delivery ID", async () => {

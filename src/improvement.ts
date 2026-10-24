@@ -1,3 +1,4 @@
+import { Cron } from "croner";
 import { mkdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { parse } from "yaml";
@@ -53,6 +54,23 @@ export class ImprovementController {
   private checking = false;
   private evaluator?: ExperimentEvaluator;
   private evaluatorKey?: string;
+  private cronJobs: Cron[] = [];
+  async start(): Promise<void> {
+    const p = await this.policy();
+    const run = () => { void this.tick(true).catch(() => undefined); };
+    this.cronJobs = [
+      new Cron(`0 ${p.startHour} * * *`, { timezone: p.timezone }, run),
+      new Cron(`0 ${p.endHour} * * *`, { timezone: p.timezone }, run),
+      // State-only recovery, not a periodic model nudge. Starts no fresh night.
+      new Cron("*/5 * * * *", { timezone: p.timezone }, () => { void this.tick(false).catch(() => undefined); }),
+    ];
+    // Recovery only: resume a persisted night, do not create a fresh run at startup.
+    await this.tick(false);
+  }
+  stop(): void { for (const job of this.cronJobs) job.stop(); this.cronJobs = []; }
+  async committed(input: Inbound): Promise<void> {
+    if (input.sessionKey === KEY) setImmediate(() => { void this.tick(false).catch(() => undefined); });
+  }
   constructor(private home: string, private harness: Harness, private timezone: string, private now = Date.now) {}
   private get file(): string { return path.join(this.home, "improvement", "state.json"); }
   async policy(): Promise<ImprovementPolicy> {
@@ -106,7 +124,7 @@ export class ImprovementController {
     this.state.pending = undefined;
     await this.save();
   }
-  async tick(): Promise<void> {
+  async tick(cronStart = true): Promise<void> {
     if (this.checking) return;
     this.checking = true;
     try {
@@ -125,13 +143,14 @@ export class ImprovementController {
         await this.save();
         return;
       }
-      if (!p.enabled || !w.active || this.harness.paused || busy) return;
-      // Interactive work has priority; do not start experiments beside other turns.
-      if ([...this.harness.sessions.values()].some((s) => s.running || s.queue.length)) return;
+      if (!p.enabled || !w.active) return;
       if (!this.state || this.state.night !== w.night) {
+        if (!cronStart) return;
         if (this.state && !this.state.reportQueued) return;
         this.state = { version: 1, night: w.night, turns: 0, results: [] };
+        await this.save(); // persist Cron intent even if interactive work delays execution
       }
+      if (this.harness.paused || busy || [...this.harness.sessions.values()].some((s) => s.running || s.queue.length)) return;
       if (this.state.done || this.state.turns >= p.maxTurns) return;
       if (this.state.pending) {
         this.state.results.push("Vorheriger Versuch unterbrochen oder fehlgeschlagen; vor Fortsetzung tatsächlichen Zustand prüfen.");

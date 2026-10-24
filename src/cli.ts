@@ -22,6 +22,7 @@ import { Harness } from "./harness.js";
 import { startMemoryGuard } from "./memguard.js";
 import { loadPersona, personaSections } from "./persona.js";
 import { ProtectedContent } from "./protected-content.js";
+import { continuationPlugin } from "./continuation-plugin.js";
 import { ImprovementController } from "./improvement.js";
 import { PiRuntime } from "./runtime/pi.js";
 import { launchMode } from "./launch.js";
@@ -164,7 +165,7 @@ async function main(argv: string[]): Promise<void> {
     harness.post({ sessionKey, text: "", source: "channel", replyTo: origin ?? harness.home }, `⚠️ Operator escalation: ${message}`);
   });
   let improvement: ImprovementController | undefined;
-  let improvementTimer: NodeJS.Timeout | undefined;
+
   harness = new Harness({
     runtime,
     contextMaintenance: maintenance,
@@ -174,6 +175,7 @@ async function main(argv: string[]): Promise<void> {
       await improvement?.before(input);
       await review.prepare(config.cwd, input.replyTo, input.sessionKey);
     },
+    turnCommitted: async (input) => { await improvement?.committed(input); },
     afterTurn: async (input, reply, session, options, signal) => {
       const result = await finishWithReview(review, config.cwd, input, reply, session, options, signal);
       await improvement?.completed(input, result);
@@ -301,7 +303,7 @@ async function main(argv: string[]): Promise<void> {
   }
   await scheduler.load();
 
-  await plugins.load(config.plugins ?? [], { agent: config.agent, home: config.home, cwd: config.cwd }, [...builtinCommandNames, "sessions", "resume", ...skills.map((s) => s.name)], ["console", "api", "matrix", ...harness.channels.keys()], [improvement!.plugin(), protectedContent.plugin(), gatewayManager.plugin(), gatewayPlugin(settings, harness), contextPlugin(maintenance, settings), ...(config.memory.enabled ? [memoryPlugin(memory)] : []), ...(reviewSettings.enabled ? [reviewPlugin(review, config.cwd)] : [])]);
+  await plugins.load(config.plugins ?? [], { agent: config.agent, home: config.home, cwd: config.cwd }, [...builtinCommandNames, "sessions", "resume", ...skills.map((s) => s.name)], ["console", "api", "matrix", ...harness.channels.keys()], [continuationPlugin(harness), improvement!.plugin(), protectedContent.plugin(), gatewayManager.plugin(), gatewayPlugin(settings, harness), contextPlugin(maintenance, settings), ...(config.memory.enabled ? [memoryPlugin(memory)] : []), ...(reviewSettings.enabled ? [reviewPlugin(review, config.cwd)] : [])]);
   let memoryConnecting = false;
   let memoryStopping = false;
   const connectMemory = async () => {
@@ -346,7 +348,7 @@ async function main(argv: string[]): Promise<void> {
     // Like Hermes restart_drain_timeout: stop input, finish in-flight work for up to
     // drainSeconds, abort the rest, then persist state (user's /pause flag untouched).
     scheduler.stop();
-    clearInterval(improvementTimer);
+    improvement?.stop();
     const unfinished = await harness.stop(config.loop.drainSeconds * 1000);
     harness.onStateChange = undefined;
     // A graceful stop is not the turn's fault: only crashes (OOM, kill) count towards giving up.
@@ -420,8 +422,7 @@ async function main(argv: string[]): Promise<void> {
   process.on("SIGTERM", () => void shutdown(0));
   try {
     await harness.start();
-    improvementTimer = setInterval(() => { void improvement!.tick().catch(() => log("[improvement] check failed; inspect configuration/state")); }, config.loop.tickMs);
-    improvementTimer.unref();
+    await improvement!.start();
   }
   catch (err) {
     await harness.stop(0).catch(() => {});

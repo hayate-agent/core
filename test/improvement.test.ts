@@ -30,7 +30,12 @@ test("persistent improvement budget, early completion and unsolicited morning re
   const opts = (harness as any).opts;
   opts.beforeTurn = (input: any) => controller.before(input);
   opts.afterTurn = async (input: any, reply: string) => { await controller.completed(input, reply); return reply; };
-  await controller.tick(); await harness.drained();
+  harness.state("mem:interactive").running = true;
+  await controller.tick(true);
+  assert.equal(harness.sessions.has("improvement:nightly"), false);
+  harness.state("mem:interactive").running = false;
+  controller = new ImprovementController(home, harness, "UTC", () => now);
+  await controller.tick(false); await harness.drained();
   assert.equal(harness.sessions.get("improvement:nightly")?.session?.status().messages, 2);
   controller = new ImprovementController(home, harness, "UTC", () => now);
   await controller.tick(); await harness.drained();

@@ -91,6 +91,8 @@ export interface HarnessOptions {
     boundary(key: string, session: RuntimeSession, rotate: (handover: import("./context-maintenance.js").ContextRecord["handover"]) => Promise<RuntimeSession>, target?: Address): Promise<string | undefined>;
     flushNotices?(deliver: (notice: { id: string; sessionKey: string; to: Address; text: string }) => Promise<void>): Promise<void>;
   };
+  /** Invoked after the completion snapshot is durable; must not recursively prompt. */
+  turnCommitted?: (input: Inbound) => Promise<void>;
   /** May feed review findings back into the same serialized working turn. */
   afterTurn?: (input: Inbound, reply: string, session: RuntimeSession, promptOptions: PromptOptions, signal: AbortSignal) => Promise<string>;
   now?: () => number;
@@ -292,6 +294,15 @@ export class Harness {
       this.sessions.set(key, s);
     }
     return s;
+  }
+
+  private resetContinuation(input: Inbound): void { input.continuation = undefined; }
+
+  planContinuation(key: string, plan: NonNullable<Inbound["continuation"]>): void {
+    const input = this.sessions.get(key)?.current;
+    if (!input || !this.sessions.get(key)?.prompting) throw Error("Continuation requires an active working turn");
+    if (!["continue", "waiting", "blocked", "completed"].includes(plan.state) || (plan.state === "continue" && (!plan.next?.trim() || plan.next.length > 4000))) throw Error("Invalid continuation plan");
+    input.continuation = { state: plan.state, ...(plan.state === "continue" ? { next: plan.next } : {}) };
   }
 
   async resumeSession(key: string, id: string): Promise<void> {
@@ -641,6 +652,7 @@ export class Harness {
         s.queue.shift();
         if (input.source === "channel" || input.source === "api") s.lastInput = input;
         s.current = input;
+        this.resetContinuation(input);
         if (replayable(input)) {
           // Durable before the turn runs, so a crash during it is charged to this input.
           input.started = true;
@@ -677,6 +689,18 @@ export class Harness {
         s.current = undefined;
         s.steered = undefined;
         s.unsaved = true;
+        // Follow-up is part of the same inbox→outbox checkpoint, never a recursive
+        // model call. A failed save holds both reply and continuation.
+        if (input.continuation?.state === "continue" && input.continuation.next && (input.continuationDepth ?? 0) < 20 && input.source !== "api" && s.key !== "improvement:nightly" && !s.queue.length && !this.stopping) {
+          s.queue.push({ id: randomUUID(), sessionKey: s.key, source: "cron", replyTo: input.replyTo ?? s.replyTo,
+            text: `Continue the explicitly authorized task with this recorded next step. Recheck blockers and authorization; do not repeat completed side effects.\n${input.continuation.next}`,
+            continuationDepth: (input.continuationDepth ?? 0) + 1 });
+        }
+        try {
+          await this.onStateChange?.();
+          s.unsaved = false;
+          await this.opts.turnCommitted?.(input);
+        } catch (err) { this.log(`completion hook/save deferred: ${err instanceof Error ? err.message : err}`); }
       }
     } finally {
       s.running = false;
@@ -784,6 +808,7 @@ export class Harness {
     }
     if (this.frozen) throw new Error("shut down after inbox snapshot; input will replay");
     const finalStatus = outcome ?? "completed";
+    if (finalStatus !== "completed") input.continuation = undefined;
     if (!this.frozen) {
       try { await this.opts.memory?.capture({ id: input.id, sessionKey: s.key, text: input.text, reply, outcome: finalStatus, tools: memoryTools, recordedAt: input.memoryRecordedAt }); }
       catch { this.log("memory capture failed; turn completion continues"); }
@@ -902,12 +927,6 @@ export class Harness {
     if (this.paused) return;
     for (const s of this.sessions.values()) {
       if (s.running || s.queue.length || s.outbox.length || s.unsaved) continue;
-      // Only established conversations: never create recurring work for API runs
-      // or destinationless internal sessions. Existing sessions migrate lazily.
-      if (!s.heartbeat && !s.heartbeatDisabled && s.replyTo && s.replyTo.channel !== "api") {
-        s.heartbeat = { everyMs: 300_000, nextAt: at + 300_000, paused: false, prompt: DEFAULT_WORK_HEARTBEAT };
-        await this.onStateChange?.();
-      }
       if (s.loop && !s.loop.paused && at >= s.loop.nextAt) {
         s.loop.nextAt = at + s.loop.everyMs;
         if (s.loop.remaining !== undefined && --s.loop.remaining <= 0) {
