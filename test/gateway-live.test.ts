@@ -39,6 +39,40 @@ test("partial channel overlays preserve baseline privacy and reaction fields", a
   assert.deepEqual(settings.effective().gateways?.overrides?.matrix, { progress: "off", statusReactions: false });
 });
 
+test("successive local gateway overlays preserve channel fields through restart", async (t) => {
+  const home = await mkdtemp(path.join(os.tmpdir(), "gateway-local-overlays-"));
+  t.after(() => rm(home, { recursive: true, force: true }));
+  const file = path.join(home, "settings.yaml");
+  const defaults = { gateways: { progress: "full" as const } };
+  const settings = new SettingsService(file, defaults);
+  await settings.load();
+  await settings.setGateways({ progress: "reduced", overrides: {
+    matrix: { progress: "off", statusReactions: true },
+    other: { progress: "off" },
+  } });
+  await settings.setGateways({ overrides: { matrix: { statusReactions: false } } });
+  assert.equal(settings.effective().gateways?.overrides?.matrix.progress, "off");
+  await Promise.all([
+    settings.setGateways({ overrides: { matrix: { statusReactions: false } } }),
+    settings.setGateways({ overrides: { other: { statusReactions: true } } }),
+  ]);
+  const expected = { progress: "reduced", overrides: {
+    matrix: { progress: "off", statusReactions: false },
+    other: { progress: "off", statusReactions: true },
+  } };
+  assert.deepEqual(settings.snapshot().gateways, expected);
+  await settings.setGateways({ progress: "reduced" });
+  await settings.setGateways({ overrides: {} });
+  await settings.setGateways({ overrides: { matrix: {} } });
+  assert.deepEqual(settings.snapshot().gateways, expected);
+  await assert.rejects(settings.setGateways({ overrides: { matrix: { progress: "invalid" } } } as any));
+  assert.deepEqual(settings.snapshot().gateways, expected);
+  const restored = new SettingsService(file, defaults);
+  await restored.load();
+  assert.deepEqual(restored.snapshot().gateways, expected);
+  assert.deepEqual(restored.effective().gateways, expected);
+});
+
 test("memory embedding settings persist without secret values and reject invalid overlays", async (t) => {
   const home = await mkdtemp(path.join(os.tmpdir(), "memory-settings-"));
   t.after(() => rm(home, { recursive: true, force: true }));

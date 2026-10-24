@@ -109,7 +109,13 @@ export class SettingsService {
     const next = this.writing.catch(() => {}).then(async () => {
       validateGatewayConfig(value);
       const updated = this.snapshot();
-      updated.gateways = { ...updated.gateways, ...value };
+      const overrides = { ...updated.gateways?.overrides };
+      for (const [name, fields] of Object.entries(value.overrides ?? {})) {
+        overrides[name] = { ...overrides[name], ...fields };
+      }
+      updated.gateways = { ...updated.gateways, ...value,
+        ...(updated.gateways?.overrides || value.overrides ? { overrides } : {}),
+      };
       await mkdir(path.dirname(this.file), { recursive: true });
       await writeFileDurable(this.file, stringify(updated));
       this.overlay = updated;

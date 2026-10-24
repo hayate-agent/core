@@ -21,7 +21,9 @@ Runtime changes (admin-only, persisted in `settings.local.yaml`, no restart):
 - `/gateway reactions on` (or `off`)
 - `/gateway status`
 
-Local settings override installation defaults. Existing per-channel and explicit
+Local settings override installation defaults. Partial updates to local gateway
+settings preserve existing overrides for other channels and fields; empty override
+objects do not reset existing values. Existing per-channel and explicit
 Matrix environment overrides retain precedence. Active progress collectors adopt
 changed progress mode on the next turn; reaction settings apply immediately.
 
