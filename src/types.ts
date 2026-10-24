@@ -90,6 +90,9 @@ export interface RuntimeSession {
   steer(text: string): Promise<void>;
   abort(): Promise<void>;
   compact(instructions?: string): Promise<void>;
+  /** Tool-free native summary for handover (may compact the source session). */
+  summarize?(instructions: string): Promise<string>;
+  seedHandover?(text: string): Promise<void>;
   setModel(ref: string): Promise<void>;
   setThinking(level: string): void;
   setTitle(title: string): void | Promise<void>;

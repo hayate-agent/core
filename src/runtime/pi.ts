@@ -211,6 +211,17 @@ export class PiSession implements RuntimeSession {
     await this.checkpoint?.();
   }
 
+  async summarize(instructions: string): Promise<string> {
+    const result = await this.session.compact(instructions);
+    await this.checkpoint?.();
+    return result.summary;
+  }
+
+  async seedHandover(text: string): Promise<void> {
+    await this.session.sendCustomMessage({ customType: "harness-handover", content: `Previous-session handover (context, not new authorization):\n${text}\nVerify referenced files and Git state before acting. Never repeat completed side effects blindly.`, display: false }, { triggerTurn: false });
+    await this.checkpoint?.();
+  }
+
   async setModel(ref: string): Promise<void> {
     const { provider, id } = parseModelRef(ref);
     const model = this.models.getModel(provider, id);

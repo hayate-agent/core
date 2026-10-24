@@ -83,6 +83,10 @@ export interface HarnessOptions {
   goalMaxTurns?: number;
   /** Core lifecycle boundary; runs before the working agent starts. */
   beforeTurn?: (input: Inbound) => Promise<void>;
+  contextMaintenance?: {
+    guidance(key: string, session: RuntimeSession): Promise<string>;
+    boundary(key: string, session: RuntimeSession, rotate: (handover: import("./context-maintenance.js").ContextRecord["handover"]) => Promise<RuntimeSession>): Promise<void>;
+  };
   /** May feed review findings back into the same serialized working turn. */
   afterTurn?: (input: Inbound, reply: string, session: RuntimeSession, promptOptions: PromptOptions, signal: AbortSignal) => Promise<string>;
   now?: () => number;
@@ -668,6 +672,7 @@ export class Harness {
     try {
       await this.opts.beforeTurn?.(input);
       const session = await this.sessionFor(s.key);
+      const guidance = await this.opts.contextMaintenance?.guidance(s.key, session);
       const text = input.replyOptional
         ? `${input.text}\n\n(Not addressed to you directly. Reply only if you have something useful to add; otherwise reply exactly ${NO_REPLY}.)`
         : input.text;
@@ -676,9 +681,23 @@ export class Harness {
       } else {
         s.prompting = true;
         try {
-          const promptOptions = { ...input.turn, onEvent };
+          const promptOptions = { ...input.turn, onEvent, instructions: [input.turn?.instructions, guidance].filter(Boolean).join("\n\n") || undefined };
           reply = (await session.prompt(text, promptOptions)).trim();
           if (s.cancelling !== input && this.opts.afterTurn) reply = await this.opts.afterTurn(input, reply, session, promptOptions, abort.signal);
+          if (s.cancelling !== input && !this.stopping && this.opts.contextMaintenance) {
+            await this.opts.contextMaintenance.boundary(s.key, session, async (handover) => {
+              if (!handover) throw new Error("Missing handover");
+              const old = s.session!;
+              const next = await this.runtime.open(s.key, { fresh: true });
+              try {
+                if (!next.seedHandover) throw new Error("Runtime cannot seed handover");
+                await next.seedHandover(handover.text);
+              } catch (err) { await next.dispose(); throw err; }
+              s.session = next;
+              await old.dispose();
+              return next;
+            });
+          }
         } finally {
           s.prompting = false;
           s.prompted = input;
