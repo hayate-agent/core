@@ -42,7 +42,7 @@ const preserve = "Preserve operator intent and corrections, decisions and reject
 
 /** Called only at Harness turn boundaries. Model tools request work, never compact themselves. */
 export class ContextMaintenance {
-  private queue: Promise<unknown> = Promise.resolve();
+  private readonly queues = new Map<string, Promise<unknown>>();
   readonly archives: SessionArchives;
   constructor(private readonly home: string, private readonly policy: () => ContextPolicy) { this.archives = new SessionArchives(home); }
   private async prepareArchive(key: string, session: RuntimeSession, instructions: string): Promise<{ text: string; archiveId: string }> {
@@ -57,19 +57,24 @@ export class ContextMaintenance {
     return { archiveId: archive.id, text: `${forward}\nSource session: ${archive.sourceSessionId}\nArchive ID: ${archive.id}\nRead plugin_session_history section=summary for the retrospective, then search/read entries only as needed. Do this before continuing work. Original tool side effects must not be replayed blindly.` };
   }
   async flushNotices(deliver: (notice: { id: string; sessionKey: string; to: Address; text: string }) => Promise<void>): Promise<void> {
-    await this.serial(async () => {
+    {
       const dir = path.join(this.home, "context-maintenance");
       const files = await readdir(dir).catch((err) => { if (err.code === "ENOENT") return []; throw err; });
       for (const name of files.filter((name) => /^[a-f0-9]{64}\.json$/.test(name))) {
         const file = path.join(dir, name);
+        // A long model operation in another conversation must not stall notice
+        // adoption (and therefore unrelated working-turn startup).
+        if (this.queues.has(file)) continue;
+        await this.serial(file, async () => {
         const state: ContextRecord = JSON.parse(await readFile(file, "utf8"));
         while (state.notices?.length) {
           await deliver(state.notices[0]); // must durably enqueue before acknowledgement
           state.notices.shift();
           await writeFileDurable(file, `${JSON.stringify(state, null, 2)}\n`);
         }
+        });
       }
-    });
+    }
   }
   private recordNotice(key: string, state: ContextRecord, text: string): void {
     if (state.noticeTarget) (state.notices ??= []).push({ id: randomUUID(), sessionKey: key, to: state.noticeTarget, text });
@@ -89,11 +94,15 @@ export class ContextMaintenance {
     await mkdir(path.dirname(this.file(key)), { recursive: true });
     await writeFileDurable(this.file(key), `${JSON.stringify(state, null, 2)}\n`);
   }
-  private serial<T>(fn: () => Promise<T>): Promise<T> {
-    const next = this.queue.catch(() => {}).then(fn); this.queue = next; return next;
+  private serial<T>(file: string, fn: () => Promise<T>): Promise<T> {
+    const next = (this.queues.get(file) ?? Promise.resolve()).catch(() => {}).then(fn);
+    this.queues.set(file, next);
+    const cleanup = () => { if (this.queues.get(file) === next) this.queues.delete(file); };
+    void next.then(cleanup, cleanup);
+    return next;
   }
   request(key: string, request: Request): Promise<void> {
-    return this.serial(async () => {
+    return this.serial(this.file(key), async () => {
       if (!["compact", "handover"].includes(request.action) || typeof request.preserve !== "string" || typeof request.resume !== "string" || request.preserve.length + request.resume.length > 16000) throw new Error("Invalid context maintenance request");
       const state = await this.load(key);
       state.pending = request;
@@ -102,7 +111,7 @@ export class ContextMaintenance {
   }
   /** A lightweight reminder, not an additional model call. Unknown usage never triggers automatic compaction. */
   async guidance(key: string, session: RuntimeSession): Promise<string> {
-    await this.serial(async () => {
+    await this.serial(this.file(key), async () => {
       const state = await this.load(key);
       const id = session.status().sessionId;
       if (state.handover?.phase === "prepared" && id !== state.handover.from) {
@@ -134,7 +143,7 @@ export class ContextMaintenance {
     return this.boundary(key, session, rotate, target, "before", incomingText);
   }
   async boundary(key: string, session: RuntimeSession, rotate: (handover: ContextRecord["handover"]) => Promise<RuntimeSession>, target?: Address, phase: "before" | "after" = "after", incomingText = ""): Promise<string | undefined> {
-    return this.serial(async () => {
+    return this.serial(this.file(key), async () => {
       const policy = this.policy();
       if (!policy.enabled) return;
       const state = await this.load(key);
