@@ -11,7 +11,7 @@ contextMaintenance:
   compactPercent: 75
   checkEveryTurns: 5
   cooldownTurns: 5
-  autoHandover: false
+  autoHandover: true
 ```
 
 The same partial object may be stored in `settings.local.yaml`. The core command
@@ -19,10 +19,19 @@ The same partial object may be stored in `settings.local.yaml`. The core command
 only). Threshold changes currently use the file and require restart. Unknown context
 usage does not trigger automatic compaction. At assessment threshold the agent gets
 a lightweight instruction on every configured turn interval, not an extra model call.
-Above the compact threshold native compaction runs at the next safe boundary. A
-persisted cooldown avoids loops and survives process restart, including failed attempts.
+Before a queued prompt is passed to the working model, automatic handover runs at
+`compactPercent`, or at `assessPercent` if the incoming prompt's estimated token
+budget would reach `compactPercent`. The byte-based budget is conservative, not a
+semantic classifier for task complexity. The original prompt remains in the durable
+inbox and is passed unchanged to the new, seeded session; it is never executed by
+the summary operation. A low-usage greeting does not cause a session rotation.
+After a completed turn, usage at `compactPercent` triggers native compaction, never
+a handover. PI overflow compaction remains a separate emergency fallback.
+A persisted cooldown avoids automatic loops and survives process restart, including
+failed attempts. Explicit agent checkpoint requests bypass that cooldown.
 
-The bundled `plugin_context_maintenance` tool requests `compact` or `handover` with
+The bundled `plugin_context_maintenance` tool requests `compact` (after the current
+turn) or `handover` (before the next queued turn) with
 `preserve` and `resume` text. Requests are persisted and executed after review and the
 working turn, not from inside the tool call. Finish the current turn at a coherent
 checkpoint. Native summaries retain intent/corrections, decisions, verified results,

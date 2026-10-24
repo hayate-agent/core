@@ -86,6 +86,7 @@ export interface HarnessOptions {
   memory?: { recall(sessionKey: string, text: string): Promise<string>; capture(turn: import("./memory.js").MemoryTurn): Promise<void> };
   contextMaintenance?: {
     guidance(key: string, session: RuntimeSession): Promise<string>;
+    beforeTurn?(key: string, session: RuntimeSession, rotate: (handover: import("./context-maintenance.js").ContextRecord["handover"]) => Promise<RuntimeSession>, target?: Address, incomingText?: string): Promise<string | undefined>;
     boundary(key: string, session: RuntimeSession, rotate: (handover: import("./context-maintenance.js").ContextRecord["handover"]) => Promise<RuntimeSession>, target?: Address): Promise<string | undefined>;
     flushNotices?(deliver: (notice: { id: string; sessionKey: string; to: Address; text: string }) => Promise<void>): Promise<void>;
   };
@@ -716,7 +717,25 @@ export class Harness {
     this.turnAbort.set(s.key, abort);
     try {
       await this.opts.beforeTurn?.(input);
-      const session = await this.sessionFor(s.key);
+      let session = await this.sessionFor(s.key);
+      const rotate = async (handover: import("./context-maintenance.js").ContextRecord["handover"]) => {
+        if (!handover) throw new Error("Missing handover");
+        const old = s.session!;
+        const next = await this.runtime.open(s.key, { fresh: true });
+        try {
+          if (!next.seedHandover) throw new Error("Runtime cannot seed handover");
+          await next.seedHandover(handover.text);
+        } catch (err) { await next.dispose(); throw err; }
+        s.session = next;
+        session = next;
+        await old.dispose();
+        return next;
+      };
+      let preTurnNotice: string | undefined;
+      if (s.cancelling !== input && !this.stopping) {
+        preTurnNotice = await this.opts.contextMaintenance?.beforeTurn?.(s.key, session, rotate, input.replyTo ?? s.replyTo ?? this.home, input.text);
+        await this.flushMaintenanceNotices();
+      }
       const guidance = (await this.opts.contextMaintenance?.guidance(s.key, session) ?? "") + (await this.opts.memory?.recall(s.key, input.text) ?? "");
       const text = input.replyOptional
         ? `${input.text}\n\n(Not addressed to you directly. Reply only if you have something useful to add; otherwise reply exactly ${NO_REPLY}.)`
@@ -730,20 +749,9 @@ export class Harness {
           reply = (await session.prompt(text, promptOptions)).trim();
           if (s.cancelling !== input && this.opts.afterTurn) reply = await this.opts.afterTurn(input, reply, session, promptOptions, abort.signal);
           if (s.cancelling !== input && !this.stopping && this.opts.contextMaintenance) {
-            let maintenanceNotice: string | undefined;
+            let maintenanceNotice: string | undefined = preTurnNotice;
             try {
-              maintenanceNotice = await this.opts.contextMaintenance.boundary(s.key, session, async (handover) => {
-              if (!handover) throw new Error("Missing handover");
-              const old = s.session!;
-              const next = await this.runtime.open(s.key, { fresh: true });
-              try {
-                if (!next.seedHandover) throw new Error("Runtime cannot seed handover");
-                await next.seedHandover(handover.text);
-              } catch (err) { await next.dispose(); throw err; }
-              s.session = next;
-              await old.dispose();
-              return next;
-              }, input.replyTo ?? s.replyTo ?? this.home);
+              maintenanceNotice = (await this.opts.contextMaintenance.boundary(s.key, session, rotate, input.replyTo ?? s.replyTo ?? this.home)) ?? preTurnNotice;
             } catch {
               maintenanceNotice = "⚠️ Kontextwartung nicht vollständig abgeschlossen; kein bestätigter Abschluss. Wiederherstellungsstand prüfen.";
             }
