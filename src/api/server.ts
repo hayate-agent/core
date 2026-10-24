@@ -365,7 +365,13 @@ export class ApiChannel implements Channel {
     if (s.closed) pending.push(null);
     pump();
     if (s.closed) return;
-    keepalive = setInterval(() => !res.writableEnded && res.write(": keepalive\n\n"), this.opts.keepaliveMs ?? 15_000);
+    keepalive = setInterval(() => {
+      if (res.writableEnded || waiting || pending.length) return;
+      if (!res.write(": keepalive\n\n")) {
+        waiting = true;
+        res.once("drain", () => { waiting = false; pump(); });
+      }
+    }, this.opts.keepaliveMs ?? 15_000);
     keepalive.unref?.();
   }
 
