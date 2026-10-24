@@ -90,6 +90,10 @@ export function defaultConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
   }
   if (overrides.sessions !== undefined && (!overrides.sessions || typeof overrides.sessions.provider !== "string" || !/^[a-z][a-z0-9_-]*$/.test(overrides.sessions.provider))) throw new Error("Invalid sessions.provider");
   if (overrides.compaction !== undefined && (!overrides.compaction || typeof overrides.compaction.strategy !== "string" || !/^[a-z][a-z0-9_-]*$/.test(overrides.compaction.strategy))) throw new Error("Invalid compaction.strategy");
+  const loop = { tickMs: 15_000, busyMode: "queue" as const, drainSeconds: 60, ...overrides.loop };
+  if (!Number.isInteger(loop.tickMs) || loop.tickMs < 1 || loop.tickMs > 2_147_483_647) {
+    throw new Error("loop.tickMs must be an integer between 1 and 2147483647 milliseconds");
+  }
   reviewConfig(overrides.review); // validate before startup
   contextPolicy(overrides.contextMaintenance);
   pruningPolicy(overrides.toolResultPruning);
@@ -120,7 +124,7 @@ export function defaultConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
     },
     skills: { paths: [path.join(home, "skills")], ...overrides.skills },
     cron: { jobsFile: path.join(home, "cron", "jobs.yaml"), ...overrides.cron },
-    loop: { tickMs: 15_000, busyMode: "queue", drainSeconds: 60, ...overrides.loop },
+    loop,
     memoryGuard: { percent: 90, ...overrides.memoryGuard },
     memory: memoryConfig(overrides.memory),
     admins: overrides.admins ?? [],
