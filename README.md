@@ -122,8 +122,9 @@ image digests and expect private configuration and secrets to be supplied separa
   supports additional transports, but does not implement them automatically.
 - A Web UI and automatic activation/rollback of agent-built runtime versions are
   not shipped features.
-- Progress verbosity, status acknowledgements and a generic secret-manager context
-  are under development, not features available on `main` yet.
+- Matrix supports optional [gateway progress and status reactions](docs/gateway-progress.md),
+  with global defaults and per-gateway overrides. A generic secret-manager context
+  is still under development.
 - Durable queues reduce lost work, but crash recovery is **at least once**, not
   exactly once. External tool effects may be repeated after a crash.
 

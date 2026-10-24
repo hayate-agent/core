@@ -106,6 +106,7 @@ async function main(argv: string[]): Promise<void> {
     runtime,
     tickMs: config.loop.tickMs,
     busyMode: config.loop.busyMode,
+    gateways: config.gateways,
     log,
     // Permanently rejected replies (e.g. no permission in the room) are parked for manual follow-up.
     parkUndeliverable: (entry, error) =>

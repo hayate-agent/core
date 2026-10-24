@@ -42,6 +42,40 @@ test("stuck asynchronous session cleanup cannot block channel shutdown", async (
   assert.equal(stopped, true);
 });
 
+test("async gateway initialization orders telemetry without blocking durable replies", async () => {
+  const {harness,ch,runtime} = setup();
+  const open = runtime.open.bind(runtime);
+  runtime.open = async (key,options) => {
+    const session = await open(key,options);
+    const prompt = session.prompt.bind(session);
+    session.prompt = async (text, opts) => {
+      for (let i=0;i<60;i++) opts?.onEvent?.({type:"text",delta:"x"});
+      opts?.onEvent?.({type:"tool",phase:"start",name:"bash"});
+      opts?.onEvent?.({type:"tool",phase:"end",name:"bash"});
+      opts?.onEvent?.({type:"usage",input:1,output:1,cacheRead:0,cacheWrite:0,costUsd:0});
+      return prompt(text,opts);
+    };
+    return session;
+  };
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => {release=resolve;});
+  const order: string[] = [];
+  const channel = ch as import("../src/types.js").Channel;
+  channel.turnStatus = async (_to,_input,status) => {
+    if (status === "started") {await gate; order.push("started");}
+    else order.push(status);
+  };
+  channel.turnEvent = (_to,event) => {order.push(event.type);};
+  await harness.submit(msg("hello"));
+  await harness.drained();
+  assert.deepEqual(ch.texts(),["echo: hello"]);
+  assert.deepEqual(order,[]);
+  release();
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.deepEqual(order,["started",...Array(60).fill("text"),"tool","tool","usage","text","completed"]);
+  await harness.stop(1000);
+});
+
 test("messages are processed in order and replies delivered", async () => {
   const { harness, ch } = setup();
   await harness.submit(msg("one"));

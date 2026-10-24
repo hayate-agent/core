@@ -75,6 +75,82 @@ async function setup(over: Partial<MatrixOptions> = {}, firstSync?: any) {
   return { ch, server, got };
 }
 
+test("matrix progress and status reactions are optional and target original batch events", async () => {
+  const { ch, server } = await setup({ progress: "full", statusReactions: true });
+  const to = { channel: "matrix", target: DM };
+  const input: Inbound = { id: "$one", parts: [{ id: "$one", text: "a" }, { id: "$two", text: "b" }], text: "a b", sessionKey: "matrix:test", source: "channel", replyTo: to };
+  await ch.turnStatus(to, input, "started");
+  ch.turnEvent(to, { type: "tool", phase: "start", name: "bash", detail: "echo hello" }, input);
+  await ch.turnStatus(to, input, "completed");
+  await (ch as any).telemetry;
+  const reactions = server.calls.filter((call) => call.path.includes("/send/m.reaction/"));
+  assert.equal(reactions.length, 4);
+  assert.deepEqual(reactions.map((call) => call.body["m.relates_to"].key), ["👀", "👀", "✅", "✅"]);
+  assert.deepEqual(reactions.slice(0, 2).map((call) => call.body["m.relates_to"].event_id), ["$one", "$two"]);
+  assert.ok(server.calls.some((call) => call.path.includes("/send/m.room.message/") && call.body.body.includes("echo hello")));
+  await ch.turnStatus(to, input, "completed");
+  await (ch as any).telemetry;
+  assert.equal(server.calls.filter((call) => call.path.includes("/send/m.reaction/")).at(-1)!.path, reactions.at(-1)!.path);
+  const off = await setup();
+  await off.ch.turnStatus(to, input, "started");
+  off.ch.turnEvent(to, { type: "tool", phase: "start", name: "bash" }, input);
+  await off.ch.turnStatus(to, input, "failed");
+  assert.ok(!off.server.calls.some((call) => call.path.includes("/send/")));
+});
+
+test("Matrix inherits gateway policy unless an explicit Matrix override is present", async () => {
+  for (const explicit of [false, true]) {
+    const { ch, server } = await setup(explicit ? {progress:"off",statusReactions:false} : {});
+    ch.configureGateway({progress:"reduced",statusReactions:true});
+    const to = {channel:"matrix",target:DM};
+    const input: Inbound = {id:"$policy",sessionKey:"policy",text:"hello",source:"channel"};
+    await ch.turnStatus(to,input,"started");
+    ch.turnEvent(to,{type:"tool",phase:"start",name:"bash"},input);
+    await ch.turnStatus(to,input,"completed");
+    await (ch as any).telemetry;
+    assert.equal(server.calls.some(c=>c.path.includes("/send/m.reaction/")),!explicit);
+    assert.equal(server.calls.some(c=>c.path.includes("/send/m.room.message/")),!explicit);
+  }
+  const inherited = matrixOptionsFromEnv({MATRIX_HOMESERVER:"https://example.org",MATRIX_ACCESS_TOKEN:"test"},"/tmp")!;
+  assert.equal(inherited.progress,undefined);
+  assert.equal(inherited.statusReactions,undefined);
+  const overridden = matrixOptionsFromEnv({MATRIX_HOMESERVER:"https://example.org",MATRIX_ACCESS_TOKEN:"test",MATRIX_PROGRESS:"off",MATRIX_STATUS_REACTIONS:"false"},"/tmp")!;
+  assert.equal(overridden.progress,"off");
+  assert.equal(overridden.statusReactions,false);
+});
+
+test("overlapping sessions retain separate progress in one room", async () => {
+  const { ch, server } = await setup({ progress: "full" });
+  const to = {channel:"matrix",target:DM};
+  const a: Inbound = {id:"$a",sessionKey:"a",text:"a",source:"channel"};
+  const b: Inbound = {id:"$b",sessionKey:"b",text:"b",source:"channel"};
+  await ch.turnStatus(to,a,"started");
+  await ch.turnStatus(to,b,"started");
+  ch.turnEvent(to,{type:"tool",phase:"start",name:"toolA"},a);
+  await ch.turnStatus(to,a,"completed");
+  ch.turnEvent(to,{type:"tool",phase:"start",name:"toolB"},b);
+  await ch.turnStatus(to,b,"completed");
+  await (ch as any).telemetry;
+  const bodies = server.calls.filter(c=>c.path.includes("/send/m.room.message/")).map(c=>c.body.body);
+  assert.equal(bodies.length,2);
+  assert.ok(bodies[0].includes("toolA"));
+  assert.ok(bodies[1].includes("toolB"));
+});
+
+test("stalled status transmission does not block lifecycle and queue stays bounded", async () => {
+  const { ch } = await setup({ statusReactions: true });
+  let release!: () => void;
+  const stalled = new Promise<void>((resolve) => { release = resolve; });
+  (ch as any).api = () => stalled;
+  const to = { channel: "matrix", target: DM };
+  const input: Inbound = { id: "$slow", text: "hello", sessionKey: "matrix:slow", source: "channel" };
+  await ch.turnStatus(to, input, "started");
+  for (let n=0;n<100;n++) await ch.turnStatus(to, input, "completed");
+  assert.ok((ch as any).telemetryPending <= 50);
+  release();
+  await (ch as any).telemetry;
+});
+
 test("env mapping follows Hermes names and defaults", () => {
   const o = matrixOptionsFromEnv(
     {
