@@ -45,6 +45,16 @@ function make() {
   return { agent, session };
 }
 
+test("PiSession: refreshes context before every prompt without replacing the session", async () => {
+  const agent = fakeAgentSession();
+  let refreshes = 0;
+  const session = new PiSession(agent as never, models as never, {}, undefined, undefined, undefined, async () => { refreshes++; });
+  await session.prompt("first");
+  await session.prompt("second");
+  assert.equal(refreshes, 2);
+  assert.deepEqual(agent.prompts, ["first", "second"]);
+});
+
 test("PiSession: abort during override setup prevents the prompt from starting", async () => {
   const { agent, session } = make();
   let release!: () => void;

@@ -47,10 +47,18 @@ names produce diagnostics in the Harness log. Skill scripts are never executed b
 indexing. The index is replaced atomically and refreshes within the process serialize.
 Do not edit the index manually or share one writable home between Harness processes.
 
-This first implementation reconciles on startup and `/reload-skills`. It does **not**
-yet watch for changes or update the resources of existing PI sessions automatically.
-The index supplies Harness command discovery; PI still loads its own resources when
-a session opens. A new session is needed for changed runtime skill context.
+The catalog reconciles on startup, before slash-command discovery and before each
+working model prompt. Existing PI sessions receive current validated skill metadata
+through the per-turn system context without reloading extensions or resetting their
+conversation. A skill created during a running prompt becomes discoverable on the
+next prompt; it can also be read directly immediately. No filesystem watcher is
+required. `/reload-skills` remains a manual fallback.
+
+## Built-in review
+
+Changeset review ships enabled by default, with a three-round persistent budget and
+configurable reviewer model/reasoning. See [review.md](review.md) for configuration,
+False-Positive assessment, operator escalation and publication enforcement limits.
 
 ## Available tools
 

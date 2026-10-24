@@ -98,6 +98,8 @@ export interface RuntimeSession {
 }
 
 export interface OpenSessionOptions {
+  /** Ephemeral reviewer session: no persisted transcript or third-party resources. */
+  ephemeral?: boolean;
   /** Start a fresh conversation instead of resuming the stored one. */
   fresh?: boolean;
   sessionId?: string;

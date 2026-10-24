@@ -118,14 +118,14 @@ export class PluginHost {
   private cleanups: Array<() => Promise<void> | void> = [];
   private closed = false;
 
-  async load(files: string[], context: Pick<PluginAPI, "agent" | "home" | "cwd">, reserved: Iterable<string>, reservedChannels: Iterable<string> = ["console", "api", "matrix"]): Promise<void> {
+  async load(files: string[], context: Pick<PluginAPI, "agent" | "home" | "cwd">, reserved: Iterable<string>, reservedChannels: Iterable<string> = ["console", "api", "matrix"], bundled: PluginModule[] = []): Promise<void> {
     if (this.closed) throw new Error("Plugin host is closed");
     const names = new Set([...reserved, ...this.commands.keys()]);
     const channelNames = new Set([...reservedChannels, ...this.channels.keys()]);
     try {
-      for (const file of files) {
-        const location = path.resolve(context.home, file);
-        const module = (await import(pathToFileURL(location).href)).default as PluginModule;
+      for (const source of [...bundled, ...files]) {
+        const location = typeof source === "string" ? path.resolve(context.home, source) : "bundled core plugin";
+        const module = typeof source === "string" ? (await import(pathToFileURL(location).href)).default as PluginModule : source;
         if (!module || module.apiVersion !== 1 || typeof module.activate !== "function") throw new Error(`Invalid plugin API: ${location}`);
         let registering = true;
         try {

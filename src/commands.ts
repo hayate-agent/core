@@ -502,6 +502,7 @@ export function installCommands(ctx: CommandContext): void {
   ctx.harness.commandHandler = async (input) => {
     const parsed = parseCommand(input.text);
     if (!parsed) return false;
+    if (parsed.name !== "reload-skills" && parsed.name !== "reload_skills" && parsed.name !== "reload-mcp" && parsed.name !== "reload_mcp") await ctx.reloadSkills();
     const cmd = BY_NAME.get(parsed.name);
     if (!cmd) {
       const plugin = ctx.pluginCommands?.get(parsed.name);
