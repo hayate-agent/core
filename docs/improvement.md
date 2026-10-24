@@ -32,14 +32,38 @@ foreign project reassignment or secret copying is permitted. Global pause is
 respected. No extra experiment starts at the morning boundary; an active turn is
 not forcibly aborted. Reports must not contain credentials or sensitive history.
 
+## Independent experiment measurement
+
+An optional infrastructure-owned evaluator is configured as:
+
+```yaml
+evaluator:
+  runner: /read-only-policy/evaluator.mjs
+  sha256: <64 lowercase hex characters>
+```
+
+`plugin_improvement_evaluate` is available only to the nightly conversation during
+its enabled window. It accepts full baseline/candidate commit IDs, a hypothesis,
+metric, direction and minimum improvement. The pinned evaluator's captured source
+runs unchanged against two temporary detached worktrees. It receives the worktree
+path and metric as arguments and emits JSON `{ "score": 10, "checksPassed": true }`.
+Regression failures reject a candidate; invalid baseline, invalid output or timeout
+are inconclusive; ties are rejected. Evidence is written under
+`improvement/experiments/`. Only one comparison runs at a time. No merge is performed
+by this tool. Worktrees are not an OS sandbox: an evaluator executing candidate
+code must arrange external isolation and credential removal itself. The runner
+must be self-contained; pinning one source file does not pin imported dependencies.
+A metric must be chosen and governed independently to avoid benchmark gaming.
+
 ## Scope and limits
 
 This is a **scheduling and budget foundation**, not a completed autonomous research
 system. The controller counts working Harness turns, not individual model calls,
 review feedback calls or tokens. Interactive work can arrive after a night turn
 started; it is not preempted or filesystem-isolated by the controller. Baseline
-selection, worktrees, experiment evaluation and PR/merge operations are currently
-agent instructions, not independently enforced structured evaluator gates. A
+selection and PR/merge operations remain agent instructions. Independent measurement
+and detached worktrees are available via the optional evaluator, but its verdict is
+not yet wired into an enforced adoption/merge gate. A
 reported improvement is not verified scientific evidence. Do not use this as a
 security boundary or unattended release authority until those gates are implemented.
 `pullRequest`/`merge` express permitted workflow, not a capability sandbox. The
