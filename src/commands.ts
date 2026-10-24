@@ -11,7 +11,8 @@ import type { Scheduler } from "./scheduler.js";
 import { type SkillInfo, skillInvocationPrompt } from "./skills.js";
 import type { BusyMode, Inbound } from "./types.js";
 
-export const VERSION = "0.1.0";
+import { BUILD_INFO } from "./build-info.js";
+export const VERSION = BUILD_INFO.version;
 
 export interface CommandContext {
   harness: Harness;
