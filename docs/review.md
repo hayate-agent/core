@@ -10,6 +10,11 @@ access. With an explicit nonempty `tools` list the Harness includes `plugin_revi
 ```yaml
 review:
   enabled: true
+  shellGuard: false # opt-in defense in depth for common publish/merge commands
+  scope:
+    mode: risk # all = review every nonempty changeset
+    nonBlockingPaths: ['docs/**', '**/*.md', '**/*.txt']
+    requiredPaths: ['.github/**', '.gitlab-ci.yml', 'deploy/**', '**/SKILL.md', '**/AGENTS.md', '**/SOUL.md']
   model: your-provider/your-review-model # omitted: configured runtime model
   thinking: medium
   maxTurns: 3
@@ -25,6 +30,18 @@ hardcoded claim that a particular model exists. An unavailable model, failed cal
 or invalid response grants no approval and consumes one reserved review round.
 Disabling `review.enabled` disables the plugin and gates. Configuration changes
 require restart. `maxTurns` accepts integers from 1 to 20.
+
+## Risk-based obligation
+
+Review availability and review obligation are separate. Default scope mode `risk`
+skips automatic review for documentation/text-only changes. Required path patterns
+win over nonblocking patterns; all unknown paths (including application code,
+dependencies and ordinary configuration) require review. Agent instruction files
+such as SKILL.md remain required even though they are Markdown. Customize both
+pattern lists or use `mode: all`. Classification uses Git paths, not model claims.
+An explicit `/review run` still reviews documentation if requested. `mandatory`
+selects which lifecycle gates apply; `shellGuard` independently opts into shell
+interception and defaults to false. No remote branch protection is installed.
 
 ## Changeset and scope
 
@@ -67,8 +84,10 @@ or operator override command in this first version. An operator must inspect and
 archive/reset the state file while the Harness is stopped to authorize a new attempt.
 
 Exhaustion marks the state escalated and posts a durable operator notice to the
-configured Harness home address (falling back to the session's reply address), also
-logging locally. Configure `/sethome` or `home_address` for reliable operator routing.
+original request's channel and thread. This address and originating session key are
+stored with the review and survive restarts/background continuation. Later sessions
+do not replace an unresolved task's origin. If no origin exists, the configured
+Harness home address is used, then the session reply address; notices also log locally.
 An escalation is not approval and does not authorize a merge or rollout.
 
 ## Enforcement and limits
@@ -78,7 +97,7 @@ returning findings to the same working session for assessment/fixes. Reviewer
 cancellation is connected to turn cancellation and shutdown. The bundled plugin can
 also be invoked explicitly when automatic local review is disabled.
 
-The PI tool-call hook checks standard `git push`, `git merge`/`rebase`, `gh pr
+When `review.shellGuard: true`, the PI tool-call hook checks standard `git push`, `git merge`/`rebase`, `gh pr
 create`/`merge` and `glab mr create`/`merge` shell invocations against the current
 approval. **This is defense in depth, not a general shell security boundary.**
 Arbitrary scripts, aliases, custom tools, different working directories and compound
@@ -87,8 +106,13 @@ policy with branch protection and CI; this release does not claim to intercept a
 possible publication paths or install a required remote CI check automatically.
 Successful review never replaces tests, human approval, authorization or GitOps.
 
+Repositories without an initial commit currently cannot establish a review base;
+with default-enabled review this blocks working turns there. This is a known P2
+limitation, not a successful review of initial-repository support.
+
 The lifecycle gate is workspace-wide. Other dirty work in the same repository is
 included; use isolated worktrees for independent concurrent tasks. Cross-process
 review ownership is not implemented beyond the Harness's existing home lock.
-Tests use deterministic reviewer doubles; they do not prove model quality or an
-authenticated production reviewer integration.
+Unit tests use deterministic reviewer doubles; they do not prove model quality.
+The same `runtimeReviewer` backend used in production can also be exercised against
+a configured live provider in an isolated Harness home.

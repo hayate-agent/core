@@ -135,6 +135,7 @@ test("bundled plugin registers by default without a local module", async (t) => 
 
 test("shell guard blocks common publish/merge commands until review passed", async (t) => {
   const { cwd, service } = await setup(t);
+  service.config.shellGuard = true;
   for (const command of ["git push origin HEAD", "git merge main", "gh pr create", "glab mr merge"]) {
     await assert.rejects(guardReviewTool(service, cwd, "bash", { command }));
   }
@@ -167,6 +168,35 @@ test("a pre-aborted review does not consume a round", async (t) => {
   await assert.rejects(service.run(cwd, "work", controller.signal), /cancelled/);
   assert.equal((await service.status(cwd)).rounds.length, 0);
   assert.equal(prompts.length, 0);
+});
+
+test("shell guard is opt-in", async (t) => {
+  const { cwd, service } = await setup(t);
+  assert.equal(service.config.shellGuard, false);
+  await guardReviewTool(service, cwd, "bash", { command: "git push" });
+});
+
+test("documentation-only edits skip automatic review, risky configuration does not", async (t) => {
+  const { cwd, service, prompts } = await setup(t);
+  await git(cwd, ["checkout", "--", "a.ts"]);
+  await writeFile(path.join(cwd, "README.md"), "A spelling fix");
+  assert.equal(await finishWithReview(service, cwd, { sessionKey: "work", source: "channel", text: "docs" }, "done", {} as never, {}), "done");
+  assert.equal(prompts.length, 0);
+  await service.assertAllowed(cwd, "merge");
+  await writeFile(path.join(cwd, "package.json"), "{}");
+  await assert.rejects(service.assertAllowed(cwd, "merge"));
+});
+
+test("escalation retains original channel and thread across restart", async (t) => {
+  const { cwd, home, config, backend, replies } = await setup(t, 1);
+  const origin = { channel: "matrix", target: "original-room", thread: "original-thread" };
+  await new ReviewService(home, config, backend, async () => {}).prepare(cwd, origin, "original-session");
+  let actual: unknown;
+  const restarted = new ReviewService(home, config, backend, async (session, message, address) => { actual = { session, address }; });
+  await restarted.prepare(cwd, { channel: "matrix", target: "other-room" }, "other-session");
+  replies.push(JSON.stringify({ findings: [finding] }));
+  await restarted.run(cwd, "other-session");
+  assert.deepEqual(actual, { session: "original-session", address: origin });
 });
 
 test("disabled gate does not block", async (t) => {

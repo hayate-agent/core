@@ -1,4 +1,5 @@
 import type { Inbound, PromptOptions, RuntimeSession } from "./types.js";
+import { requiresReview } from "./review-scope.js";
 import type { ReviewService } from "./review.js";
 
 /** Shares the working session; reviewer calls are isolated by the backend. */
@@ -12,7 +13,7 @@ export async function finishWithReview(service: ReviewService, cwd: string, inpu
     try { await git(cwd, ["rev-parse", "--show-toplevel"]); } catch { return reply; }
     throw new Error("Cannot establish review changeset; completion blocked");
   }
-  if (!change.diff) return reply;
+  if (!requiresReview(change, service.config)) return reply;
   for (let n = 0; n <= service.config.maxTurns; n++) {
     if (signal?.aborted) throw new Error("Review cancelled");
     let state = await service.status(cwd);

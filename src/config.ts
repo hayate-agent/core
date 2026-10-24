@@ -6,6 +6,8 @@ import { reviewConfig } from "./review-config.js";
 
 export interface ReviewConfig {
   enabled: boolean;
+  shellGuard: boolean;
+  scope: { mode: "risk" | "all"; nonBlockingPaths: string[]; requiredPaths: string[] };
   model?: string;
   thinking: string;
   maxTurns: number;
@@ -24,7 +26,7 @@ export interface HarnessConfig {
   timezone: string;
   model?: string;
   thinking?: string;
-  review?: Partial<Omit<ReviewConfig, "mandatory">> & { mandatory?: Partial<ReviewConfig["mandatory"]> };
+  review?: Partial<Omit<ReviewConfig, "mandatory" | "scope">> & { mandatory?: Partial<ReviewConfig["mandatory"]>; scope?: Partial<ReviewConfig["scope"]> };
   /** Literal tool names exposed to the model; omitted = runtime defaults, [] = no tools. */
   tools?: string[];
   /** Trusted local ESM plugin paths, relative to Harness home or absolute. */

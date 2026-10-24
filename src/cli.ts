@@ -25,6 +25,7 @@ import type { Inbound } from "./types.js";
 import { type SkillInfo } from "./skills.js";
 import { SkillCatalog } from "./skill-catalog.js";
 import { ReviewService } from "./review.js";
+import { runtimeReviewer } from "./runtime/reviewer.js";
 import { reviewConfig } from "./review-config.js";
 import { reviewPlugin } from "./review-plugin.js";
 import { finishWithReview } from "./review-lifecycle.js";
@@ -118,26 +119,13 @@ async function main(argv: string[]): Promise<void> {
     approvals,
     requestApproval: (key, tool, input) => harness.requestApproval(key, tool, input),
   });
-  review = new ReviewService(config.home, reviewSettings, {
-    review: async (prompt, model, thinking, signal) => {
-      const reviewer = await runtime.open(`review:${Date.now()}`, { ephemeral: true });
-      const abort = () => { void reviewer.abort(); };
-      signal?.addEventListener("abort", abort, { once: true });
-      try {
-        if (signal?.aborted) throw new Error("Review cancelled");
-        return await reviewer.prompt(prompt, { model, thinking });
-      } finally {
-        signal?.removeEventListener("abort", abort);
-        await reviewer.dispose();
-      }
-    },
-  }, async (sessionKey, message) => {
+  review = new ReviewService(config.home, reviewSettings, runtimeReviewer(runtime), async (sessionKey, message, origin) => {
     log(`[review] ${message}`);
-    harness.post({ sessionKey, text: "", source: "channel", replyTo: harness.home }, `⚠️ Operator escalation: ${message}`);
+    harness.post({ sessionKey, text: "", source: "channel", replyTo: origin ?? harness.home }, `⚠️ Operator escalation: ${message}`);
   });
   harness = new Harness({
     runtime,
-    beforeTurn: () => review.prepare(config.cwd),
+    beforeTurn: (input) => review.prepare(config.cwd, input.replyTo, input.sessionKey),
     afterTurn: (input, reply, session, options, signal) => finishWithReview(review, config.cwd, input, reply, session, options, signal),
     tickMs: config.loop.tickMs,
     busyMode: config.loop.busyMode,

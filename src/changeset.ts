@@ -16,11 +16,12 @@ export async function git(cwd: string, args: string[]): Promise<string> {
     cwd, maxBuffer: LIMIT, env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_PAGER: "cat" },
   })).stdout;
 }
-export interface Changeset { root: string; base: string; fingerprint: string; diff: string }
+export interface Changeset { root: string; base: string; fingerprint: string; diff: string; files: string[] }
 export async function captureChangeset(cwd: string, baseRef: string): Promise<Changeset> {
   const root = (await git(cwd, ["rev-parse", "--show-toplevel"])).trim();
   const base = (await git(root, ["rev-parse", "--verify", `${baseRef}^{commit}`])).trim();
   let diff = await git(root, ["diff", "--no-ext-diff", "--no-textconv", "--binary", base, "--"]);
+  const tracked = (await git(root, ["diff", "--no-renames", "--name-only", "-z", base, "--"])).split("\0").filter(Boolean);
   const untracked = (await git(root, ["ls-files", "--others", "--exclude-standard", "-z"])).split("\0").filter(Boolean).sort();
   for (const file of untracked) {
     const absolute = path.resolve(root, file);
@@ -34,5 +35,5 @@ export async function captureChangeset(cwd: string, baseRef: string): Promise<Ch
     if (Buffer.byteLength(diff) > LIMIT) throw new Error("Changeset exceeds review size limit");
   }
   if (Buffer.byteLength(diff) > LIMIT) throw new Error("Changeset exceeds review size limit");
-  return { root, base, diff, fingerprint: createHash("sha256").update(base).update("\0").update(diff).digest("hex") };
+  return { root, base, diff, files: [...new Set([...tracked, ...untracked])].sort(), fingerprint: createHash("sha256").update(base).update("\0").update(diff).digest("hex") };
 }

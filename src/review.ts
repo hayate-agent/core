@@ -3,6 +3,8 @@ import { mkdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { captureChangeset, git, resolveReviewBase, type Changeset } from "./changeset.js";
 import type { ReviewConfig } from "./config.js";
+import type { Address } from "./types.js";
+import { requiresReview } from "./review-scope.js";
 import { writeFileDurable } from "./durable.js";
 
 export type Severity = "P0" | "P1" | "P2" | "P3";
@@ -19,6 +21,8 @@ export interface ReviewState {
   version: 1;
   root: string;
   base: string;
+  origin?: Address;
+  originSessionKey?: string;
   rounds: ReviewRound[];
   status: "pending" | "passed" | "escalated";
   approvedFingerprint?: string;
@@ -63,7 +67,7 @@ export class ReviewService {
     private readonly home: string,
     readonly config: ReviewConfig,
     private readonly backend: ReviewBackend,
-    private readonly escalate: (sessionKey: string, message: string) => Promise<void>,
+    private readonly escalate: (sessionKey: string, message: string, origin?: Address) => Promise<void>,
   ) {}
 
   private file(root: string): string {
@@ -93,12 +97,19 @@ export class ReviewService {
       return state;
     }
   }
-  async prepare(cwd: string): Promise<void> {
+  async prepare(cwd: string, origin?: Address, sessionKey?: string): Promise<void> {
     if (!this.config.enabled) return;
     let root: string;
     try { root = (await git(cwd, ["rev-parse", "--show-toplevel"])).trim(); }
     catch { return; } // ordinary non-code conversations do not require Git
-    await this.serialize(root, async () => { await this.load(root); });
+    await this.serialize(root, async () => {
+      const state = await this.load(root);
+      if (origin && (!state.origin || state.status === "passed")) {
+        state.origin = structuredClone(origin);
+        state.originSessionKey = sessionKey;
+        await this.save(state);
+      }
+    });
   }
   async changes(cwd: string): Promise<Changeset> {
     const root = (await git(cwd, ["rev-parse", "--show-toplevel"])).trim();
@@ -141,7 +152,7 @@ export class ReviewService {
       if (state.status === "escalated" || state.rounds.length >= this.config.maxTurns) {
         state.status = "escalated";
         await this.save(state);
-        await this.escalate(sessionKey, "Review budget exhausted; operator decision required. No publish/merge approval.");
+        await this.escalate(state.originSessionKey ?? sessionKey, "Review budget exhausted; operator decision required. No publish/merge approval.", state.origin);
         return state;
       }
       if (signal?.aborted) throw new Error("Review cancelled");
@@ -167,7 +178,7 @@ export class ReviewService {
       } catch { round.error = "Reviewer failed, was cancelled, or returned invalid output; no approval granted"; }
       if (state.status !== "passed" && state.rounds.length >= this.config.maxTurns) state.status = "escalated";
       await this.save(state);
-      if (state.status === "escalated") await this.escalate(sessionKey, `Review blocked after ${state.rounds.length} rounds. Operator decision required.\n${JSON.stringify(round)}`);
+      if (state.status === "escalated") await this.escalate(state.originSessionKey ?? sessionKey, `Review blocked after ${state.rounds.length} rounds. Operator decision required.\n${JSON.stringify(round)}`, state.origin);
       return structuredClone(state);
     });
   }
@@ -178,14 +189,14 @@ export class ReviewService {
       state.status = "escalated";
       state.approvedFingerprint = undefined;
       await this.save(state);
-      await this.escalate(sessionKey, reason);
+      await this.escalate(state.originSessionKey ?? sessionKey, reason, state.origin);
     });
   }
   async assertAllowed(cwd: string, action: "local" | "publish" | "merge"): Promise<void> {
     if (!this.config.enabled || !this.config.mandatory[action]) return;
     const state = await this.status(cwd);
     const change = await captureChangeset(state.root, state.base);
-    if (!change.diff) return;
+    if (!requiresReview(change, this.config)) return;
     if (state.status !== "passed" || state.approvedFingerprint !== change.fingerprint) throw new Error(`Review gate blocks ${action}: current changeset has no successful review`);
   }
 }
