@@ -14,7 +14,7 @@ export interface ContextPolicy {
   autoHandover: boolean;
 }
 export const defaultContextPolicy: ContextPolicy = {
-  enabled: true, checkEveryTurns: 5, assessPercent: 60, compactPercent: 75, cooldownTurns: 5, autoHandover: false,
+  enabled: true, checkEveryTurns: 5, assessPercent: 60, compactPercent: 75, cooldownTurns: 5, autoHandover: true,
 };
 export function contextPolicy(input: Partial<ContextPolicy> = {}): ContextPolicy {
   const policy = { ...defaultContextPolicy, ...input };
@@ -130,7 +130,10 @@ export class ContextMaintenance {
     if (!policy.enabled || percent === undefined || percent < policy.assessPercent || state.turns % policy.checkEveryTurns !== 0) return "";
     return `Context usage is ${Math.round(percent)}%. Assess whether compaction is useful at this task boundary. If needed request plugin_context_maintenance with what to preserve and how to resume. Continue normally if continuity is more important. ${preserve}`;
   }
-  async boundary(key: string, session: RuntimeSession, rotate: (handover: ContextRecord["handover"]) => Promise<RuntimeSession>, target?: Address): Promise<string | undefined> {
+  async beforeTurn(key: string, session: RuntimeSession, rotate: (handover: ContextRecord["handover"]) => Promise<RuntimeSession>, target?: Address, incomingText = ""): Promise<string | undefined> {
+    return this.boundary(key, session, rotate, target, "before", incomingText);
+  }
+  async boundary(key: string, session: RuntimeSession, rotate: (handover: ContextRecord["handover"]) => Promise<RuntimeSession>, target?: Address, phase: "before" | "after" = "after", incomingText = ""): Promise<string | undefined> {
     return this.serial(async () => {
       const policy = this.policy();
       if (!policy.enabled) return;
@@ -145,7 +148,7 @@ export class ContextMaintenance {
         return state.noticeTarget ? undefined : notice;
       }
       // Recover prepared transitions before considering a new maintenance action.
-      if (state.handover?.phase === "prepared") {
+      if (state.handover?.phase === "prepared" && phase === "before") {
         if (id === state.handover.from) {
           if (!session.summarize) throw new Error("Runtime cannot refresh handover");
           const refreshed = await this.prepareArchive(key, session, `${preserve}\nRefresh intervening turns. Previous checkpoint: ${state.handover.text}`);
@@ -169,19 +172,27 @@ export class ContextMaintenance {
         await this.save(key, state);
         return state.noticeTarget ? undefined : notice;
       }
+      if (state.handover?.phase === "prepared") return;
       state.sessionId = id;
-      state.turns++;
+      if (phase === "after") state.turns++;
       const request = state.pending;
       const percent = session.status().contextPercent;
+      // Conservative incoming-input budget, not a claim of semantic task detection.
+      const window = session.status().contextWindow;
+      const incomingPercent = window ? (Buffer.byteLength(incomingText, "utf8") / 3 / window) * 100 : 0;
       const due = state.turns - state.lastMaintenance >= policy.cooldownTurns;
-      if (!due || (!request && (percent === undefined || percent < policy.compactPercent))) { await this.save(key, state); return; }
+      const matchingRequest = request && (phase === "before" ? request.action === "handover" : request.action === "compact");
+      const automatic = !request && percent !== undefined && (phase === "before"
+        ? policy.autoHandover && (percent >= policy.compactPercent || (percent >= policy.assessPercent && percent + incomingPercent >= policy.compactPercent))
+        : percent >= policy.compactPercent);
+      if ((!matchingRequest && !due) || (!matchingRequest && !automatic)) { await this.save(key, state); return; }
       state.pending = undefined;
       state.lastMaintenance = state.turns;
       await this.save(key, state); // cooldown reserved even if summarization fails
       let notice: string;
       try {
         const instructions = `${preserve}\nPreserve additionally: ${request?.preserve ?? "current task state"}\nResume: ${request?.resume ?? "continue with the next queued operator request"}`;
-        const handover = request?.action === "handover" || (policy.autoHandover && percent !== undefined && percent >= 90);
+        const handover = phase === "before";
         if (handover) {
           // Tool-free summary operation: no extra autonomous working turn or code side effects.
           if (!session.summarize) throw new Error("Runtime does not support handover summaries");

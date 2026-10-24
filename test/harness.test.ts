@@ -41,6 +41,37 @@ test("editable gateway final references survive durable outbox restore and follo
   assert.equal(metaSeen.progressId, entries[0].progressId);
 });
 
+test("pre-turn rotation seeds the replacement before delivering the original prompt exactly once", async () => {
+  const runtime = new FakeRuntime();
+  const order: string[] = [];
+  const opened: import("../src/types.js").RuntimeSession[] = [];
+  const open = runtime.open.bind(runtime);
+  runtime.open = async (key, options) => {
+    const session = await open(key, options);
+    session.seedHandover = async (text) => { assert.equal(text, "checkpoint"); order.push("seed"); };
+    const prompt = session.prompt.bind(session);
+    session.prompt = async (text, opts) => { order.push("prompt"); return prompt(text, opts); };
+    opened.push(session);
+    return session;
+  };
+  const harness = new Harness({ runtime, tickMs: 60000, contextMaintenance: {
+    beforeTurn: async (_key, _session, rotate, _to, text) => {
+      assert.equal(text, "original operator input");
+      await rotate({ phase: "prepared", from: "old", text: "checkpoint" });
+      return "handover notice";
+    },
+    guidance: async () => { order.push("guidance"); return ""; },
+    boundary: async () => { order.push("after"); return undefined; },
+  } });
+  const ch = new MemoryChannel(); harness.addChannel(ch);
+  await harness.submit(msg("original operator input")); await harness.drained();
+  assert.deepEqual(order, ["seed", "guidance", "prompt", "after"]);
+  assert.equal((opened[0] as any).prompts.length, 0);
+  assert.deepEqual((opened[1] as any).prompts, ["original operator input"]);
+  assert.deepEqual(ch.texts(), ["echo: original operator input\n\nhandover notice"]);
+  await harness.stop(1000);
+});
+
 test("startup adopts a pending maintenance notice durably with its stable delivery ID", async () => {
   let acknowledged = false;
   let saves = 0;

@@ -271,6 +271,7 @@ export class PiSession implements RuntimeSession {
       messages: stats.totalMessages,
       tokens: { input: stats.tokens.input, output: stats.tokens.output },
       contextPercent: usage?.percent ?? undefined,
+      contextWindow: m?.contextWindow,
       systemPrompt: { characters: [...this.session.systemPrompt].length, bytes: Buffer.byteLength(this.session.systemPrompt, "utf8") },
     };
   }

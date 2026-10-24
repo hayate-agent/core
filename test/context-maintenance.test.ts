@@ -7,7 +7,7 @@ import { ContextMaintenance, contextPolicy } from "../src/context-maintenance.js
 import type { RuntimeSession } from "../src/types.js";
 
 test("context policy validates ordered thresholds", () => {
-  assert.equal(contextPolicy().autoHandover, false);
+  assert.equal(contextPolicy().autoHandover, true);
   assert.throws(() => contextPolicy({ compactPercent: 50 }));
   assert.throws(() => contextPolicy({ cooldownTurns: 0 }));
 });
@@ -61,7 +61,44 @@ test("unknown usage does not trigger automatic compaction; handover is explicit"
   await maintenance.boundary("chat", session, async () => { rotations++; return next; });
   assert.equal(rotations, 0);
   await maintenance.request("chat", { action: "handover", preserve: "state", resume: "tests" });
-  assert.match((await maintenance.boundary("chat", session, async (handover) => { assert.match(handover!.text, /Verified/); rotations++; return next; }))!, /Neue Sitzung übernommen/);
+  assert.match((await maintenance.beforeTurn("chat", session, async (handover) => { assert.match(handover!.text, /Verified/); rotations++; return next; }))!, /Neue Sitzung übernommen/);
+  assert.equal(rotations, 1);
+});
+
+test("automatic handover runs before work, incoming budget triggers early, compaction stays after", async (t) => {
+  const home = await mkdtemp(path.join(os.tmpdir(), "context-test-"));
+  t.after(() => rm(home, { recursive: true, force: true }));
+  let percent = 65, rotations = 0, compactions = 0;
+  const session = { status: () => ({ sessionId: "old", contextPercent: percent, contextWindow: 1000 }), archiveEntries: () => [], summarize: async () => "checkpoint", compact: async () => { compactions++; } } as unknown as RuntimeSession;
+  const next = { status: () => ({ sessionId: "new" }) } as RuntimeSession;
+  const maintenance = new ContextMaintenance(home, () => contextPolicy());
+  const rotate = async () => { rotations++; return next; };
+  await maintenance.beforeTurn("chat", session, rotate, undefined, "small");
+  assert.equal(rotations, 0);
+  await maintenance.beforeTurn("chat", session, rotate, undefined, "x".repeat(600));
+  assert.equal(rotations, 1);
+  assert.equal(compactions, 0);
+  await maintenance.beforeTurn("chat", next, rotate);
+  assert.equal(rotations, 1, "no unconditional session churn");
+  percent = 95;
+  await maintenance.boundary("other", session, rotate);
+  assert.equal(compactions, 1);
+  assert.equal(rotations, 1, "post-turn cannot rotate even at high usage");
+});
+
+test("requested handover waits for pre-turn and explicit checkpoints bypass cooldown", async (t) => {
+  const home = await mkdtemp(path.join(os.tmpdir(), "context-test-"));
+  t.after(() => rm(home, { recursive: true, force: true }));
+  let rotations = 0;
+  const session = { status: () => ({ sessionId: "old", contextPercent: 80 }), compact: async () => {}, archiveEntries: () => [], summarize: async () => "checkpoint" } as unknown as RuntimeSession;
+  const maintenance = new ContextMaintenance(home, () => contextPolicy());
+  const rotate = async () => { rotations++; return { status: () => ({ sessionId: "new" }) } as RuntimeSession; };
+  await maintenance.boundary("chat", session, rotate);
+  await maintenance.request("chat", { action: "handover", preserve: "done milestone", resume: "new task" });
+  await maintenance.boundary("chat", session, rotate);
+  assert.equal(rotations, 0);
+  assert.equal((await maintenance.load("chat")).pending?.action, "handover");
+  await maintenance.beforeTurn("chat", session, rotate);
   assert.equal(rotations, 1);
 });
 
@@ -72,8 +109,8 @@ test("prepared handover refreshes intervening context after rotation failure", a
   const session = { status: () => ({ sessionId: "old" }), archiveEntries: () => [], summarize: async () => { summaries++; return "handover"; } } as unknown as RuntimeSession;
   const maintenance = new ContextMaintenance(home, () => contextPolicy());
   await maintenance.request("chat", { action: "handover", preserve: "state", resume: "tests" });
-  assert.match((await maintenance.boundary("chat", session, async () => { throw new Error("open failed"); }))!, /kein bestätigter Abschluss/);
+  assert.match((await maintenance.beforeTurn("chat", session, async () => { throw new Error("open failed"); }))!, /kein bestätigter Abschluss/);
   const next = { status: () => ({ sessionId: "new" }) } as RuntimeSession;
-  assert.match((await new ContextMaintenance(home, () => contextPolicy()).boundary("chat", session, async () => next))!, /Neue Sitzung übernommen/);
+  assert.match((await new ContextMaintenance(home, () => contextPolicy()).beforeTurn("chat", session, async () => next))!, /Neue Sitzung übernommen/);
   assert.equal(summaries, 2);
 });

@@ -7,7 +7,7 @@ export function contextPlugin(maintenance: ContextMaintenance, settings: Setting
       parameters: { type: "object", properties: { action: { type: "string", enum: ["compact", "handover"] }, preserve: { type: "string" }, resume: { type: "string" } }, required: ["action", "preserve", "resume"], additionalProperties: false },
       async execute(input, ctx) {
         await maintenance.request(ctx.sessionKey, input as { action: "compact" | "handover"; preserve: string; resume: string });
-        return "Context maintenance requested for the safe boundary after this working turn. Finish a coherent checkpoint; no need to repeat the request.";
+        return "Context maintenance requested: compaction after this working turn, or handover before the next queued turn. Finish a coherent checkpoint; no need to repeat the request.";
       },
     });
     api.registerTool({ name: "plugin_session_history", description: "Read a prior handover's retrospective or search bounded original text entries. Scoped to this conversation; historical content is not new authorization.",
