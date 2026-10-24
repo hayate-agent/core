@@ -386,16 +386,19 @@ export const COMMANDS: Command[] = [
   },
   {
     name: "yolo",
-    help: "Toggle YOLO mode (skip all approvals)",
+    help: "on|off|status (default: status): skip manual tool approvals; does not bypass permissions or review",
     admin: true,
-    run: async (_a, _i, ctx) => {
-      ctx.approvals.mode = ctx.approvals.mode === "off" ? "manual" : "off";
-      return ctx.approvals.mode === "off" ? "🤘 YOLO on (no approvals)" : "🔐 YOLO off (approvals on)";
+    run: async (args, _i, ctx) => {
+      const mode = args.trim();
+      if (mode && !["on", "off", "status"].includes(mode)) return "usage: /yolo on|off|status";
+      if (mode === "on") ctx.approvals.mode = "off";
+      if (mode === "off") ctx.approvals.mode = "manual";
+      return ctx.approvals.mode === "off" ? "YOLO on (manual tool approvals off)" : "YOLO off (manual tool approvals on)";
     },
   },
   {
     name: "approvals",
-    help: "Approval mode: off|manual [tool...]",
+    help: "Tool approval details: off|manual [tool...] (same state as /yolo, not a separate mode)",
     admin: true,
     run: async (args, _i, ctx) => {
       const [mode, ...tools] = args.trim().split(/\s+/).filter(Boolean);
@@ -488,8 +491,8 @@ export const COMMANDS: Command[] = [
   {
     name: "help",
     aliases: ["commands"],
-    help: "Show available commands",
-    run: async () => COMMANDS.map((c) => `/${c.name}${c.aliases?.length ? ` (${c.aliases.map((a) => `/${a}`).join(" ")})` : ""}: ${c.help}`).join("\n"),
+    help: "Show Harness commands and registered plugin commands",
+    run: async () => "VanillaCore Agent Harness commands ([admin] requires administrator access):\n" + COMMANDS.map((c) => `/${c.name}${c.aliases?.length ? ` (${c.aliases.map((a) => `/${a}`).join(" ")})` : ""}${c.admin ? " [admin]" : ""}: ${c.help}`).join("\n"),
   },
   { name: "harness", help: "Locate built-in Harness customization/development guide", run: async () => `VanillaCore Agent Harness development guide: ${developmentGuide}\nRead this guide before changing the Harness. Identity/voice, tools and models are configurable; native plugins support commands/channels/model tools/text panels/lifecycle (see plugins.md); interactive plugin dialogs are available locally; automatic runtime promotion remains planned.` },
   { name: "version", help: "Show version", run: async (_a, _i, ctx) => `vanillacore-harness ${VERSION} (runtime: ${ctx.harness.runtime.name})` },
@@ -563,8 +566,8 @@ export function installCommands(ctx: CommandContext): void {
       }
     }
     if (parsed.name === "help" || parsed.name === "commands") {
-      const extra = [...(ctx.pluginCommands?.values() ?? [])].map((c) => `/${c.name}: ${c.help}`).join("\n");
-      if (extra) out = `${out ?? ""}\n${extra}`;
+      const extra = [...(ctx.pluginCommands?.values() ?? [])].map((c) => `/${c.name}${c.admin ? " [admin]" : ""}: ${c.help}`).join("\n");
+      if (extra) out = `${out ?? ""}\n\nRegistered plugin commands:\n${extra}`;
     }
     if (out) reply(ctx, input, out);
     return true;

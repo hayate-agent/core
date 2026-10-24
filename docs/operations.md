@@ -1,5 +1,22 @@
 # Operations
 
+## Tool approvals and YOLO
+
+`/yolo on|off|status` controls the Harness's manual tool approvals, not a PI
+runtime mode. With no argument it reports status; it never implicitly toggles.
+`on` disables manual tool approvals, `off` enables them, and repeated settings
+are idempotent. This does not extend permissions or bypass review requirements.
+The command requires administrator access, including status queries.
+
+`/approvals off|manual [tool...]` configures the same state and optionally limits
+which tools require approval. `/yolo` preserves that tool selection. Consequently,
+`/yolo off` enables approvals for the configured selection (all tools when empty).
+
+`/help` (alias `/commands`) lists Harness commands separately from registered
+plugin commands, marks administrative commands with `[admin]`, and explains the
+YOLO scope. Migration: scripts relying on bare `/yolo` toggling must use explicit
+`/yolo on` or `/yolo off` instead.
+
 ## Memory pressure
 
 On cgroup v2 with `memory.oom.group=1`, an OOM can kill the entire container,

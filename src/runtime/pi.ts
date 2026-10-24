@@ -49,7 +49,7 @@ export interface PiRuntimeOptions {
   toolGuard?: (sessionKey: string, tool: string, input: unknown) => Promise<void>;
   /** Returns persona sections, read on every session open (so persona edits apply to new sessions). */
   personaSections: () => Promise<string[]>;
-  /** "off" (default, YOLO) or "manual". Mutable at runtime via /approvals and /yolo. */
+  /** "off" (default, YOLO) or "manual". Mutable at runtime via /approvals and /yolo on|off (no argument reports status). */
   approvals: { mode: "off" | "manual"; tools: string[] };
   requestApproval?: ApprovalRequest;
 }
