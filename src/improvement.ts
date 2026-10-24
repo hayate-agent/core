@@ -65,8 +65,9 @@ export class ImprovementController {
       // State-only recovery, not a periodic model nudge. Starts no fresh night.
       new Cron("*/5 * * * *", { timezone: p.timezone }, () => { void this.tick(false).catch(() => undefined); }),
     ];
-    // Recovery only: resume a persisted night, do not create a fresh run at startup.
-    await this.tick(false);
+    // Catch up a missed start Cron after deployment/restart inside the window.
+    // Persisted night identity and budget prevent resetting an existing run.
+    await this.tick(true);
   }
   stop(): void { for (const job of this.cronJobs) job.stop(); this.cronJobs = []; }
   async committed(input: Inbound): Promise<void> {
