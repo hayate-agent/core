@@ -21,6 +21,7 @@ import { initialize, diagnose } from "./setup.js";
 import { Harness } from "./harness.js";
 import { startMemoryGuard } from "./memguard.js";
 import { loadPersona, personaSections } from "./persona.js";
+import { ProtectedContent } from "./protected-content.js";
 import { PiRuntime } from "./runtime/pi.js";
 import { launchMode } from "./launch.js";
 import { Scheduler } from "./scheduler.js";
@@ -84,6 +85,8 @@ async function main(argv: string[]): Promise<void> {
   }
   const config = await loadConfig(values["--home"]);
   if (interactive) config.cwd = process.cwd();
+  const protectedContent = new ProtectedContent(config.home, config.protectedContent);
+  await protectedContent.verify();
   const sessionOwnership = await LocalSessions.open(config.home, config.cwd);
   await sessionOwnership.acquireHome();
   sessionOwners.add(sessionOwnership);
@@ -95,6 +98,7 @@ async function main(argv: string[]): Promise<void> {
   const skillDirs = () => [...config.skills.paths, path.join(config.cwd, ".pi", "skills"), path.join(getAgentDir(), "skills")];
   const skillCatalog = new SkillCatalog(path.join(config.home, "skills", "index.json"), skillDirs);
   const reloadSkills = async () => {
+    await protectedContent.verify();
     const snapshot = await skillCatalog.refresh();
     skills = skillCatalog.skills;
     for (const diagnostic of snapshot.diagnostics) log(`[skills] ${diagnostic.filePath}: ${diagnostic.message}`);
@@ -147,7 +151,10 @@ async function main(argv: string[]): Promise<void> {
       return `Available skills (metadata only; read the named SKILL.md when relevant):\n${JSON.stringify(skills)}\n${reviewSettings.enabled ? "Core review is enabled. Use plugin_review to inspect, critically assess and review code changes. P0/P1 block publication and completion. Budget cannot be reset by starting another session." : ""}`;
     },
     toolGuard: (_key, tool, input) => guardReviewTool(review, config.cwd, tool, input),
-    personaSections: async () => personaSections(await loadPersona(config.persona, personality), { name: config.agent, workspace: config.cwd }),
+    personaSections: async () => {
+      await protectedContent.verify();
+      return personaSections(await loadPersona(config.persona, personality), { name: config.agent, workspace: config.cwd });
+    },
     approvals,
     requestApproval: (key, tool, input) => harness.requestApproval(key, tool, input),
   });
@@ -159,7 +166,10 @@ async function main(argv: string[]): Promise<void> {
     runtime,
     contextMaintenance: maintenance,
     memory,
-    beforeTurn: (input) => review.prepare(config.cwd, input.replyTo, input.sessionKey),
+    beforeTurn: async (input) => {
+      await protectedContent.verify();
+      await review.prepare(config.cwd, input.replyTo, input.sessionKey);
+    },
     afterTurn: (input, reply, session, options, signal) => finishWithReview(review, config.cwd, input, reply, session, options, signal),
     tickMs: config.loop.tickMs,
     busyMode: config.loop.busyMode,
@@ -280,7 +290,7 @@ async function main(argv: string[]): Promise<void> {
   }
   await scheduler.load();
 
-  await plugins.load(config.plugins ?? [], { agent: config.agent, home: config.home, cwd: config.cwd }, [...builtinCommandNames, "sessions", "resume", ...skills.map((s) => s.name)], ["console", "api", "matrix", ...harness.channels.keys()], [gatewayManager.plugin(), gatewayPlugin(settings, harness), contextPlugin(maintenance, settings), ...(config.memory.enabled ? [memoryPlugin(memory)] : []), ...(reviewSettings.enabled ? [reviewPlugin(review, config.cwd)] : [])]);
+  await plugins.load(config.plugins ?? [], { agent: config.agent, home: config.home, cwd: config.cwd }, [...builtinCommandNames, "sessions", "resume", ...skills.map((s) => s.name)], ["console", "api", "matrix", ...harness.channels.keys()], [protectedContent.plugin(), gatewayManager.plugin(), gatewayPlugin(settings, harness), contextPlugin(maintenance, settings), ...(config.memory.enabled ? [memoryPlugin(memory)] : []), ...(reviewSettings.enabled ? [reviewPlugin(review, config.cwd)] : [])]);
   let memoryConnecting = false;
   let memoryStopping = false;
   const connectMemory = async () => {
