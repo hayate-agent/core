@@ -149,6 +149,32 @@ export class Harness {
     this.channels.set(channel.name, channel);
   }
 
+  /** Refuse replacement while any turn or delivery is using the adapter. Caller retries at a safe boundary. */
+  private gatewayChanging = false;
+  async replaceGateway(name: string, candidate?: Channel): Promise<void> {
+    if (this.gatewayChanging || this.stopping) throw Error("Gateway replacement requires an idle turn boundary; retry after current work completes");
+    if ([...this.sessions.values()].some((s) => s.running) || this.inbox.accepting.size) throw Error("Gateway replacement requires an idle turn boundary; retry after current work completes");
+    if (candidate && candidate.name !== name) throw Error("Gateway channel name mismatch");
+    const old = this.channels.get(name);
+    const pins = { pin: (ids: Iterable<string>) => this.pinSeen(ids), unpin: (ids: Iterable<string>) => this.unpinSeen(ids) };
+    this.gatewayChanging = true;
+    try {
+    if (old) await old.stop(10000);
+    this.channels.delete(name);
+    try {
+      if (candidate) {
+        candidate.configureGateway?.(gatewaySettings(this.opts.gateways, name));
+        await candidate.start((input) => this.accept(input), pins);
+        this.channels.set(name, candidate);
+      }
+    } catch (err) {
+      await candidate?.stop(10000).catch(() => {});
+      if (old) { await old.start((input) => this.accept(input), pins); this.channels.set(name, old); }
+      throw err;
+    }
+    } finally { this.gatewayChanging = false; }
+  }
+
   async start(): Promise<void> {
     const pins = { pin: (ids: Iterable<string>) => this.pinSeen(ids), unpin: (ids: Iterable<string>) => this.unpinSeen(ids) };
     for (const ch of this.channels.values()) await ch.start((input) => this.accept(input), pins);
@@ -318,7 +344,7 @@ export class Harness {
   }
 
   async accept(input: Inbound): Promise<void> {
-    if (this.stopping) throw new Error("shutting down");
+    if (this.stopping || this.gatewayChanging) throw new Error("shutting down or gateway transition; retry input");
     // Drop what was already accepted before (redelivery after a cursor rewind or crash).
     // Acknowledge a duplicate only once the state is durable (an earlier save may have failed).
     const duplicate = async () => void (await this.onStateChange?.());
@@ -589,7 +615,7 @@ export class Harness {
   }
 
   private async pump(s: SessionState): Promise<void> {
-    if (s.running) return;
+    if (s.running || this.gatewayChanging) return;
     s.running = true;
     try {
       while (!this.halting) {

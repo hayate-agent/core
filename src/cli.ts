@@ -5,7 +5,7 @@ import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { LocalSessions } from "./local-sessions.js";
 import { HarnessTuiChannel } from "./channels/tui.js";
 import { ConsoleChannel } from "./channels/console.js";
-import { MatrixChannel, matrixOptionsFromEnv } from "./channels/matrix.js";
+import { GatewayManager } from "./gateway-manager.js";
 import { RunRegistry } from "./api/runs.js";
 import { API_CHANNEL, ApiChannel } from "./api/server.js";
 import { nativeCompaction, type CompactionStrategy } from "./compaction.js";
@@ -170,16 +170,15 @@ async function main(argv: string[]): Promise<void> {
       appendFileDurable(path.join(config.home, "outbox-deadletter.jsonl"), `${JSON.stringify({ at: new Date().toISOString(), error, ...entry })}\n`),
   });
   harness.home = config.home_address;
-  const matrixOpts = matrixOptionsFromEnv(process.env, config.home);
-  // Resolve one remote approval policy and pass it to both Matrix reactions and commands.
-  const matrixApprovers = matrixOpts?.approvers ?? [];
-  const admins = config.admins.length ? config.admins : matrixApprovers;
-  const approvers = config.approvers.length ? config.approvers : matrixApprovers.length ? matrixApprovers : admins;
-  if (matrixOpts) {
-    const matrix = new MatrixChannel({ ...matrixOpts, approvers, displayName: matrixOpts.displayName ?? config.agent });
-    harness.addChannel(matrix);
-    harness.home ??= matrix.home;
-  }
+  const gatewayManager = new GatewayManager(harness, settings, {
+    home: config.home, agent: config.agent, approvers: config.approvers, admins: config.admins,
+  }, { matrix: new URL(import.meta.url.endsWith(".ts") ? "./channels/matrix-plugin.ts" : "./channels/matrix-plugin.js", import.meta.url).href });
+  await gatewayManager.load();
+  const gatewayApprovers = gatewayManager.approvers;
+  const admins = config.admins.length ? config.admins : gatewayApprovers;
+  const approvers = config.approvers.length ? config.approvers : gatewayApprovers.length ? gatewayApprovers : admins;
+  const gatewayTimer = setInterval(() => { void gatewayManager.tick().catch(() => log("[gateway] activation failed")); }, 2000);
+  gatewayTimer.unref();
   // Hermes-compatible HTTP API (AgentOS hermes_gateway adapter); enabled by API_SERVER_KEY.
   const runs = new RunRegistry(path.join(config.home, "runs.json"));
   const apiKey = process.env.API_SERVER_KEY?.trim();
@@ -281,7 +280,7 @@ async function main(argv: string[]): Promise<void> {
   }
   await scheduler.load();
 
-  await plugins.load(config.plugins ?? [], { agent: config.agent, home: config.home, cwd: config.cwd }, [...builtinCommandNames, "sessions", "resume", ...skills.map((s) => s.name)], ["console", "api", "matrix", ...harness.channels.keys()], [gatewayPlugin(settings, harness), contextPlugin(maintenance, settings), ...(config.memory.enabled ? [memoryPlugin(memory)] : []), ...(reviewSettings.enabled ? [reviewPlugin(review, config.cwd)] : [])]);
+  await plugins.load(config.plugins ?? [], { agent: config.agent, home: config.home, cwd: config.cwd }, [...builtinCommandNames, "sessions", "resume", ...skills.map((s) => s.name)], ["console", "api", "matrix", ...harness.channels.keys()], [gatewayManager.plugin(), gatewayPlugin(settings, harness), contextPlugin(maintenance, settings), ...(config.memory.enabled ? [memoryPlugin(memory)] : []), ...(reviewSettings.enabled ? [reviewPlugin(review, config.cwd)] : [])]);
   let memoryConnecting = false;
   let memoryStopping = false;
   const connectMemory = async () => {
@@ -332,6 +331,7 @@ async function main(argv: string[]): Promise<void> {
     for (const input of unfinished) input.started = undefined;
     await persist(unfinished).catch((err) => console.error(`[state] save failed: ${err}`));
     if (unfinished.length) console.error(`[harness] ${unfinished.length} unfinished input(s) saved for replay`);
+    clearInterval(gatewayTimer);
     memoryStopping = true;
     clearInterval(memoryTimer);
     await memory.provider?.close().catch(() => console.error("[memory] cleanup failed"));
@@ -381,7 +381,7 @@ async function main(argv: string[]): Promise<void> {
     // Remote channels fail closed: without `admins` only MATRIX_APPROVAL_APPROVERS (AgentOS:
     // the human owner) and the local console may run privileged commands.
     admins,
-    openAdmin: !matrixOpts && plugins.channels.size === 0,
+    openAdmin: false, // Remote gateways may be enabled later; console remains explicitly privileged.
     approvers,
     agent: config.agent,
     // Exit with 75 (EX_TEMPFAIL); the supervisor (systemd/Kubernetes) restarts the process.
@@ -399,6 +399,7 @@ async function main(argv: string[]): Promise<void> {
   try { await harness.start(); }
   catch (err) {
     await harness.stop(0).catch(() => {});
+    clearInterval(gatewayTimer);
     memoryStopping = true;
     clearInterval(memoryTimer);
     await memory.provider?.close().catch(() => {});
