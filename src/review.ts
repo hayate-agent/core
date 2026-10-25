@@ -27,7 +27,7 @@ export interface ReviewState {
   status: "pending" | "passed" | "escalated";
   approvedFingerprint?: string;
   /** Completed tasks retain their nonblocking findings and assessment history. */
-  history?: Array<{ approvedFingerprint?: string; rounds: ReviewRound[] }>;
+  history?: Array<{ base?: string; approvedFingerprint?: string; rounds: ReviewRound[]; boundary?: { head: string; ref: string } }>;
 }
 export interface ReviewBackend {
   review(prompt: string, model: string | undefined, thinking: string, signal?: AbortSignal): Promise<string>;
@@ -104,7 +104,34 @@ export class ReviewService {
     catch { return; } // ordinary non-code conversations do not require Git
     await this.serialize(root, async () => {
       const state = await this.load(root);
-      if (origin && (!state.origin || state.status === "passed")) {
+      let rotated = false;
+      // Rotate only between completed tasks, never merely because the tree is clean.
+      // HEAD must be accepted by the configured target/upstream, not local-only work.
+      if (state.status === "passed" && state.approvedFingerprint &&
+          !(await git(root, ["status", "--porcelain=v1", "--untracked-files=all"])).trim()) {
+        const ref = this.config.baseRef ?? "@{upstream}";
+        let head: string | undefined;
+        try {
+          const current = (await git(root, ["rev-parse", "--verify", "HEAD^{commit}"])).trim();
+          const resolvedRef = (await git(root, ["rev-parse", "--symbolic-full-name", ref])).trim();
+          const target = (await git(root, ["rev-parse", "--verify", `${ref}^{commit}`])).trim();
+          const ancestor = (await git(root, ["merge-base", state.base, current])).trim();
+          if (resolvedRef.startsWith("refs/remotes/") && current === target && ancestor === state.base && current !== state.base) head = current;
+        } catch { /* Missing/unusable target is not permission to reset review. */ }
+        if (head) {
+          state.history = [...(state.history ?? []), {
+            base: state.base, approvedFingerprint: state.approvedFingerprint,
+            rounds: structuredClone(state.rounds), boundary: { head, ref },
+          }];
+          state.base = head;
+          state.rounds = [];
+          state.status = "pending";
+          state.approvedFingerprint = undefined;
+          rotated = true;
+          await this.save(state);
+        }
+      }
+      if (origin && (!state.origin || state.status === "passed" || rotated)) {
         state.origin = structuredClone(origin);
         state.originSessionKey = sessionKey;
         await this.save(state);
@@ -144,7 +171,7 @@ export class ReviewService {
       if (state.status === "passed" && state.approvedFingerprint === change.fingerprint) return state;
       // A passed task may begin a new task, but unresolved tasks cannot reset their budget by editing.
       if (state.status === "passed") {
-        state.history = [...(state.history ?? []), { approvedFingerprint: state.approvedFingerprint, rounds: structuredClone(state.rounds) }];
+        state.history = [...(state.history ?? []), { base: state.base, approvedFingerprint: state.approvedFingerprint, rounds: structuredClone(state.rounds) }];
         state.rounds = [];
         state.status = "pending";
         state.approvedFingerprint = undefined;
