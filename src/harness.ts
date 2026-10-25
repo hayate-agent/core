@@ -305,6 +305,37 @@ export class Harness {
     input.continuation = { state: plan.state, ...(plan.state === "continue" ? { next: plan.next } : {}) };
   }
 
+  /** Conversation-local loop control. Success is acknowledged only after persistence.
+   * On save failure retain the safer requested in-memory state and report failure;
+   * callers may retry, but must not claim restart durability.
+   */
+  async controlLoop(key: string, input: { action: string; prompt?: string; everyMs?: number; times?: number }): Promise<Recurring | null> {
+    const s = this.state(key);
+    if (input.action === "status") return s.loop ? structuredClone(s.loop) : null;
+    if (!this.onStateChange) throw Error("Loop persistence unavailable");
+    if (input.action === "set") {
+      if (typeof input.prompt !== "string" || !input.prompt.trim() || input.prompt.length > 4000 ||
+          !Number.isSafeInteger(input.everyMs) || input.everyMs! < 60_000 ||
+          !Number.isSafeInteger(this.now() + input.everyMs!) ||
+          (input.times !== undefined && (!Number.isSafeInteger(input.times) || input.times < 1))) throw Error("Invalid loop: prompt 1..4000 characters, interval >=60000 safe milliseconds, positive integer times");
+      s.loop = { prompt: input.prompt.trim(), everyMs: input.everyMs!, nextAt: this.now(), paused: false,
+        ...(input.times !== undefined ? { remaining: input.times } : {}) };
+    } else if (input.action === "stop") {
+      s.loop = undefined;
+    } else if (input.action === "pause" || input.action === "resume") {
+      if (!s.loop) throw Error("No loop set");
+      s.loop.paused = input.action === "pause";
+    } else throw Error("Unknown loop action");
+    // Superseded/paused prompts must not survive in the inbox. Never abort the
+    // current turn or remove unrelated user, cron, heartbeat or continuation work.
+    if (input.action !== "resume") {
+      for (const queued of s.queue) if (queued.source === "loop") this.inbox.unsaved.delete(queued);
+      s.queue = s.queue.filter((queued) => queued.source !== "loop");
+    }
+    await this.onStateChange?.();
+    return s.loop ? structuredClone(s.loop) : null;
+  }
+
   async resumeSession(key: string, id: string): Promise<void> {
     const s = this.state(key);
     if (s.running || s.opening || s.queue.length) throw new Error("Session has active or queued work");

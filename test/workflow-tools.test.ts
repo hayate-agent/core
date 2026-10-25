@@ -12,4 +12,5 @@ test("bundled continuation/evaluation tools remain reachable with explicit tools
   assert.equal(tools.includes("plugin_review"), false);
   assert.equal(tools.includes("plugin_memory"), false);
   assert.ok(workflowTools(["read"], true, true)!.includes("plugin_review"));
+  assert.ok(tools.includes("plugin_loop"));
 });

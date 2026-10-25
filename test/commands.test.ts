@@ -8,6 +8,7 @@ import { FakeRuntime, MemoryChannel, msg, ROOM } from "./fakes.js";
 function setup(opts: { admins?: string[]; approvers?: string[]; skills?: SkillInfo[] } = {}) {
   const runtime = new FakeRuntime();
   const harness = new Harness({ runtime, tickMs: 60_000, busyMode: "queue", log: () => {} });
+  harness.onStateChange = async () => {};
   const ch = new MemoryChannel();
   harness.addChannel(ch);
   const approvals = { mode: "off" as "off" | "manual", tools: [] as string[] };

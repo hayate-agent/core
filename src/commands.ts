@@ -88,11 +88,13 @@ function recurringCommand(kind: "heartbeat" | "loop"): Command["run"] {
       case "pause":
       case "resume":
         if (!current) return `no ${kind} set`;
-        current.paused = sub === "pause";
+        if (kind === "loop") await ctx.harness.controlLoop(input.sessionKey, { action: sub });
+        else current.paused = sub === "pause";
         return `${kind} ${sub}d`;
       case "clear":
       case "stop":
-        s[kind] = undefined;
+        if (kind === "loop") await ctx.harness.controlLoop(input.sessionKey, { action: "stop" });
+        else s[kind] = undefined;
         if (kind === "heartbeat") s.heartbeatDisabled = true;
         return `${kind} cleared`;
     }
@@ -115,7 +117,9 @@ function recurringCommand(kind: "heartbeat" | "loop"): Command["run"] {
     if (!prompt) return `usage: /${kind} ${kind === "heartbeat" ? "every <interval> <prompt>" : "[interval] <prompt> [--times N]"}`;
     if (everyMs < 60_000) return "minimum interval is 1m";
     if (kind === "heartbeat") s.heartbeatDisabled = false;
-    s[kind] = { prompt, everyMs, nextAt: Date.now() + (kind === "loop" ? 0 : everyMs), paused: false, remaining };
+    if (kind === "loop") {
+      await ctx.harness.controlLoop(input.sessionKey, { action: "set", prompt, everyMs, times: remaining });
+    } else s[kind] = { prompt, everyMs, nextAt: Date.now() + everyMs, paused: false, remaining };
     return `${kind} set: every ${formatInterval(everyMs)}: ${prompt}`;
   };
 }
