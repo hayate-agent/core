@@ -8,6 +8,18 @@ import { GatewayManager } from "../src/gateway-manager.js";
 import { SettingsService } from "../src/settings.js";
 import { FakeRuntime, MemoryChannel, msg } from "./fakes.js";
 
+test("dispatcher gateway namespace is reserved before loading configured modules", async t => {
+  const home = await mkdtemp(path.join(os.tmpdir(), "gateway-reserved-"));
+  t.after(() => rm(home, { recursive: true, force: true }));
+  const settings = new SettingsService(path.join(home, "settings.yaml"), {}); await settings.load();
+  await settings.setGatewayPlugin("dispatch", { module: "must-not-load.mjs" });
+  const harness = new Harness({ runtime: new FakeRuntime(), tickMs: 60000, busyMode: "queue" });
+  const manager = new GatewayManager(harness, settings, { home, agent: "test", approvers: [] }, {});
+  await assert.rejects(manager.load(), /Reserved gateway ID/);
+  assert.equal(harness.channels.has("dispatch"), false);
+  await assert.rejects(manager.request("dispatch"), /Reserved/);
+});
+
 test("gateway plugin override activation, disable, baseline and failed-start rollback", async (t) => {
   const home = await mkdtemp(path.join(os.tmpdir(), "gateway-manager-"));
   t.after(() => rm(home, { recursive: true, force: true }));

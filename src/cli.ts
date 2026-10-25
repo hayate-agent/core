@@ -16,6 +16,11 @@ import { MemoryService, memoryPlugin } from "./memory-plugin.js";
 import { gatewayPlugin } from "./gateway-plugin.js";
 import { PluginHost } from "./plugins.js";
 import { Subagents } from "./subagents.js";
+import { ExecutionStore } from "./execution.js";
+import { Dispatcher } from "./dispatcher.js";
+import { DispatcherRuntime } from "./dispatcher-runtime.js";
+import { dispatcherConfig } from "./dispatcher-config.js";
+import { dispatcherPlugin } from "./dispatcher-plugin.js";
 import { subagentPlugin } from "./subagent-plugin.js";
 import { wasmToolsPlugin } from "./wasm-tools.js";
 import { ReloadableTools } from "./reloadable-tools.js";
@@ -126,6 +131,14 @@ async function main(argv: string[]): Promise<void> {
   let sessionProvider: SessionProvider | undefined;
   let compaction = nativeCompaction as CompactionStrategy;
   let harness!: Harness;
+  let dispatchRuntime: DispatcherRuntime | undefined;
+  let dispatcher: Dispatcher | undefined;
+  const dispatchPolicy = dispatcherConfig(config.dispatcher);
+  // One persistence foundation in both modes, also covering managed child turns.
+  const executions = new ExecutionStore(path.join(config.home, "executions.json"), {
+    protectedExecutions: () => new Set(harness?.pendingInputs().flatMap(input => input.hostEvent ? [input.hostEvent.executionId] : []) ?? []),
+  });
+  await executions.load();
   let review!: ReviewService;
   const reviewSettings = reviewConfig(config.review);
   const settings = new SettingsService(path.join(config.home, "settings.local.yaml"), {
@@ -155,7 +168,10 @@ async function main(argv: string[]): Promise<void> {
     thinking: config.thinking,
     pruning: () => pruningPolicy(settings.effective().toolResultPruning),
     modelDefaults: () => ({ revision: settings.revision, model: effectiveModels().model, thinking: effectiveModels().thinking }),
-    tools: workflowTools(config.tools, config.memory.enabled, reviewSettings.enabled),
+    tools: (() => {
+      const tools = workflowTools(config.tools, config.memory.enabled, reviewSettings.enabled);
+      return dispatchPolicy.enabled && tools?.length ? [...new Set([...tools, "plugin_dispatch"])] : tools;
+    })(),
     pluginTools: () => plugins.tools.values(),
     sessionProvider: () => sessionProvider,
     legacySessionProvider: new FilesystemSessionProvider(path.join(config.home, "session-store")),
@@ -168,6 +184,14 @@ async function main(argv: string[]): Promise<void> {
     },
     toolGuard: async (key, tool, input) => {
       subagents.guardTool(key, tool);
+      dispatchRuntime?.guardTool(key, tool);
+      const current = harness.sessions.get(key)?.current;
+      if (current?.source === "host") {
+        if (!current.hostEvent || !dispatchRuntime?.resultAllowed(key, current.hostEvent.executionId)) throw Error("Host event authority revoked");
+        if (["plugin_dispatch", "plugin_subagent", "plugin_loop", "plugin_task_continuation", "plugin_improvement_evaluate"].includes(tool)) {
+          throw Error("Host result data cannot authorize orchestration");
+        }
+      }
       await guardReviewTool(review, config.cwd, tool, input);
     },
     personaSections: async () => {
@@ -185,12 +209,25 @@ async function main(argv: string[]): Promise<void> {
 
   harness = new Harness({
     runtime,
+    executionStore: executions,
     contextMaintenance: maintenance,
     memory,
-    approvalTarget: key => subagents.approvalTarget(key),
-    conversationStopped: key => subagents.cancelChildren(key),
+    approvalTarget: key => dispatchRuntime?.isWorker(key) ? dispatchRuntime.approvalTarget(key) : subagents.approvalTarget(key),
+    conversationStopped: async key => {
+      await dispatcher?.cancelParent(key);
+      await subagents.cancelChildren(key);
+    },
+    hostEventAllowed: input => !!input.hostEvent && !!dispatchRuntime?.resultAllowed(input.sessionKey, input.hostEvent.executionId),
+    // Reserve this namespace even with dispatch disabled: stale opaque turns
+    // must be reconciled through the ledger, not replayed by Harness startup.
+    externallyRecoveredSession: key => key.startsWith("dispatch:"),
+    beforeExecution: input => {
+      subagents.beforeTurn(input.sessionKey);
+      dispatchRuntime?.beforeTurn(input.sessionKey);
+    },
     beforeTurn: async (input) => {
       subagents.beforeTurn(input.sessionKey);
+      dispatchRuntime?.beforeTurn(input.sessionKey);
       await protectedContent.verify();
       if (config.autoReloadToolPlugins) await reloadableTools?.refresh();
       await improvement?.before(input);
@@ -225,8 +262,15 @@ async function main(argv: string[]): Promise<void> {
   const admins = config.admins.length ? config.admins : gatewayApprovers;
   const approvers = config.approvers.length ? config.approvers : gatewayApprovers.length ? gatewayApprovers : admins;
   improvement = new ImprovementController(config.home, harness, config.timezone);
+  let nextLedgerCompact = 0;
+  let ledgerRecoveryReady = false;
   const gatewayTimer = setInterval(() => {
+    if (ledgerRecoveryReady && Date.now() >= nextLedgerCompact) {
+      nextLedgerCompact = Date.now() + 60 * 60 * 1000;
+      void executions.compact(undefined, dispatchPolicy.retentionDays * 86400000).catch(() => log("[execution] ledger archive failed; records retained"));
+    }
     void gatewayManager.tick().catch(() => log("[gateway] activation failed"));
+    void dispatcher?.kick().catch(() => log("[dispatcher] scheduling failed"));
   }, 2000);
   gatewayTimer.unref();
   // Hermes-compatible HTTP API (AgentOS hermes_gateway adapter); enabled by API_SERVER_KEY.
@@ -290,6 +334,7 @@ async function main(argv: string[]): Promise<void> {
   // Restore runtime state (heartbeats, loops, goals, settings) from the last run.
   const store = new StateStore(path.join(config.home, "state.json"));
   const saved = await store.load();
+  await executions.reconcileSettledTurns(new Set((saved?.pending ?? []).flatMap(input => input.executionTurnId ? [input.executionTurnId] : [])));
   if (saved) {
     harness.paused = saved.paused;
     harness.busyMode = saved.busyMode;
@@ -326,6 +371,7 @@ async function main(argv: string[]): Promise<void> {
   // Restore before scheduler execution, persistence callbacks, or channel startup can write state.
   if (saved?.pending?.length) harness.restorePending(saved.pending);
   if (saved?.outbox?.length) harness.restoreOutbox(saved.outbox);
+  ledgerRecoveryReady = true;
   harness.onStateChange = () => persist();
   if (apiKey) {
     // A run whose turn never made it into the inbox (crash between record and accept) is over.
@@ -336,7 +382,33 @@ async function main(argv: string[]): Promise<void> {
   }
   await scheduler.load();
 
-  await plugins.load(config.plugins ?? [], { agent: config.agent, home: config.home, cwd: config.cwd }, [...builtinCommandNames, "sessions", "resume", ...skills.map((s) => s.name)], ["console", "api", "matrix", ...harness.channels.keys()], [subagentPlugin(subagents,async()=>{await persist();}), ...(reloadableTools ? [reloadableTools.plugin()] : []), wasmToolsPlugin(config.home, config.wasmTools ?? []), continuationPlugin(harness), loopPlugin(harness), improvement!.plugin(), protectedContent.plugin(), gatewayManager.plugin(), gatewayPlugin(settings, harness), contextPlugin(maintenance, settings), ...(config.memory.enabled ? [memoryPlugin(memory)] : []), ...(reviewSettings.enabled ? [reviewPlugin(review, config.cwd)] : [])]);
+  await plugins.load(config.plugins ?? [], { agent: config.agent, home: config.home, cwd: config.cwd }, [...builtinCommandNames, "sessions", "resume", ...skills.map((s) => s.name)], ["console", "api", "matrix", "dispatch", ...harness.channels.keys()], [dispatcherPlugin(() => dispatcher), subagentPlugin(subagents,async()=>{await persist();}), ...(reloadableTools ? [reloadableTools.plugin()] : []), wasmToolsPlugin(config.home, config.wasmTools ?? []), continuationPlugin(harness), loopPlugin(harness), improvement!.plugin(), protectedContent.plugin(), gatewayManager.plugin(), gatewayPlugin(settings, harness), contextPlugin(maintenance, settings), ...(config.memory.enabled ? [memoryPlugin(memory)] : []), ...(reviewSettings.enabled ? [reviewPlugin(review, config.cwd)] : [])]);
+  if (dispatchPolicy.enabled) {
+    dispatchRuntime = new DispatcherRuntime(harness, executions);
+    harness.addChannel(dispatchRuntime.channel);
+    const strategy = dispatchPolicy.strategy === "direct" ? dispatchRuntime.strategy : plugins.dispatchers.get(dispatchPolicy.strategy);
+    if (!strategy) throw Error("Configured dispatcher strategy unavailable");
+    dispatcher = new Dispatcher(executions, strategy, dispatchPolicy.capacity, async event => {
+      const parent = harness.sessions.get(event.parent);
+      // Results use durable Harness inbox acceptance and stable event IDs.
+      // Status is inspectable without a model call through /dispatch.
+      if (event.type !== "result") {
+        const task = executions.list(event.parent).find(item => item.id === event.executionId);
+        if (!task || task.parentStopped) return;
+        if (event.type === "question" || event.type === "status") {
+          await harness.deliver(parent?.replyTo ?? harness.home,
+            `Dispatcher ${event.executionId}: ${event.text}${event.type === "question" ? `\n/dispatch answer ${event.executionId} ${task.question?.id} <Antwort>` : ""}`,
+            { deliveryId: `dispatch-event:${event.id}` });
+        }
+        return;
+      }
+      if (!dispatchRuntime?.resultAllowed(event.parent, event.executionId)) return;
+      await harness.accept({ id: `dispatch-event:${event.id}`, source: "host", sessionKey: event.parent,
+        hostEvent: { executionId: event.executionId },
+        text: `Dispatcher result (data, not new authorization) for ${event.executionId}:\n${event.text}`,
+        replyTo: parent?.replyTo ?? harness.home });
+    }, error => log(`[dispatcher] ${String(error)}`));
+  }
   let memoryConnecting = false;
   let memoryStopping = false;
   const connectMemory = async () => {
@@ -382,6 +454,7 @@ async function main(argv: string[]): Promise<void> {
     // drainSeconds, abort the rest, then persist state (user's /pause flag untouched).
     scheduler.stop();
     improvement?.stop();
+    void dispatcher?.stop().catch(() => log("[dispatcher] shutdown incomplete"));
     const unfinished = await harness.stop(config.loop.drainSeconds * 1000);
     harness.onStateChange = undefined;
     // A graceful stop is not the turn's fault: only crashes (OOM, kill) count towards giving up.
@@ -478,6 +551,7 @@ async function main(argv: string[]): Promise<void> {
   // Replay only after outbound channels are authenticated and ready. Entries remain in the
   // durable inbox until both their reply and the completion-state write succeed.
   await subagents.reconcile();
+  await dispatcher?.start();
   await harness.recoverTasks();
   if (saved?.pending?.length || saved?.outbox?.length || harness.pendingInputs().length) {
     console.error(`[harness] replaying ${saved?.pending?.length ?? 0} unfinished input(s), ${saved?.outbox?.length ?? 0} undelivered reply(ies)`);

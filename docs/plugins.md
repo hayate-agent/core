@@ -236,6 +236,15 @@ The built-in native strategy delegates directly to PI; native is reserved.
 Strategies wrap manual compaction without receiving or rewriting the session tree.
 PI automatic compaction remains configured by PI settings and hooks.
 
+## Dispatcher strategies
+
+`api.registerDispatcher(strategy)` registers a trusted execution strategy with
+`name`, positive integer `version`, boolean `replaySafe` and async
+`execute(task, context)`. The built-in name `direct` is reserved. Configuration,
+claim fencing, effect intents, cancellation and a complete example are described
+in [durable dispatcher](dispatcher.md). Registration does not enable dispatcher
+mode or grant credentials, subagent access or automatic replay permission.
+
 ## Deliberate limits
 
 Version 1 exposes commands, channels, model tools, text panels, interactive local

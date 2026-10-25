@@ -1,5 +1,10 @@
 # Durable task recovery after restart
 
+For explicitly submitted background executions, see the separate
+[durable dispatcher ledger](dispatcher.md). Dispatcher worker turns are excluded
+from ordinary inbox/continuation replay, even when dispatcher mode is disabled;
+ambiguous opaque worker effects must be reconciled through their ledger.
+
 The Harness stores the original accepted chat request separately from its inbox.
 Its task checkpoint records the most recent continuation decision, concrete next
 step, chain depth and inherited numeric deadline. Generated follow-ups carry the
@@ -25,6 +30,18 @@ language task registry. A request interrupted before its first checkpoint uses
 ordinary inbox replay. Existing installations without task checkpoints continue
 using inbox replay; historical transcripts are not automatically converted into
 permission to work. Task checkpoints begin with requests processed by this version.
+
+In either mode, ordinary turns (including managed-subagent turns) share
+`executions.json` with dispatcher executions. A stable turn ID is saved before
+execution. Terminal reply/continuation/goal and consumed steering-input state are
+settled there before the inbox/outbox completion snapshot. Restart in that commit
+gap restores the saved result without another runtime prompt. Unsettled ordinary
+turns still follow the existing inbox replay policy; this does not silently
+upgrade arbitrary model/tool effects to replay-safe operations. A stop racing the
+asynchronous settlement write marks that turn stopped in the same ledger; either
+commit order suppresses successful reply delivery and continuation. Recovery also
+honors a stopped turn whose final result was not yet saved. This revocation does
+not undo side effects already performed.
 
 Execution is at-least-once: a tool may have committed an external effect before
 its result or completion checkpoint was saved. Recovery prompts require checking

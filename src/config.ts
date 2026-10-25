@@ -8,6 +8,7 @@ import { contextPolicy } from "./context-maintenance.js";
 import { memoryConfig, type MemoryConfig } from "./memory.js";
 import { reviewConfig } from "./review-config.js";
 import { validateWasmTools } from "./wasm-tools.js";
+import { dispatcherConfig } from "./dispatcher-config.js";
 
 export interface ReviewConfig {
   enabled: boolean;
@@ -46,6 +47,7 @@ export interface HarnessConfig {
   skillUpdateSource?: import("./skill-updates.js").SkillUpdateSource;
   /** Infrastructure-owned semantic continuation grants, keyed by exact conversation. */
   completionCheck?: { authorizations: Record<string, import("./completion-check.js").CompletionAuthorization> };
+  dispatcher?: Partial<import("./dispatcher-config.js").DispatcherConfig>;
   sessions?: { provider: string; options?: unknown };
   compaction?: { strategy: string };
   contextMaintenance?: Partial<import("./context-maintenance.js").ContextPolicy>;
@@ -99,6 +101,7 @@ export function defaultConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
     throw Error("reloadableToolPlugins must be an array of local module paths");
   }
   if (overrides.autoReloadToolPlugins !== undefined && typeof overrides.autoReloadToolPlugins !== "boolean") throw Error("autoReloadToolPlugins must be a boolean");
+  dispatcherConfig(overrides.dispatcher);
   validateWasmTools(overrides.wasmTools ?? []);
   if (overrides.mcp !== undefined && (overrides.mcp === null || typeof overrides.mcp !== "object" || typeof overrides.mcp.enabled !== "boolean")) {
     throw new Error("mcp.enabled must be a boolean");
@@ -129,6 +132,7 @@ export function defaultConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
     protectedContent: overrides.protectedContent,
     skillUpdateSource: overrides.skillUpdateSource,
     completionCheck: overrides.completionCheck,
+    dispatcher: dispatcherConfig(overrides.dispatcher),
     sessions: overrides.sessions ?? { provider: "native" },
     compaction: overrides.compaction ?? { strategy: "native" },
     contextMaintenance: contextPolicy(overrides.contextMaintenance),

@@ -3,7 +3,7 @@
  */
 
 /** Where an input came from. */
-export type InputSource = "channel" | "cron" | "api" | "heartbeat" | "loop" | "goal";
+export type InputSource = "channel" | "cron" | "api" | "heartbeat" | "loop" | "goal" | "host";
 
 /** Where a reply goes. `channel` + `target` identify a conversation (e.g. matrix + room id). */
 export interface Address {
@@ -21,6 +21,10 @@ export interface Inbound {
   sessionKey: string;
   text: string;
   source: InputSource;
+  /** Host event identity for authority checks; event data never grants continuation. */
+  hostEvent?: { executionId: string };
+  /** Stable core ledger identity, independent of transport IDs and runtime sessions. */
+  executionTurnId?: string;
   /** Durable, bounded continuation plan supplied during this turn. */
   continuation?: { state: "continue" | "waiting" | "blocked" | "completed"; next?: string; expiresAt?: number };
   continuationDepth?: number;
