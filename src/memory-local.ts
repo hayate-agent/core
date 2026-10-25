@@ -47,10 +47,14 @@ export class LocalMemory implements MemoryProvider {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => { this.pending.delete(id); reject(Error("Memory request timed out; write outcome may be unknown, retry with same key")); }, 30000);
       this.pending.set(id, { resolve, reject, timer });
-      this.child.send?.({ id, method, args }, (err) => {
-        if (!err) return;
-        clearTimeout(timer); this.pending.delete(id); reject(Error("Memory worker disconnected"));
-      });
+      try {
+        this.child.send?.({ id, method, args }, (err) => {
+          if (!err) return;
+          clearTimeout(timer); this.pending.delete(id); reject(Error("Memory worker disconnected"));
+        });
+      } catch (err) {
+        clearTimeout(timer); this.pending.delete(id); reject(err);
+      }
     });
   }
   put(context: MemoryContext, input: MemoryWrite): Promise<MemoryEntry> { return this.call("put", [context, input]); }
