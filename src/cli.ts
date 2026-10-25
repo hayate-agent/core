@@ -15,6 +15,8 @@ import { LocalMemory } from "./memory-local.js";
 import { MemoryService, memoryPlugin } from "./memory-plugin.js";
 import { gatewayPlugin } from "./gateway-plugin.js";
 import { PluginHost } from "./plugins.js";
+import { Subagents } from "./subagents.js";
+import { subagentPlugin } from "./subagent-plugin.js";
 import { wasmToolsPlugin } from "./wasm-tools.js";
 import { ReloadableTools } from "./reloadable-tools.js";
 import { builtinCommandNames, installCommands, VERSION } from "./commands.js";
@@ -164,7 +166,10 @@ async function main(argv: string[]): Promise<void> {
       await reloadSkills();
       return `Available skills (metadata only; read the named SKILL.md when relevant):\n${JSON.stringify(skills)}\n${reviewSettings.enabled ? "Core review is enabled. Use plugin_review to inspect, critically assess and review code changes. P0/P1 block publication and completion. Budget cannot be reset by starting another session." : ""}`;
     },
-    toolGuard: (_key, tool, input) => guardReviewTool(review, config.cwd, tool, input),
+    toolGuard: async (key, tool, input) => {
+      subagents.guardTool(key, tool);
+      await guardReviewTool(review, config.cwd, tool, input);
+    },
     personaSections: async () => {
       await protectedContent.verify();
       return personaSections(await loadPersona(config.persona, personality), { name: config.agent, workspace: config.cwd });
@@ -182,11 +187,14 @@ async function main(argv: string[]): Promise<void> {
     runtime,
     contextMaintenance: maintenance,
     memory,
+    approvalTarget: key => subagents.approvalTarget(key),
+    conversationStopped: key => subagents.cancelChildren(key),
     beforeTurn: async (input) => {
+      subagents.beforeTurn(input.sessionKey);
       await protectedContent.verify();
       if (config.autoReloadToolPlugins) await reloadableTools?.refresh();
       await improvement?.before(input);
-      await review.prepare(config.cwd, input.replyTo, input.sessionKey);
+      await review.prepare(config.cwd, subagents.isChild(input.sessionKey) ? subagents.approvalTarget(input.sessionKey) : input.replyTo, input.sessionKey);
     },
     turnCommitted: async (input) => { await improvement?.committed(input); },
     continuationDeadline: input => config.completionCheck?.authorizations[input.sessionKey]?.expiresAt,
@@ -295,6 +303,10 @@ async function main(argv: string[]): Promise<void> {
   }
   updateReviewDefaults();
   // The state file doubles as the inbox: unfinished user/cron inputs are part of every save.
+  const subagents = new Subagents(harness, async () => { await persist(); });
+  subagents.restore(saved?.subagents ?? []);
+  subagents.restoreOverrides(saved?.subagentOverrides ?? {});
+  harness.addChannel(subagents.channel);
   const persist = (pending: Inbound[] = harness.pendingInputs()) =>
     store.save({
       version: 1,
@@ -305,6 +317,8 @@ async function main(argv: string[]): Promise<void> {
       personality,
       cronOverrides: Object.fromEntries(scheduler.overrides),
       sessions: harness.snapshotSessions(),
+      subagents: subagents.snapshot(),
+      subagentOverrides: subagents.overrides(),
       pending: pending.length ? pending : undefined,
       outbox: harness.outboxEntries().length ? harness.outboxEntries() : undefined,
       seen: harness.seenIds(),
@@ -322,7 +336,7 @@ async function main(argv: string[]): Promise<void> {
   }
   await scheduler.load();
 
-  await plugins.load(config.plugins ?? [], { agent: config.agent, home: config.home, cwd: config.cwd }, [...builtinCommandNames, "sessions", "resume", ...skills.map((s) => s.name)], ["console", "api", "matrix", ...harness.channels.keys()], [...(reloadableTools ? [reloadableTools.plugin()] : []), wasmToolsPlugin(config.home, config.wasmTools ?? []), continuationPlugin(harness), loopPlugin(harness), improvement!.plugin(), protectedContent.plugin(), gatewayManager.plugin(), gatewayPlugin(settings, harness), contextPlugin(maintenance, settings), ...(config.memory.enabled ? [memoryPlugin(memory)] : []), ...(reviewSettings.enabled ? [reviewPlugin(review, config.cwd)] : [])]);
+  await plugins.load(config.plugins ?? [], { agent: config.agent, home: config.home, cwd: config.cwd }, [...builtinCommandNames, "sessions", "resume", ...skills.map((s) => s.name)], ["console", "api", "matrix", ...harness.channels.keys()], [subagentPlugin(subagents,async()=>{await persist();}), ...(reloadableTools ? [reloadableTools.plugin()] : []), wasmToolsPlugin(config.home, config.wasmTools ?? []), continuationPlugin(harness), loopPlugin(harness), improvement!.plugin(), protectedContent.plugin(), gatewayManager.plugin(), gatewayPlugin(settings, harness), contextPlugin(maintenance, settings), ...(config.memory.enabled ? [memoryPlugin(memory)] : []), ...(reviewSettings.enabled ? [reviewPlugin(review, config.cwd)] : [])]);
   let memoryConnecting = false;
   let memoryStopping = false;
   const connectMemory = async () => {
@@ -463,6 +477,7 @@ async function main(argv: string[]): Promise<void> {
 
   // Replay only after outbound channels are authenticated and ready. Entries remain in the
   // durable inbox until both their reply and the completion-state write succeed.
+  await subagents.reconcile();
   await harness.recoverTasks();
   if (saved?.pending?.length || saved?.outbox?.length || harness.pendingInputs().length) {
     console.error(`[harness] replaying ${saved?.pending?.length ?? 0} unfinished input(s), ${saved?.outbox?.length ?? 0} undelivered reply(ies)`);

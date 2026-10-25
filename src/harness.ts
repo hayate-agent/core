@@ -108,6 +108,9 @@ export interface HarnessOptions {
   afterTurn?: (input: Inbound, reply: string, session: RuntimeSession, promptOptions: PromptOptions, signal: AbortSignal) => Promise<string>;
   /** Advisory fallback; production caller must supply independently authorized task scope. */
   completionCheck?: (input: Inbound, reply: string, signal: AbortSignal) => Promise<NonNullable<Inbound["continuation"]> | undefined>;
+  /** Trusted host routing for child approval requests; never supplied by model input. */
+  approvalTarget?: (sessionKey: string) => Address | undefined;
+  conversationStopped?: (sessionKey: string) => Promise<void>;
   /** Trusted installation deadline, independent of model continuation plans. */
   continuationDeadline?: (input: Inbound) => number | undefined;
   now?: () => number;
@@ -574,6 +577,7 @@ export class Harness {
     if (s.current) { s.cancelling = s.current; s.current.continuation = undefined; }
     this.turnAbort.get(sessionKey)?.abort();
     if (s.prompting) await s.session?.abort();
+    await this.opts.conversationStopped?.(sessionKey);
     await this.onStateChange?.();
     return dropped;
   }
@@ -1141,6 +1145,9 @@ export class Harness {
   requestApproval = async (sessionKey: string, tool: string, input: unknown): Promise<boolean> => {
     const id = randomUUID().slice(0, 8);
     const s = this.state(sessionKey);
+    let target: Address | undefined;
+    try { target = this.opts.approvalTarget ? this.opts.approvalTarget(sessionKey) : s.replyTo; }
+    catch { return false; } // A child without a trusted operator destination fails closed.
     const preview = approvalPreview(tool, input);
     const signal = this.turnAbort.get(sessionKey)?.signal;
     if (signal?.aborted) return false;
@@ -1161,7 +1168,7 @@ export class Harness {
     const text = `🔐 Approval needed [${id}]: \`${tool}\` ${preview}\n/approve ${id} or /deny ${id} (or react ✅/❌)`;
     for (let attempt = 1; !settled; attempt++) {
       try {
-        await this.deliver(s.replyTo, text, { approvalId: id, deliveryId: `approval-${id}` });
+        await this.deliver(target, text, { approvalId: id, deliveryId: `approval-${id}` });
         break;
       } catch (err) {
         if (attempt >= Harness.APPROVAL_SEND_ATTEMPTS || this.stopping) {

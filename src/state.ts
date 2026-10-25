@@ -29,6 +29,8 @@ export interface PersistedState {
   /** /cron pause|resume overrides of jobs.yaml `enabled` (name → enabled). */
   cronOverrides?: Record<string, boolean>;
   sessions: PersistedSession[];
+  subagents?: import("./subagents.js").SubagentRecord[];
+  subagentOverrides?: Record<string,{model:string;thinking:string}>;
   /** Unfinished inputs (inbox); replayed on start. */
   pending?: Inbound[];
   /** Replies of finished turns not yet delivered; sent on start, turns are not re-run. */
