@@ -193,7 +193,7 @@ export class ContextMaintenance {
       const matchingRequest = request && (phase === "before" ? request.action === "handover" : request.action === "compact");
       const automatic = !request && percent !== undefined && (phase === "before"
         ? policy.autoHandover && (percent >= policy.compactPercent || (percent >= policy.assessPercent && percent + incomingPercent >= policy.compactPercent))
-        : percent >= policy.compactPercent);
+        : !policy.autoHandover && percent >= policy.compactPercent);
       if ((!matchingRequest && !due) || (!matchingRequest && !automatic)) { await this.save(key, state); return; }
       state.pending = undefined;
       state.lastMaintenance = state.turns;

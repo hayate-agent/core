@@ -25,8 +25,11 @@ budget would reach `compactPercent`. The byte-based budget is conservative, not 
 semantic classifier for task complexity. The original prompt remains in the durable
 inbox and is passed unchanged to the new, seeded session; it is never executed by
 the summary operation. A low-usage greeting does not cause a session rotation.
-After a completed turn, usage at `compactPercent` triggers native compaction, never
-a handover. PI overflow compaction remains a separate emergency fallback.
+With `autoHandover` enabled, automatic post-turn compaction is deferred so it
+cannot reduce usage and consume the cooldown before the next pre-turn handover.
+With `autoHandover` disabled, usage at `compactPercent` triggers post-turn native
+compaction. Explicit compact requests still run after a turn. PI overflow
+compaction remains a separate emergency fallback and may independently reduce usage.
 A persisted cooldown avoids automatic loops and survives process restart, including
 failed attempts. Explicit agent checkpoint requests bypass that cooldown.
 
