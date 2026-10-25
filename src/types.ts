@@ -24,6 +24,8 @@ export interface Inbound {
   /** Durable, bounded continuation plan supplied during this turn. */
   continuation?: { state: "continue" | "waiting" | "blocked" | "completed"; next?: string; expiresAt?: number };
   continuationDepth?: number;
+  /** Host-assigned durable task identity, never a model authorization grant. */
+  taskId?: string;
   /** Trusted numeric authorization boundary inherited by generated work. */
   continuationExpiresAt?: number;
   /** Core-captured original chat input; inherited by generated follow-ups, never reply text. */

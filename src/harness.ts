@@ -35,8 +35,19 @@ export interface Goal {
   turns: number;
 }
 
+export interface DurableTask {
+  id: string;
+  original: string;
+  state: "active" | "waiting" | "blocked" | "completed" | "stopped";
+  next?: string;
+  depth: number;
+  expiresAt?: number;
+  anchor?: Inbound["completionAnchor"];
+}
+
 export interface SessionState {
   key: string;
+  task?: DurableTask;
   session?: RuntimeSession;
   opening?: Promise<RuntimeSession>;
   queue: Inbound[];
@@ -559,6 +570,7 @@ export class Harness {
     const dropped = s.queue.length;
     for (const input of s.queue) this.inbox.unsaved.delete(input);
     s.queue.length = 0;
+    if (s.task) s.task.state = "stopped";
     if (s.current) { s.cancelling = s.current; s.current.continuation = undefined; }
     this.turnAbort.get(sessionKey)?.abort();
     if (s.prompting) await s.session?.abort();
@@ -661,6 +673,23 @@ export class Harness {
     }
   }
 
+  /** Reconstruct only explicitly checkpointed active next steps. No status polling. */
+  async recoverTasks(): Promise<void> {
+    for (const s of this.sessions.values()) {
+      const task = s.task;
+      if (!task || task.state !== "active" || !task.next?.trim() || !Number.isSafeInteger(task.depth) || task.depth < 0 || task.depth >= 20 ||
+          (task.expiresAt !== undefined && (!Number.isSafeInteger(task.expiresAt) || task.expiresAt <= this.now())) ||
+          s.current || s.queue.length || s.key === "improvement:nightly") continue;
+      const input: Inbound = { id: `task:${task.id}:${task.depth + 1}`, source: "heartbeat", sessionKey: s.key,
+        text: `Resume the authorized task after restart. Verify completed side effects before acting. Original task:\n${task.original}\nNext step:\n${task.next}`,
+        replyTo: s.replyTo, taskId: task.id, continuationDepth: task.depth + 1, continuationExpiresAt: task.expiresAt, completionAnchor: task.anchor };
+      await this.submit(input, true);
+      this.inbox.restored.add(input);
+      try { await this.onStateChange?.(); }
+      catch (error) { s.queue.splice(s.queue.indexOf(input),1); this.inbox.restored.delete(input); throw error; }
+    }
+  }
+
   releaseRestored(): void {
     this.inbox.restored.clear();
     this.outbox.held = false;
@@ -703,6 +732,10 @@ export class Harness {
         if (input.source === "channel" || input.source === "api") s.lastInput = input;
         s.current = input;
         this.resetContinuation(input);
+        if (input.source === "channel" && !(input.continuationDepth ?? 0)) {
+          input.taskId = input.taskId ?? input.id ?? randomUUID();
+          s.task = { id: input.taskId, original: input.text, state: "active", depth: 0, anchor: input.completionAnchor };
+        }
         if (replayable(input)) {
           // Durable before the turn runs, so a crash during it is charged to this input.
           input.started = true;
@@ -742,9 +775,17 @@ export class Harness {
         // Follow-up is part of the same inbox→outbox checkpoint, never a recursive
         // model call. A failed save holds both reply and continuation.
         const inheritedDeadline = Math.min(input.continuationExpiresAt ?? Infinity, input.continuation?.expiresAt ?? Infinity);
+        if (s.task && input.taskId === s.task.id && s.task.state !== "stopped") {
+          const plan = input.continuation;
+          s.task.state = plan?.state === "continue" ? "active" : plan?.state ?? "waiting";
+          s.task.next = plan?.state === "continue" ? plan.next : undefined;
+          s.task.depth = input.continuationDepth ?? 0;
+          s.task.expiresAt = inheritedDeadline === Infinity ? undefined : inheritedDeadline;
+        }
         if (input.continuation?.state === "continue" && input.continuation.next && (input.continuationDepth ?? 0) < 20 && input.source !== "api" && s.key !== "improvement:nightly" && !s.queue.length && !this.stopping) {
           s.queue.push({ id: randomUUID(), sessionKey: s.key, source: "cron", replyTo: input.replyTo ?? s.replyTo,
             text: `Continue the explicitly authorized task with this recorded next step. Recheck blockers and authorization; do not repeat completed side effects.\n${input.continuation.next}`,
+            taskId: input.taskId,
             continuationDepth: (input.continuationDepth ?? 0) + 1,
             continuationExpiresAt: inheritedDeadline === Infinity ? undefined : inheritedDeadline,
             completionAnchor: input.completionAnchor ? structuredClone(input.completionAnchor) : undefined });
@@ -1076,8 +1117,8 @@ export class Harness {
   snapshotSessions(): PersistedSession[] {
     const out: PersistedSession[] = [];
     for (const s of this.sessions.values()) {
-      if (!s.heartbeat && !s.heartbeatDisabled && !s.loop && !s.goal && !s.replyTo) continue;
-      out.push({ key: s.key, replyTo: s.replyTo, heartbeat: s.heartbeat, heartbeatDisabled: s.heartbeatDisabled, loop: s.loop, goal: s.goal });
+      if (!s.task && !s.heartbeat && !s.heartbeatDisabled && !s.loop && !s.goal && !s.replyTo) continue;
+      out.push({ key: s.key, task: s.task ? structuredClone(s.task) : undefined, replyTo: s.replyTo, heartbeat: s.heartbeat, heartbeatDisabled: s.heartbeatDisabled, loop: s.loop, goal: s.goal });
     }
     return out;
   }
@@ -1085,6 +1126,7 @@ export class Harness {
   restoreSessions(list: PersistedSession[]): void {
     for (const p of list) {
       const s = this.state(p.key);
+      s.task = p.task ? structuredClone(p.task) : undefined;
       s.replyTo = p.replyTo;
       s.heartbeat = p.heartbeat;
       s.heartbeatDisabled = p.heartbeatDisabled;

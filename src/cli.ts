@@ -463,8 +463,9 @@ async function main(argv: string[]): Promise<void> {
 
   // Replay only after outbound channels are authenticated and ready. Entries remain in the
   // durable inbox until both their reply and the completion-state write succeed.
-  if (saved?.pending?.length || saved?.outbox?.length) {
-    console.error(`[harness] replaying ${saved.pending?.length ?? 0} unfinished input(s), ${saved.outbox?.length ?? 0} undelivered reply(ies)`);
+  await harness.recoverTasks();
+  if (saved?.pending?.length || saved?.outbox?.length || harness.pendingInputs().length) {
+    console.error(`[harness] replaying ${saved?.pending?.length ?? 0} unfinished input(s), ${saved?.outbox?.length ?? 0} undelivered reply(ies)`);
     // Replay counters (and abandoned inputs' failure replies) are durable before anything runs.
     await persist();
     harness.releaseRestored();
