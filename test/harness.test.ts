@@ -746,3 +746,27 @@ test("a turn does not start while its start checkpoint cannot be saved", async (
   await harness.drained();
   assert.deepEqual(runtime.sessions.get("mem:room1")!.prompts, ["careful", "careful"]);
 });
+
+test("completion fallback is invoked with a live signal and queues one durable follow-up", async () => {
+  let checks = 0, saves = 0, turns = 0;
+  const runtime = new FakeRuntime(() => ++turns === 1 ? "Tests remain unfinished" : "Finished");
+  const h = new Harness({ runtime, tickMs: 60000, completionCheck: async (_input, _reply, signal) => {
+    assert.equal(signal.aborted, false); checks++;
+    return checks === 1 ? { state: "continue", next: "Run remaining tests" } : undefined;
+  } });
+  h.addChannel(new MemoryChannel()); h.onStateChange = async () => { saves++; };
+  await h.submit(msg("Finish tests")); await h.drained();
+  assert.equal(checks, 2); assert.equal(turns, 2); assert.ok(saves > 0);
+  await h.stop(1000);
+});
+
+test("completion result cannot override a pause arriving during assessment", async () => {
+  let turns = 0;
+  const h = new Harness({ runtime: new FakeRuntime(() => { turns++; return "unfinished"; }), tickMs: 60000,
+    completionCheck: async () => { h.paused = true; return { state: "continue", next: "do more" }; } });
+  h.addChannel(new MemoryChannel()); h.onStateChange = async () => {};
+  await h.submit(msg("authorized task"));
+  for (let i=0;i<100 && h.state("mem:room1").running;i++) await new Promise(r=>setTimeout(r,1));
+  assert.equal(turns,1); assert.equal(h.state("mem:room1").queue.length,0);
+  await h.stop(1000);
+});

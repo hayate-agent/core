@@ -42,6 +42,7 @@ import { ContextMaintenance, contextPolicy } from "./context-maintenance.js";
 import { contextPlugin } from "./context-plugin.js";
 import { SettingsService, type SettingPath } from "./settings.js";
 import { runtimeReviewer } from "./runtime/reviewer.js";
+import { assessCompletion } from "./completion-check.js";
 import { reviewConfig } from "./review-config.js";
 import { reviewPlugin } from "./review-plugin.js";
 import { finishWithReview } from "./review-lifecycle.js";
@@ -183,6 +184,10 @@ async function main(argv: string[]): Promise<void> {
       await review.prepare(config.cwd, input.replyTo, input.sessionKey);
     },
     turnCommitted: async (input) => { await improvement?.committed(input); },
+    completionCheck: async (input, reply, signal) => {
+      const grant = config.completionCheck?.authorizations[input.sessionKey];
+      return assessCompletion(runtimeReviewer(runtime), input, reply, grant, signal, effectiveModels().reviewModel);
+    },
     afterTurn: async (input, reply, session, options, signal) => {
       const result = await finishWithReview(review, config.cwd, input, reply, session, options, signal);
       await improvement?.completed(input, result);
