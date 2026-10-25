@@ -7,11 +7,21 @@ export async function finishWithReview(service: ReviewService, cwd: string, inpu
   if (!service.config.enabled || !service.config.mandatory.local) return reply;
   let change;
   try { change = await service.changes(cwd); }
-  catch {
+  catch (error) {
     // No repository is a valid chat workspace; a Git repository with an unreadable diff is not.
     const { git } = await import("./changeset.js");
     try { await git(cwd, ["rev-parse", "--show-toplevel"]); } catch { return reply; }
-    throw new Error("Cannot establish review changeset; completion blocked");
+    // Never expose child-process messages/stdout/stderr: they can contain source or credentials.
+    const code = (error as NodeJS.ErrnoException | undefined)?.code;
+    const known = error instanceof Error && [
+      "Changeset exceeds review size limit", "Invalid changeset path",
+      "Untracked non-regular file requires operator review", "Untracked binary file requires operator review",
+      "Untracked invalid UTF-8 file requires operator review",
+    ].includes(error.message) ? error.message : undefined;
+    const reason = code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER"
+      ? "ERR_CHILD_PROCESS_STDIO_MAXBUFFER: changeset exceeds review size limit (512 KiB)"
+      : known ?? "Git/state capture failed; inspect local operator diagnostics";
+    throw new Error(`Cannot establish review changeset; completion blocked: ${reason}`);
   }
   if (!requiresReview(change, service.config)) return reply;
   for (let n = 0; n <= service.config.maxTurns; n++) {

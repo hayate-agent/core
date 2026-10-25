@@ -77,7 +77,16 @@ model. The final exhausted round is escalated with its findings for operator rev
 Budget reservations are durable before external calls. Edits, session switches and
 process restarts do not reset an unresolved task. Reviewer failures consume budget.
 A successful review is bound to the exact changeset fingerprint; a concurrent edit
-cannot inherit it. A subsequent changed task after a successful review gets a fresh
+cannot inherit it. At the next pre-turn boundary, a passed task may be archived
+when the worktree (including untracked files) is clean, HEAD exactly equals the
+configured remote-tracking baseRef (or remote-tracking upstream), and the old base is its ancestor. This
+records an accepted upstream task boundary, not review approval of historical
+commits: the new state is pending with no approved fingerprint, based at HEAD.
+The old base, fingerprint, rounds and boundary ref/HEAD remain in history. Missing
+upstream, local-only commits, dirty work and unresolved/escalated tasks cannot
+rotate the base or reset budget. New working-turn edits remain mandatory-review
+changes even when old upstream history exceeded the unchanged 512 KiB limit.
+A subsequent changed task after a successful review gets a fresh
 budget. State is serialized per repository under `<home>/reviews/<root-hash>.json`.
 Corrupt state fails closed. There is intentionally no agent-accessible budget reset
 or operator override command in this first version. An operator must inspect and
