@@ -24,6 +24,8 @@ export interface Inbound {
   /** Durable, bounded continuation plan supplied during this turn. */
   continuation?: { state: "continue" | "waiting" | "blocked" | "completed"; next?: string };
   continuationDepth?: number;
+  /** Core-captured original chat input; inherited by generated follow-ups, never reply text. */
+  completionAnchor?: { id: string; task: string; receivedAt: number };
   sender?: string;
   /** Where replies for this input are delivered. */
   replyTo?: Address;

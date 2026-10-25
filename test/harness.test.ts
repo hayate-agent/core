@@ -770,3 +770,15 @@ test("completion result cannot override a pause arriving during assessment", asy
   assert.equal(turns,1); assert.equal(h.state("mem:room1").queue.length,0);
   await h.stop(1000);
 });
+
+test("chat completion anchor survives generated follow-ups without using assistant text", async () => {
+  let count = 0; const anchors: unknown[] = [];
+  const h = new Harness({ runtime: new FakeRuntime(() => "unfinished"), tickMs: 60000, completionCheck: async input => {
+    anchors.push(input.completionAnchor);
+    return ++count === 1 ? {state:"continue",next:"remaining test"} : undefined;
+  } });
+  h.addChannel(new MemoryChannel()); h.onStateChange = async () => {};
+  await h.submit(msg("Implement approved feature")); await h.drained();
+  assert.equal(anchors.length,2); assert.deepEqual(anchors[0],anchors[1]);
+  assert.equal((anchors[0] as {task:string}).task,"Implement approved feature"); await h.stop(1000);
+});
