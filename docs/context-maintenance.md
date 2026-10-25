@@ -91,6 +91,16 @@ sensitive task data just like session history; protect Harness home. No automati
 archive retention/deletion is implemented yet. A failed refreshed handover can leave
 an unreferenced archive; it is retained rather than deleting possible recovery data.
 
+## Maintenance cancellation and deadline
+
+Native compaction and handover summarization have a five-minute host deadline.
+At the deadline the Harness aborts the SDK compaction controller and reports
+failure, retaining the original session/prepared checkpoint rather than claiming
+a successful handover. `/stop` also aborts pre-turn maintenance even when no
+working prompt has started. This does not reset a review escalation or grant new
+authorization. A backend ignoring cancellation may still finish its remote
+request; cancellation is not a rollback of server-side computation.
+
 ## Manual handover command
 
 `/handover [resume instructions]` immediately requests and performs a durable

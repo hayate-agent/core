@@ -12,7 +12,12 @@ export function runtimeReviewer(runtime: AgentRuntime): ReviewBackend {
       signal?.addEventListener("abort", abort, { once: true });
       try {
         if (signal?.aborted) throw new Error("Review cancelled");
-        return await reviewer.prompt(prompt, { model, thinking });
+        const result = await reviewer.prompt(prompt, { model, thinking });
+        if (result.trim() || thinking === "off" || signal?.aborted) return result;
+        // Reasoning-only local responses are not a review verdict. One bounded
+        // retry with explicit wire-level reasoning disabled stays in this same
+        // review attempt; parsing/gating still requires a real JSON verdict.
+        return await reviewer.prompt(prompt, { model, thinking: "off" });
       } finally {
         signal?.removeEventListener("abort", abort);
         await reviewer.dispose();
