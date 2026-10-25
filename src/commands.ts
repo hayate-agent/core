@@ -100,7 +100,10 @@ function recurringCommand(kind: "heartbeat" | "loop"): Command["run"] {
     let words = sub === "every" ? rest : [sub, ...rest];
     let everyMs = parseInterval(words[0] ?? "");
     if (everyMs) words = words.slice(1);
-    else everyMs = kind === "heartbeat" ? 30 * 60_000 : 10 * 60_000;
+    else {
+      if (sub === "every" || /^(\d+[smhd])+$/i.test(words[0] ?? "")) return "invalid interval: use a positive duration within safe integer milliseconds";
+      everyMs = kind === "heartbeat" ? 30 * 60_000 : 10 * 60_000;
+    }
     let remaining: number | undefined;
     const t = words.indexOf("--times");
     if (t >= 0) {

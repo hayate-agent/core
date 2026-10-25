@@ -6,7 +6,7 @@ export function parseInterval(text: string): number | undefined {
   if (!/^(\d+[smhd])+$/.test(s)) return undefined;
   let total = 0;
   for (const [, n, u] of s.matchAll(/(\d+)([smhd])/g)) total += Number(n) * UNITS[u];
-  return total > 0 ? total : undefined;
+  return Number.isSafeInteger(total) && total > 0 ? total : undefined;
 }
 
 export function formatInterval(ms: number): string {

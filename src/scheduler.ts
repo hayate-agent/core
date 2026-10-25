@@ -82,22 +82,32 @@ export class Scheduler {
   }
 
   async load(): Promise<void> {
-    this.stop();
-    if (!this.opts.jobsFile) return;
+    if (!this.opts.jobsFile) { this.stop(); this.jobs = []; return; }
     let text: string;
     try {
       text = await readFile(this.opts.jobsFile, "utf8");
     } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === "ENOENT") return;
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") { this.stop(); this.jobs = []; return; }
       throw err;
     }
-    this.jobs = parseJobs(text);
-    for (const job of this.jobs) {
-      const enabled = this.overrides.get(job.name) ?? job.enabled !== false;
-      const cron = new Cron(job.schedule, { timezone: this.opts.timezone, paused: !enabled, protect: true }, () =>
-        this.runJob(job).catch((err) => this.log(`${job.name}: ${err instanceof Error ? err.message : err}`)),
-      );
-      this.crons.push(cron);
+    const jobs = parseJobs(text);
+    const crons: Cron[] = [];
+    try {
+      // Prepare paused: invalid later definitions must not replace or partially start the schedule.
+      for (const job of jobs) {
+        crons.push(new Cron(job.schedule, { timezone: this.opts.timezone, paused: true, protect: true }, () =>
+          this.runJob(job).catch((err) => this.log(`${job.name}: ${err instanceof Error ? err.message : err}`)),
+        ));
+      }
+    } catch (err) {
+      for (const cron of crons) cron.stop();
+      throw err;
+    }
+    this.stop();
+    this.jobs = jobs;
+    this.crons = crons;
+    for (let i = 0; i < jobs.length; i++) {
+      if (this.overrides.get(jobs[i].name) ?? jobs[i].enabled !== false) crons[i].resume();
     }
     this.log(`loaded ${this.jobs.length} job(s) from ${this.opts.jobsFile}`);
   }
@@ -140,7 +150,9 @@ export class Scheduler {
       const scriptsDir = this.opts.scriptsDir ?? path.join(this.baseDir(), "scripts");
       const file = path.resolve(scriptsDir, job.script);
       if (!file.startsWith(path.resolve(scriptsDir) + path.sep)) throw new Error(`script outside scripts dir: ${job.script}`);
-      const { stdout } = await run(file, [], { timeout: 10 * 60_000, maxBuffer: 4 * 1024 * 1024 });
+      // Enforce the deadline even when the direct script ignores SIGTERM. This is
+      // not process-tree isolation: independently running descendants may survive.
+      const { stdout } = await run(file, [], { timeout: 10 * 60_000, killSignal: "SIGKILL", maxBuffer: 4 * 1024 * 1024 });
       scriptOut = stdout.trim();
     }
     const delivery = resolveDelivery(job, this.harness.home);

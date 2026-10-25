@@ -6,7 +6,9 @@ export function runtimeReviewer(runtime: AgentRuntime): ReviewBackend {
   return {
     async review(prompt, model, thinking, signal) {
       const reviewer = await runtime.open(`review:${Date.now()}`, { ephemeral: true });
-      const abort = () => { void reviewer.abort(); };
+      // Abort is best-effort; runtime failures must not escape the event callback as
+      // unhandled rejections. Prompt/dispose errors still propagate to the review gate.
+      const abort = () => { void Promise.resolve().then(() => reviewer.abort()).catch(() => undefined); };
       signal?.addEventListener("abort", abort, { once: true });
       try {
         if (signal?.aborted) throw new Error("Review cancelled");

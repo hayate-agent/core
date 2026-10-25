@@ -1,0 +1,34 @@
+import assert from 'node:assert/strict';
+import {mkdtemp,readFile,writeFile,rm} from 'node:fs/promises';
+import os from 'node:os';import path from 'node:path';import {test} from 'node:test';
+import {ImprovementController} from '../src/improvement.js';
+import {Harness} from '../src/harness.js';import {FakeRuntime} from './fakes.js';
+
+test('no report destination preserves results locally and allows the next night after restart',async(t)=>{
+ const home=await mkdtemp(path.join(os.tmpdir(),'improvement-local-'));
+ let now=Date.parse('2026-10-24T23:00:00Z'),calls=0;
+ const harness=new Harness({runtime:new FakeRuntime(()=>{calls++;return 'synthetic result [IMPROVEMENT_DONE]';}),tickMs:60000,log:()=>{}});
+ t.after(async()=>{await harness.stop(0);await rm(home,{recursive:true,force:true});});
+ await writeFile(path.join(home,'improvement.yaml'),'enabled: true\nmaxTurns: 1\ntimezone: UTC\n');
+ let controller=new ImprovementController(home,harness,'UTC',()=>now);
+ (harness as any).opts.beforeTurn=(input:any)=>controller.before(input);
+ (harness as any).opts.afterTurn=async(input:any,reply:string)=>{await controller.completed(input,reply);return reply;};
+ await controller.tick(true);await harness.drained();assert.equal(calls,1);
+ now=Date.parse('2026-10-25T05:00:00Z');
+ const reports=path.join(home,'improvement','reports');
+ await writeFile(reports,'blocked');
+ await assert.rejects(controller.tick(false));
+ const failedState=JSON.parse(await readFile(path.join(home,'improvement','state.json'),'utf8'));
+ assert.notEqual(failedState.reportQueued,true,'failed archive must retain unhandled state');
+ assert.match(failedState.results[0],/synthetic result/);
+ await rm(reports);await controller.tick(false);
+ now=Date.parse('2026-10-25T23:00:00Z');
+ controller=new ImprovementController(home,harness,'UTC',()=>now);
+ await controller.tick(true);await harness.drained();
+ controller=new ImprovementController(home,harness,'UTC',()=>now);
+ await controller.tick(false);await harness.drained();assert.equal(calls,2,'second night must execute');
+ const report=JSON.parse(await readFile(path.join(home,'improvement','reports','2026-10-24.json'),'utf8'));
+ assert.equal(report.night,'2026-10-24');assert.equal(report.turns,1);
+ assert.match(report.results[0],/synthetic result/);
+ assert.equal(report.delivery,'local-only');assert.equal(harness.outboxEntries().length,0);
+});

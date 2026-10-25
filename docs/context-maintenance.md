@@ -77,7 +77,10 @@ the current Harness conversation key; archive IDs cannot address another convers
 or arbitrary files. Reads are bounded. The seed explicitly asks the new agent to read
 the retrospective before continuing. This is model guidance, not a guaranteed read
 acknowledgement; short forward state is already in the seed. Summary responses are
-bounded to 20,000 characters; full text remains on disk. Images and non-text blocks
+valid JSON with at most 1,500 characters per retrospective/forward field. Use
+`charOffset` to page both fields; `retrospectiveTotalChars`, `forwardTotalChars` and
+the corresponding `*Truncated` flags report remaining content. JSON escaping may
+increase the serialized size; full text remains on disk. Images and non-text blocks
 are not duplicated into the text archive; the native session remains the original.
 
 Historical instructions are context, not new authorization. Archives may contain

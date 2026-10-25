@@ -797,6 +797,7 @@ export class Harness {
       outcome = "failed";
       if (s.cancelling !== input) this.log(`turn failed in ${s.key}: ${reply}`);
     } finally {
+      abort.abort(); // Pending tool approvals cannot outlive their working turn.
       this.turnAbort.delete(s.key);
       await typingCh?.typing?.(to!, false).catch(() => undefined);
     }
@@ -984,10 +985,20 @@ export class Harness {
     const id = randomUUID().slice(0, 8);
     const s = this.state(sessionKey);
     const preview = approvalPreview(tool, input);
+    const signal = this.turnAbort.get(sessionKey)?.signal;
+    if (signal?.aborted) return false;
     let settled = false;
+    const deny = () => this.approvals.get(id)?.resolve(false);
     const result = new Promise<boolean>((resolve) =>
-      this.approvals.set(id, { id, sessionKey, tool, input, resolve: (ok) => ((settled = true), resolve(ok)) }),
+      this.approvals.set(id, { id, sessionKey, tool, input, resolve: (ok) => {
+        if (settled) return;
+        settled = true;
+        this.approvals.delete(id);
+        signal?.removeEventListener("abort", deny);
+        resolve(ok);
+      } }),
     );
+    signal?.addEventListener("abort", deny, { once: true });
     // Not via the session outbox (its pump is waiting for this very approval). Same delivery id
     // on every retry, so a prompt that arrived despite an error is not posted twice.
     const text = `🔐 Approval needed [${id}]: \`${tool}\` ${preview}\n/approve ${id} or /deny ${id} (or react ✅/❌)`;

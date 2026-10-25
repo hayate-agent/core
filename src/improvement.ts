@@ -142,7 +142,18 @@ export class ImprovementController {
       // Report previous window even when disabled meanwhile. Outbox owns retry.
       if (this.state && !busy && (!w.active || this.state.night !== w.night) && !this.state.reportQueued) {
         const to = p.reportTo ?? this.harness.home;
-        if (!to) return;
+        if (!to) {
+          // No remote destination: preserve results durably before releasing the old night.
+          const directory = path.join(this.home, "improvement", "reports");
+          await mkdir(directory, { recursive: true, mode: 0o700 });
+          await writeFileDurable(path.join(directory, `${this.state.night}.json`), JSON.stringify({
+            version: 1, night: this.state.night, timezone: p.timezone,
+            turns: this.state.turns, results: this.state.results, delivery: "local-only",
+          }));
+          this.state.reportQueued = true; // handled locally, not remotely delivered
+          await this.save();
+          return;
+        }
         this.harness.post({ id: `improvement-report:${this.state.night}`, sessionKey: KEY, source: "cron", text: "", replyTo: to }, `Nachtbericht ${this.state.night} (${p.timezone})\nArbeits-Turns: ${this.state.turns}.\n${this.state.results.join("\n\n") || "Keine abgeschlossenen Experimente protokolliert."}\nMerge ist kein Aktivierungsnachweis.`);
         await this.harness.onStateChange?.(); // ensure report is durable before marking adopted
         this.state.reportQueued = true;

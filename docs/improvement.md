@@ -24,7 +24,12 @@ marker. DST uses local calendar dates. A morning report goes through Harness out
 at the first idle check after the window ends, also after restart. A crash between
 outbox adoption and marking the report can produce a duplicate report (at least
 once, not exactly once). On restart interrupted candidates require state inspection,
-not blind repetition of side effects. The Harness home lock owns this controller.
+not blind repetition of side effects. If neither `reportTo` nor Harness home address
+is available, results are durably retained in `improvement/reports/<night>.json`
+with `delivery: local-only`; this is not remote delivery. Only a successful local
+write releases the old night so subsequent nights can run. Local-only reports are
+not automatically sent if a destination is configured later; retention is manual.
+The Harness home lock owns this controller.
 
 The prompt requires isolated experiments, baseline/acceptance criteria, tests,
 review, licensing/provenance and read-only authorized study of other agents. No
@@ -54,6 +59,22 @@ by this tool. Worktrees are not an OS sandbox: an evaluator executing candidate
 code must arrange external isolation and credential removal itself. The runner
 must be self-contained; pinning one source file does not pin imported dependencies.
 A metric must be chosen and governed independently to avoid benchmark gaming.
+
+Runner stdout and stderr share a 64 KiB output budget. On POSIX the runner is
+started in its own process group; timeout, excessive output or leader exit kills
+ordinary descendants still in that group, including after successful execution.
+On Windows only the direct runner is terminated. Descendants that create a new
+session/group can escape this cleanup; inherited pipes from escaped descendants
+may still prevent completion. This is resource cleanup, not process isolation or
+a guarantee against hostile code. External sandboxing remains necessary.
+
+Cleanup attempts each registered worktree independently. An incomplete cleanup
+forces an `inconclusive` result, preserving completed measurements in final evidence.
+Evidence includes internal recovery paths (`cleanup.remainingWorktrees` and
+`cleanup.retainedRoot`); these paths are not runner output. A retained root is not
+recursively deleted while Git worktree removal has failed. Operators must recover
+these resources explicitly. Final evidence-write failure can still reject the call;
+this is not a transactional filesystem/resource cleanup guarantee.
 
 ## Scope and limits
 

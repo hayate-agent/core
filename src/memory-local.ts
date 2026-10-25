@@ -10,6 +10,7 @@ export class LocalMemory implements MemoryProvider {
   private readonly pending = new Map<number, { resolve: (value: any) => void; reject: (error: Error) => void; timer: NodeJS.Timeout }>();
   private sequence = 0;
   private closed = false;
+  private closing?: Promise<void>;
   private failure?: Error;
   private constructor(private readonly child: ChildProcess, config: MemoryConfig) {
     this.capabilities = { semantic: Boolean(config.embedding), revisions: true };
@@ -46,10 +47,14 @@ export class LocalMemory implements MemoryProvider {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => { this.pending.delete(id); reject(Error("Memory request timed out; write outcome may be unknown, retry with same key")); }, 30000);
       this.pending.set(id, { resolve, reject, timer });
-      this.child.send?.({ id, method, args }, (err) => {
-        if (!err) return;
-        clearTimeout(timer); this.pending.delete(id); reject(Error("Memory worker disconnected"));
-      });
+      try {
+        this.child.send?.({ id, method, args }, (err) => {
+          if (!err) return;
+          clearTimeout(timer); this.pending.delete(id); reject(Error("Memory worker disconnected"));
+        });
+      } catch (err) {
+        clearTimeout(timer); this.pending.delete(id); reject(err);
+      }
     });
   }
   put(context: MemoryContext, input: MemoryWrite): Promise<MemoryEntry> { return this.call("put", [context, input]); }
@@ -59,13 +64,27 @@ export class LocalMemory implements MemoryProvider {
   forget(context: MemoryContext, id: string, revision: string): Promise<void> { return this.call("forget", [context, id, revision]); }
   status(): Promise<MemoryStatus> { return this.call("status", []); }
   reindex(): Promise<void> { return this.call("reindex", []); }
-  async close(): Promise<void> {
+  close(): Promise<void> {
+    return this.closing ??= this.closeOnce();
+  }
+  private async closeOnce(): Promise<void> {
     if (this.closed) return;
     try { await this.call("close", []); } finally {
       this.closed = true;
-      const exited = new Promise<void>((resolve) => this.child.once("exit", () => resolve()));
-      this.child.kill("SIGTERM");
-      await Promise.race([exited, new Promise<void>((resolve) => { const t = setTimeout(() => { this.child.kill("SIGKILL"); resolve(); }, 2000); t.unref(); })]);
+      if (this.child.exitCode === null && this.child.signalCode === null) await new Promise<void>((resolve) => {
+        const finish = () => {
+          clearTimeout(timer);
+          this.child.removeListener("exit", finish);
+          resolve();
+        };
+        const timer = setTimeout(() => {
+          if (this.child.exitCode === null && this.child.signalCode === null) this.child.kill("SIGKILL");
+          finish();
+        }, 2000);
+        timer.unref();
+        this.child.once("exit", finish);
+        this.child.kill("SIGTERM");
+      });
     }
   }
 }

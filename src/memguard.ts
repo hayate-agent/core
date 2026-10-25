@@ -92,26 +92,28 @@ export function startMemoryGuard(opts: MemoryGuardOptions): () => void {
   const log = opts.log ?? ((m: string) => console.error(`[memguard] ${m}`));
   const kill = opts.kill ?? ((pid: number) => process.kill(pid, "SIGKILL"));
   let busy = false;
+  let stopped = false;
   const check = async () => {
-    if (busy) return;
+    if (stopped || busy) return;
     busy = true;
     try {
       const pressure = async () => {
         const u = await (opts.usage ?? (() => readUsage(opts.cgroupDir)))();
         return u && u.workingSet * 100 >= u.limit * opts.percent ? u : undefined;
       };
-      if (!(await pressure())) return;
+      if (!(await pressure()) || stopped) return;
       const victim = await largestChild(opts.procDir, opts.root);
-      if (!victim) return;
+      if (stopped || !victim) return;
       // Re-check right before the signal: still under pressure, same process (start time
       // guards against pid reuse; the remaining window is a few microseconds).
       const usage = await pressure();
+      if (stopped || !usage) return;
       const now = await readProc(opts.procDir ?? "/proc", victim.pid);
-      if (!usage || !now || now.start !== victim.start || now.ppid !== victim.ppid) return;
+      if (stopped || !now || now.start !== victim.start || now.ppid !== victim.ppid) return;
       const mb = (n: number) => `${Math.round(n / 2 ** 20)}Mi`;
       log(`working set ${mb(usage.workingSet)} of ${mb(usage.limit)}: killing pid ${victim.pid} ${victim.comm} (${mb(victim.rss)})`);
       try {
-        kill(victim.pid);
+        if (!stopped) kill(victim.pid);
       } catch (err) {
         log(`kill ${victim.pid} failed: ${err instanceof Error ? err.message : err}`);
       }
@@ -121,5 +123,5 @@ export function startMemoryGuard(opts: MemoryGuardOptions): () => void {
   };
   const timer = setInterval(() => void check(), opts.intervalMs ?? 1000);
   timer.unref?.();
-  return () => clearInterval(timer);
+  return () => { stopped = true; clearInterval(timer); };
 }

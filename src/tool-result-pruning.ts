@@ -49,8 +49,12 @@ export function pruneToolResults<T extends ProjectionMessage>(messages: T[], pol
       if (previous) projected = `${marker}\nExact duplicate of toolCallId=${previous}.`;
       else {
         const room = Math.max(0, policy.maxResultChars - marker.length - 40);
-        const head = Math.floor(room * 0.65);
-        projected = `${marker}\n${body.slice(0, head)}\n[… middle omitted …]\n${room - head > 0 ? body.slice(-(room - head)) : ""}`;
+        let head = Math.floor(room * 0.65);
+        let tailStart = body.length - (room - head);
+        // Move cut points inward rather than leaving half a surrogate pair in an excerpt.
+        if (head > 0 && /[\uD800-\uDBFF]/.test(body[head - 1])) head--;
+        if (tailStart < body.length && /[\uDC00-\uDFFF]/.test(body[tailStart])) tailStart++;
+        projected = `${marker}\n${body.slice(0, head)}\n[… middle omitted …]\n${body.slice(tailStart)}`;
       }
       // Metadata and duplicate references count toward the cap too. Tool identity
       // remains in the message fields even if a long textual marker is shortened.

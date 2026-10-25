@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { createHash } from "node:crypto";
+import { isUtf8 } from "node:buffer";
 import { lstat, readFile } from "node:fs/promises";
 import path from "node:path";
 
@@ -31,6 +32,7 @@ export async function captureChangeset(cwd: string, baseRef: string): Promise<Ch
     if (info.size > LIMIT) throw new Error("Changeset exceeds review size limit");
     const body = await readFile(absolute);
     if (body.includes(0)) throw new Error("Untracked binary file requires operator review");
+    if (!isUtf8(body)) throw new Error("Untracked invalid UTF-8 file requires operator review");
     diff += `\nUntracked file ${JSON.stringify(file)}\n${body.toString("utf8")}\n`;
     if (Buffer.byteLength(diff) > LIMIT) throw new Error("Changeset exceeds review size limit");
   }

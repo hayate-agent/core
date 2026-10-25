@@ -21,7 +21,9 @@ Runtime changes (admin-only, persisted in `settings.local.yaml`, no restart):
 - `/gateway reactions on` (or `off`)
 - `/gateway status`
 
-Local settings override installation defaults. Existing per-channel and explicit
+Local settings override installation defaults. Partial updates to local gateway
+settings preserve existing overrides for other channels and fields; empty override
+objects do not reset existing values. Existing per-channel and explicit
 Matrix environment overrides retain precedence. Active progress collectors adopt
 changed progress mode on the next turn; reaction settings apply immediately.
 
@@ -53,7 +55,9 @@ Full mode may disclose command arguments, paths and tool results to room members
 Enable only in rooms appropriate for those contents. Progress is best effort,
 not persisted or replayed; delivery failures do not fail the agent turn. Notices
 are batched for 1.5 seconds, at most 50 entries per turn and 8000 characters per
-batch (2000 per detail). Final replies retain durable outbox semantics.
+batch (2000 per detail). If a progress sender is slow, only one in-flight batch
+and the latest pending batch are retained; intermediate progress may be dropped.
+Final replies retain durable outbox semantics.
 
 Progress messages carry transport-neutral `SendMeta.presentation: "progress"`.
 Their text is plain text, not preformatted Matrix/Slack/Telegram markup. Matrix
