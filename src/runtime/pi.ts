@@ -5,7 +5,8 @@ import { pruneToolResults, type PruningPolicy } from "../tool-result-pruning.js"
 import { nativeCompaction, type CompactionStrategy } from "../compaction.js";
 import type { SessionProvider, SessionRecord, SessionSummary } from "../sessions.js";
 import type { PluginTool } from "../plugins.js";
-import { mkdir } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import path from "node:path";
 import {
   type AgentSession,
@@ -16,6 +17,8 @@ import {
   createToolSearchExtension,
   DefaultResourceLoader,
   getAgentDir,
+  SettingsManager,
+  ProjectTrustStore,
   ModelRuntime,
   SessionManager,
 } from "@earendil-works/pi-coding-agent";
@@ -296,6 +299,7 @@ export class PiSession implements RuntimeSession {
 export class PiRuntime implements AgentRuntime {
   readonly name = "pi";
   private modelsRuntime?: ModelRuntime;
+  private resourceRevision = 0;
 
   constructor(private readonly opts: PiRuntimeOptions) {}
 
@@ -306,6 +310,8 @@ export class PiRuntime implements AgentRuntime {
 
   async reload(): Promise<void> {
     this.modelsRuntime = undefined;
+    // Existing sessions consume this at their next prompt, never mid-turn.
+    this.resourceRevision++;
   }
 
   async login(ui: LoginUI): Promise<void> {
@@ -375,9 +381,13 @@ export class PiRuntime implements AgentRuntime {
     const approvals = this.opts.approvals;
     const requestApproval = this.opts.requestApproval;
     const slot: TurnSlot = {};
+    const settingsManager = SettingsManager.create(cwd, getAgentDir(), {
+      projectTrusted: !options.ephemeral && new ProjectTrustStore(getAgentDir()).get(cwd) === true,
+    });
     const loader = new DefaultResourceLoader({
       cwd,
       agentDir: getAgentDir(),
+      settingsManager,
       additionalSkillPaths: options.ephemeral ? [] : this.opts.skillPaths,
       noExtensions: options.ephemeral,
       noContextFiles: options.ephemeral,
@@ -444,6 +454,7 @@ export class PiRuntime implements AgentRuntime {
       cwd,
       modelRuntime: models,
       resourceLoader: loader,
+      settingsManager,
       sessionManager,
       tools: options.ephemeral ? [] : this.opts.tools,
       noTools: options.ephemeral || this.opts.tools?.length === 0 ? "all" : undefined,
@@ -473,7 +484,41 @@ export class PiRuntime implements AgentRuntime {
     } : undefined;
     // External providers checkpoint at explicit durability barriers, never by replacing SDK internals.
     let appliedDefaults = this.opts.modelDefaults?.();
+    let appliedResourceRevision = this.resourceRevision;
+    // Observe only MCP configuration, not arbitrary extension directory changes.
+    // SDK project trust still decides whether project server definitions can load.
+    const mcpFingerprint = async () => {
+      if (options.ephemeral || !this.opts.mcp?.enabled || this.opts.tools?.length === 0) return "";
+      const hash = createHash("sha256");
+      const files = [path.join(getAgentDir(), "mcp.json")];
+      if (session.settingsManager.isProjectTrusted()) files.push(path.join(this.opts.cwd, ".pi", "mcp.json"));
+      hash.update(session.settingsManager.isProjectTrusted() ? "trusted\0" : "untrusted\0");
+      for (const file of files) {
+        let text: string;
+        try { text = await readFile(file, "utf8"); }
+        catch (error) {
+          if ((error as NodeJS.ErrnoException).code === "ENOENT") { hash.update("missing\0"); continue; }
+          throw Error("MCP configuration could not be read");
+        }
+        try { JSON.parse(text); } catch { throw Error("MCP configuration is not valid JSON"); }
+        hash.update(text).update("\0");
+      }
+      return hash.digest("hex");
+    };
+    let appliedMcpFingerprint = "";
     const wrapped = new PiSession(session, models, slot, checkpoint, record, this.opts.compaction?.(), async () => {
+      const fingerprint = await mcpFingerprint();
+      if (!options.ephemeral && (appliedResourceRevision !== this.resourceRevision || fingerprint !== appliedMcpFingerprint)) {
+        const revision = this.resourceRevision;
+        // SDK reload closes old MCP connections, rebuilds extension bindings and
+        // keeps history. Failed reloads block this prompt and retry next time.
+        await session.reload();
+        // Headless bindExtensions({}) has no UI bindings; SDK reload therefore
+        // does not emit session_start. Rebind to start replacement MCP servers.
+        await session.bindExtensions({});
+        appliedResourceRevision = revision;
+        appliedMcpFingerprint = fingerprint;
+      }
       const defaults = this.opts.modelDefaults?.();
       if (!options.ephemeral && defaults && defaults.revision !== appliedDefaults?.revision) {
         if (defaults.model) await wrapped.setModel(defaults.model);
@@ -483,6 +528,7 @@ export class PiRuntime implements AgentRuntime {
       if (!options.ephemeral && this.opts.skillContext) skillContext = await this.opts.skillContext();
     }, () => { appliedDefaults = this.opts.modelDefaults?.(); });
     try {
+      appliedMcpFingerprint = await mcpFingerprint();
       if (checkpoint) await checkpoint();
       const defaultModel = appliedDefaults?.model ?? this.opts.model;
       const defaultThinking = appliedDefaults?.thinking ?? this.opts.thinking;
