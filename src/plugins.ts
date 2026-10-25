@@ -1,4 +1,5 @@
 import path from "node:path";
+import type { DispatcherStrategy } from "./dispatcher.js";
 import type { MemoryProviderFactory } from "./memory.js";
 import type { CompactionStrategy } from "./compaction.js";
 import type { SessionProviderFactory } from "./sessions.js";
@@ -109,6 +110,8 @@ export interface PluginAPI {
   registerMemoryProvider(name: string, factory: MemoryProviderFactory): void;
   registerCompaction(name: string, strategy: CompactionStrategy): void;
   registerPanel(panel: PluginPanel): void;
+  /** Register execution policy; activation is selected explicitly by host configuration. */
+  registerDispatcher(strategy: DispatcherStrategy): void;
   /** Cleanup runs in reverse registration order, including failed initialization. */
   onStop(cleanup: () => Promise<void> | void): void;
 }
@@ -127,6 +130,7 @@ export class PluginHost {
   readonly memoryProviders = new Map<string, MemoryProviderFactory>();
   readonly sessionProviders = new Map<string, SessionProviderFactory>();
   readonly panels = new Map<string, PluginPanel>();
+  readonly dispatchers = new Map<string, DispatcherStrategy>();
   private cleanups: Array<() => Promise<void> | void> = [];
   private closed = false;
 
@@ -150,6 +154,17 @@ export class PluginHost {
               if (names.has(command.name)) throw new Error(`Command conflict: /${command.name}`);
               names.add(command.name);
               this.commands.set(command.name, Object.freeze({ ...command, admin: command.admin ?? true, run: command.run.bind(command) }));
+            },
+            registerDispatcher: (strategy: DispatcherStrategy) => {
+              if (!registering) throw new Error("Plugin registration is closed");
+              if (!strategy || typeof strategy.name !== "string" || !/^[a-z][a-z0-9_-]*$/.test(strategy.name) ||
+                  !Number.isSafeInteger(strategy.version) || strategy.version < 1 || typeof strategy.replaySafe !== "boolean" ||
+                  typeof strategy.execute !== "function") throw new Error("Invalid dispatcher strategy");
+              if (strategy.name === "direct" || this.dispatchers.has(strategy.name)) throw new Error(`Dispatcher conflict: ${strategy.name}`);
+              this.dispatchers.set(strategy.name, Object.freeze({
+                name: strategy.name, version: strategy.version, replaySafe: strategy.replaySafe,
+                execute: strategy.execute.bind(strategy),
+              }));
             },
             registerCompaction: (name: string, strategy: CompactionStrategy) => {
               if (!registering) throw new Error("Plugin registration is closed");
@@ -207,6 +222,7 @@ export class PluginHost {
       this.sessionProviders.clear();
       this.compactions.clear();
       this.panels.clear();
+      this.dispatchers.clear();
       throw err;
     }
   }

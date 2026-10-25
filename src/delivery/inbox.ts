@@ -2,7 +2,7 @@ import type { Inbound } from "../types.js";
 
 /** User, API and cron inputs are replayed after a crash; heartbeat/loop/goal ticks regenerate. */
 export function replayable(i: Inbound): boolean {
-  return i.source === "channel" || i.source === "api" || i.source === "cron" || (i.continuationDepth ?? 0) > 0;
+  return i.source === "host" || i.source === "channel" || i.source === "api" || i.source === "cron" || (i.continuationDepth ?? 0) > 0;
 }
 
 /** The parts of a session the inbox snapshot is built from. */

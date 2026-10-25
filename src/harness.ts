@@ -88,6 +88,7 @@ export interface PendingApproval {
 
 export interface HarnessOptions {
   runtime: AgentRuntime;
+  executionStore?: import("./execution.js").ExecutionStore;
   tickMs: number;
   busyMode: BusyMode;
   gateways?: GatewayConfig;
@@ -95,6 +96,8 @@ export interface HarnessOptions {
   goalMaxTurns?: number;
   /** Core lifecycle boundary; runs before the working agent starts. */
   beforeTurn?: (input: Inbound) => Promise<void>;
+  /** Non-reserving authority check repeated after async setup and by the runtime before execution. */
+  beforeExecution?: (input: Inbound) => void;
   memory?: { recall(sessionKey: string, text: string): Promise<string>; capture(turn: import("./memory.js").MemoryTurn): Promise<void> };
   contextMaintenance?: {
     guidance(key: string, session: RuntimeSession): Promise<string>;
@@ -111,6 +114,10 @@ export interface HarnessOptions {
   /** Trusted host routing for child approval requests; never supplied by model input. */
   approvalTarget?: (sessionKey: string) => Address | undefined;
   conversationStopped?: (sessionKey: string) => Promise<void>;
+  /** Revalidate queued host data immediately before execution, including after restart. */
+  hostEventAllowed?: (input: Inbound) => boolean;
+  /** Externally owned workers must recover through their own durable ledger, never inbox replay. */
+  externallyRecoveredSession?: (sessionKey: string) => boolean;
   /** Trusted installation deadline, independent of model continuation plans. */
   continuationDeadline?: (input: Inbound) => number | undefined;
   now?: () => number;
@@ -138,10 +145,23 @@ export class Harness {
   private readonly now: () => number;
   private readonly log: (msg: string) => void;
   private readonly idle = new Set<() => void>();
+  private readonly sessionIdle = new Map<string, Set<() => void>>();
+
+  /** Resolves after the conversation's pump has actually returned, not merely
+   * after cancellation was requested. Does not wait on unrelated conversations. */
+  waitForSessionIdle(key: string): Promise<void> {
+    if (!this.sessions.get(key)?.running) return Promise.resolve();
+    return new Promise(resolve => {
+      const waiters = this.sessionIdle.get(key) ?? new Set<() => void>();
+      waiters.add(resolve);
+      this.sessionIdle.set(key, waiters);
+    });
+  }
   private readonly quiet = new Set<() => void>();
   /** Durable inbox bookkeeping, accepted-id window, outbox delivery (src/delivery/). */
   private readonly inbox = new InboxLedger();
   private readonly seen = new SeenWindow();
+  private readonly stoppingHostParents = new Set<string>();
   private readonly outbox: OutboxDelivery;
   /** Shutdown chose its final inbox snapshot; late turn results are discarded. */
   private frozen = false;
@@ -318,6 +338,7 @@ export class Harness {
 
   planContinuation(key: string, plan: NonNullable<Inbound["continuation"]>): void {
     const input = this.sessions.get(key)?.current;
+    if (input?.source === "host") throw Error("Host event data cannot authorize continuation");
     if (!input || !this.sessions.get(key)?.prompting) throw Error("Continuation requires an active working turn");
     if (!["continue", "waiting", "blocked", "completed"].includes(plan.state) || (plan.state === "continue" && (!plan.next?.trim() || plan.next.length > 4000))) throw Error("Invalid continuation plan");
     input.continuation = { state: plan.state, ...(plan.state === "continue" ? { next: plan.next } : {}) };
@@ -501,10 +522,10 @@ export class Harness {
       input.completionAnchor = { id: randomUUID(), task: input.text, receivedAt: this.now() };
     }
     // API runs answer to the run itself, never become the session's conversation address.
-    if (input.replyTo && input.source !== "api") s.replyTo = input.replyTo;
+    if (input.replyTo && input.source !== "api" && input.source !== "host") s.replyTo = input.replyTo;
     s.lastActivity = this.now();
     // Slash commands are a chat feature; API run input is always a turn (never privileged).
-    if (input.source !== "api" && input.text.trimStart().startsWith("/") && this.commandHandler) {
+    if (input.source !== "api" && input.source !== "host" && input.text.trimStart().startsWith("/") && this.commandHandler) {
       this.inbox.runningCommands.add(input);
       let handled: boolean;
       try {
@@ -517,11 +538,12 @@ export class Harness {
         return;
       }
     }
-    if (s.running) {
+    if (s.running && input.source !== "host" && s.current?.source !== "host") {
       if (this.busyMode === "steer" && s.session && s.current) {
         const turn = s.current;
         // Durable before the runtime sees it: held in `handoff` (part of every inbox snapshot)
         // until it is attached to the running turn or moved to the queue — no gap in between.
+        if (this.opts.executionStore) input.executionTurnId ??= randomUUID();
         this.inbox.handoff.add(input);
         try {
           await this.onStateChange?.();
@@ -569,16 +591,21 @@ export class Harness {
    * away; a running one is aborted and finishes as cancelled. False if it is not pending.
    */
   async stopConversation(sessionKey: string): Promise<number> {
+    this.stoppingHostParents.add(sessionKey);
     const s = this.state(sessionKey);
     const dropped = s.queue.length;
     for (const input of s.queue) this.inbox.unsaved.delete(input);
     s.queue.length = 0;
     if (s.task) s.task.state = "stopped";
-    if (s.current) { s.cancelling = s.current; s.current.continuation = undefined; }
+    if (s.current) {
+      s.cancelling = s.current; s.current.continuation = undefined;
+      if (s.current.executionTurnId) await this.opts.executionStore?.stopTurn(s.current.executionTurnId, sessionKey);
+    }
     this.turnAbort.get(sessionKey)?.abort();
     if (s.prompting) await s.session?.abort();
     await this.opts.conversationStopped?.(sessionKey);
     await this.onStateChange?.();
+    this.stoppingHostParents.delete(sessionKey);
     return dropped;
   }
 
@@ -659,6 +686,7 @@ export class Harness {
    */
   restorePending(inputs: Inbound[], maxReplays = Harness.MAX_REPLAYS): void {
     for (const input of inputs) {
+      if (this.opts.externallyRecoveredSession?.(input.sessionKey)) continue;
       if (input.started) input.replays = (input.replays ?? 0) + 1;
       input.started = undefined;
       const s = this.state(input.sessionKey);
@@ -680,6 +708,7 @@ export class Harness {
   /** Reconstruct only explicitly checkpointed active next steps. No status polling. */
   async recoverTasks(): Promise<void> {
     for (const s of this.sessions.values()) {
+      if (this.opts.externallyRecoveredSession?.(s.key)) continue;
       const task = s.task;
       if (!task || task.state !== "active" || !task.next?.trim() || !Number.isSafeInteger(task.depth) || task.depth < 0 || task.depth >= 20 ||
           (task.expiresAt !== undefined && (!Number.isSafeInteger(task.expiresAt) || task.expiresAt <= this.now())) ||
@@ -733,6 +762,10 @@ export class Harness {
         // Not yet durable (acceptance/inbox save pending) or restored before channels are ready.
         if (this.inbox.held(input)) break;
         s.queue.shift();
+        if (input.source === "host" && (this.stoppingHostParents.has(s.key) || !this.opts.hostEventAllowed?.(input))) {
+          s.unsaved = true;
+          continue;
+        }
         if (input.source === "channel" || input.source === "api") s.lastInput = input;
         s.current = input;
         this.resetContinuation(input);
@@ -740,6 +773,7 @@ export class Harness {
           input.taskId = input.taskId ?? input.id ?? randomUUID();
           s.task = { id: input.taskId, original: input.text, state: "active", depth: 0, anchor: input.completionAnchor };
         }
+        if (this.opts.executionStore) input.executionTurnId ??= randomUUID();
         if (replayable(input)) {
           // Durable before the turn runs, so a crash during it is charged to this input.
           input.started = true;
@@ -758,9 +792,45 @@ export class Harness {
             break;
           }
         }
+        const outboxStart = s.outbox.length;
+        const goalBefore = s.goal ? structuredClone(s.goal) : undefined;
         try {
-          await this.runTurn(s, input);
+          const ledger = this.opts.executionStore;
+          const durableTurn = input.executionTurnId ? ledger?.turn(input.executionTurnId, s.key) : undefined;
+          const settled = durableTurn?.settlement;
+          if (settled) {
+            s.outbox.push(...structuredClone(settled.outbox));
+            input.continuation = structuredClone(settled.continuation);
+            s.goal = structuredClone(settled.goal);
+            if (durableTurn?.stopped && s.task && input.taskId === s.task.id) s.task.state = "stopped";
+            const consumed = new Set(settled.consumed);
+            s.queue = s.queue.filter(item => !item.executionTurnId || !consumed.has(item.executionTurnId));
+          } else {
+            if (durableTurn?.stopped) {
+              s.cancelling = input;
+              if (s.task && input.taskId === s.task.id) s.task.state = "stopped";
+            }
+            if (ledger && input.executionTurnId) await ledger.beginTurn(input.executionTurnId, s.key);
+            await this.runTurn(s, input);
+            if (ledger && input.executionTurnId) await ledger.settleTurn(input.executionTurnId, s.key, {
+              outbox: s.outbox.slice(outboxStart), continuation: input.continuation, goal: s.goal,
+              consumed: (s.steered ?? []).map(item => item.executionTurnId).filter((id): id is string => !!id),
+            });
+          }
+          if (s.cancelling === input) {
+            // /stop can race the asynchronous ledger commit after runTurn's
+            // final cancellation check. Fence restart first, then project it.
+            if (ledger && input.executionTurnId) await ledger.stopTurn(input.executionTurnId, s.key);
+            input.continuation = undefined;
+            for (const entry of s.outbox.slice(outboxStart)) {
+              entry.outcome = "cancelled";
+              entry.text = "⏹️ Abgebrochen. Bereits ausgeführte Seiteneffekte prüfen.";
+            }
+            s.cancelling = undefined;
+          }
         } catch (err) {
+          s.outbox.splice(outboxStart);
+          s.goal = goalBefore;
           // Turn did not finish (aborted on shutdown): keep it and what was steered into it, in order.
           s.current = undefined;
           s.queue.unshift(input, ...(s.steered ?? []));
@@ -786,7 +856,7 @@ export class Harness {
           s.task.depth = input.continuationDepth ?? 0;
           s.task.expiresAt = inheritedDeadline === Infinity ? undefined : inheritedDeadline;
         }
-        if (input.continuation?.state === "continue" && input.continuation.next && (input.continuationDepth ?? 0) < 20 && input.source !== "api" && s.key !== "improvement:nightly" && !s.queue.length && !this.stopping) {
+        if (input.source !== "host" && input.continuation?.state === "continue" && input.continuation.next && (input.continuationDepth ?? 0) < 20 && input.source !== "api" && s.key !== "improvement:nightly" && !s.queue.length && !this.stopping) {
           s.queue.push({ id: randomUUID(), sessionKey: s.key, source: "cron", replyTo: input.replyTo ?? s.replyTo,
             text: `Continue the explicitly authorized task with this recorded next step. Recheck blockers and authorization; do not repeat completed side effects.\n${input.continuation.next}`,
             taskId: input.taskId,
@@ -798,10 +868,14 @@ export class Harness {
           await this.onStateChange?.();
           s.unsaved = false;
           await this.opts.turnCommitted?.(input);
+          if (input.executionTurnId) await this.opts.executionStore?.acknowledgeTurn(input.executionTurnId, s.key);
         } catch (err) { this.log(`completion hook/save deferred: ${err instanceof Error ? err.message : err}`); }
       }
     } finally {
       s.running = false;
+      const waiters = this.sessionIdle.get(s.key);
+      this.sessionIdle.delete(s.key);
+      for (const resolve of waiters ?? []) resolve();
       this.notifyQuiet();
     }
   }
@@ -841,6 +915,11 @@ export class Harness {
     let assessmentAbort: AbortController;
     this.turnAbort.set(s.key, abort);
     const checkExpiry = () => {
+      if (input.source === "host" && (this.stoppingHostParents.has(s.key) || !this.opts.hostEventAllowed?.(input))) {
+        s.cancelling = input;
+        throw Error("Host event authority revoked");
+      }
+      this.opts.beforeExecution?.(input);
       // The grant limits autonomous work, not a new operator request. Keep its
       // deadline on the original input solely for inheritance by follow-ups.
       if ((input.continuationDepth ?? 0) > 0 && input.continuationExpiresAt !== undefined && (!Number.isSafeInteger(input.continuationExpiresAt) || input.continuationExpiresAt <= this.now())) {
@@ -934,7 +1013,7 @@ export class Harness {
     }
     let finalStatus: TurnOutcome | "completed" = outcome ?? "completed";
     if (finalStatus !== "completed") input.continuation = undefined;
-    else if (!input.continuation && this.opts.completionCheck && !this.paused && !this.stopping && !s.queue.length &&
+    else if (input.source !== "host" && !input.continuation && this.opts.completionCheck && !this.paused && !this.stopping && !s.queue.length &&
         input.source !== "api" && s.key !== "improvement:nightly" && (input.continuationDepth ?? 0) < 20 && !assessmentAbort.signal.aborted) {
       try {
         const plan = await this.opts.completionCheck(structuredClone(input), reply, assessmentAbort.signal);
