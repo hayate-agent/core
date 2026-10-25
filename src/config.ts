@@ -37,6 +37,8 @@ export interface HarnessConfig {
   plugins?: string[];
   protectedContent?: import("./protected-content.js").ProtectedContentConfig;
   skillUpdateSource?: import("./skill-updates.js").SkillUpdateSource;
+  /** Infrastructure-owned semantic continuation grants, keyed by exact conversation. */
+  completionCheck?: { authorizations: Record<string, import("./completion-check.js").CompletionAuthorization> };
   sessions?: { provider: string; options?: unknown };
   compaction?: { strategy: string };
   contextMaintenance?: Partial<import("./context-maintenance.js").ContextPolicy>;
@@ -111,6 +113,7 @@ export function defaultConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
     plugins: overrides.plugins ?? [],
     protectedContent: overrides.protectedContent,
     skillUpdateSource: overrides.skillUpdateSource,
+    completionCheck: overrides.completionCheck,
     sessions: overrides.sessions ?? { provider: "native" },
     compaction: overrides.compaction ?? { strategy: "native" },
     contextMaintenance: contextPolicy(overrides.contextMaintenance),

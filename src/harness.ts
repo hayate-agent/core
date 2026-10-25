@@ -95,6 +95,8 @@ export interface HarnessOptions {
   turnCommitted?: (input: Inbound) => Promise<void>;
   /** May feed review findings back into the same serialized working turn. */
   afterTurn?: (input: Inbound, reply: string, session: RuntimeSession, promptOptions: PromptOptions, signal: AbortSignal) => Promise<string>;
+  /** Advisory fallback; production caller must supply independently authorized task scope. */
+  completionCheck?: (input: Inbound, reply: string, signal: AbortSignal) => Promise<NonNullable<Inbound["continuation"]> | undefined>;
   now?: () => number;
   log?: (msg: string) => void;
   /** Durably records a reply that can never be delivered (before it leaves the outbox). */
@@ -771,6 +773,7 @@ export class Harness {
         }
       ;
     const abort = new AbortController();
+    let assessmentAbort: AbortController;
     this.turnAbort.set(s.key, abort);
     try {
       await this.opts.beforeTurn?.(input);
@@ -828,8 +831,15 @@ export class Harness {
       outcome = "failed";
       if (s.cancelling !== input) this.log(`turn failed in ${s.key}: ${reply}`);
     } finally {
+      const cancelled = abort.signal.aborted;
       abort.abort(); // Pending tool approvals cannot outlive their working turn.
-      this.turnAbort.delete(s.key);
+      // Assessment has its own lifecycle; approval cleanup must not cancel it.
+      assessmentAbort = new AbortController();
+      if (cancelled) assessmentAbort.abort();
+      if (this.halting || this.frozen) {
+        assessmentAbort.abort();
+        this.turnAbort.delete(s.key);
+      } else this.turnAbort.set(s.key, assessmentAbort);
       await typingCh?.typing?.(to!, false).catch(() => undefined);
     }
     s.prompted = undefined;
@@ -838,9 +848,24 @@ export class Harness {
       if (!this.frozen) outcome = "cancelled";
       if (outcome === "cancelled" && reply.startsWith("⚠️")) reply = "";
     }
-    if (this.frozen) throw new Error("shut down after inbox snapshot; input will replay");
+    if (this.frozen) {
+      assessmentAbort.abort();
+      this.turnAbort.delete(s.key);
+      throw new Error("shut down after inbox snapshot; input will replay");
+    }
     const finalStatus = outcome ?? "completed";
     if (finalStatus !== "completed") input.continuation = undefined;
+    else if (!input.continuation && this.opts.completionCheck && !this.paused && !this.stopping && !s.queue.length &&
+        input.source !== "api" && s.key !== "improvement:nightly" && (input.continuationDepth ?? 0) < 20 && !assessmentAbort.signal.aborted) {
+      try {
+        const plan = await this.opts.completionCheck(structuredClone(input), reply, assessmentAbort.signal);
+        if (!input.continuation && !this.paused && !this.stopping && !s.queue.length && !assessmentAbort.signal.aborted && s.cancelling !== input &&
+            plan?.state === "continue" && typeof plan.next === "string" && plan.next.trim() && plan.next.length <= 4000) input.continuation = plan;
+      } catch { this.log("completion assessment failed; no automatic follow-up"); }
+    }
+    assessmentAbort.abort();
+    this.turnAbort.delete(s.key);
+    if (this.frozen) throw new Error("shut down during completion assessment; input will replay");
     if (!this.frozen) {
       try { await this.opts.memory?.capture({ id: input.id, sessionKey: s.key, text: input.text, reply, outcome: finalStatus, tools: memoryTools, recordedAt: input.memoryRecordedAt }); }
       catch { this.log("memory capture failed; turn completion continues"); }
