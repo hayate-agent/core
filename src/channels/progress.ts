@@ -14,7 +14,7 @@ export class GatewayProgress {
   private queuedText?: string;
   private draining = false;
   private count = 0;
-  private active = new Map<string, number>();
+  private active = new Map<string, { since: number; count: number; error: boolean }>();
   private heartbeat?: NodeJS.Timeout;
   private closed = false;
   constructor(private mode: ProgressMode, private send: (text: string) => Promise<void>, private heartbeatMs = 15000) {
@@ -23,7 +23,7 @@ export class GatewayProgress {
         if (this.closed || !this.active.size || this.count >= 50) return;
         this.count++;
         const now = Date.now();
-        this.pending.push([...this.active].map(([name, since]) => `⏳ ${name} läuft weiterhin (${Math.floor((now - since) / 1000)} s); noch kein Ergebnis.`).join("\n"));
+        this.pending.push([...this.active].map(([name, state]) => `⏳ ${name} läuft weiterhin (${Math.floor((now - state.since) / 1000)} s); noch kein Ergebnis.`).join("\n"));
         this.flush();
       }, heartbeatMs);
       this.heartbeat.unref?.();
@@ -31,14 +31,25 @@ export class GatewayProgress {
   }
   event(event: TurnEvent): void {
     if (this.closed || this.mode === "off" || event.type !== "tool") return;
+    let error = event.error;
     if (event.phase === "start") {
-      if (this.active.size < 50) this.active.set(event.name, Date.now());
-    } else this.active.delete(event.name);
+      const active = this.active.get(event.name);
+      if (active) { active.count++; this.count++; return; }
+      if (this.active.size < 50) this.active.set(event.name, { since: Date.now(), count: 1, error: false });
+    } else {
+      const active = this.active.get(event.name);
+      if (active) {
+        active.error ||= !!event.error;
+        if (--active.count > 0) return;
+        error ||= active.error;
+      }
+      this.active.delete(event.name);
+    }
     if (this.count >= 50) return;
     if (this.mode === "reduced") {
-      this.pending.push(event.phase === "start" ? `▶ ${event.name} gestartet` : `${event.error ? "⚠" : "✓"} ${event.name} beendet`);
+      this.pending.push(event.phase === "start" ? `▶ ${event.name} gestartet` : `${error ? "⚠" : "✓"} ${event.name} beendet`);
     } else {
-      this.pending.push(`${event.phase === "start" ? "▶" : event.error ? "⚠" : "✓"} ${event.name}${event.detail ? `\n${event.detail.slice(0, 2000)}` : ""}`);
+      this.pending.push(`${event.phase === "start" ? "▶" : error ? "⚠" : "✓"} ${event.name}${event.detail ? `\n${event.detail.slice(0, 2000)}` : ""}`);
     }
     this.count++;
     if (!this.scheduled) this.scheduled = setTimeout(() => { this.scheduled = undefined; this.flush(); }, 1500);

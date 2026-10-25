@@ -410,3 +410,13 @@ test("approval prompt delivery retries with a stable delivery id, then denies", 
   assert.equal(await harness.requestApproval("mem:room1", "bash", {}), false);
   Harness.APPROVAL_RETRY_MS = 1000;
 });
+
+test("operator controls and inspection bypass failing skill discovery", async () => {
+  const { ctx, harness, send, ch } = setup();
+  ctx.reloadSkills = async () => { throw Error("integrity failure"); };
+  await send("/pause");
+  assert.equal(harness.paused, true);
+  await send("/stop");
+  assert.ok(ch.sent.length >= 2);
+  await assert.rejects(harness.commandHandler!({ sessionKey: "mem:room1", text: "/unknown-skill", source: "channel" }), /integrity failure/);
+});
