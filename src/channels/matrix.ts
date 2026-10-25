@@ -149,7 +149,8 @@ export class MatrixChannel implements Channel {
       const stateKey = JSON.stringify([to.target, id]);
       const previous = this.reactionStates.get(stateKey);
       const terminal = ["completed", "failed", "cancelled"];
-      if (previous && (terminal.includes(previous) || (previous === "started" && status === "received"))) continue;
+      const lateCancellation = previous === "completed" && status === "cancelled";
+      if (previous && !lateCancellation && (terminal.includes(previous) || (previous === "started" && status === "received"))) continue;
       this.reactionStates.set(stateKey, status);
       if (this.reactionStates.size > 5000) this.reactionStates.delete(this.reactionStates.keys().next().value!);
       const txnFor = (stage: string) => createHash("sha256").update(JSON.stringify([to.target, id, stage])).digest("hex");
@@ -158,10 +159,10 @@ export class MatrixChannel implements Channel {
           "m.relates_to": { rel_type: "m.annotation", event_id: id, key: emoji },
         });
         // Resolve previous reaction IDs through their stable transactions, including after restart.
-        const obsolete = status === "started" ? ["received"] : terminal.includes(status) ? ["received", "started"] : [];
+        const obsolete = status === "started" ? ["received"] : terminal.includes(status) ? ["received", "started", ...(lateCancellation ? ["completed"] : [])] : [];
         for (const stage of obsolete) {
           const old = await this.api("PUT", `/rooms/${encodeURIComponent(to.target)}/send/m.reaction/${txnFor(stage)}`, {
-            "m.relates_to": { rel_type: "m.annotation", event_id: id, key: stage === "received" ? "📥" : "👀" },
+            "m.relates_to": { rel_type: "m.annotation", event_id: id, key: stage === "received" ? "📥" : stage === "completed" ? "✅" : "👀" },
           });
           if (typeof old.event_id === "string") await this.api("PUT", `/rooms/${encodeURIComponent(to.target)}/redact/${encodeURIComponent(old.event_id)}/${txnFor(stage)}.clear`, {});
         }

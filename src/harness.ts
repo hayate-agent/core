@@ -892,9 +892,28 @@ export class Harness {
       try { await this.opts.memory?.capture({ id: input.id, sessionKey: s.key, text: input.text, reply, outcome: finalStatus, tools: memoryTools, recordedAt: input.memoryRecordedAt }); }
       catch { this.log("memory capture failed; turn completion continues"); }
     }
+    // Stop remains meaningful until final reply construction. Capture may already
+    // have committed its earlier snapshot; do not repeat that side effect.
+    const consumeLateCancellation = () => {
+      if (s.cancelling !== input) return false;
+      s.cancelling = undefined;
+      outcome = finalStatus = "cancelled";
+      input.continuation = undefined;
+      if (reply.startsWith("⚠️")) reply = "";
+      return true;
+    };
+    consumeLateCancellation();
+    if (this.frozen) throw new Error("shut down during memory capture; input will replay");
     const finishTelemetry = telemetry.then(() => typingCh?.turnStatus?.(to!, input, finalStatus)).catch(() => undefined);
     // Editable gateways finish pending progress before the durable final replacement.
-    if (typingCh?.editableProgress) await finishTelemetry;
+    if (typingCh?.editableProgress) {
+      await finishTelemetry;
+      if (consumeLateCancellation()) {
+        await typingCh.turnStatus?.(to!, input, "cancelled").catch(() => undefined);
+        consumeLateCancellation();
+      }
+      if (this.frozen) throw new Error("shut down during terminal telemetry; input will replay");
+    }
     s.lastActivity = this.now();
     if (s.goal && input.source === "goal") {
       s.goal.turns++;
