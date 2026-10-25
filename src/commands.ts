@@ -471,11 +471,11 @@ export const COMMANDS: Command[] = [
   {
     name: "reload-skills",
     aliases: ["reload_skills", "reload-mcp", "reload_mcp"],
-    help: "Re-scan skills and MCP config (applies to new sessions)",
+    help: "Re-scan skills; reload session resources/MCP before each session's next turn",
     run: async (_a, _i, ctx) => {
       await ctx.reloadSkills();
       await ctx.harness.runtime.reload();
-      return `🔄 reloaded, ${ctx.skills().length} skill(s)`;
+      return `🔄 ${ctx.skills().length} skill(s); session resource/MCP reload scheduled for the next turn`;
     },
   },
   {
