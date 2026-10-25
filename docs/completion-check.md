@@ -41,6 +41,12 @@ deadline requests best-effort abort and bounds the waiting caller; runtime open 
 cleanup may still remain pending if the adapter does not honor cancellation.
 This does not establish hard process isolation or model semantic accuracy.
 
+Numeric grant deadlines are persisted on generated inputs, inherited by later
+follow-ups without extension, and checked again before execution (including after
+asynchronous PI setup). Expiry prevents a new working prompt; it is not a timer
+that interrupts an already-running prompt. Other runtime adapters must honor the
+host `beforeExecution` guard after their own asynchronous setup.
+
 The existing twenty-follow-up chain cap and normal tool/review approval policies
 remain in force. Model output is advisory and can misclassify task scope; grants
 should therefore be narrow and short-lived. Revocation currently requires changing

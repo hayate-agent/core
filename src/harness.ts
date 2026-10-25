@@ -97,6 +97,8 @@ export interface HarnessOptions {
   afterTurn?: (input: Inbound, reply: string, session: RuntimeSession, promptOptions: PromptOptions, signal: AbortSignal) => Promise<string>;
   /** Advisory fallback; production caller must supply independently authorized task scope. */
   completionCheck?: (input: Inbound, reply: string, signal: AbortSignal) => Promise<NonNullable<Inbound["continuation"]> | undefined>;
+  /** Trusted installation deadline, independent of model continuation plans. */
+  continuationDeadline?: (input: Inbound) => number | undefined;
   now?: () => number;
   log?: (msg: string) => void;
   /** Durably records a reply that can never be delivered (before it leaves the outbox). */
@@ -739,10 +741,12 @@ export class Harness {
         s.unsaved = true;
         // Follow-up is part of the same inbox→outbox checkpoint, never a recursive
         // model call. A failed save holds both reply and continuation.
+        const inheritedDeadline = Math.min(input.continuationExpiresAt ?? Infinity, input.continuation?.expiresAt ?? Infinity);
         if (input.continuation?.state === "continue" && input.continuation.next && (input.continuationDepth ?? 0) < 20 && input.source !== "api" && s.key !== "improvement:nightly" && !s.queue.length && !this.stopping) {
           s.queue.push({ id: randomUUID(), sessionKey: s.key, source: "cron", replyTo: input.replyTo ?? s.replyTo,
             text: `Continue the explicitly authorized task with this recorded next step. Recheck blockers and authorization; do not repeat completed side effects.\n${input.continuation.next}`,
             continuationDepth: (input.continuationDepth ?? 0) + 1,
+            continuationExpiresAt: inheritedDeadline === Infinity ? undefined : inheritedDeadline,
             completionAnchor: input.completionAnchor ? structuredClone(input.completionAnchor) : undefined });
         }
         try {
@@ -791,7 +795,20 @@ export class Harness {
     const abort = new AbortController();
     let assessmentAbort: AbortController;
     this.turnAbort.set(s.key, abort);
+    const checkExpiry = () => {
+      // The grant limits autonomous work, not a new operator request. Keep its
+      // deadline on the original input solely for inheritance by follow-ups.
+      if ((input.continuationDepth ?? 0) > 0 && input.continuationExpiresAt !== undefined && (!Number.isSafeInteger(input.continuationExpiresAt) || input.continuationExpiresAt <= this.now())) {
+        s.cancelling = input;
+        throw Error("Continuation authorization expired");
+      }
+    };
     try {
+      const configuredDeadline = this.opts.continuationDeadline?.(structuredClone(input));
+      if (configuredDeadline !== undefined) {
+        input.continuationExpiresAt = Math.min(input.continuationExpiresAt ?? Infinity, configuredDeadline);
+      }
+      checkExpiry();
       await this.opts.beforeTurn?.(input);
       let session = await this.sessionFor(s.key);
       const rotate = async (handover: import("./context-maintenance.js").ContextRecord["handover"]) => {
@@ -816,12 +833,13 @@ export class Harness {
       const text = input.replyOptional
         ? `${input.text}\n\n(Not addressed to you directly. Reply only if you have something useful to add; otherwise reply exactly ${NO_REPLY}.)`
         : input.text;
+      checkExpiry();
       if (s.cancelling === input) {
         reply = ""; // stopped while the session was opening: never started
       } else {
         s.prompting = true;
         try {
-          const promptOptions = { ...input.turn, onEvent, instructions: [input.turn?.instructions, guidance].filter(Boolean).join("\n\n") || undefined };
+          const promptOptions = { ...input.turn, onEvent, beforeExecution: checkExpiry, instructions: [input.turn?.instructions, guidance].filter(Boolean).join("\n\n") || undefined };
           reply = (await session.prompt(text, promptOptions)).trim();
           if (s.cancelling !== input && this.opts.afterTurn) reply = await this.opts.afterTurn(input, reply, session, promptOptions, abort.signal);
           if (s.cancelling !== input && !this.stopping && this.opts.contextMaintenance) {
