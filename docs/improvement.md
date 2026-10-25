@@ -24,7 +24,12 @@ marker. DST uses local calendar dates. A morning report goes through Harness out
 at the first idle check after the window ends, also after restart. A crash between
 outbox adoption and marking the report can produce a duplicate report (at least
 once, not exactly once). On restart interrupted candidates require state inspection,
-not blind repetition of side effects. The Harness home lock owns this controller.
+not blind repetition of side effects. If neither `reportTo` nor Harness home address
+is available, results are durably retained in `improvement/reports/<night>.json`
+with `delivery: local-only`; this is not remote delivery. Only a successful local
+write releases the old night so subsequent nights can run. Local-only reports are
+not automatically sent if a destination is configured later; retention is manual.
+The Harness home lock owns this controller.
 
 The prompt requires isolated experiments, baseline/acceptance criteria, tests,
 review, licensing/provenance and read-only authorized study of other agents. No
