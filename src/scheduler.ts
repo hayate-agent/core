@@ -150,7 +150,9 @@ export class Scheduler {
       const scriptsDir = this.opts.scriptsDir ?? path.join(this.baseDir(), "scripts");
       const file = path.resolve(scriptsDir, job.script);
       if (!file.startsWith(path.resolve(scriptsDir) + path.sep)) throw new Error(`script outside scripts dir: ${job.script}`);
-      const { stdout } = await run(file, [], { timeout: 10 * 60_000, maxBuffer: 4 * 1024 * 1024 });
+      // Enforce the deadline even when the direct script ignores SIGTERM. This is
+      // not process-tree isolation: independently running descendants may survive.
+      const { stdout } = await run(file, [], { timeout: 10 * 60_000, killSignal: "SIGKILL", maxBuffer: 4 * 1024 * 1024 });
       scriptOut = stdout.trim();
     }
     const delivery = resolveDelivery(job, this.harness.home);
