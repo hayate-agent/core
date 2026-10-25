@@ -3,7 +3,8 @@ import { test } from "node:test";
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { wasmTools, validateWasmTools } from "../src/wasm-tools.js";
+import { wasmTools, wasmToolsPlugin, validateWasmTools } from "../src/wasm-tools.js";
+import { PluginHost } from "../src/plugins.js";
 import { validateWasmLimits } from "../src/wasm-tool-limits.js";
 
 // (memory 1 2), alloc(i32)->i32 = 0, run(i32,i32)->i64 = unsigned(length).
@@ -23,6 +24,15 @@ test("restricted Wasm tools run, refresh file bytes, bound loops and cancel", as
     await writeFile(file, fixture());
     const [tool] = wasmTools(home,[{name:"plugin_echo", description:"Echo",path:"echo.wasm",timeoutMs:500}]);
     assert.equal(await tool.execute({input:"Grüße"},{sessionKey:"test"}),"Grüße");
+    const host = new PluginHost();
+    const config = [{name:"plugin_host_echo",description:"Host echo",path:"echo.wasm"}];
+    await host.load([], {home,cwd:home,agent:"test"}, [], [], [wasmToolsPlugin(home,config)]);
+    assert.equal(await host.tools.get("plugin_host_echo")!.execute({input:"host"},{sessionKey:"test"}),"host");
+    await host.stop();
+    const conflicting = new PluginHost();
+    await assert.rejects(conflicting.load([], {home,cwd:home,agent:"test"}, [], [], [wasmToolsPlugin(home,config),wasmToolsPlugin(home,config)]),/conflict/);
+    assert.equal(conflicting.tools.size,0,'failed registration is rolled back');
+    await conflicting.stop();
     await writeFile(file, fixture(true));
     await assert.rejects(tool.execute({input:"loop"},{sessionKey:"test"}),/timed out/);
     const controllers = Array.from({length:4},()=>new AbortController());
