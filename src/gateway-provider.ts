@@ -22,7 +22,7 @@ export type GatewayOverlay = Record<string, GatewayOverride>;
 export function validateGatewayOverlay(value: unknown): asserts value is GatewayOverlay {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw Error("Invalid gateway plugin overlay");
   for (const [name, spec] of Object.entries(value)) {
-    if (!/^[a-z][a-z0-9_-]*$/.test(name) || ["console", "api"].includes(name) || !spec || typeof spec !== "object" || Array.isArray(spec)) throw Error("Invalid gateway plugin ID");
+    if (!/^[a-z][a-z0-9_-]*$/.test(name) || ["console", "api", "subagents"].includes(name) || !spec || typeof spec !== "object" || Array.isArray(spec)) throw Error("Invalid gateway plugin ID");
     for (const [key, v] of Object.entries(spec)) {
       if (key === "module" && typeof v === "string" && v.length && v.length <= 2000) continue;
       if (key === "disabled" && typeof v === "boolean") continue;

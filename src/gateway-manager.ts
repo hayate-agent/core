@@ -89,7 +89,7 @@ export class GatewayManager {
       api.registerCommand({ name: "gateway-plugin", help: "Runtime gateway modules: status | reload <id> | use <id> <module-path> | disable <id> | baseline <id>", run: async (args) => {
         const [action = "status", name, ...rest] = args.trim().split(/\s+/).filter(Boolean);
         if (action === "status") return this.status();
-        if (!name || !/^[a-z][a-z0-9_-]*$/.test(name) || ["console", "api"].includes(name)) throw Error("Invalid gateway ID");
+        if (!name || !/^[a-z][a-z0-9_-]*$/.test(name) || ["console", "api", "subagents"].includes(name)) throw Error("Invalid gateway ID");
         if (action === "use" && rest.length === 1) await this.settings.setGatewayPlugin(name, { module: rest[0] });
         else if (action === "disable" && !rest.length) await this.settings.setGatewayPlugin(name, { disabled: true });
         else if (action === "baseline" && !rest.length) await this.settings.setGatewayPlugin(name, undefined);
