@@ -173,6 +173,11 @@ export const COMMANDS: Command[] = [
     },
   },
   {
+    name: "handover",
+    help: "Switch idle conversation to a fresh session with a durable handover [resume instructions]",
+    run: async (args, input, ctx) => ctx.harness.handover(input.sessionKey, args.trim() || "Continue with the next operator request; do not invent new authorization."),
+  },
+  {
     name: "compress",
     aliases: ["compact"],
     help: "Compress conversation context [instructions]",

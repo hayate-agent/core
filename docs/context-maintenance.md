@@ -91,6 +91,20 @@ sensitive task data just like session history; protect Harness home. No automati
 archive retention/deletion is implemented yet. A failed refreshed handover can leave
 an unreferenced archive; it is retained rather than deleting possible recovery data.
 
+## Manual handover command
+
+`/handover [resume instructions]` immediately requests and performs a durable
+fresh-session handover for the current idle conversation. It summarizes and
+archives the old session, seeds the replacement and returns a completion/failure
+notice; it does not start a working model turn or invent permission to continue.
+The default resume instruction is to wait for the next operator request. Manual
+requests work even when automatic context maintenance is disabled. Normal command
+administrator authorization applies. Busy conversations, queued work and pending
+outbox delivery are refused; finish or stop that work and retry. A runtime without
+summary/seeding support reports failure rather than claiming a switch. Prepared
+handover recovery uses the existing crash-safe transition. `/compact` remains
+in-session compaction and is not a synonym for `/handover`.
+
 ## Handover
 
 Explicit tool requests can hand over even when automatic handover is disabled.

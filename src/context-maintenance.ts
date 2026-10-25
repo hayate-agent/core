@@ -145,8 +145,8 @@ export class ContextMaintenance {
   async boundary(key: string, session: RuntimeSession, rotate: (handover: ContextRecord["handover"]) => Promise<RuntimeSession>, target?: Address, phase: "before" | "after" = "after", incomingText = ""): Promise<string | undefined> {
     return this.serial(this.file(key), async () => {
       const policy = this.policy();
-      if (!policy.enabled) return;
       const state = await this.load(key);
+      if (!policy.enabled && !state.pending) return;
       if (target) state.noticeTarget = target;
       const id = session.status().sessionId;
       if (state.completionNotice) {

@@ -123,7 +123,7 @@ test("parseCommand handles args, bot suffix and non-commands", () => {
 
 test("all relevant Hermes gateway commands exist", () => {
   const names = new Set(COMMANDS.flatMap((c) => [c.name, ...(c.aliases ?? [])]));
-  for (const n of ["new", "reset", "retry", "title", "compress", "compact", "stop", "queue", "q", "steer", "s", "bg", "btw", "agents", "tasks", "goal", "subgoal", "heartbeat", "hb", "loop", "status", "context", "whoami", "profile", "sethome", "model", "reasoning", "personality", "busy", "yolo", "approvals", "approve", "deny", "pause", "restart", "skills", "reload-skills", "reload-mcp", "cron", "help", "commands", "version"]) {
+  for (const n of ["new", "reset", "retry", "title", "handover", "compress", "compact", "stop", "queue", "q", "steer", "s", "bg", "btw", "agents", "tasks", "goal", "subgoal", "heartbeat", "hb", "loop", "status", "context", "whoami", "profile", "sethome", "model", "reasoning", "personality", "busy", "yolo", "approvals", "approve", "deny", "pause", "restart", "skills", "reload-skills", "reload-mcp", "cron", "help", "commands", "version"]) {
     assert.ok(names.has(n), `missing /${n}`);
   }
 });

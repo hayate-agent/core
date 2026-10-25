@@ -101,6 +101,7 @@ export interface HarnessOptions {
   memory?: { recall(sessionKey: string, text: string): Promise<string>; capture(turn: import("./memory.js").MemoryTurn): Promise<void> };
   contextMaintenance?: {
     guidance(key: string, session: RuntimeSession): Promise<string>;
+    request?(key: string, request: { action: "handover"; preserve: string; resume: string }): Promise<void>;
     beforeTurn?(key: string, session: RuntimeSession, rotate: (handover: import("./context-maintenance.js").ContextRecord["handover"]) => Promise<RuntimeSession>, target?: Address, incomingText?: string): Promise<string | undefined>;
     boundary(key: string, session: RuntimeSession, rotate: (handover: import("./context-maintenance.js").ContextRecord["handover"]) => Promise<RuntimeSession>, target?: Address): Promise<string | undefined>;
     flushNotices?(deliver: (notice: { id: string; sessionKey: string; to: Address; text: string }) => Promise<void>): Promise<void>;
@@ -332,6 +333,38 @@ export class Harness {
       this.sessions.set(key, s);
     }
     return s;
+  }
+
+  /** Operator-only idle boundary, reserved synchronously against queued pumps. */
+  async handover(key: string, resume: string): Promise<string> {
+    const s = this.state(key);
+    const maintenance = this.opts.contextMaintenance;
+    if (!maintenance?.request || !maintenance.beforeTurn) throw Error("Handover maintenance unavailable");
+    if (this.stopping || this.gatewayChanging || s.running || s.queue.length || s.unsaved || s.outbox.length) return "busy; try /handover again when idle";
+    s.running = true;
+    try {
+      const session = await this.sessionFor(key);
+      // Reconcile the existing session identity before recording the request.
+      await maintenance.guidance(key, session);
+      await maintenance.request(key, { action: "handover", preserve: "Operator intent, corrections, verified results, completed side effects, open work and next steps. Never include credentials.", resume });
+      const notice = await maintenance.beforeTurn(key, session, async handover => {
+        if (!handover) throw Error("Missing handover checkpoint");
+        const next = await this.runtime.open(key, { fresh: true });
+        try {
+          if (!next.seedHandover) throw Error("Runtime cannot seed handover");
+          await next.seedHandover(handover.text);
+        } catch (error) { await next.dispose(); throw error; }
+        s.session = next;
+        await session.dispose();
+        return next;
+      });
+      await this.onStateChange?.();
+      return notice ?? "Handover processed; maintenance status will be delivered separately.";
+    } finally {
+      s.running = false;
+      this.notifyQuiet();
+      if (s.queue.length) void this.pump(s);
+    }
   }
 
   private resetContinuation(input: Inbound): void { input.continuation = undefined; }
