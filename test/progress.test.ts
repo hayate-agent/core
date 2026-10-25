@@ -51,7 +51,8 @@ test("blocked delivery coalesces heartbeat backlog and retains the final batch",
     if (sent.length === 1) await blocked;
   }, 10);
   p.event({ type: "tool", phase: "start", name: "bash" });
-  for (let i = 0; i < 100; i++) {
+  // Stay within the shared event budget; exhaustion is covered separately.
+  for (let i = 0; i < 20; i++) {
     t.mock.timers.tick(10);
     await Promise.resolve();
   }
