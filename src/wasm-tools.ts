@@ -67,7 +67,10 @@ export function wasmTools(home: string, config: WasmToolConfig[]): PluginTool[] 
         if (context.signal?.aborted) throw Error("Wasm tool cancelled");
         return await new Promise<string>((resolve, reject) => {
           const worker = new Worker(new URL(import.meta.url.endsWith(".ts") ? "./wasm-tool-worker.ts" : "./wasm-tool-worker.js", import.meta.url), {
-            workerData: { bytes: file, input: input.input },
+            // --input-type applies only to eval/stdin, not a worker file entrypoint.
+          ...(process.execArgv.some(arg => arg.startsWith("--input-type="))
+            ? { execArgv: process.execArgv.filter(arg => !arg.startsWith("--input-type=")) } : {}),
+          workerData: { bytes: file, input: input.input },
             resourceLimits: { maxOldGenerationSizeMb: 32, maxYoungGenerationSizeMb: 8 },
           });
           let settled = false;
