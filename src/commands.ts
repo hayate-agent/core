@@ -188,10 +188,7 @@ export const COMMANDS: Command[] = [
     name: "stop",
     help: "Stop the running turn and clear this session's queue",
     run: async (_a, input, ctx) => {
-      const s = ctx.harness.state(input.sessionKey);
-      const dropped = s.queue.length;
-      s.queue.length = 0;
-      if (s.running) await s.session?.abort();
+      const dropped = await ctx.harness.stopConversation(input.sessionKey);
       return `⏹️ Stopped${dropped ? `, ${dropped} queued dropped` : ""}.`;
     },
   },

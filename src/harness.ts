@@ -481,6 +481,9 @@ export class Harness {
    */
   async submit(input: Inbound, deferPump = false): Promise<void> {
     const s = this.state(input.sessionKey);
+    if (input.source === "channel") {
+      input.completionAnchor = { id: randomUUID(), task: input.text, receivedAt: this.now() };
+    }
     // API runs answer to the run itself, never become the session's conversation address.
     if (input.replyTo && input.source !== "api") s.replyTo = input.replyTo;
     s.lastActivity = this.now();
@@ -549,6 +552,18 @@ export class Harness {
    * Cancel an accepted input by id (API stop). A queued input is answered as cancelled right
    * away; a running one is aborted and finishes as cancelled. False if it is not pending.
    */
+  async stopConversation(sessionKey: string): Promise<number> {
+    const s = this.state(sessionKey);
+    const dropped = s.queue.length;
+    for (const input of s.queue) this.inbox.unsaved.delete(input);
+    s.queue.length = 0;
+    if (s.current) { s.cancelling = s.current; s.current.continuation = undefined; }
+    this.turnAbort.get(sessionKey)?.abort();
+    if (s.prompting) await s.session?.abort();
+    await this.onStateChange?.();
+    return dropped;
+  }
+
   async cancel(sessionKey: string, id: string): Promise<"queued" | "running" | false> {
     const s = this.sessions.get(sessionKey);
     if (!s) return false;
@@ -727,7 +742,8 @@ export class Harness {
         if (input.continuation?.state === "continue" && input.continuation.next && (input.continuationDepth ?? 0) < 20 && input.source !== "api" && s.key !== "improvement:nightly" && !s.queue.length && !this.stopping) {
           s.queue.push({ id: randomUUID(), sessionKey: s.key, source: "cron", replyTo: input.replyTo ?? s.replyTo,
             text: `Continue the explicitly authorized task with this recorded next step. Recheck blockers and authorization; do not repeat completed side effects.\n${input.continuation.next}`,
-            continuationDepth: (input.continuationDepth ?? 0) + 1 });
+            continuationDepth: (input.continuationDepth ?? 0) + 1,
+            completionAnchor: input.completionAnchor ? structuredClone(input.completionAnchor) : undefined });
         }
         try {
           await this.onStateChange?.();

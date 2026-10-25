@@ -8,7 +8,7 @@ are excluded. Conditions are rechecked after assessment; the ordinary durable
 inbox/outbox checkpoint commits any follow-up. Working approval cleanup and
 assessment cancellation use separate signals.
 
-Enable only through installation configuration:
+Installation configuration may supply a narrow task scope with a numeric deadline:
 
 ```yaml
 completionCheck:
@@ -18,12 +18,21 @@ completionCheck:
       expiresAt: 1793000000000 # explicit UTC epoch milliseconds; example only
 ```
 
-The task scope and deadline must be provided by a trusted operator/deployment,
-not inferred from assistant replies. Protect installation configuration at the
-infrastructure boundary. No tool or settings overlay may edit these grants.
-There is currently no automatic extraction of trusted task grants from ordinary
-chat: without a grant this fallback does not run. A reply saying work remains is
-not itself permission. This is an opt-in foundation, not a complete task registry.
+Protect installation configuration at the infrastructure boundary. No tool or
+settings overlay may edit these grants. Without a configured grant, the core uses
+the original accepted chat input as a task anchor, captured before working execution
+and persisted with the input. Generated follow-ups inherit that same anchor rather
+than assistant replies. The classifier must distinguish actual work requests from
+questions, status requests and quoted history. This distinction is model-advisory,
+not a formal authorization proof. Non-chat scheduled inputs have no implicit anchor.
+
+A reply saying work remains is never itself permission. Chat anchors have no
+invented expiry: if the task contains a temporal limit without a numeric grant,
+the classifier is instructed to return uncertain rather than guess its meaning.
+This is not a deterministic natural-language deadline parser or full task registry.
+New queued input suppresses follow-up scheduling; `/stop` aborts the assessment as
+well as working execution and clears waiting work. Already committed work cannot
+be undone by stopping. Installation grants take precedence over chat anchors.
 
 The classifier uses the existing ephemeral tool-free reviewer adapter (no skills,
 project context or extensions). It receives bounded task/request/reply text and

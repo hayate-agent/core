@@ -185,7 +185,8 @@ async function main(argv: string[]): Promise<void> {
     },
     turnCommitted: async (input) => { await improvement?.committed(input); },
     completionCheck: async (input, reply, signal) => {
-      const grant = config.completionCheck?.authorizations[input.sessionKey];
+      const grant = config.completionCheck?.authorizations[input.sessionKey] ??
+        (input.completionAnchor ? { task: input.completionAnchor.task } : undefined);
       return assessCompletion(runtimeReviewer(runtime), input, reply, grant, signal, effectiveModels().reviewModel);
     },
     afterTurn: async (input, reply, session, options, signal) => {
