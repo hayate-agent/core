@@ -810,3 +810,32 @@ test("typing stays enabled until all room activities finish", async () => {
  calls=server.calls.filter(c=>c.path.includes("/typing/"));
  assert.equal(calls.at(-1)!.body.typing,false); await ch.stop();
 });
+
+
+test("typing updates serialize a slow stop before a new start", async () => {
+  const server = fakeServer({ [ROOM]: 5 });
+  let release!: () => void;
+  let stopping!: () => void;
+  const stopped = new Promise<void>(resolve => { stopping = resolve; });
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  let hold = true;
+  const { ch } = await setup({ fetch: (async (url: string, init: RequestInit) => {
+    const body = init.body ? JSON.parse(String(init.body)) : undefined;
+    if (url.includes("/typing/") && body?.typing === false && hold) {
+      hold = false; stopping(); await gate;
+    }
+    return server.fetch(url, init);
+  }) as typeof fetch });
+  const to = {channel: "matrix", target: ROOM};
+  try {
+    await ch.typing(to, true);
+    const off = ch.typing(to, false);
+    await stopped;
+    const on = ch.typing(to, true);
+    await new Promise(resolve => setTimeout(resolve, 5));
+    assert.equal(server.calls.filter(c => c.path.includes("/typing/")).length, 1);
+    release(); await Promise.all([off, on]);
+    assert.deepEqual(server.calls.filter(c => c.path.includes("/typing/")).map(c => c.body.typing), [true, false, true]);
+    await ch.typing(to, false);
+  } finally { release(); await ch.stop(); }
+});

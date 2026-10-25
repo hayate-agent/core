@@ -113,6 +113,7 @@ export class MatrixChannel implements Channel {
   private readonly batches = new Map<string, { input: Inbound; timer: NodeJS.Timeout; since: number }>();
   private readonly typingTimers = new Map<string, NodeJS.Timeout>();
   private readonly typingUsers = new Map<string, number>();
+  private readonly typingRequests = new Map<string, Promise<void>>();
   private gateway: import("../gateway-settings.js").GatewaySettings = { progress: "off", statusReactions: false };
   configureGateway(settings: import("../gateway-settings.js").GatewaySettings): void {
     this.gateway = { progress: this.o.progress ?? settings.progress, statusReactions: this.o.statusReactions ?? settings.statusReactions };
@@ -670,10 +671,23 @@ export class MatrixChannel implements Channel {
     if (parts.length > 1) await this.send(to, parts.slice(1).join("\n"), { ...meta, progressId: undefined, deliveryId: `${logical}.${txn}.tail` });
   }
 
-  /** Typing indicator; refreshed every 25s for long turns. */
+  /** Serialize room updates: a slow stop must never overtake the next start. */
+  private putTyping(to: Address): Promise<void> {
+    const previous = this.typingRequests.get(to.target) ?? Promise.resolve();
+    const next = previous.catch(() => undefined).then(async () => {
+      const on = (this.typingUsers.get(to.target) ?? 0) > 0;
+      await this.api("PUT", `/rooms/${encodeURIComponent(to.target)}/typing/${encodeURIComponent(this.userId)}`,
+        on ? { typing: true, timeout: 30_000 } : { typing: false });
+    });
+    this.typingRequests.set(to.target, next);
+    void next.finally(() => {
+      if (this.typingRequests.get(to.target) === next) this.typingRequests.delete(to.target);
+    }).catch(() => undefined);
+    return next;
+  }
+
+  /** Typing indicator; refreshed every 10s for long turns. */
   async typing(to: Address, on: boolean): Promise<void> {
-    const put = (v: boolean) =>
-      this.api("PUT", `/rooms/${encodeURIComponent(to.target)}/typing/${encodeURIComponent(this.userId)}`, v ? { typing: true, timeout: 30_000 } : { typing: false });
     const users = this.typingUsers.get(to.target) ?? 0;
     if (on) this.typingUsers.set(to.target, users + 1);
     else if (users > 1) { this.typingUsers.set(to.target, users - 1); return; }
@@ -682,11 +696,11 @@ export class MatrixChannel implements Channel {
     clearInterval(this.typingTimers.get(to.target));
     this.typingTimers.delete(to.target);
     if (on) {
-      const t = setInterval(() => void put(true).catch(() => this.log("[matrix] typing renewal failed")), 10_000);
+      const t = setInterval(() => void this.putTyping(to).catch(() => this.log("[matrix] typing renewal failed")), 10_000);
       t.unref?.();
       this.typingTimers.set(to.target, t);
     }
-    await put(on);
+    await this.putTyping(to);
   }
 }
 
