@@ -15,6 +15,7 @@ import { LocalMemory } from "./memory-local.js";
 import { MemoryService, memoryPlugin } from "./memory-plugin.js";
 import { gatewayPlugin } from "./gateway-plugin.js";
 import { PluginHost } from "./plugins.js";
+import { wasmToolsPlugin } from "./wasm-tools.js";
 import { builtinCommandNames, installCommands, VERSION } from "./commands.js";
 import { loadConfig } from "./config.js";
 import { initialize, diagnose } from "./setup.js";
@@ -316,7 +317,7 @@ async function main(argv: string[]): Promise<void> {
   }
   await scheduler.load();
 
-  await plugins.load(config.plugins ?? [], { agent: config.agent, home: config.home, cwd: config.cwd }, [...builtinCommandNames, "sessions", "resume", ...skills.map((s) => s.name)], ["console", "api", "matrix", ...harness.channels.keys()], [continuationPlugin(harness), loopPlugin(harness), improvement!.plugin(), protectedContent.plugin(), gatewayManager.plugin(), gatewayPlugin(settings, harness), contextPlugin(maintenance, settings), ...(config.memory.enabled ? [memoryPlugin(memory)] : []), ...(reviewSettings.enabled ? [reviewPlugin(review, config.cwd)] : [])]);
+  await plugins.load(config.plugins ?? [], { agent: config.agent, home: config.home, cwd: config.cwd }, [...builtinCommandNames, "sessions", "resume", ...skills.map((s) => s.name)], ["console", "api", "matrix", ...harness.channels.keys()], [wasmToolsPlugin(config.home, config.wasmTools ?? []), continuationPlugin(harness), loopPlugin(harness), improvement!.plugin(), protectedContent.plugin(), gatewayManager.plugin(), gatewayPlugin(settings, harness), contextPlugin(maintenance, settings), ...(config.memory.enabled ? [memoryPlugin(memory)] : []), ...(reviewSettings.enabled ? [reviewPlugin(review, config.cwd)] : [])]);
   let memoryConnecting = false;
   let memoryStopping = false;
   const connectMemory = async () => {
