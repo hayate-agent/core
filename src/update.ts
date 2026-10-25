@@ -16,7 +16,7 @@ export class OverlayUpdater {
           try {
             const result = await this.reloaders[target]();
             results.push({ component: target, status: result?.warnings ? "activated-with-warnings" : "activated",
-              detail: result?.warnings ? `Local source reloaded with ${result.warnings} diagnostics; inspect component logs` : "Local source reloaded; no remote version fetched" });
+              detail: result?.warnings ? `Local source reloaded with ${result.warnings} diagnostics; inspect component logs` : "Configured source activated; inspect installation configuration for local/pinned-download mode" });
           }
           catch { results.push({ component: target, status: "failed", detail: "Reload failed; inspect component diagnostics" }); }
         }

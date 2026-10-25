@@ -36,6 +36,7 @@ export interface HarnessConfig {
   /** Trusted local ESM plugin paths, relative to Harness home or absolute. */
   plugins?: string[];
   protectedContent?: import("./protected-content.js").ProtectedContentConfig;
+  skillUpdateSource?: import("./skill-updates.js").SkillUpdateSource;
   sessions?: { provider: string; options?: unknown };
   compaction?: { strategy: string };
   contextMaintenance?: Partial<import("./context-maintenance.js").ContextPolicy>;
@@ -109,6 +110,7 @@ export function defaultConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
     review: reviewConfig(overrides.review),
     plugins: overrides.plugins ?? [],
     protectedContent: overrides.protectedContent,
+    skillUpdateSource: overrides.skillUpdateSource,
     sessions: overrides.sessions ?? { provider: "native" },
     compaction: overrides.compaction ?? { strategy: "native" },
     contextMaintenance: contextPolicy(overrides.contextMaintenance),

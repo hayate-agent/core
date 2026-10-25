@@ -47,9 +47,9 @@ export class GatewayProgress {
     }
     if (this.count >= 50) return;
     if (this.mode === "reduced") {
-      this.pending.push(event.phase === "start" ? `· ${event.name} gestartet` : `${error ? "⚠" : "✓"} ${event.name} beendet`);
+      this.pending.push(event.phase === "start" ? `⏳ ${event.name} gestartet` : `${error ? "⚠" : "✓"} ${event.name} beendet`);
     } else {
-      this.pending.push(`${event.phase === "start" ? "·" : error ? "⚠" : "✓"} ${event.name}${event.detail ? `\n${event.detail.slice(0, 2000)}` : ""}`);
+      this.pending.push(`${event.phase === "start" ? "⏳" : error ? "⚠" : "✓"} ${event.name}${event.detail ? `\n${event.detail.slice(0, 2000)}` : ""}`);
     }
     this.count++;
     if (!this.scheduled) this.scheduled = setTimeout(() => { this.scheduled = undefined; this.flush(); }, 1500);
