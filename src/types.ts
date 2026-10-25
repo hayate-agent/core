@@ -92,7 +92,9 @@ export interface RuntimeSessionStatus {
   thinking?: string;
   busy: boolean;
   messages?: number;
-  tokens?: { input: number; output: number };
+  tokens?: { input: number; output: number; cacheRead?: number; cacheWrite?: number; total?: number };
+  /** Provider/model price estimate for this runtime session, not a billing statement. */
+  costUsd?: number;
   contextPercent?: number;
   contextWindow?: number;
   /** Effective runtime system prompt size; excludes conversation history and tool schemas. */

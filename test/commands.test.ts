@@ -40,6 +40,27 @@ function setup(opts: { admins?: string[]; approvers?: string[]; skills?: SkillIn
   return { runtime, harness, ch, ctx, send, approvals };
 }
 
+test("usage and tokens alias report session/cache/cost with honest scope and unknown fallback", async () => {
+  const { harness, send, ch } = setup();
+  try {
+    await send("/usage");
+    assert.match(ch.texts().at(-1)!, /tokens in\/out: unknown\/unknown/);
+    assert.match(ch.texts().at(-1)!, /estimated cost USD: unknown/);
+    const session = await harness.sessionFor("mem:room1");
+    session.status = () => ({ sessionId: "usage-test", busy: true, model: "p/m", tokens: { input: 10, output: 20, cacheRead: 30, cacheWrite: 40, total: 100 }, costUsd: 0.012345 });
+    await send("/tokens");
+    const text = ch.texts().at(-1)!;
+    assert.match(text, /usage-test \(busy; partial\)/);
+    assert.match(text, /tokens in\/out: 10\/20/);
+    assert.match(text, /cache read\/write: 30\/40/);
+    assert.match(text, /including cache\): 100/);
+    assert.match(text, /estimated cost USD: 0.012345/);
+    assert.match(text, /not account billing or parent\/subagent totals/);
+    await send("/help");
+    assert.match(ch.texts().at(-1)!, /\/usage.*\/tokens/);
+  } finally { await harness.stop(1000); }
+});
+
 test("global and reviewer model commands require admin for changes and support reset", async () => {
   const { ctx, send, ch, runtime } = setup({ admins: ["owner"] });
   const settings: Record<string, string | undefined> = {};
