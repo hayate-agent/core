@@ -311,6 +311,24 @@ export const COMMANDS: Command[] = [
     },
   },
   {
+    name: "usage",
+    aliases: ["tokens"],
+    help: "Show current runtime-session tokens, cache usage and estimated USD cost (alias: /tokens)",
+    run: async (_a, input, ctx) => {
+      const st = (await ctx.harness.sessionFor(input.sessionKey)).status();
+      const count = (n: number | undefined) => n !== undefined && Number.isFinite(n) && n >= 0 ? String(n) : "unknown";
+      return [
+        `usage: current runtime session ${st.sessionId}${st.busy ? " (busy; partial)" : ""}`,
+        `model: ${st.model ?? "default"}`,
+        `tokens in/out: ${count(st.tokens?.input)}/${count(st.tokens?.output)}`,
+        `cache read/write: ${count(st.tokens?.cacheRead)}/${count(st.tokens?.cacheWrite)}`,
+        `total tokens (including cache): ${count(st.tokens?.total)}`,
+        `estimated cost USD: ${st.costUsd !== undefined && Number.isFinite(st.costUsd) && st.costUsd >= 0 ? st.costUsd.toFixed(6) : "unknown"}`,
+        "Scope: this runtime session only; not account billing or parent/subagent totals. Handover/new sessions have separate counters. Provider/model pricing may be unavailable or zero.",
+      ].join("\n");
+    },
+  },
+  {
     name: "context",
     aliases: ["ctx"],
     help: "Show context window usage",
