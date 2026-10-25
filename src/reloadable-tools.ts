@@ -1,4 +1,5 @@
-import { randomUUID } from "node:crypto";
+import { randomUUID, createHash } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 import path from "node:path";
 import { PluginHost, type PluginAPI, type PluginModule, type PluginTool } from "./plugins.js";
@@ -13,6 +14,22 @@ export class ReloadableTools {
   private changing = false;
   private closed = false;
   private attempts = 0;
+  private fingerprint?: string;
+  private refreshing?: Promise<void>;
+
+  private async snapshot(): Promise<string> {
+    const hash = createHash("sha256");
+    for (const file of this.files) hash.update(await readFile(path.resolve(this.context.home,file))).update("\0");
+    return hash.digest("hex");
+  }
+
+  /** Coalesce checks across conversations; no background watcher or mid-turn reload. */
+  refresh(): Promise<void> {
+    return this.refreshing ??= (async () => {
+      const fingerprint = await this.snapshot();
+      if (fingerprint !== this.fingerprint) await this.reload();
+    })().finally(() => { this.refreshing = undefined; });
+  }
 
   plugin(): PluginModule {
     return { apiVersion: 1, activate: async api => {
@@ -42,6 +59,7 @@ export class ReloadableTools {
     this.changing = true;
     const host = new PluginHost();
     try {
+      const fingerprint = await this.snapshot();
       const modules: PluginModule[] = [];
       for (const file of this.files) {
         const url = pathToFileURL(path.resolve(this.context.home,file));
@@ -62,6 +80,7 @@ export class ReloadableTools {
       this.generations.add(next);
       const old = this.current;
       this.current = next;
+      this.fingerprint = fingerprint;
       if (!old) for (const [name,tool] of host.tools) this.tools.set(name, Object.freeze({...tool,
         execute: async (input: Record<string,unknown>,context: {sessionKey:string;signal?:AbortSignal}) => {
           if (this.closed || !this.current) throw Error("Tool plugins stopped");

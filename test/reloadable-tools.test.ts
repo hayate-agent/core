@@ -85,3 +85,22 @@ test("stop during candidate activation prevents publication and cleans candidate
   await assert.rejects(tool.execute({},{sessionKey:"test"}),/stopped/);
  } finally {release();await manager.stop();delete (globalThis as any)[key];await rm(home,{recursive:true,force:true});}
 });
+
+
+test("automatic refresh detects entry changes and preserves previous generation on failure",async()=>{
+ const home=await mkdtemp(path.join(os.tmpdir(),"tool-auto-reload-"));
+ const manager=new ReloadableTools({home,cwd:home,agent:"test"},["tool.mjs"]);
+ try {
+  const file=path.join(home,"tool.mjs");
+  await writeFile(file,moduleText("first"));await manager.reload();
+  const tool=manager.tools.get("plugin_reload")!;
+  await Promise.all([manager.refresh(),manager.refresh()]);
+  await writeFile(file,moduleText("second"));
+  await Promise.all([manager.refresh(),manager.refresh()]);
+  assert.equal(await tool.execute({},{sessionKey:"test"}),"second");
+  await writeFile(file,"invalid javascript");await assert.rejects(manager.refresh());
+  assert.equal(await tool.execute({},{sessionKey:"test"}),"second");
+  await writeFile(file,moduleText("repaired"));await manager.refresh();
+  assert.equal(await tool.execute({},{sessionKey:"test"}),"repaired");
+ } finally {await manager.stop();await rm(home,{recursive:true,force:true});}
+});

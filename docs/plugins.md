@@ -33,7 +33,12 @@ is needed. Calls already running retain their old generation; its onStop cleanup
 runs after its last call finishes. New calls use the replacement. Invalid candidates
 leave the previous delegates active and their registered cleanups are attempted.
 
-This is explicit reload, not automatic file watching. Only entry modules receive
+By default reload is explicit. Set `autoReloadToolPlugins: true` to compare entry
+file contents before each working turn and reload changed entries. Concurrent
+turn-boundary checks are coalesced. A failed candidate leaves existing tools active
+but fails the new turn before model execution; fix the file before retrying. This
+is not a background file watcher. Changes in imported dependencies are not detected.
+Only entry modules receive
 fresh ESM URLs; imported dependencies remain cached. Publish versioned dependency
 paths. Node does not unload old ESM modules: after 50 load attempts, restart is
 required. Trusted activation/cleanup can hang or produce external side effects;
