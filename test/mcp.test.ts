@@ -27,7 +27,7 @@ createInterface({input:process.stdin}).on('line', line => {
     await writeFile(path.join(dir, "mcp.json"), JSON.stringify({ mcpServers: { fixture: { command: process.execPath, args: [server, path.join(dir, "pid")], exposure: "direct" } } }));
     const code = `
 import { PiRuntime } from './src/runtime/pi.ts';
-import { access, readFile, writeFile } from 'node:fs/promises';
+import { access, readFile, writeFile, mkdir } from 'node:fs/promises';
 import assert from 'node:assert/strict';
 const options={cwd:process.cwd(),sessionsDir:process.env.TEST_DIR+'/sessions',skillPaths:[],personaSections:async()=>[],approvals:{mode:'off',tools:[]}};
 for (const extra of [{}, {mcp:{enabled:true},tools:[]}]) {
@@ -79,8 +79,43 @@ while(!session.getAllTools().some(t=>t.name==='mcp__changed__echo') && Date.now(
 assert.ok(session.getAllTools().some(t=>t.name==='mcp__changed__echo'));
 assert.ok(!session.getAllTools().some(t=>t.name==='mcp__fixture__echo'),'removed tools disappear');
 const finalPid=Number(await readFile(process.env.TEST_DIR+'/pid','utf8'));
+// A failed SDK reload must not run the prompt or acknowledge the revision.
+const sdkReload=session.reload.bind(session);
+let reloadAttempts=0;
+session.reload=async()=>{reloadAttempts++; if(reloadAttempts===1) throw Error('reload fixture failure'); return sdkReload();};
+await runtime.reload();
+const beforeFailure=prompts;
+await assert.rejects(wrapped.prompt('failed reload'),/reload fixture failure/);
+assert.equal(prompts,beforeFailure);
+process.kill(finalPid,0);
+await wrapped.prompt('retry reload');
+assert.equal(reloadAttempts,2);
+assert.throws(()=>process.kill(finalPid,0));
 await wrapped.dispose();
-assert.throws(()=>process.kill(finalPid,0)); // closed while the owning process is still alive
+const untrustedCwd=process.env.TEST_DIR+'/untrusted';
+await mkdir(untrustedCwd+'/.pi',{recursive:true});
+await writeFile(untrustedCwd+'/.pi/mcp.json','{untrusted broken JSON');
+const untrustedRuntime=new PiRuntime({...options,cwd:untrustedCwd,mcp:{enabled:true},tools:['read']});
+const untrusted=await untrustedRuntime.open('untrusted');
+assert.equal(untrusted.session.settingsManager.isProjectTrusted(),false);
+untrusted.session.prompt=async()=>{}; untrusted.session.waitForIdle=async()=>{};
+await untrusted.prompt('untrusted project cannot block user configuration');
+await untrusted.dispose();
+const restrictedRuntime=new PiRuntime({...options,mcp:{enabled:true},tools:['read']});
+const restricted=await restrictedRuntime.open('restricted');
+const restrictedSession=restricted.session;
+restrictedSession.prompt=async()=>{}; restrictedSession.waitForIdle=async()=>{};
+await restrictedRuntime.reload(); await restricted.prompt('restricted reload');
+await new Promise(r=>setTimeout(r,100));
+assert.deepEqual(restrictedSession.getActiveToolNames(),['read'],'reload cannot broaden explicit tools');
+await restricted.dispose();
+const ephemeral=await runtime.open('review',{ephemeral:true});
+let forbiddenReload=0;
+ephemeral.session.reload=async()=>{forbiddenReload++;};
+ephemeral.session.prompt=async()=>{}; ephemeral.session.waitForIdle=async()=>{};
+await runtime.reload(); await ephemeral.prompt('review');
+assert.equal(forbiddenReload,0,'review sessions never reload working resources');
+await ephemeral.dispose();
 console.log('DISCOVERED');
 `;
     const result = await exec(process.execPath, ["--import", "tsx", "--input-type=module", "-e", code], {

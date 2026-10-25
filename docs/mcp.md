@@ -50,7 +50,12 @@ background watcher; environment-only credential changes are not detected.
 Invalid JSON blocks that prompt before closing the previous connections. Other
 SDK reload/start failures are not transactional rollback; repair configuration and
 retry. File validation is syntax-only and cannot eliminate external write races.
-Project trust and explicit tool restrictions remain SDK-enforced.
+The adapter passes the persisted PI project-trust decision to both the SDK
+resource loader and session settings. Projects without an explicit stored allow
+decision do not load project-local executable resources; user-level configuration
+remains available. Automatic discovery ignores untrusted project `mcp.json`.
+Grant trust externally through PI's project-trust controls; chat cannot grant it.
+Explicit tool restrictions remain SDK-enforced.
 
 SDK resource reload also re-reads trusted runtime extensions/settings, not only
 MCP. It does not reload Harness general plugins or configuration, and is not an

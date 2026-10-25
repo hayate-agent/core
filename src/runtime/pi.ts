@@ -17,6 +17,8 @@ import {
   createToolSearchExtension,
   DefaultResourceLoader,
   getAgentDir,
+  SettingsManager,
+  ProjectTrustStore,
   ModelRuntime,
   SessionManager,
 } from "@earendil-works/pi-coding-agent";
@@ -379,9 +381,13 @@ export class PiRuntime implements AgentRuntime {
     const approvals = this.opts.approvals;
     const requestApproval = this.opts.requestApproval;
     const slot: TurnSlot = {};
+    const settingsManager = SettingsManager.create(cwd, getAgentDir(), {
+      projectTrusted: !options.ephemeral && new ProjectTrustStore(getAgentDir()).get(cwd) === true,
+    });
     const loader = new DefaultResourceLoader({
       cwd,
       agentDir: getAgentDir(),
+      settingsManager,
       additionalSkillPaths: options.ephemeral ? [] : this.opts.skillPaths,
       noExtensions: options.ephemeral,
       noContextFiles: options.ephemeral,
@@ -448,6 +454,7 @@ export class PiRuntime implements AgentRuntime {
       cwd,
       modelRuntime: models,
       resourceLoader: loader,
+      settingsManager,
       sessionManager,
       tools: options.ephemeral ? [] : this.opts.tools,
       noTools: options.ephemeral || this.opts.tools?.length === 0 ? "all" : undefined,
@@ -483,7 +490,10 @@ export class PiRuntime implements AgentRuntime {
     const mcpFingerprint = async () => {
       if (options.ephemeral || !this.opts.mcp?.enabled || this.opts.tools?.length === 0) return "";
       const hash = createHash("sha256");
-      for (const file of [path.join(getAgentDir(), "mcp.json"), path.join(this.opts.cwd, ".pi", "mcp.json")]) {
+      const files = [path.join(getAgentDir(), "mcp.json")];
+      if (session.settingsManager.isProjectTrusted()) files.push(path.join(this.opts.cwd, ".pi", "mcp.json"));
+      hash.update(session.settingsManager.isProjectTrusted() ? "trusted\0" : "untrusted\0");
+      for (const file of files) {
         let text: string;
         try { text = await readFile(file, "utf8"); }
         catch (error) {
