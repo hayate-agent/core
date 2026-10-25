@@ -100,3 +100,12 @@ test("full bounds output and events; telemetry failures do not reject finish", a
   assert.ok(sent[0].includes("⚠ bash"));
   assert.ok(sent[0].length <= 8000);
 });
+
+ test("parallel same-name tools emit one start and one final completion", async () => {
+ const sent: string[] = []; const p = new GatewayProgress("reduced", async text => { sent.push(text); });
+ for(let i=0;i<5;i++) p.event({type:"tool",phase:"start",name:"read"});
+ for(let i=0;i<4;i++) p.event({type:"tool",phase:"end",name:"read",error:i===0});
+ p.event({type:"tool",phase:"end",name:"read"}); await p.finish();
+ const text=sent.join("\n"); assert.equal((text.match(/read gestartet/g)||[]).length,1);
+ assert.equal((text.match(/read beendet/g)||[]).length,1); assert.match(text,/⚠ read beendet/);
+ });

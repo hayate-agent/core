@@ -567,7 +567,6 @@ export function installCommands(ctx: CommandContext): void {
   ctx.harness.commandHandler = async (input) => {
     const parsed = parseCommand(input.text);
     if (!parsed) return false;
-    if (parsed.name !== "reload-skills" && parsed.name !== "reload_skills" && parsed.name !== "reload-mcp" && parsed.name !== "reload_mcp" && parsed.name !== "update") await ctx.reloadSkills();
     const cmd = BY_NAME.get(parsed.name);
     if (!cmd) {
       const plugin = ctx.pluginCommands?.get(parsed.name);
@@ -582,6 +581,9 @@ export function installCommands(ctx: CommandContext): void {
         }
         return true;
       }
+      // Operational and inspection commands must remain available even when
+      // content verification fails. Only skill resolution needs discovery here.
+      await ctx.reloadSkills();
       const skill = ctx.skills().find((s) => s.name === parsed.name);
       if (!skill) return false;
       ctx.harness.enqueue({ ...input, text: skillInvocationPrompt(skill, parsed.args) });

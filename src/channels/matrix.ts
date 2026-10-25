@@ -112,6 +112,7 @@ export class MatrixChannel implements Channel {
   private readonly pendingInvites = new Map<string, any>();
   private readonly batches = new Map<string, { input: Inbound; timer: NodeJS.Timeout; since: number }>();
   private readonly typingTimers = new Map<string, NodeJS.Timeout>();
+  private readonly typingUsers = new Map<string, number>();
   private gateway: import("../gateway-settings.js").GatewaySettings = { progress: "off", statusReactions: false };
   configureGateway(settings: import("../gateway-settings.js").GatewaySettings): void {
     this.gateway = { progress: this.o.progress ?? settings.progress, statusReactions: this.o.statusReactions ?? settings.statusReactions };
@@ -275,6 +276,8 @@ export class MatrixChannel implements Channel {
   async stop(budgetMs = Infinity): Promise<void> {
     this.abort.abort();
     for (const t of this.typingTimers.values()) clearInterval(t);
+    this.typingTimers.clear();
+    this.typingUsers.clear();
     const finish = async () => {
       await this.loop?.catch(() => undefined);
       for (const [key, b] of this.batches) {
@@ -671,10 +674,15 @@ export class MatrixChannel implements Channel {
   async typing(to: Address, on: boolean): Promise<void> {
     const put = (v: boolean) =>
       this.api("PUT", `/rooms/${encodeURIComponent(to.target)}/typing/${encodeURIComponent(this.userId)}`, v ? { typing: true, timeout: 30_000 } : { typing: false });
+    const users = this.typingUsers.get(to.target) ?? 0;
+    if (on) this.typingUsers.set(to.target, users + 1);
+    else if (users > 1) { this.typingUsers.set(to.target, users - 1); return; }
+    else this.typingUsers.delete(to.target);
+    if (on && users > 0) return;
     clearInterval(this.typingTimers.get(to.target));
     this.typingTimers.delete(to.target);
     if (on) {
-      const t = setInterval(() => void put(true).catch(() => undefined), 25_000);
+      const t = setInterval(() => void put(true).catch(() => this.log("[matrix] typing renewal failed")), 10_000);
       t.unref?.();
       this.typingTimers.set(to.target, t);
     }

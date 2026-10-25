@@ -798,3 +798,15 @@ test("chunks split long text on newlines", () => {
   const parts = chunks(`${"a".repeat(60)}\n${"b".repeat(60)}`, 100);
   assert.deepEqual(parts.map((p) => p.length), [60, 60]);
 });
+
+test("typing stays enabled until all room activities finish", async () => {
+ const {ch,server} = await setup();
+ await ch.typing({channel:"matrix",target:ROOM},true);
+ await ch.typing({channel:"matrix",target:ROOM},true);
+ await ch.typing({channel:"matrix",target:ROOM},false);
+ let calls=server.calls.filter(c=>c.path.includes("/typing/"));
+ assert.equal(calls.length,1); assert.equal(calls[0].body.typing,true);
+ await ch.typing({channel:"matrix",target:ROOM},false);
+ calls=server.calls.filter(c=>c.path.includes("/typing/"));
+ assert.equal(calls.at(-1)!.body.typing,false); await ch.stop();
+});
