@@ -36,6 +36,8 @@ export interface HarnessConfig {
   tools?: string[];
   /** Trusted local ESM plugin paths, relative to Harness home or absolute. */
   plugins?: string[];
+  /** Trusted tool-only ESM modules with explicit generation replacement. */
+  reloadableToolPlugins?: string[];
   /** Restricted no-import WebAssembly tool modules; no WASI or host capabilities. */
   wasmTools?: import("./wasm-tools.js").WasmToolConfig[];
   protectedContent?: import("./protected-content.js").ProtectedContentConfig;
@@ -91,6 +93,9 @@ export function defaultConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
   if (overrides.plugins !== undefined && (!Array.isArray(overrides.plugins) || overrides.plugins.some((p) => typeof p !== "string" || !p.trim()))) {
     throw new Error("plugins must be an array of local module paths");
   }
+  if (overrides.reloadableToolPlugins !== undefined && (!Array.isArray(overrides.reloadableToolPlugins) || overrides.reloadableToolPlugins.some(p => typeof p !== "string" || !p.trim()))) {
+    throw Error("reloadableToolPlugins must be an array of local module paths");
+  }
   validateWasmTools(overrides.wasmTools ?? []);
   if (overrides.mcp !== undefined && (overrides.mcp === null || typeof overrides.mcp !== "object" || typeof overrides.mcp.enabled !== "boolean")) {
     throw new Error("mcp.enabled must be a boolean");
@@ -115,6 +120,7 @@ export function defaultConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
     thinking: overrides.thinking,
     review: reviewConfig(overrides.review),
     plugins: overrides.plugins ?? [],
+    reloadableToolPlugins: overrides.reloadableToolPlugins ?? [],
     wasmTools: overrides.wasmTools ?? [],
     protectedContent: overrides.protectedContent,
     skillUpdateSource: overrides.skillUpdateSource,

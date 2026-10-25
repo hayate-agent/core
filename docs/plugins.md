@@ -20,7 +20,26 @@ plugins:
 
 Relative paths resolve against Harness home, not current project. Absolute paths
 also work. Compile TypeScript plugins to ESM before use. Restart after changes;
-hot reload, package marketplace and dependency management are not implemented.
+general hot reload, package marketplace and dependency management are not implemented.
+
+## Explicit tool-only reload
+
+Trusted ESM modules that register **only tools** can instead be listed under
+`reloadableToolPlugins` (the same local-path syntax as `plugins`). The admin-only
+`/tool-plugin status|reload` command loads and validates a replacement generation.
+Tool names, descriptions and schemas must remain unchanged; restart for registration
+changes. Existing SDK sessions retain stable delegates, so no session/history reset
+is needed. Calls already running retain their old generation; its onStop cleanup
+runs after its last call finishes. New calls use the replacement. Invalid candidates
+leave the previous delegates active and their registered cleanups are attempted.
+
+This is explicit reload, not automatic file watching. Only entry modules receive
+fresh ESM URLs; imported dependencies remain cached. Publish versioned dependency
+paths. Node does not unload old ESM modules: after 50 load attempts, restart is
+required. Trusted activation/cleanup can hang or produce external side effects;
+there is no timeout/isolation or rollback of those effects. Do not register channels,
+commands, panels or providers in these modules. They still have full process
+privileges. Use the restricted Wasm surface or external isolation when required.
 
 Example plugins/greeting.mjs:
 
