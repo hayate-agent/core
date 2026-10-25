@@ -1,5 +1,8 @@
 # Harness plugins (API version 1)
 
+For a no-host-import, tool-only WebAssembly alternative, see [restricted Wasm
+tools](wasm-tools.md). It does not confer reduced privileges on ESM plugins.
+
 The Harness also ships a default-enabled [changeset review plugin](review.md).
 It is activated from product code, before local plugins, and does not need a module
 path in configuration. Its lifecycle and durable policy live in the core.

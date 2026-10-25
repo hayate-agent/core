@@ -7,6 +7,7 @@ import { pruningPolicy } from "./tool-result-pruning.js";
 import { contextPolicy } from "./context-maintenance.js";
 import { memoryConfig, type MemoryConfig } from "./memory.js";
 import { reviewConfig } from "./review-config.js";
+import { validateWasmTools } from "./wasm-tools.js";
 
 export interface ReviewConfig {
   enabled: boolean;
@@ -35,6 +36,8 @@ export interface HarnessConfig {
   tools?: string[];
   /** Trusted local ESM plugin paths, relative to Harness home or absolute. */
   plugins?: string[];
+  /** Restricted no-import WebAssembly tool modules; no WASI or host capabilities. */
+  wasmTools?: import("./wasm-tools.js").WasmToolConfig[];
   protectedContent?: import("./protected-content.js").ProtectedContentConfig;
   skillUpdateSource?: import("./skill-updates.js").SkillUpdateSource;
   /** Infrastructure-owned semantic continuation grants, keyed by exact conversation. */
@@ -88,6 +91,7 @@ export function defaultConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
   if (overrides.plugins !== undefined && (!Array.isArray(overrides.plugins) || overrides.plugins.some((p) => typeof p !== "string" || !p.trim()))) {
     throw new Error("plugins must be an array of local module paths");
   }
+  validateWasmTools(overrides.wasmTools ?? []);
   if (overrides.mcp !== undefined && (overrides.mcp === null || typeof overrides.mcp !== "object" || typeof overrides.mcp.enabled !== "boolean")) {
     throw new Error("mcp.enabled must be a boolean");
   }
@@ -111,6 +115,7 @@ export function defaultConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
     thinking: overrides.thinking,
     review: reviewConfig(overrides.review),
     plugins: overrides.plugins ?? [],
+    wasmTools: overrides.wasmTools ?? [],
     protectedContent: overrides.protectedContent,
     skillUpdateSource: overrides.skillUpdateSource,
     completionCheck: overrides.completionCheck,
