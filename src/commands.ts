@@ -22,6 +22,7 @@ export interface CommandContext {
     set: (key: import("./model-settings.js").ModelSetting, value?: string) => Promise<void>;
   };
   scheduler?: Scheduler;
+  updater?: import("./update.js").OverlayUpdater;
   /** Mutable approval settings shared with the runtime. */
   approvals: { mode: "off" | "manual"; tools: string[] };
   /** Current skill catalog (refreshed by /reload-skills). */
@@ -459,6 +460,18 @@ export const COMMANDS: Command[] = [
     },
   },
   {
+    name: "update",
+    admin: true,
+    help: "Inspect or reconcile provisioned local overlays: status | apply [skills|cron|all] (no download)",
+    run: async (args, _input, ctx) => {
+      if (!ctx.updater) throw Error("Overlay updater unavailable");
+      const [action = "status", target = "all", ...extra] = args.trim().split(/\s+/).filter(Boolean);
+      if (!["status", "apply"].includes(action) || !["skills", "cron", "all"].includes(target) || extra.length) throw Error("usage: /update status|apply [skills|cron|all]");
+      const results = await ctx.updater.run(action as "status" | "apply", target === "all" ? ["skills", "cron"] : [target as "skills" | "cron"]);
+      return results.map(r => `${r.component}: ${r.status} — ${r.detail}`).join("\n");
+    },
+  },
+  {
     name: "reload-skills",
     aliases: ["reload_skills", "reload-mcp", "reload_mcp"],
     help: "Re-scan skills and MCP config (applies to new sessions)",
@@ -554,7 +567,7 @@ export function installCommands(ctx: CommandContext): void {
   ctx.harness.commandHandler = async (input) => {
     const parsed = parseCommand(input.text);
     if (!parsed) return false;
-    if (parsed.name !== "reload-skills" && parsed.name !== "reload_skills" && parsed.name !== "reload-mcp" && parsed.name !== "reload_mcp") await ctx.reloadSkills();
+    if (parsed.name !== "reload-skills" && parsed.name !== "reload_skills" && parsed.name !== "reload-mcp" && parsed.name !== "reload_mcp" && parsed.name !== "update") await ctx.reloadSkills();
     const cmd = BY_NAME.get(parsed.name);
     if (!cmd) {
       const plugin = ctx.pluginCommands?.get(parsed.name);

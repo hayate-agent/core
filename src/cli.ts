@@ -25,6 +25,7 @@ import { ProtectedContent } from "./protected-content.js";
 import { workflowTools } from "./workflow-tools.js";
 import { continuationPlugin } from "./continuation-plugin.js";
 import { loopPlugin } from "./loop-plugin.js";
+import { OverlayUpdater } from "./update.js";
 import { ImprovementController } from "./improvement.js";
 import { PiRuntime } from "./runtime/pi.js";
 import { launchMode } from "./launch.js";
@@ -106,6 +107,7 @@ async function main(argv: string[]): Promise<void> {
     const snapshot = await skillCatalog.refresh();
     skills = skillCatalog.skills;
     for (const diagnostic of snapshot.diagnostics) log(`[skills] ${diagnostic.filePath}: ${diagnostic.message}`);
+    return { warnings: snapshot.diagnostics.length };
   };
   await reloadSkills();
 
@@ -369,6 +371,7 @@ async function main(argv: string[]): Promise<void> {
   installCommands({
     harness,
     scheduler,
+    updater: new OverlayUpdater(() => protectedContent.verify(), { skills: reloadSkills, cron: () => scheduler.load() }),
     approvals,
     modelSettings: {
       get: effectiveModels,
@@ -387,7 +390,7 @@ async function main(argv: string[]): Promise<void> {
     pluginCommands: plugins.commands,
     pluginUI: () => tui?.pluginUI(),
     localSessionKey: () => localSessions?.current?.key ?? "console:local",
-    reloadSkills,
+    reloadSkills: async () => { await reloadSkills(); },
     personality: {
       get current() {
         return personality;
