@@ -1,7 +1,9 @@
 import { parentPort, workerData } from "node:worker_threads";
+import { validateWasmLimits } from "./wasm-tool-limits.js";
 
 // No WASI, JS callbacks, filesystem, environment, clock or network imports.
 const run = async () => {
+  validateWasmLimits(workerData.bytes);
   const module = await WebAssembly.compile(workerData.bytes);
   if (WebAssembly.Module.imports(module).length) throw Error("Wasm tools must not import host capabilities");
   const instance = await WebAssembly.instantiate(module, {});
