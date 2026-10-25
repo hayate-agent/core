@@ -677,7 +677,7 @@ export class Harness {
   async recoverTasks(): Promise<void> {
     for (const s of this.sessions.values()) {
       const task = s.task;
-      if (!task || task.state !== "active" || !task.next?.trim() || task.depth >= 20 ||
+      if (!task || task.state !== "active" || !task.next?.trim() || !Number.isSafeInteger(task.depth) || task.depth < 0 || task.depth >= 20 ||
           (task.expiresAt !== undefined && (!Number.isSafeInteger(task.expiresAt) || task.expiresAt <= this.now())) ||
           s.current || s.queue.length || s.key === "improvement:nightly") continue;
       const input: Inbound = { id: `task:${task.id}:${task.depth + 1}`, source: "heartbeat", sessionKey: s.key,

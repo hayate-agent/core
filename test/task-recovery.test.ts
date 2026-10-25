@@ -70,3 +70,35 @@ test("unrelated scheduled turn cannot overwrite a waiting task checkpoint",async
   assert.equal(h.snapshotSessions()[0].task?.original,"Implement feature");
  }finally{await h.stop(1000);}
 });
+
+
+test("restart from committed completion resumes only the already queued next step",async()=>{
+ let h:Harness;let turns=0;
+ h=new Harness({runtime:new FakeRuntime(()=>{
+  turns++;h.planContinuation("mem:room1",{state:"continue",next:"verify remaining tests"});return "first side effect completed";
+ }),tickMs:60000});
+ h.addChannel(new MemoryChannel());
+ let checkpoint:{sessions:any[];pending:any[];outbox:any[]}|undefined;
+ h.onStateChange=async()=>{};
+ try {
+  h.onStateChange=async()=>{
+   if(h.state("mem:room1").task?.next && !checkpoint){
+    h.paused=true;
+    checkpoint=JSON.parse(JSON.stringify({sessions:h.snapshotSessions(),pending:h.pendingInputs(),outbox:h.outboxEntries()}));
+   }
+  };
+  await h.submit(msg("implement original feature"));
+  for(let i=0;i<100&&!checkpoint;i++)await new Promise(r=>setTimeout(r,1));
+  assert.ok(checkpoint);assert.equal(turns,1);assert.equal(checkpoint.pending.length,1);
+  assert.equal(checkpoint.pending[0].taskId,checkpoint.sessions[0].task.id);
+  const runtime=new FakeRuntime();const next=new Harness({runtime,tickMs:60000});
+  next.addChannel(new MemoryChannel());next.onStateChange=async()=>{};
+  try{
+   next.restoreSessions(checkpoint.sessions);next.restorePending(checkpoint.pending);next.restoreOutbox(checkpoint.outbox);
+   await next.recoverTasks();assert.equal(next.pendingInputs().length,1);
+   next.releaseRestored();await next.drained();
+   assert.equal(runtime.sessions.get("mem:room1")?.prompts.length,1);
+   assert.match(runtime.sessions.get("mem:room1")!.prompts[0],/verify remaining tests/);
+  }finally{await next.stop(1000);}
+ }finally{await h.stop(0);}
+});
