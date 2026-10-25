@@ -26,6 +26,7 @@ import { workflowTools } from "./workflow-tools.js";
 import { continuationPlugin } from "./continuation-plugin.js";
 import { loopPlugin } from "./loop-plugin.js";
 import { OverlayUpdater } from "./update.js";
+import { SkillUpdates } from "./skill-updates.js";
 import { ImprovementController } from "./improvement.js";
 import { PiRuntime } from "./runtime/pi.js";
 import { launchMode } from "./launch.js";
@@ -100,7 +101,9 @@ async function main(argv: string[]): Promise<void> {
   const approvals = { mode: "off" as "off" | "manual", tools: [] as string[] };
   let personality: string | undefined;
   let skills: SkillInfo[] = [];
-  const skillDirs = () => [...config.skills.paths, path.join(config.cwd, ".pi", "skills"), path.join(getAgentDir(), "skills")];
+  const skillUpdates = new SkillUpdates(config.home, config.skillUpdateSource);
+  await skillUpdates.restore();
+  const skillDirs = () => [...skillUpdates.roots, ...config.skills.paths, path.join(config.cwd, ".pi", "skills"), path.join(getAgentDir(), "skills")];
   const skillCatalog = new SkillCatalog(path.join(config.home, "skills", "index.json"), skillDirs);
   const reloadSkills = async () => {
     await protectedContent.verify();
@@ -371,7 +374,14 @@ async function main(argv: string[]): Promise<void> {
   installCommands({
     harness,
     scheduler,
-    updater: new OverlayUpdater(() => protectedContent.verify(), { skills: reloadSkills, cron: () => scheduler.load() }),
+    updater: new OverlayUpdater(() => protectedContent.verify(), { skills: async () => {
+      if (config.skillUpdateSource) {
+        let result = { warnings: 0 };
+        await skillUpdates.apply(async () => { result = await reloadSkills(); });
+        return result;
+      }
+      return reloadSkills();
+    }, cron: () => scheduler.load() }),
     approvals,
     modelSettings: {
       get: effectiveModels,

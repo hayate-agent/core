@@ -15,7 +15,7 @@ test("off emits nothing; reduced summarizes tools without outputs", async () => 
     p.event({type:"tool",phase:"end",name:"bash",detail:"private result"});
     p.event({type:"tool",phase:"start",name:"bash"});
     await p.finish();
-    assert.deepEqual(sent, mode === "off" ? [] : ["· bash gestartet\n\n✓ bash beendet\n\n· bash gestartet"]);
+    assert.deepEqual(sent, mode === "off" ? [] : ["⏳ bash gestartet\n\n✓ bash beendet\n\n⏳ bash gestartet"]);
   }
 });
 test("heartbeats share the per-turn progress budget", async () => {
