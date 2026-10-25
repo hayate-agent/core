@@ -839,3 +839,27 @@ test("typing updates serialize a slow stop before a new start", async () => {
     await ch.typing(to, false);
   } finally { release(); await ch.stop(); }
 });
+
+
+test("late cancellation supersedes completed Matrix reaction exactly once", async () => {
+  const { ch, server } = await setup({ statusReactions: true });
+  const input: Inbound = { source: "channel", sessionKey: "matrix:"+ROOM, text: "work", id: "$late" };
+  const to = { channel: "matrix", target: ROOM };
+  try {
+    await ch.turnStatus(to,input,"completed");
+    await (ch as any).telemetry;
+    await ch.turnStatus(to,input,"cancelled");
+    await (ch as any).telemetry;
+    const reactions = server.calls.filter(c=>c.path.includes("/send/m.reaction/"));
+    assert.equal(reactions.filter(c=>c.body["m.relates_to"].key === "⏹️").length,1);
+    const completed = reactions.filter(c=>c.body["m.relates_to"].key === "✅");
+    assert.equal(completed.length,2,"resolve previous completion through stable transaction");
+    assert.equal(completed[0].path,completed[1].path);
+    assert.ok(server.calls.some(c=>c.path.includes("/redact/") && c.path.endsWith(".clear")));
+    const count = server.calls.length;
+    await ch.turnStatus(to,input,"cancelled");
+    await ch.turnStatus(to,input,"completed");
+    await (ch as any).telemetry;
+    assert.equal(server.calls.length,count,"terminal cancellation cannot be reversed or repeated");
+  } finally { await ch.stop(); }
+});

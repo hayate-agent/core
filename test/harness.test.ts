@@ -809,3 +809,37 @@ test("stop during completion assessment records cancellation, not success", asyn
     assert.equal(h.state("mem:room1").cancelling, undefined);
   } finally { await h.stop(1000); }
 });
+
+
+for (const boundary of ["capture", "telemetry"] as const) {
+  test(`stop during ${boundary} cancels final reply without repeating capture`, async () => {
+    let enter!: () => void, release!: () => void;
+    const entered = new Promise<void>(r => { enter = r; });
+    const gate = new Promise<void>(r => { release = r; });
+    let captures = 0;
+    const statuses: string[] = [];
+    const h = new Harness({ runtime: new FakeRuntime(() => "done"), tickMs: 60000,
+      memory: { recall: async () => "", capture: async () => {
+        captures++; if (boundary === "capture") { enter(); await gate; }
+      } },
+    });
+    const ch = new MemoryChannel();
+    Object.assign(ch, { editableProgress: true,
+      turnStatus: async (_to: unknown, _input: unknown, status: string) => {
+        statuses.push(status);
+        if (boundary === "telemetry" && status === "completed") { enter(); await gate; }
+      },
+    });
+    h.addChannel(ch); h.onStateChange = async () => {};
+    try {
+      await h.submit(msg("work")); await entered;
+      await h.stopConversation("mem:room1"); release(); await h.drained();
+      assert.equal(ch.sent.at(-1)?.meta?.outcome, "cancelled");
+      assert.equal(statuses.at(-1), "cancelled");
+      if (boundary === "capture") assert.ok(!statuses.includes("completed"));
+      assert.equal(captures, 1);
+      assert.equal(h.state("mem:room1").cancelling, undefined);
+      assert.equal(h.state("mem:room1").queue.length, 0);
+    } finally { release(); await h.stop(1000); }
+  });
+}
