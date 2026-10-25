@@ -782,3 +782,30 @@ test("chat completion anchor survives generated follow-ups without using assista
   assert.equal(anchors.length,2); assert.deepEqual(anchors[0],anchors[1]);
   assert.equal((anchors[0] as {task:string}).task,"Implement approved feature"); await h.stop(1000);
 });
+
+
+test("stop during completion assessment records cancellation, not success", async () => {
+  let entered!: () => void;
+  const assessing = new Promise<void>(resolve => { entered = resolve; });
+  const statuses: string[] = [], captured: string[] = [];
+  const h = new Harness({ runtime: new FakeRuntime(() => "unfinished"), tickMs: 60000,
+    memory: { recall: async () => "", capture: async turn => { captured.push(turn.outcome!); } },
+    completionCheck: async (_input, _reply, signal) => {
+      entered();
+      await new Promise<void>(resolve => signal.addEventListener("abort", () => resolve(), { once: true }));
+      return { state: "continue", next: "must not run" };
+    },
+  });
+  const ch = new MemoryChannel();
+  Object.assign(ch, { turnStatus: async (_to: unknown, _input: unknown, status: string) => { statuses.push(status); } });
+  h.addChannel(ch); h.onStateChange = async () => {};
+  try {
+    await h.submit(msg("Implement task")); await assessing;
+    await h.stopConversation("mem:room1"); await h.drained();
+    assert.deepEqual(statuses, ["started", "cancelled"]);
+    assert.deepEqual(captured, ["cancelled"]);
+    assert.equal(ch.sent.at(-1)?.meta?.outcome, "cancelled");
+    assert.equal(h.state("mem:room1").queue.length, 0);
+    assert.equal(h.state("mem:room1").cancelling, undefined);
+  } finally { await h.stop(1000); }
+});

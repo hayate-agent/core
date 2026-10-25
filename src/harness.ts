@@ -869,7 +869,7 @@ export class Harness {
       this.turnAbort.delete(s.key);
       throw new Error("shut down after inbox snapshot; input will replay");
     }
-    const finalStatus = outcome ?? "completed";
+    let finalStatus: TurnOutcome | "completed" = outcome ?? "completed";
     if (finalStatus !== "completed") input.continuation = undefined;
     else if (!input.continuation && this.opts.completionCheck && !this.paused && !this.stopping && !s.queue.length &&
         input.source !== "api" && s.key !== "improvement:nightly" && (input.continuationDepth ?? 0) < 20 && !assessmentAbort.signal.aborted) {
@@ -878,6 +878,12 @@ export class Harness {
         if (!input.continuation && !this.paused && !this.stopping && !s.queue.length && !assessmentAbort.signal.aborted && s.cancelling !== input &&
             plan?.state === "continue" && typeof plan.next === "string" && plan.next.trim() && plan.next.length <= 4000) input.continuation = plan;
       } catch { this.log("completion assessment failed; no automatic follow-up"); }
+    }
+    if (s.cancelling === input) {
+      s.cancelling = undefined;
+      outcome = finalStatus = "cancelled";
+      input.continuation = undefined;
+      if (reply.startsWith("⚠️")) reply = "";
     }
     assessmentAbort.abort();
     this.turnAbort.delete(s.key);
