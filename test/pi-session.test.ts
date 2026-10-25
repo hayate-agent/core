@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { PiSession, toTurnEvent } from "../src/runtime/pi.js";
+import { PiSession, toTurnEvent, boundedMaintenance } from "../src/runtime/pi.js";
 
 const A = { provider: "p", id: "a" };
 const B = { provider: "p", id: "b" };
@@ -32,6 +32,7 @@ function fakeAgentSession() {
     },
     async waitForIdle() {},
     async abort() {},
+    abortCompaction() {},
     getLastAssistantText: () => s.last,
   };
   return s;
@@ -44,6 +45,43 @@ function make() {
   const session = new PiSession(agent as any, models as any, {});
   return { agent, session };
 }
+
+test("maintenance deadline aborts compaction and rejects instead of hanging", async () => {
+  let aborted = 0;
+  await assert.rejects(boundedMaintenance(() => new Promise(() => {}), () => { aborted++; }, 10), /deadline/);
+  assert.equal(aborted, 1);
+});
+
+test("explicit off supplies reasoning_effort none and restores model metadata", async () => {
+  const agent = fakeAgentSession();
+  const local = { provider: "local", id: "reasoner", api: "openai-completions", reasoning: true };
+  agent.model = local;
+  let sampled: unknown;
+  agent.prompt = async () => { sampled = agent.model; agent.last = "{}"; };
+  const session = new PiSession(agent as never, models as never, {}, undefined, undefined, undefined, undefined, undefined, () => ["local/reasoner"]);
+  await session.prompt("JSON", { thinking: "off" });
+  assert.equal((sampled as any).samplingParamsByThinkingLevel.off.reasoning_effort, "none");
+  assert.equal(agent.model, local);
+});
+
+test("off does not inject unsupported none into models without explicit opt-in", async () => {
+  const agent = fakeAgentSession();
+  const model = { provider: "openai", id: "o3-mini", api: "openai-completions", reasoning: true };
+  agent.model = model;
+  let sampled: unknown;
+  agent.prompt = async () => { sampled = agent.model; agent.last = "{}"; };
+  const session = new PiSession(agent as never, models as never, {}, undefined, undefined, undefined, undefined, undefined, () => ["local/reasoner"]);
+  await session.prompt("JSON", { thinking: "off" });
+  assert.equal(sampled, model);
+  assert.equal((sampled as any).samplingParamsByThinkingLevel, undefined);
+});
+
+test("PiSession abort also interrupts compaction outside a streaming prompt", async () => {
+  const agent = fakeAgentSession(); let aborted = 0;
+  agent.abortCompaction = () => { aborted++; };
+  const session = new PiSession(agent as never, models as never, {});
+  await session.abort(); assert.equal(aborted, 1);
+});
 
 test("PiSession: refreshes context before every prompt without replacing the session", async () => {
   const agent = fakeAgentSession();

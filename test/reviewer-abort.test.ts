@@ -4,6 +4,14 @@ import {promisify} from 'node:util';
 import {test} from 'node:test';
 const exec=promisify(execFile);
 
+test('reasoning-only reviewer retries once with off without bypassing verdict parsing', async () => {
+ const {runtimeReviewer}=await import('../src/runtime/reviewer.js');
+ const calls: string[]=[];let disposed=0;
+ const runtime={open:async()=>({prompt:async(_text:string,options:{thinking:string})=>{calls.push(options.thinking);return calls.length===1?'':'{"findings":[]}';},dispose:async()=>{disposed++;},abort:async()=>{}})};
+ const result=await runtimeReviewer(runtime as never).review('review',undefined,'medium');
+ assert.equal(result,'{"findings":[]}');assert.deepEqual(calls,['medium','off']);assert.equal(disposed,1);
+});
+
 for(const kind of ['throw','reject'])test(`review abort ${kind} is contained without losing prompt failure or cleanup`,async()=>{
  const moduleUrl=new URL('../src/runtime/reviewer.ts',import.meta.url).href;
  const code=`

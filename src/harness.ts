@@ -635,7 +635,7 @@ export class Harness {
       if (s.current.executionTurnId) await this.opts.executionStore?.stopTurn(s.current.executionTurnId, sessionKey);
     }
     this.turnAbort.get(sessionKey)?.abort();
-    if (s.prompting) await s.session?.abort();
+    if (s.running) await s.session?.abort();
     await this.opts.conversationStopped?.(sessionKey);
     await this.onStateChange?.();
     this.stoppingHostParents.delete(sessionKey);

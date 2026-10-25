@@ -125,6 +125,19 @@ export function toTurnEvent(event: AgentSessionEvent): TurnEvent | undefined {
   return undefined;
 }
 
+/** Bound slow/stalled maintenance independently of ordinary tool-turn duration. */
+export async function boundedMaintenance<T>(run: () => Promise<T>, abort: () => void, timeoutMs = 300000): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([Promise.resolve().then(run), new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => {
+        try { abort(); } catch { /* Deadline remains a failure even if abort itself fails. */ }
+        reject(Error("Context maintenance deadline exceeded; checkpoint retained"));
+      }, timeoutMs);
+    })]);
+  } finally { if (timer) clearTimeout(timer); }
+}
+
 export class PiSession implements RuntimeSession {
   /** The prompt in progress; abort() during its setup (before generation) cancels it. */
   private turn?: { aborted: boolean };
@@ -140,6 +153,8 @@ export class PiSession implements RuntimeSession {
     private readonly compaction: CompactionStrategy = nativeCompaction,
     private readonly beforePrompt?: () => Promise<void>,
     private readonly onSessionSelection?: () => void,
+    private readonly reasoningEffortNoneModels: () => readonly string[] = () =>
+      (process.env.HARNESS_REASONING_EFFORT_NONE_MODELS ?? "").split(",").map(value => value.trim()).filter(Boolean),
   ) {}
 
   get busy(): boolean {
@@ -173,6 +188,17 @@ export class PiSession implements RuntimeSession {
       // (the session's own model/thinking stay what /model and /reasoning set).
       if (model) await this.setModel(model);
       if (thinking) this.setThinking(thinking);
+      // Explicit off must reach OpenAI-compatible local servers as a wire
+      // parameter, not just the SDK's internal thinking-level selection.
+      if (thinking === "off" && this.session.model?.api === "openai-completions" &&
+          this.reasoningEffortNoneModels().includes(`${this.session.model.provider}/${this.session.model.id}`)) {
+        const selected = this.session.model;
+        await this.session.setModel({ ...selected,
+          samplingParamsByThinkingLevel: { ...selected.samplingParamsByThinkingLevel,
+            off: { ...selected.samplingParamsByThinkingLevel?.off, reasoning_effort: "none" } },
+        });
+        this.setThinking("off");
+      }
       this.slot.instructions = instructions?.trim() || undefined;
       // Aborted while setting up: nothing has run yet, so nothing runs.
       if (turn.aborted) return "";
@@ -185,7 +211,7 @@ export class PiSession implements RuntimeSession {
       this.slot.instructions = undefined;
       unsubscribe?.();
       // Model first: switching models may clamp the thinking level, which is restored after it.
-      if (model && prevModel && this.session.model !== prevModel) {
+      if ((model || thinking === "off") && prevModel && this.session.model !== prevModel) {
         try {
           await this.session.setModel(prevModel);
         } catch {
@@ -208,17 +234,20 @@ export class PiSession implements RuntimeSession {
   }
 
   async abort(): Promise<void> {
+    // Compaction/summarization is not a normal streaming prompt. Abort its
+    // dedicated controller before awaiting any broader session shutdown.
+    this.session.abortCompaction();
     if (this.turn) this.turn.aborted = true;
     await this.session.abort();
   }
 
   async compact(instructions?: string): Promise<void> {
-    await this.compaction.compact({ instructions, compactNative: (text) => this.session.compact(text).then(() => {}) });
+    await boundedMaintenance(() => this.compaction.compact({ instructions, compactNative: (text) => this.session.compact(text).then(() => {}) }), () => this.session.abortCompaction());
     await this.checkpoint?.();
   }
 
   async summarize(instructions: string): Promise<string> {
-    const result = await this.session.compact(instructions);
+    const result = await boundedMaintenance(() => this.session.compact(instructions), () => this.session.abortCompaction());
     await this.checkpoint?.();
     return result.summary;
   }

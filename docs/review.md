@@ -99,6 +99,34 @@ do not replace an unresolved task's origin. If no origin exists, the configured
 Harness home address is used, then the session reply address; notices also log locally.
 An escalation is not approval and does not authorize a merge or rollout.
 
+## Local reasoning-only responses
+
+A review response with no final text is not a verdict. The runtime reviewer makes
+one bounded retry with thinking `off` when the first response was empty and the
+requested thinking level was not already `off`. JSON validation and the gate's
+round budget remain enforced; a second empty/invalid response still fails.
+
+Some local OpenAI-compatible servers require `reasoning_effort: "none"` rather
+than their ordinary thinking switch. Opt in only models verified to accept that
+parameter through the Harness process environment:
+
+```sh
+HARNESS_REASONING_EFFORT_NONE_MODELS='homelab/deepseek-v4-flash,homelab/glm-5.3-flash'
+```
+
+Entries are exact `provider/model-id` references from the installation, not display
+names. For opted-in `openai-completions` models, an explicit per-turn thinking
+`off` adds `samplingParamsByThinkingLevel.off.reasoning_effort = "none"` to a
+copy of the selected model and restores the original selection afterward. No
+root-owned `models.json` or SDK files are edited. Other models remain unchanged;
+models such as o3-mini must not be opted in without verified support. This is a
+process-level setting requiring restart. Existing model-specific SDK sampling
+configuration is another supported route.
+
+Fixing the provider does not reset an escalated review budget. Operator resolution
+of the existing escalation is still required; do not delete review state or
+start another session to evade it.
+
 ## Enforcement and limits
 
 The local gate runs before final completion of a code-changing working turn,
