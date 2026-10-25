@@ -18,6 +18,15 @@ test("off emits nothing; reduced summarizes tools without outputs", async () => 
     assert.deepEqual(sent, mode === "off" ? [] : ["▶ bash gestartet\n\n✓ bash beendet\n\n▶ bash gestartet"]);
   }
 });
+test("heartbeats share the per-turn progress budget", async () => {
+  const sent: string[] = [];
+  const progress = new GatewayProgress("reduced", async (text) => { sent.push(text); }, 2);
+  for (let i = 0; i < 49; i++) progress.event({ type: "tool", name: "review", phase: "start" });
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  await progress.finish();
+  assert.equal(sent.join("\n").split("läuft weiterhin").length - 1, 1);
+});
+
 test("long reviews emit truthful heartbeats and stop after completion", async () => {
   const sent: string[] = [];
   const p = new GatewayProgress("reduced", async (text) => { sent.push(text); }, 10);
@@ -42,7 +51,8 @@ test("blocked delivery coalesces heartbeat backlog and retains the final batch",
     if (sent.length === 1) await blocked;
   }, 10);
   p.event({ type: "tool", phase: "start", name: "bash" });
-  for (let i = 0; i < 100; i++) {
+  // Stay within the shared event budget; exhaustion is covered separately.
+  for (let i = 0; i < 20; i++) {
     t.mock.timers.tick(10);
     await Promise.resolve();
   }

@@ -20,7 +20,8 @@ export class GatewayProgress {
   constructor(private mode: ProgressMode, private send: (text: string) => Promise<void>, private heartbeatMs = 15000) {
     if (mode !== "off") {
       this.heartbeat = setInterval(() => {
-        if (this.closed || !this.active.size) return;
+        if (this.closed || !this.active.size || this.count >= 50) return;
+        this.count++;
         const now = Date.now();
         this.pending.push([...this.active].map(([name, since]) => `⏳ ${name} läuft weiterhin (${Math.floor((now - since) / 1000)} s); noch kein Ergebnis.`).join("\n"));
         this.flush();
