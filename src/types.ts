@@ -22,8 +22,10 @@ export interface Inbound {
   text: string;
   source: InputSource;
   /** Durable, bounded continuation plan supplied during this turn. */
-  continuation?: { state: "continue" | "waiting" | "blocked" | "completed"; next?: string };
+  continuation?: { state: "continue" | "waiting" | "blocked" | "completed"; next?: string; expiresAt?: number };
   continuationDepth?: number;
+  /** Trusted numeric authorization boundary inherited by generated work. */
+  continuationExpiresAt?: number;
   /** Core-captured original chat input; inherited by generated follow-ups, never reply text. */
   completionAnchor?: { id: string; task: string; receivedAt: number };
   sender?: string;
@@ -70,6 +72,8 @@ export type TurnEvent =
 
 export interface PromptOptions extends TurnOptions {
   onEvent?: (event: TurnEvent) => void;
+  /** Host-only authorization guard, invoked after asynchronous runtime setup. */
+  beforeExecution?: () => void;
 }
 
 /** How a turn ended, when it did not simply complete. */

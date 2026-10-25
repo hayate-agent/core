@@ -11,7 +11,7 @@ test("completion classifier needs independent authorization and preserves explic
   assert.equal(await assessCompletion(yes, input(), "Still need tests", undefined, signal(), undefined, () => 1000), undefined);
   const planned = input(); planned.continuation = { state: "blocked" };
   assert.equal(await assessCompletion(yes, planned, "Still need tests", auth, signal(), undefined, () => 1000), undefined);
-  assert.deepEqual(await assessCompletion(yes, input(), "Still need tests", auth, signal(), undefined, () => 1000), { state: "continue", next: "Run the missing regression test" });
+  assert.deepEqual(await assessCompletion(yes, input(), "Still need tests", auth, signal(), undefined, () => 1000), { state: "continue", next: "Run the missing regression test", expiresAt: 2000 });
 });
 test("uncertain, malformed, expired, cancelled and budget-exhausted assessments fail closed", async () => {
   for (const raw of ['not json', '{"state":"uncertain"}', '{"state":"blocked"}', '{"state":"continue","next":""}']) {

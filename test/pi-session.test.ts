@@ -55,6 +55,17 @@ test("PiSession: refreshes context before every prompt without replacing the ses
   assert.deepEqual(agent.prompts, ["first", "second"]);
 });
 
+test("PiSession: authorization is rechecked after runtime preparation", async () => {
+  const agent = fakeAgentSession();
+  let expired = false;
+  const session = new PiSession(agent as never, models as never, {}, undefined, undefined, undefined, async () => { expired = true; });
+  await assert.rejects(session.prompt("expired", { beforeExecution: () => {
+    assert.equal(expired, true);
+    throw Error("authorization expired");
+  } }), /authorization expired/);
+  assert.deepEqual(agent.prompts, []);
+});
+
 test("PiSession: explicit session selections acknowledge defaults, per-turn overrides do not", async () => {
   const agent = fakeAgentSession();
   let selections = 0;

@@ -843,3 +843,76 @@ for (const boundary of ["capture", "telemetry"] as const) {
     } finally { release(); await h.stop(1000); }
   });
 }
+
+
+test("completion deadline survives delayed capture and prevents follow-up execution", async () => {
+  let now = 1000, turns = 0;
+  const h = new Harness({ runtime: new FakeRuntime(() => { turns++; return "unfinished"; }), tickMs:60000, now:()=>now,
+    completionCheck: async () => ({state:"continue",next:"remaining work",expiresAt:2000}),
+    memory: {recall:async()=>"",capture:async()=>{now=3000;}},
+  });
+  const ch=new MemoryChannel(); h.addChannel(ch);h.onStateChange=async()=>{};
+  try {
+    await h.submit(msg("authorized task"));await h.drained();
+    assert.equal(turns,1);
+    assert.equal(h.state("mem:room1").cancelling,undefined);
+  } finally {await h.stop(1000);}
+});
+
+test("restored continuation expiry is rechecked after asynchronous setup", async () => {
+  let now=1000, turns=0;
+  const h=new Harness({runtime:new FakeRuntime(()=>{turns++;return "must not run";}),tickMs:60000,now:()=>now,
+    memory:{recall:async()=>{now=3000;return "";},capture:async()=>{}},
+  });
+  const ch=new MemoryChannel();h.addChannel(ch);h.onStateChange=async()=>{};
+  try {
+    await h.submit({...msg("restored generated task"),source:"heartbeat",continuationDepth:1,continuationExpiresAt:2000});await h.drained();
+    assert.equal(turns,0);assert.equal(h.state("mem:room1").cancelling,undefined);
+  } finally {await h.stop(1000);}
+});
+
+
+test("generated chains cannot extend their inherited authorization deadline", async () => {
+  let now=1000,turns=0;
+  const deadlines: Array<number|undefined>=[];
+  const h=new Harness({runtime:new FakeRuntime(()=>{turns++;return "unfinished";}),tickMs:60000,now:()=>now,
+    beforeTurn:async input=>{deadlines.push(input.continuationExpiresAt);},
+    completionCheck:async()=>({state:"continue",next:"remaining",expiresAt:turns===1?2000:9000}),
+    memory:{recall:async()=>"",capture:async()=>{if(turns===2)now=3000;}},
+  });
+  h.addChannel(new MemoryChannel());h.onStateChange=async()=>{};
+  try {
+    await h.submit(msg("work"));await h.drained();
+    assert.equal(turns,2);
+    assert.deepEqual(deadlines,[undefined,2000]);
+  } finally {await h.stop(1000);}
+});
+
+
+test("explicit continuation plans inherit the installation deadline without assessment", async () => {
+  let now=1000,turns=0;
+  const h=new Harness({runtime:new FakeRuntime(()=>{turns++;h.planContinuation("mem:room1",{state:"continue",next:"work"});return "unfinished";}),tickMs:60000,now:()=>now,
+    continuationDeadline:()=>2000,
+    completionCheck:async()=>{throw Error("explicit plan must skip assessment");},
+    memory:{recall:async()=>"",capture:async()=>{now=3000;}},
+  });
+  h.addChannel(new MemoryChannel());h.onStateChange=async()=>{};
+  try {await h.submit(msg("work"));await h.drained();assert.equal(turns,1);}
+  finally {await h.stop(1000);}
+});
+
+
+test("expired completion grant permits fresh requests but denies their autonomous follow-ups", async () => {
+  let turns=0;
+  const h=new Harness({runtime:new FakeRuntime(()=>{
+    turns++;h.planContinuation("mem:room1",{state:"continue",next:"automatic work"});return "reply";
+  }),tickMs:60000,now:()=>3000,continuationDeadline:()=>2000});
+  h.addChannel(new MemoryChannel());h.onStateChange=async()=>{};
+  try {
+    await h.submit(msg("fresh request"));await h.drained();
+    assert.equal(turns,1);
+    await h.submit(msg("another fresh request"));await h.drained();
+    assert.equal(turns,2);
+    assert.equal(h.state("mem:room1").cancelling,undefined);
+  } finally {await h.stop(1000);}
+});

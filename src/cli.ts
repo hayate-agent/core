@@ -185,6 +185,7 @@ async function main(argv: string[]): Promise<void> {
       await review.prepare(config.cwd, input.replyTo, input.sessionKey);
     },
     turnCommitted: async (input) => { await improvement?.committed(input); },
+    continuationDeadline: input => config.completionCheck?.authorizations[input.sessionKey]?.expiresAt,
     completionCheck: async (input, reply, signal) => {
       const grant = config.completionCheck?.authorizations[input.sessionKey] ??
         (input.completionAnchor ? { task: input.completionAnchor.task } : undefined);

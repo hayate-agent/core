@@ -36,7 +36,7 @@ DATA: ${JSON.stringify({ task: authorization.task, request: input.text.slice(0, 
     if (signal.aborted || controller.signal.aborted || (authorization.expiresAt !== undefined && authorization.expiresAt <= now()) || input.continuation || raw.length > 8000) return;
     const result = JSON.parse(raw);
     if (result.state !== "continue" || typeof result.next !== "string" || !result.next.trim() || result.next.length > 4000) return;
-    return { state: "continue", next: result.next.trim() };
+    return { state: "continue", next: result.next.trim(), ...(authorization.expiresAt !== undefined ? { expiresAt: authorization.expiresAt } : {}) };
   } catch { return undefined; }
   finally { clearTimeout(timer); signal.removeEventListener("abort", abort); }
 }

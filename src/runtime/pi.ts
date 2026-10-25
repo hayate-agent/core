@@ -176,6 +176,7 @@ export class PiSession implements RuntimeSession {
       this.slot.instructions = instructions?.trim() || undefined;
       // Aborted while setting up: nothing has run yet, so nothing runs.
       if (turn.aborted) return "";
+      options.beforeExecution?.();
       await this.session.prompt(text, { source: "rpc" });
       await this.session.waitForIdle();
       await this.checkpoint?.();
