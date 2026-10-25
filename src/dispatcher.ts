@@ -18,6 +18,12 @@ export interface DispatcherStrategy {
   execute(task: Readonly<Execution>, context: DispatchContext): Promise<string>;
 }
 
+/** Parent revocation belongs to persistence even when scheduling is disabled. */
+export async function stopDispatcherParent(store: ExecutionStore, parent: string, dispatcher?: Dispatcher): Promise<void> {
+  if (dispatcher) await dispatcher.cancelParent(parent);
+  else await store.cancelParent(parent);
+}
+
 /** Event-driven host scheduler. Number of durable tasks is independent of active
  * capacity. A paused worker retains its slot until it actually settles. */
 export class Dispatcher {

@@ -17,7 +17,7 @@ import { gatewayPlugin } from "./gateway-plugin.js";
 import { PluginHost } from "./plugins.js";
 import { Subagents } from "./subagents.js";
 import { ExecutionStore } from "./execution.js";
-import { Dispatcher } from "./dispatcher.js";
+import { Dispatcher, stopDispatcherParent } from "./dispatcher.js";
 import { DispatcherRuntime } from "./dispatcher-runtime.js";
 import { dispatcherConfig } from "./dispatcher-config.js";
 import { dispatcherPlugin } from "./dispatcher-plugin.js";
@@ -214,7 +214,7 @@ async function main(argv: string[]): Promise<void> {
     memory,
     approvalTarget: key => dispatchRuntime?.isWorker(key) ? dispatchRuntime.approvalTarget(key) : subagents.approvalTarget(key),
     conversationStopped: async key => {
-      await dispatcher?.cancelParent(key);
+      await stopDispatcherParent(executions, key, dispatcher);
       await subagents.cancelChildren(key);
     },
     hostEventAllowed: input => !!input.hostEvent && !!dispatchRuntime?.resultAllowed(input.sessionKey, input.hostEvent.executionId),

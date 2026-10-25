@@ -4,7 +4,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Harness } from "../src/harness.js";
-import { Dispatcher } from "../src/dispatcher.js";
+import { Dispatcher, stopDispatcherParent } from "../src/dispatcher.js";
 import { DispatcherRuntime } from "../src/dispatcher-runtime.js";
 import { ExecutionStore } from "../src/execution.js";
 import { replayable } from "../src/delivery/inbox.js";
@@ -14,6 +14,38 @@ import type { Inbound } from "../src/types.js";
 function host(id = "event"): Inbound {
   return { id, sessionKey: "parent", text: "/not-a-command", source: "host", hostEvent: { executionId: "task" } };
 }
+
+test("parent stop while dispatcher is disabled survives restart and re-enabling", async t => {
+  const home = await mkdtemp(path.join(os.tmpdir(), "dispatch-disabled-stop-"));
+  const file = path.join(home, "ledger.json");
+  let dispatcher: Dispatcher | undefined;
+  t.after(async () => { await dispatcher?.stop(); await rm(home, { recursive: true, force: true }); });
+  const store = new ExecutionStore(file); await store.load();
+  const ready = await store.submit("parent", "ready", "work", "direct");
+  const paused = await store.submit("parent", "paused", "work", "direct"); await store.control(paused.id, "pause");
+  const done = await store.submit("parent", "done", "work", "direct");
+  const claimed = await store.claim(done.id); await store.complete(done.id, claimed.token!, "old result");
+  const other = await store.submit("other", "ready", "other work", "direct");
+  const disabledStore = new ExecutionStore(file); await disabledStore.load();
+  const harness = new Harness({ runtime: new FakeRuntime(), tickMs: 60000, busyMode: "queue",
+    conversationStopped: key => stopDispatcherParent(disabledStore, key),
+  });
+  harness.onStateChange = async () => {};
+  await harness.stopConversation("parent");
+  const restored = new ExecutionStore(file); await restored.load();
+  assert.equal(restored.events().some(event => event.parent === "parent"), false);
+  assert.ok(restored.list("parent").every(task => task.parentStopped));
+  assert.equal(restored.list().find(task => task.id === ready.id)!.status, "cancelled");
+  assert.equal(restored.list().find(task => task.id === paused.id)!.status, "cancelled");
+  let completed!: () => void; const finished = new Promise<void>(resolve => { completed = resolve; });
+  const executed: string[] = []; const delivered: string[] = [];
+  dispatcher = new Dispatcher(restored, { name: "direct", version: 1, replaySafe: false,
+    execute: async task => { executed.push(task.id); return "other result"; },
+  }, 1, async event => { delivered.push(event.parent); if (event.type === "result") completed(); }, () => {});
+  await dispatcher.start(); await finished;
+  assert.deepEqual(executed, [other.id]);
+  assert.ok(delivered.every(parent => parent === "other"));
+});
 
 test("host results are durable data turns, never commands or continuation authority", async () => {
   const runtime = new FakeRuntime();
