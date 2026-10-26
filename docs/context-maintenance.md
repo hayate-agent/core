@@ -17,21 +17,37 @@ contextMaintenance:
 The same partial object may be stored in `settings.local.yaml`. The core command
 `/context-policy status|on|off|handover-on|handover-off` updates that overlay (admin
 only). Threshold changes currently use the file and require restart. Unknown context
-usage does not trigger automatic compaction. At assessment threshold the agent gets
-a lightweight instruction on every configured turn interval, not an extra model call.
-Before a queued prompt is passed to the working model, automatic handover runs at
-`compactPercent`, or at `assessPercent` if the incoming prompt's estimated token
-budget would reach `compactPercent`. The byte-based budget is conservative, not a
-semantic classifier for task complexity. The original prompt remains in the durable
-inbox and is passed unchanged to the new, seeded session; it is never executed by
-the summary operation. A low-usage greeting does not cause a session rotation.
-With `autoHandover` enabled, automatic post-turn compaction is deferred so it
-cannot reduce usage and consume the cooldown before the next pre-turn handover.
-With `autoHandover` disabled, usage at `compactPercent` triggers post-turn native
-compaction. Explicit compact requests still run after a turn. PI overflow
-compaction remains a separate emergency fallback and may independently reduce usage.
-A persisted cooldown avoids automatic loops and survives process restart, including
-failed attempts. Explicit agent checkpoint requests bypass that cooldown.
+usage never becomes an invented percentage. It persists as `observation.usage=unknown`,
+suspends automatic threshold actions and produces one durable informational notice
+per unknown-usage episode (not a completion notice). Fresh known usage rearms that
+notice. PI intentionally reports unknown immediately after compaction until a fresh
+successful assistant response supplies usage. `beforeObservation` retains the latest
+pre-turn decision independently of the post-turn observation.
+
+At assessment threshold the working agent gets a lightweight reminder on every
+configured turn interval. Eligible automatic boundaries additionally use a bounded,
+tool-free semantic assessment through the configured review model: recent branch
+text is evidence, and incoming work is classified as checkpoint-resumable/new work
+versus tightly coupled continuation, never as fresh authority. No incoming byte-to-token
+percentage is fabricated. Malformed/unavailable assessments defer the operation.
+Before a queued prompt, handover may run at `assessPercent` when the assessment
+selects handover. After a useful work boundary, usage at `compactPercent` may select
+compaction **even when autoHandover is enabled**. The original prompt remains in the
+durable inbox and is passed unchanged to the seeded session, not executed by the
+assessment or summary. A low-usage greeting without prior pressure causes no rotation.
+
+Separate persisted compact/handover cooldowns survive restart and failed attempts.
+A successful compaction retains `pressureSinceCompaction` until a safe pre-turn
+handover or session replacement: relieving pressure must not erase eligibility for
+a later semantically appropriate handover. Compaction therefore cannot continually
+consume the handover cooldown or starve it by lowering usage. Unknown usage still
+defers automatic action, including this remembered pressure. Explicit checkpoint
+requests bypass cooldown and semantic assessment.
+
+PI overflow compaction is independent and can bypass Harness completion notices.
+A native JSONL `type=compaction` entry is evidence of a real compaction; absence of a
+Harness notice does not prove no compaction occurred. This service does not yet
+persist or announce every SDK-native compaction event.
 
 The bundled `plugin_context_maintenance` tool requests `compact` (after the current
 turn) or `handover` (before the next queued turn) with
@@ -118,8 +134,8 @@ in-session compaction and is not a synonym for `/handover`.
 ## Handover
 
 Explicit tool requests can hand over even when automatic handover is disabled.
-Automatic handover is opt-in; at >=90% usage it replaces compaction when cooldown
-permits. Native compaction produces the tool-free handover summary (and also compacts
+Automatic handover is controlled by `autoHandover` (default true) and coexists
+with post-turn compaction under the semantic boundary policy described above. Native compaction produces the tool-free handover summary (and also compacts
 the old session); no extra working-model turn is used to generate it. The summary is
 saved as a prepared transition before a fresh runtime session is opened. The new
 session is seeded without executing tools. The next queued operator request reads
