@@ -902,14 +902,14 @@ test("explicit continuation plans inherit the installation deadline without asse
 });
 
 
-test("premature completed assesses original task and durably executes only its missing step", async () => {
+for (const premature of ["completed", "waiting", "blocked"] as const) test(`premature ${premature} assesses original task and durably executes only its missing step`, async () => {
   const { assessCompletion } = await import("../src/completion-check.js");
   let turns = 0, checks = 0, persisted = false;
   const original = "Implement update and run its regression test";
   const h = new Harness({runtime:new FakeRuntime(() => {
     turns++;
     if (turns === 2) assert.ok(persisted, "follow-up cannot run before its durable checkpoint");
-    h.planContinuation("mem:room1",{state:"completed"});
+    h.planContinuation("mem:room1",{state:turns === 1 ? premature : "completed"});
     return turns === 1 ? "Implementation done, regression test still missing" : "Regression test passed; task finished";
   }), tickMs:60000, completionCheck: (input, reply, signal) => assessCompletion({review:async prompt=>{
     checks++; assert.ok(prompt.includes(original));
@@ -940,13 +940,13 @@ test("completed assessment preserves terminal boundaries and explicit completion
       checks++;
       if(boundary==="failed") throw Error("classifier unavailable");
       if(boundary==="invalid") return {state:"continue",next:""};
-      return boundary==="finished" || boundary==="denied" ? undefined : {state:"continue",next:"remaining"};
+      return ["finished","denied","waiting","blocked"].includes(boundary) ? undefined : {state:"continue",next:"remaining"};
     }});
     h.addChannel(new MemoryChannel());h.onStateChange=async()=>{};
     try {
       await h.submit({...msg("original task"),...(boundary==="depth"?{continuationDepth:20}:{})});await h.drained();
       assert.equal(turns,1,boundary);
-      assert.equal(checks,["finished","invalid","failed","denied"].includes(boundary)?1:0,boundary);
+      assert.equal(checks,["finished","invalid","failed","denied","waiting","blocked"].includes(boundary)?1:0,boundary);
       if(["finished","invalid","failed","denied","expired","pause"].includes(boundary)) assert.equal(h.state("mem:room1").task?.state,"completed",boundary);
     } finally {await h.stop(1000);}
   }

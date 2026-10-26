@@ -9,7 +9,7 @@ const backend = (reply: string) => ({ review: async () => reply });
 test("completion classifier needs independent authorization and preserves explicit checkpoints", async () => {
   const yes = backend('{"state":"continue","next":"Run the missing regression test"}');
   assert.equal(await assessCompletion(yes, input(), "Still need tests", undefined, signal(), undefined, () => 1000), undefined);
-  const planned = input(); planned.continuation = { state: "blocked" };
+  const planned = input(); planned.continuation = { state: "continue", next: "Already scheduled" };
   assert.equal(await assessCompletion(yes, planned, "Still need tests", auth, signal(), undefined, () => 1000), undefined);
   assert.deepEqual(await assessCompletion(yes, input(), "Still need tests", auth, signal(), undefined, () => 1000), { state: "continue", next: "Run the missing regression test", expiresAt: 2000 });
 });
@@ -38,6 +38,14 @@ test("explicit completed is independently assessed without erasing its checkpoin
   assert.equal(await assessCompletion({review:async()=>{
     planned.continuation={state:"waiting"};return '{"state":"continue","next":"test"}';
   }}, planned, "reply", auth, signal(), undefined, () => 1000), undefined);
+});
+
+test("waiting and blocked checkpoints are checked against original authorization", async () => {
+  for (const state of ["waiting", "blocked"] as const) {
+    const planned = input(); planned.continuation = { state };
+    assert.deepEqual(await assessCompletion(backend('{"state":"continue","next":"Run missing test"}'), planned, "Tests missing", auth, signal(), undefined, () => 1000), { state: "continue", next: "Run missing test", expiresAt: 2000 });
+    assert.equal(await assessCompletion(backend('{"state":"blocked"}'), planned, "Credential missing", auth, signal(), undefined, () => 1000), undefined);
+  }
 });
 
 test("authorization expiring during assessment cannot schedule follow-up", async () => {
