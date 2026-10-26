@@ -1,8 +1,13 @@
 # Runtime gateway modules (v1)
 
-The CLI no longer constructs Matrix directly. The bundled
-`channels/matrix-plugin.js` is a default ESM GatewayModule, implementing
-`src/gateway-provider.ts`. MATRIX_* environment settings remain compatible.
+The CLI consumes a bundled gateway-module catalog rather than constructing Matrix
+or naming its factory. Matrix factory, transport, sync recovery and native activity
+delivery are maintained in `harness/plugins` and materialized from the immutable
+`plugins.lock.json` revision into generated `builtin-plugins/` modules. The default
+factory implements `src/gateway-provider.ts`; MATRIX_* settings remain compatible.
+Existing local GatewayModule overrides and disable/baseline operations are unchanged.
+This is source ownership separation: bundled modules still compile into the image;
+changing that pin requires a build and rollout, not runtime hot replacement.
 
 A module exports default `{ apiVersion: 1, async create(context) { ... } }`.
 Context supplies home, agent and initial approvers. Return `{ channel, home?,

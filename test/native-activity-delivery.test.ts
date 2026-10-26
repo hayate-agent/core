@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { NativeActivityDelivery } from "../src/channels/native-activity.js";
+import { NativeActivityDelivery } from "../src/builtin-plugins/native-activity.js";
 import type { ActivityEvent } from "../src/activity.js";
 const to = { channel: "matrix", target: "room" };
 const event = (state: "started" | "completed"): ActivityEvent => ({ type: "activity", kind: "progress",
