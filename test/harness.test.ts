@@ -902,6 +902,56 @@ test("explicit continuation plans inherit the installation deadline without asse
 });
 
 
+test("premature completed assesses original task and durably executes only its missing step", async () => {
+  const { assessCompletion } = await import("../src/completion-check.js");
+  let turns = 0, checks = 0, persisted = false;
+  const original = "Implement update and run its regression test";
+  const h = new Harness({runtime:new FakeRuntime(() => {
+    turns++;
+    if (turns === 2) assert.ok(persisted, "follow-up cannot run before its durable checkpoint");
+    h.planContinuation("mem:room1",{state:"completed"});
+    return turns === 1 ? "Implementation done, regression test still missing" : "Regression test passed; task finished";
+  }), tickMs:60000, completionCheck: (input, reply, signal) => assessCompletion({review:async prompt=>{
+    checks++; assert.ok(prompt.includes(original));
+    return checks === 1 ? '{"state":"continue","next":"Run the missing regression test"}' : '{"state":"completed"}';
+  }},input,reply,input.completionAnchor ? {task:input.completionAnchor.task} : undefined,signal)});
+  h.addChannel(new MemoryChannel());
+  h.onStateChange=async()=>{if(h.pendingInputs().some(i=>i.continuationDepth===1)) persisted=true;};
+  try {
+    await h.submit(msg(original));await h.drained();
+    assert.equal(turns,2);assert.equal(checks,2);assert.ok(persisted);
+    assert.equal(h.state("mem:room1").task?.state,"completed");
+    await h.recoverTasks();await h.tick();await h.drained();assert.equal(turns,2);
+  } finally {await h.stop(1000);}
+});
+
+test("completed assessment preserves terminal boundaries and explicit completion without a valid plan", async () => {
+  for (const boundary of ["finished","invalid","failed","waiting","blocked","stopped","cancelled","expired","depth","pause","denied"] as const) {
+    let turns=0,checks=0;
+    const h=new Harness({runtime:new FakeRuntime(()=>{
+      turns++;
+      h.planContinuation("mem:room1",{state:boundary==="waiting" ? "waiting" : boundary==="blocked" ? "blocked" : "completed"});
+      if(boundary==="stopped") void h.stopConversation("mem:room1");
+      if(boundary==="cancelled") void h.cancel("mem:room1",h.state("mem:room1").current!.id!);
+      if(boundary==="pause") h.paused=true;
+      return "remaining original work";
+    }),tickMs:60000, now:()=>3000, continuationDeadline:()=>boundary==="expired"?2000:undefined,
+    completionCheck:async()=>{
+      checks++;
+      if(boundary==="failed") throw Error("classifier unavailable");
+      if(boundary==="invalid") return {state:"continue",next:""};
+      return boundary==="finished" || boundary==="denied" ? undefined : {state:"continue",next:"remaining"};
+    }});
+    h.addChannel(new MemoryChannel());h.onStateChange=async()=>{};
+    try {
+      await h.submit({...msg("original task"),...(boundary==="depth"?{continuationDepth:20}:{})});await h.drained();
+      assert.equal(turns,1,boundary);
+      assert.equal(checks,["finished","invalid","failed","denied"].includes(boundary)?1:0,boundary);
+      if(["finished","invalid","failed","denied","expired","pause"].includes(boundary)) assert.equal(h.state("mem:room1").task?.state,"completed",boundary);
+    } finally {await h.stop(1000);}
+  }
+});
+
 test("expired completion grant permits fresh requests but denies their autonomous follow-ups", async () => {
   let turns=0;
   const h=new Harness({runtime:new FakeRuntime(()=>{

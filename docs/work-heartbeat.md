@@ -14,6 +14,11 @@ API run inputs are excluded. A chain is limited to 20 follow-ups. This is not a 
 task registry: waiting states need external events or explicit new input to resume.
 Authorization is still enforced by normal tools/review, not by a next-step string.
 The tool records a plan; it does not infer completion reliably from arbitrary prose.
+An explicit completed checkpoint can still be independently assessed against the
+original authorized task. Only a valid concrete continue plan replaces it; an
+unavailable or inconclusive assessment preserves completed. Waiting and blocked
+checkpoints are not reassessed, and cancellation, pause, expiry and chain limits
+still prevent automatic follow-ups.
 
 Self-improvement starts via Cron at the configured local start hour, and a separate
 Cron triggers the morning report. The committed-turn hook requests the next night
