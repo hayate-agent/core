@@ -4,6 +4,7 @@ import path from "node:path";
 import { SessionArchives } from "./session-archive.js";
 import { writeFileDurable } from "./durable.js";
 import type { Address, RuntimeSession } from "./types.js";
+import type { BoundaryAssessment } from "./context-assessment.js";
 
 export interface ContextPolicy {
   enabled: boolean;
@@ -31,6 +32,13 @@ export interface ContextRecord {
   sessionId?: string;
   turns: number;
   lastMaintenance: number;
+  lastCompact?: number;
+  lastHandover?: number;
+  pressureSinceCompaction?: boolean;
+  observation?: { phase: "before" | "after"; usage: "known" | "unknown"; percent?: number; decision: string; turn: number };
+  beforeObservation?: ContextRecord["observation"];
+  unknownUsageNotified?: boolean;
+  assessmentFailures?: Partial<Record<"before" | "after", number>>;
   pending?: Request;
   handover?: { phase: "prepared" | "switched"; from: string; to?: string; text: string; archiveId?: string };
   lastError?: string;
@@ -44,7 +52,7 @@ const preserve = "Preserve operator intent and corrections, decisions and reject
 export class ContextMaintenance {
   private readonly queues = new Map<string, Promise<unknown>>();
   readonly archives: SessionArchives;
-  constructor(private readonly home: string, private readonly policy: () => ContextPolicy) { this.archives = new SessionArchives(home); }
+  constructor(private readonly home: string, private readonly policy: () => ContextPolicy, private readonly assess?: BoundaryAssessment) { this.archives = new SessionArchives(home); }
   private async prepareArchive(key: string, session: RuntimeSession, instructions: string): Promise<{ text: string; archiveId: string }> {
     if (!session.summarize || !session.archiveEntries) throw new Error("Runtime cannot archive handover");
     const entries = session.archiveEntries(); // capture original branch before native compaction
@@ -101,6 +109,8 @@ export class ContextMaintenance {
     void next.then(cleanup, cleanup);
     return next;
   }
+  /** Read-only decision diagnostics; serialized with maintenance operations. */
+  status(key: string): Promise<ContextRecord> { return this.serial(this.file(key), () => this.load(key)); }
   request(key: string, request: Request): Promise<void> {
     return this.serial(this.file(key), async () => {
       if (!["compact", "handover"].includes(request.action) || typeof request.preserve !== "string" || typeof request.resume !== "string" || request.preserve.length + request.resume.length > 16000) throw new Error("Invalid context maintenance request");
@@ -130,13 +140,20 @@ export class ContextMaintenance {
       } else if (state.sessionId !== id && state.handover?.phase !== "prepared") {
         state.pending = undefined;
         state.handover = undefined;
+        state.pressureSinceCompaction = false;
+        state.lastCompact = undefined;
+        state.lastHandover = undefined;
+        state.assessmentFailures = undefined;
+        state.unknownUsageNotified = false;
         state.sessionId = id;
         await this.save(key, state);
       }
     });
     const state = await this.load(key); const policy = this.policy();
     const percent = session.status().contextPercent;
-    if (!policy.enabled || percent === undefined || percent < policy.assessPercent || state.turns % policy.checkEveryTurns !== 0) return "";
+    if (!policy.enabled || state.turns % policy.checkEveryTurns !== 0) return "";
+    if (percent === undefined || !Number.isFinite(percent)) return "Context usage is unknown; no percentage was inferred. Assess useful boundaries explicitly with plugin_context_maintenance.";
+    if (percent < policy.assessPercent) return "";
     return `Context usage is ${Math.round(percent)}%. Assess whether compaction is useful at this task boundary. If needed request plugin_context_maintenance with what to preserve and how to resume. Continue normally if continuity is more important. ${preserve}`;
   }
   async beforeTurn(key: string, session: RuntimeSession, rotate: (handover: ContextRecord["handover"]) => Promise<RuntimeSession>, target?: Address, incomingText = ""): Promise<string | undefined> {
@@ -182,22 +199,55 @@ export class ContextMaintenance {
         return state.noticeTarget ? undefined : notice;
       }
       if (state.handover?.phase === "prepared") return;
+      if (state.sessionId && state.sessionId !== id) {
+        state.pending = undefined;
+        state.pressureSinceCompaction = false;
+        state.lastCompact = undefined;
+        state.lastHandover = undefined;
+        state.assessmentFailures = undefined;
+        state.unknownUsageNotified = false;
+      }
       state.sessionId = id;
       if (phase === "after") state.turns++;
       const request = state.pending;
-      const percent = session.status().contextPercent;
-      // Conservative incoming-input budget, not a claim of semantic task detection.
-      const window = session.status().contextWindow;
-      const incomingPercent = window ? (Buffer.byteLength(incomingText, "utf8") / 3 / window) * 100 : 0;
-      const due = state.turns - state.lastMaintenance >= policy.cooldownTurns;
+      const usage = session.status().contextPercent;
+      const percent = usage !== undefined && Number.isFinite(usage) ? usage : undefined;
+      // Independent cooldowns: compaction cannot continually postpone handover.
+      const last = phase === "before" ? state.lastHandover : state.lastCompact;
+      const due = state.turns - (last ?? -1000) >= policy.cooldownTurns;
       const matchingRequest = request && (phase === "before" ? request.action === "handover" : request.action === "compact");
-      const automatic = !request && percent !== undefined && (phase === "before"
-        ? policy.autoHandover && (percent >= policy.compactPercent || (percent >= policy.assessPercent && percent + incomingPercent >= policy.compactPercent))
-        : !policy.autoHandover && percent >= policy.compactPercent);
-      if ((!matchingRequest && !due) || (!matchingRequest && !automatic)) { await this.save(key, state); return; }
+      const pressure = percent !== undefined && percent >= (phase === "before" ? policy.assessPercent : policy.compactPercent);
+      const failedAt = state.assessmentFailures?.[phase];
+      const assessmentDue = failedAt === undefined || state.turns - failedAt >= policy.cooldownTurns;
+      const eligible = !request && due && assessmentDue && policy.enabled && percent !== undefined &&
+        (phase === "before" ? policy.autoHandover && (pressure || state.pressureSinceCompaction === true) : pressure);
+      let decision = percent === undefined ? "usage-unknown" : !due ? "cooldown" : !assessmentDue ? "assessment-backoff" : "below-threshold";
+      let automatic = false;
+      if (eligible) {
+        const recent = (session.archiveEntries?.() ?? []).slice(-8).map(e => `${e.role}: ${e.text}`).join("\n").slice(-16000);
+        let action: Awaited<ReturnType<BoundaryAssessment>> = "unknown";
+        try { if (this.assess) action = await this.assess({ phase, incoming: incomingText.slice(0, 8000), recent, percent, pressureSinceCompaction: state.pressureSinceCompaction === true }); }
+        catch { /* Advisory failure defers maintenance; never abort the working turn. */ }
+        state.assessmentFailures ??= {};
+        if (action === "unknown") state.assessmentFailures[phase] = state.turns;
+        else delete state.assessmentFailures[phase];
+        decision = `assessment-${action}`;
+        automatic = action === (phase === "before" ? "handover" : "compact");
+      }
+      state.observation = { phase, usage: percent === undefined ? "unknown" : "known", percent, decision, turn: state.turns };
+      if (phase === "before") state.beforeObservation = state.observation;
+      let diagnostic: string | undefined;
+      if (policy.enabled && percent === undefined && !state.unknownUsageNotified) {
+        diagnostic = "ℹ️ Kontextauslastung derzeit unbekannt; automatische Schwellenentscheidung ausgesetzt. Es wurde kein Prozentwert geschätzt.";
+        this.recordNotice(key, state, diagnostic);
+        state.unknownUsageNotified = true;
+      } else if (percent !== undefined) state.unknownUsageNotified = false;
+      if (!matchingRequest && !automatic) { await this.save(key, state); return state.noticeTarget ? undefined : diagnostic; }
       state.pending = undefined;
       state.lastMaintenance = state.turns;
-      await this.save(key, state); // cooldown reserved even if summarization fails
+      if (phase === "before") state.lastHandover = state.turns;
+      else state.lastCompact = state.turns;
+      await this.save(key, state); // per-action cooldown reserved even on failure
       let notice: string;
       try {
         const instructions = `${preserve}\nPreserve additionally: ${request?.preserve ?? "current task state"}\nResume: ${request?.resume ?? "continue with the next queued operator request"}`;
@@ -211,10 +261,12 @@ export class ContextMaintenance {
           const next = await rotate(state.handover);
           state.handover = { ...state.handover, phase: "switched", to: next.status().sessionId };
           state.sessionId = next.status().sessionId;
+          state.pressureSinceCompaction = false;
           await this.archives.link(key, prepared.archiveId, state.sessionId);
           notice = "🔄 Neue Sitzung übernommen; Rückschau gespeichert.";
         } else {
           await session.compact(instructions);
+          state.pressureSinceCompaction = true;
           notice = "♻️ Kontext kompaktiert.";
         }
         state.lastError = undefined;

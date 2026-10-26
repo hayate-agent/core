@@ -57,6 +57,7 @@ import { ContextMaintenance, contextPolicy } from "./context-maintenance.js";
 import { contextPlugin } from "./builtin-plugins/context-plugin.js";
 import { SettingsService, type SettingPath } from "./settings.js";
 import { runtimeReviewer } from "./runtime/reviewer.js";
+import { boundaryAssessor } from "./context-assessment.js";
 import { guardResultOrchestration } from "./result-orchestration.js";
 import { assessCompletion } from "./completion-check.js";
 import { reviewConfig } from "./review-config.js";
@@ -160,7 +161,8 @@ async function main(argv: string[]): Promise<void> {
   const dispatchPolicy = dispatcherConfig(settings.effective().dispatcher);
   config.memory = memoryConfig(settings.effective().memory);
   memory = new MemoryService(config.memory, log, config.home);
-  const maintenance = new ContextMaintenance(config.home, () => contextPolicy(settings.effective().contextMaintenance));
+  const maintenance = new ContextMaintenance(config.home, () => contextPolicy(settings.effective().contextMaintenance),
+    evidence => boundaryAssessor(runtimeReviewer(runtime), () => effectiveModels().reviewModel)(evidence));
   const effectiveModels = () => {
     const values = settings.effective();
     return { model: values.model, thinking: values.thinking, reviewModel: values.review?.model ?? values.model, reviewThinking: values.review?.thinking ?? "medium" };

@@ -9,7 +9,7 @@ import type { RuntimeSession } from "../src/types.js";
 test("slow maintenance serializes its conversation without blocking another conversation", async (t) => {
   const home = await mkdtemp(path.join(os.tmpdir(), "context-parallel-"));
   t.after(() => rm(home, { recursive: true, force: true }));
-  const maintenance = new ContextMaintenance(home, () => contextPolicy({ autoHandover: false }));
+  const maintenance = new ContextMaintenance(home, () => contextPolicy({ autoHandover: false }), async () => "compact");
   let release!: () => void, entered!: () => void;
   const gate = new Promise<void>((r) => { release = r; });
   const started = new Promise<void>((r) => { entered = r; });
@@ -58,7 +58,7 @@ test("completion and durable notice survive restart and failed outbox adoption",
   const home = await mkdtemp(path.join(os.tmpdir(), "context-test-"));
   t.after(() => rm(home, { recursive: true, force: true }));
   const policy = () => contextPolicy({ autoHandover: false });
-  const maintenance = new ContextMaintenance(home, policy);
+  const maintenance = new ContextMaintenance(home, policy, async () => "compact");
   let compactions = 0;
   const session = { status: () => ({ sessionId: "old", contextPercent: 80 }), compact: async () => { compactions++; } } as unknown as RuntimeSession;
   const rotate = async () => { throw Error("unexpected"); };
@@ -92,24 +92,24 @@ test("unknown usage does not trigger automatic compaction; handover is explicit"
   assert.equal(rotations, 1);
 });
 
-test("automatic handover runs before work, incoming budget triggers early, compaction stays after", async (t) => {
+test("semantic incoming work triggers handover before work; compaction stays after", async (t) => {
   const home = await mkdtemp(path.join(os.tmpdir(), "context-test-"));
   t.after(() => rm(home, { recursive: true, force: true }));
   let percent = 65, rotations = 0, compactions = 0;
   const session = { status: () => ({ sessionId: "old", contextPercent: percent, contextWindow: 1000 }), archiveEntries: () => [], summarize: async () => "checkpoint", compact: async () => { compactions++; } } as unknown as RuntimeSession;
   const next = { status: () => ({ sessionId: "new" }) } as RuntimeSession;
-  const maintenance = new ContextMaintenance(home, () => contextPolicy());
+  const maintenance = new ContextMaintenance(home, () => contextPolicy(), async e => e.phase === "after" ? "compact" : e.incoming === "new task" ? "handover" : "keep");
   const rotate = async () => { rotations++; return next; };
   await maintenance.beforeTurn("chat", session, rotate, undefined, "small");
   assert.equal(rotations, 0);
-  await maintenance.beforeTurn("chat", session, rotate, undefined, "x".repeat(600));
+  await maintenance.beforeTurn("chat", session, rotate, undefined, "new task");
   assert.equal(rotations, 1);
   assert.equal(compactions, 0);
   await maintenance.beforeTurn("chat", next, rotate);
   assert.equal(rotations, 1, "no unconditional session churn");
   percent = 95;
   await maintenance.boundary("other", session, rotate);
-  assert.equal(compactions, 0, "automatic handover owns the next pre-turn boundary");
+  assert.equal(compactions, 1, "both policies coexist");
   assert.equal(rotations, 1, "post-turn cannot rotate even at high usage");
 });
 
@@ -145,11 +145,11 @@ test("prepared handover refreshes intervening context after rotation failure", a
 test("automatic post-turn compaction does not steal the next pre-turn handover", async (t) => {
   const home = await mkdtemp(path.join(os.tmpdir(), "context-priority-"));
   t.after(() => rm(home, { recursive: true, force: true }));
-  const maintenance = new ContextMaintenance(home, () => contextPolicy());
+  const maintenance = new ContextMaintenance(home, () => contextPolicy(), async e => e.phase === "after" ? "compact" : "handover");
   let percent = 80, compactions = 0, rotations = 0;
   const session = { status: () => ({ sessionId: "old", contextPercent: percent }), archiveEntries: () => [], summarize: async () => "checkpoint", compact: async () => { compactions++; percent = 20; } } as unknown as RuntimeSession;
   await maintenance.boundary("chat", session, async () => { throw Error("post-turn rotation"); });
   await maintenance.beforeTurn("chat", session, async () => { rotations++; return { status: () => ({ sessionId: "new", contextPercent: 10 }) } as RuntimeSession; });
   assert.equal(rotations, 1);
-  assert.equal(compactions, 0);
+  assert.equal(compactions, 1);
 });
