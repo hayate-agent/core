@@ -42,6 +42,7 @@ export interface PluginChannel {
   send(to: Address, text: string, meta?: SendMeta): Promise<void>;
   stop(budgetMs?: number): Promise<void>;
   turnEvent?(to: Address, event: TurnEvent, input?: Inbound): void;
+  taskActivity?(to: Address, event: import("./activity.js").ActivityEvent, input: Inbound): void;
   typing?(to: Address, on: boolean): Promise<void>;
 }
 
@@ -72,6 +73,7 @@ function wrapChannel(channel: PluginChannel): Channel {
     ...(channel.configureGateway ? { configureGateway: (settings: import("./gateway-settings.js").GatewaySettings) => channel.configureGateway!(settings) } : {}),
     ...(channel.turnStatus ? { turnStatus: (to: Address, input: Inbound, status: "started" | "completed" | "failed" | "cancelled") => channel.turnStatus!(to, input, status) } : {}),
     ...(channel.turnEvent ? { turnEvent: (to: Address, event: TurnEvent, input?: Inbound) => channel.turnEvent!(to, event, input) } : {}),
+    ...(channel.taskActivity ? { taskActivity: (to: Address, event: import("./activity.js").ActivityEvent, input: Inbound) => channel.taskActivity!(to, event, input) } : {}),
     ...(channel.typing ? { typing: (to: Address, on: boolean) => channel.typing!(to, on) } : {}),
   };
 }
@@ -210,7 +212,7 @@ export class PluginHost {
               if (!registering) throw new Error("Plugin registration is closed");
               if (!channel || typeof channel.name !== "string" || !/^[a-z][a-z0-9_-]*$/.test(channel.name) ||
                   [channel.start, channel.send, channel.stop].some((fn) => typeof fn !== "function") ||
-                  [channel.turnEvent, channel.typing].some((fn) => fn !== undefined && typeof fn !== "function")) throw new Error("Invalid plugin channel");
+                  [channel.turnEvent, channel.taskActivity, channel.typing].some((fn) => fn !== undefined && typeof fn !== "function")) throw new Error("Invalid plugin channel");
               if (channelNames.has(channel.name)) throw new Error(`Channel conflict: ${channel.name}`);
               channelNames.add(channel.name);
               this.channels.set(channel.name, wrapChannel(channel));
