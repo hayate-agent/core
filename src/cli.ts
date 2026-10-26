@@ -153,7 +153,7 @@ async function main(argv: string[]): Promise<void> {
     contextMaintenance: contextPolicy(config.contextMaintenance),
     toolResultPruning: pruningPolicy(config.toolResultPruning),
     review: { model: config.review?.model, thinking: config.review?.thinking ?? "medium" },
-  });
+  }, message => log(`[settings] ${message}`));
   await settings.load();
   const dispatchPolicy = dispatcherConfig(settings.effective().dispatcher);
   config.memory = memoryConfig(settings.effective().memory);
