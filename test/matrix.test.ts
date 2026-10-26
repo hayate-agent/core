@@ -3,7 +3,7 @@ import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { chunks, fitChunks, MatrixChannel, type MatrixOptions, matrixOptionsFromEnv } from "../src/channels/matrix.js";
+import { chunks, fitChunks, MatrixChannel, type MatrixOptions, matrixOptionsFromEnv } from "../src/builtin-plugins/matrix-channel.js";
 import type { Inbound } from "../src/types.js";
 
 const BOT = "@agent:example.org";

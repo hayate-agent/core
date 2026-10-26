@@ -2,6 +2,7 @@
 import { ToolGuardError } from "./tool-guard-error.js";
 import { improvementPlugin } from "./builtin-plugins/improvement-plugin.js";
 import { gatewayManagerPlugin } from "./builtin-plugins/gateway-manager-plugin.js";
+import { bundledGatewayModules } from "./builtin-plugins/gateway-baselines.js";
 import { reloadableToolsPlugin } from "./builtin-plugins/reloadable-tools-plugin.js";
 import { protectedContentPlugin } from "./builtin-plugins/protected-content-plugin.js";
 import { readdir } from "node:fs/promises";
@@ -266,7 +267,7 @@ async function main(argv: string[]): Promise<void> {
   harness.home = config.home_address;
   const gatewayManager = new GatewayManager(harness, settings, {
     home: config.home, agent: config.agent, approvers: config.approvers, admins: config.admins,
-  }, { matrix: new URL(import.meta.url.endsWith(".ts") ? "./channels/matrix-plugin.ts" : "./channels/matrix-plugin.js", import.meta.url).href });
+  }, bundledGatewayModules());
   await gatewayManager.load();
   const gatewayApprovers = gatewayManager.approvers;
   const admins = config.admins.length ? config.admins : gatewayApprovers;
@@ -392,7 +393,7 @@ async function main(argv: string[]): Promise<void> {
   }
   await scheduler.load();
 
-  await plugins.load(config.plugins ?? [], { agent: config.agent, home: config.home, cwd: config.cwd }, [...builtinCommandNames, "sessions", "resume", ...skills.map((s) => s.name)], ["console", "api", "matrix", "dispatch", ...harness.channels.keys()], [dispatcherPlugin(() => dispatcher), subagentPlugin(subagents,async()=>{await persist();}), ...(reloadableTools ? [reloadableToolsPlugin(reloadableTools)] : []), wasmToolsPlugin(config.home, config.wasmTools ?? []), continuationPlugin(harness), loopPlugin(harness), improvementPlugin(improvement!), protectedContentPlugin(protectedContent), gatewayManagerPlugin(gatewayManager, settings), gatewayPlugin(settings, harness), contextPlugin(maintenance, settings), ...(config.memory.enabled ? [memoryPlugin(memory)] : []), ...(reviewSettings.enabled ? [reviewPlugin(review, config.cwd)] : [])]);
+  await plugins.load(config.plugins ?? [], { agent: config.agent, home: config.home, cwd: config.cwd }, [...builtinCommandNames, "sessions", "resume", ...skills.map((s) => s.name)], ["console", "api", "dispatch", ...Object.keys(bundledGatewayModules()), ...harness.channels.keys()], [dispatcherPlugin(() => dispatcher), subagentPlugin(subagents,async()=>{await persist();}), ...(reloadableTools ? [reloadableToolsPlugin(reloadableTools)] : []), wasmToolsPlugin(config.home, config.wasmTools ?? []), continuationPlugin(harness), loopPlugin(harness), improvementPlugin(improvement!), protectedContentPlugin(protectedContent), gatewayManagerPlugin(gatewayManager, settings), gatewayPlugin(settings, harness), contextPlugin(maintenance, settings), ...(config.memory.enabled ? [memoryPlugin(memory)] : []), ...(reviewSettings.enabled ? [reviewPlugin(review, config.cwd)] : [])]);
   if (dispatchPolicy.enabled) {
     dispatchRuntime = new DispatcherRuntime(harness, executions);
     harness.addChannel(dispatchRuntime.channel);

@@ -17,7 +17,10 @@ for (const [name, digest] of Object.entries(lock.files)) {
       return response.text();
     })();
   if (createHash('sha256').update(source).digest('hex') !== digest) throw Error(`Plugin digest mismatch: ${name}`);
-  files.push([name, source.replace(/from (["'])\.\//g, 'from $1../')]);
+  files.push([name, source.replace(/(from\s+|import\()(["'])\.\/([^"']+)\2/g, (match, prefix, quote, specifier) => {
+    const peer = specifier.replace(/\.js$/, '.ts');
+    return `${prefix}${quote}${Object.hasOwn(lock.files, peer) ? './' : '../'}${specifier}${quote}`;
+  })]);
 }
 // Verify every source before replacing generated output. Never run downloaded code.
 await rm(output, { recursive: true, force: true });

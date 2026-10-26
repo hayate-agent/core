@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { MatrixChannel } from "../src/channels/matrix.js";
+import { MatrixChannel } from "../src/builtin-plugins/matrix-channel.js";
 import { TurnActivity } from "../src/activity.js";
 import type { ActivityEvent } from "../src/activity.js";
 import { Harness } from "../src/harness.js";

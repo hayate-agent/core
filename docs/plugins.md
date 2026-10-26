@@ -27,7 +27,11 @@ hashes against a local checkout. Do not update the pin until its plugin commit i
 published. Normal builds require network access to the pinned repository and
 fail closed on a mismatch/download failure. Docker uses the same lock and script.
 Sources are compiled into the package; this build-time pin does not fetch code at
-runtime or replace the separate runtime overlay/loading contracts.
+runtime or replace the separate runtime overlay/loading contracts. Locked sources
+may import each other with sibling paths; imports of Core contracts/helpers are
+relocated to the parent directory by the materializer (including `import()` type
+references). Matrix factory/transport/sync/native delivery are plugin-owned locked
+sources, while Core retains generic gateway lifecycle and shared delivery helpers.
 
 
 For a no-host-import, tool-only WebAssembly alternative, see [restricted Wasm
