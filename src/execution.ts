@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { writeFileDurable } from "./durable.js";
+import { recoveryBlock, type RecoveryStrategy, type ExecutionRecoveryPolicy } from "./execution-recovery.js";
 
 /** Expected contention with a control or another claimant, not a storage failure. */
 export class ExecutionClaimConflict extends Error {}
@@ -21,6 +22,14 @@ export interface Execution {
   result?: string;
   token?: string;
   restarts: number;
+  recoveryReason?: string;
+  /** Prior token-scoped transcript, never an ownership credential. */
+  recoverySession?: string;
+  resolutions?: Array<{ actor: string; action: "continue" | "retry"; evidence: string; at: number }>;
+  /** Consumed atomically by the next claim; history is not authorization. */
+  recoveryGrant?: { action: "continue" | "retry"; restarts: number };
+  /** Returned by claim only, never persisted as permission for another attempt. */
+  claimedRecoveryAction?: "continue" | "retry";
   terminalAt?: number;
   question?: { id: string; text: string; answer?: string };
   /** Parent stop permanently revokes result delivery as well as execution. */
@@ -97,6 +106,10 @@ export class ExecutionStore {
             !["safe", "unsafe"].includes(item.intent.replay))) throw Error("Invalid execution intent");
         if (item.settledEffect !== undefined && (!item.settledEffect || typeof item.settledEffect.key !== "string" || !item.settledEffect.key.trim() ||
             typeof item.settledEffect.result !== "string" || item.settledEffect.result.length > 64000)) throw Error("Invalid settled effect");
+        if (item.claimedRecoveryAction !== undefined) throw Error("Invalid persisted claim-only recovery action");
+        if (item.recoveryGrant !== undefined && (!item.recoveryGrant ||
+            !["continue", "retry"].includes(item.recoveryGrant.action) ||
+            !Number.isSafeInteger(item.recoveryGrant.restarts) || item.recoveryGrant.restarts < 0)) throw Error("Invalid recovery grant");
         ids.add(item.id);
       }
       const eventIds = new Set<string>();
@@ -255,18 +268,18 @@ export class ExecutionStore {
   }
   /** Current policy is supplied by the trusted host registry, never by model input.
    * Recovery is not itself a replay grant: policy is checked again at claim time. */
-  claim(id: string, current?: { strategy: string; version: number; replaySafe: boolean }): Promise<Execution> {
+  claim(id: string, current?: RecoveryStrategy & { strategy: string }, policy?: ExecutionRecoveryPolicy): Promise<Execution> {
     return this.mutate(draft => {
       const task = this.find(draft, id);
       if (task.status !== "ready") throw new ExecutionClaimConflict("Execution not ready");
-      if (task.intent && !(task.intent.replay === "safe" && current?.replaySafe === true &&
-          current.strategy === task.strategy && current.version === task.strategyVersion)) {
-        throw Error("Unresolved effect intent requires matching replay-safe policy");
-      }
+      const reason = task.intent ? recoveryBlock(task, current?.strategy === task.strategy ? current : undefined, policy) : undefined;
+      if (reason) throw Error(reason);
+      const claimedRecoveryAction = task.recoveryGrant?.restarts === task.restarts ? task.recoveryGrant.action : undefined;
+      delete task.recoveryGrant;
       task.token = randomUUID();
       task.status = "running";
       this.event(draft, task, "status", "Ausführung gestartet");
-      return task;
+      return { ...task, claimedRecoveryAction };
     });
   }
   checkpoint(id: string, token: string, checkpoint: string): Promise<void> {
@@ -275,6 +288,13 @@ export class ExecutionStore {
       const task = this.owned(draft, id, token);
       task.checkpoint = checkpoint;
       task.restarts = 0;
+    });
+  }
+  workerSession(id: string, token: string, key: string): Promise<void> {
+    return this.mutate(draft => {
+      const task = this.owned(draft, id, token);
+      if (key !== `dispatch:${id}:${token}`) throw Error("Invalid worker session");
+      task.recoverySession = key;
     });
   }
   intent(id: string, token: string, key: string, replay: "safe" | "unsafe"): Promise<void> {
@@ -374,7 +394,8 @@ export class ExecutionStore {
   }
   /** Startup reconstruction is separate from scheduling. Unknown strategies/versions
    * and ambiguous external effects stay blocked. Both old and new replay policy must agree. */
-  recover(strategies: ReadonlyMap<string, { version: number; replaySafe: boolean }>, restartLimit = 3): Promise<void> {
+  recover(strategies: ReadonlyMap<string, RecoveryStrategy>, restartLimit?: number, policy?: ExecutionRecoveryPolicy): Promise<void> {
+    if (restartLimit !== undefined && (!Number.isSafeInteger(restartLimit) || restartLimit < 0)) throw Error("Invalid recovery restart limit");
     return this.mutate(draft => {
       for (const task of draft.executions) {
         if (!["ready", "running"].includes(task.status)) continue;
@@ -398,17 +419,36 @@ export class ExecutionStore {
             task.restarts = 0;
           }
         }
+        if (!task.recoverySession && task.token && task.intent) task.recoverySession = `dispatch:${task.id}:${task.token}`;
         delete task.token;
-        const unsafe = task.intent && !(task.intent.replay === "safe" && strategy?.replaySafe);
-        if (!strategy || strategy.version !== task.strategyVersion || unsafe || task.restarts >= restartLimit) {
+        const reason = restartLimit !== undefined && task.restarts >= restartLimit
+          ? `Recovery restart limit ${restartLimit} reached; inspect evidence and resolve before retrying.`
+          : recoveryBlock(task, strategy, policy);
+        if (reason) {
+          task.recoveryReason = reason;
           task.status = "blocked";
-          this.event(draft, task, "status", "Wiederaufnahme blockiert: Strategie, Seiteneffekt oder Neustartlimit prüfen");
-        } else task.status = "ready";
+          this.event(draft, task, "status", reason);
+        } else { task.status = "ready"; delete task.recoveryReason; }
       }
       // Dispatcher inboxes never replay independently; after claim recovery
       // their orphan turn records carry no additional execution authority.
       draft.turns = draft.turns?.filter(turn => !turn.sessionKey.startsWith("dispatch:") ||
         draft.executions.some(task => task.token && task.intent && turn.sessionKey === `dispatch:${task.id}:${task.token}`));
+    });
+  }
+  /** Explicit acknowledgement retains ambiguous intent and audit history. No budget reset. */
+  resolve(parent: string, id: string, actor: string, action: "continue" | "retry", evidence: string): Promise<void> {
+    if (!actor.trim() || !evidence.trim() || evidence.length > 8000) return Promise.reject(Error("Actor and bounded evidence required"));
+    return this.mutate(draft => {
+      const task = this.find(draft, id);
+      if (task.parent !== parent || task.parentStopped || !["blocked", "paused"].includes(task.status) || (task.question && task.question.answer === undefined)) throw Error("Execution cannot be resolved");
+      if (!task.recoverySession && task.token && task.intent) task.recoverySession = `dispatch:${task.id}:${task.token}`;
+      delete task.token;
+      (task.resolutions ??= []).push({ actor, action, evidence, at: this.now() });
+      task.recoveryGrant = { action, restarts: task.restarts };
+      delete task.recoveryReason;
+      task.status = "ready";
+      this.event(draft, task, "status", `${actor}: ${action}; uncertain effects may duplicate. Evidence: ${evidence}`);
     });
   }
   /** Archive before removing active records. A crash between commits leaves an

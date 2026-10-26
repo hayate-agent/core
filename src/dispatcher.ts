@@ -1,8 +1,10 @@
+import type { ExecutionRecoveryPolicy } from "./execution-recovery.js";
 import { ExecutionClaimConflict, type Execution, type ExecutionEvent, type ExecutionStore } from "./execution.js";
 
 export interface DispatchContext {
   readonly signal: AbortSignal;
   checkpoint(value: string): Promise<void>;
+  workerSession?(key: string): Promise<void>;
   /** Optional only for source compatibility with existing strategy test adapters. */
   status?(text: string): Promise<void>;
   /** Persists a question and suspends this execution; never returns normally. */
@@ -15,6 +17,7 @@ export interface DispatcherStrategy {
   name: string;
   version: number;
   replaySafe: boolean;
+  reconcile?: boolean;
   execute(task: Readonly<Execution>, context: DispatchContext): Promise<string>;
 }
 
@@ -41,6 +44,7 @@ export class Dispatcher {
     private readonly deliver: (event: ExecutionEvent) => Promise<void>,
     private readonly report: (error: unknown) => void,
     private readonly checkpoint?: (parent: string) => Execution["dependency"],
+    private readonly recoveryPolicy?: ExecutionRecoveryPolicy,
   ) {
     if (!Number.isSafeInteger(capacity) || capacity < 1) throw Error("Invalid dispatcher capacity");
     if (!strategy.name.trim() || !Number.isSafeInteger(strategy.version) || strategy.version < 1) throw Error("Invalid dispatcher strategy");
@@ -48,7 +52,7 @@ export class Dispatcher {
   async start(): Promise<void> {
     if (this.initialized) throw Error("Dispatcher already started");
     this.initialized = true;
-    await this.store.recover(new Map([[this.strategy.name, this.strategy]]));
+    await this.store.recover(new Map([[this.strategy.name, this.strategy]]), undefined, this.recoveryPolicy);
     this.recovered = true;
     await this.kick();
   }
@@ -87,8 +91,8 @@ export class Dispatcher {
       let claimed: Execution;
       try {
         claimed = await this.store.claim(task.id, {
-          strategy: this.strategy.name, version: this.strategy.version, replaySafe: this.strategy.replaySafe,
-        });
+          strategy: this.strategy.name, version: this.strategy.version, replaySafe: this.strategy.replaySafe, reconcile: this.strategy.reconcile,
+        }, this.recoveryPolicy);
       } catch (error) {
         if (error instanceof ExecutionClaimConflict) continue;
         throw error;
@@ -113,6 +117,7 @@ export class Dispatcher {
           throw new ExecutionClaimConflict("Execution waiting for answer");
         },
         checkpoint: value => { check(); return this.store.checkpoint(task.id, token, value); },
+        workerSession: key => { check(); return this.store.workerSession(task.id, token, key); },
         intent: (key, replay) => { check(); return this.store.intent(task.id, token, key, replay); },
         settleIntent: (key, result, checkpoint) => { check(); return this.store.settleIntent(task.id, token, key, result, checkpoint); },
       });
@@ -131,6 +136,13 @@ export class Dispatcher {
       if (pending) void pending.then(() => this.kick()).catch(this.report);
       else void this.kick().catch(this.report);
     }
+  }
+  async resolve(parent: string, id: string, actor: string, action: "continue" | "retry", evidence: string): Promise<void> {
+    const task = this.store.list(parent).find(task => task.id === id);
+    if (!task) throw Error("Unknown execution in this conversation");
+    if (action === "continue" && task.intent && !this.strategy.reconcile) throw Error("Strategy has no reconciliation support; choose explicit retry or cancel");
+    await this.store.resolve(parent, id, actor, action, evidence);
+    await this.kick();
   }
   async answer(parent: string, id: string, questionId: string, text: string): Promise<void> {
     await this.store.answer(parent, id, questionId, text);

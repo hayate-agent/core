@@ -259,9 +259,13 @@ export class PiSession implements RuntimeSession {
       const message = record.message as { role?: string; content?: unknown } | undefined;
       const content = message?.content;
       const text = typeof content === "string" ? content : Array.isArray(content)
-        ? content.filter((p) => p?.type === "text" && typeof p.text === "string").map((p) => p.text).join("\n")
+        ? content.map((p) => p?.type === "text" && typeof p.text === "string" ? p.text
+          : p?.type === "toolCall" ? JSON.stringify({ type: "toolCall", id: p.id, name: p.name, arguments: p.arguments })
+          : "").filter(Boolean).join("\n")
         : typeof record.summary === "string" ? record.summary : "";
-      return { id: entry.id, role: message?.role ?? entry.type, text };
+      const result = message?.role === "toolResult" ? message as unknown as { toolCallId?: string; toolName?: string; isError?: boolean } : undefined;
+      const evidence = result ? JSON.stringify({ type: "toolResult", toolCallId: result.toolCallId, toolName: result.toolName, isError: result.isError, text }) : text;
+      return { id: entry.id, role: message?.role ?? entry.type, text: evidence };
     }).filter((entry) => entry.text.length > 0);
   }
 
