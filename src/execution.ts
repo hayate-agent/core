@@ -9,6 +9,8 @@ export class ExecutionClaimConflict extends Error {}
 export type ExecutionStatus = "ready" | "running" | "paused" | "blocked" | "completed" | "cancelled";
 export interface Execution {
   id: string;
+  /** Host-captured parent mandate; never accepted from model tool arguments. */
+  dependency?: { taskId: string; depth: number; original: string; expiresAt?: number; anchor?: import("./types.js").Inbound["completionAnchor"] };
   requestId: string;
   parent: string;
   input: string;
@@ -235,7 +237,7 @@ export class ExecutionStore {
     return structuredClone(this.data.executions.filter(item => parent === undefined || item.parent === parent));
   }
   events(): ExecutionEvent[] { return structuredClone(this.data.events); }
-  submit(parent: string, requestId: string, input: string, strategy: string, strategyVersion = 1): Promise<Execution> {
+  submit(parent: string, requestId: string, input: string, strategy: string, strategyVersion = 1, dependency?: Execution["dependency"]): Promise<Execution> {
     return this.mutate(async draft => {
       if (![parent, requestId, input, strategy].every(value => typeof value === "string" && value.trim()) || input.length > 64000 ||
           !Number.isSafeInteger(strategyVersion) || strategyVersion < 1) throw Error("Invalid execution submission");
@@ -245,7 +247,7 @@ export class ExecutionStore {
         return old;
       }
       if (draft.executions.length >= 2000) throw Error("Retained execution limit reached; archive only after reconciliation");
-      const task: Execution = { id: randomUUID(), parent, requestId, input, strategy, strategyVersion, status: "ready", restarts: 0 };
+      const task: Execution = { dependency: structuredClone(dependency), id: randomUUID(), parent, requestId, input, strategy, strategyVersion, status: "ready", restarts: 0 };
       draft.executions.push(task);
       this.event(draft, task, "accepted", "Auftrag angenommen");
       return task;
