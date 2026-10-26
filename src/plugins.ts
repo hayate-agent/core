@@ -1,4 +1,5 @@
 import path from "node:path";
+import { PolicyRegistry, type Policy } from "./policies.js";
 import type { DispatcherStrategy } from "./dispatcher.js";
 import type { MemoryProviderFactory } from "./memory.js";
 import type { CompactionStrategy } from "./compaction.js";
@@ -112,6 +113,8 @@ export interface PluginAPI {
   registerPanel(panel: PluginPanel): void;
   /** Register execution policy; activation is selected explicitly by host configuration. */
   registerDispatcher(strategy: DispatcherStrategy): void;
+  /** Trusted optional hooks; ordered by registration, no implicit default veto. */
+  registerPolicy(policy: Policy): void;
   /** Cleanup runs in reverse registration order, including failed initialization. */
   onStop(cleanup: () => Promise<void> | void): void;
 }
@@ -123,6 +126,8 @@ export interface PluginModule {
 
 /** Trusted, explicitly configured local ESM modules. This is not a code sandbox. */
 export class PluginHost {
+  readonly policies: PolicyRegistry;
+  constructor(requiredPolicies: readonly string[] = []) { this.policies = new PolicyRegistry(requiredPolicies); }
   readonly commands = new Map<string, PluginCommand>();
   readonly channels = new Map<string, Channel>();
   readonly tools = new Map<string, PluginTool>();
@@ -154,6 +159,10 @@ export class PluginHost {
               if (names.has(command.name)) throw new Error(`Command conflict: /${command.name}`);
               names.add(command.name);
               this.commands.set(command.name, Object.freeze({ ...command, admin: command.admin ?? true, run: command.run.bind(command) }));
+            },
+            registerPolicy: (policy: Policy) => {
+              if (!registering) throw new Error("Plugin registration is closed");
+              this.policies.register(policy);
             },
             registerDispatcher: (strategy: DispatcherStrategy) => {
               if (!registering) throw new Error("Plugin registration is closed");
@@ -213,6 +222,7 @@ export class PluginHost {
           }));
         } finally { registering = false; }
       }
+      this.policies.assertReady();
     } catch (err) {
       await this.stop().catch(() => {});
       this.commands.clear();
@@ -230,6 +240,7 @@ export class PluginHost {
   async stop(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
+    this.policies.clear();
     const errors: unknown[] = [];
     for (const cleanup of this.cleanups.splice(0).reverse()) {
       try { await cleanup(); } catch (err) { errors.push(err); }

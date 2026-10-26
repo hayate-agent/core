@@ -62,8 +62,7 @@ import { guardResultOrchestration } from "./result-orchestration.js";
 import { assessCompletion } from "./completion-check.js";
 import { reviewConfig } from "./review-config.js";
 import { reviewPlugin } from "./builtin-plugins/review-plugin.js";
-import { finishWithReview } from "./review-lifecycle.js";
-import { guardReviewTool } from "./review-guard.js";
+import { reviewPolicy } from "./review-policy.js";
 import { appendFileDurable } from "./durable.js";
 
 const USAGE = `VanillaCore Agent Harness ${VERSION}
@@ -132,7 +131,7 @@ async function main(argv: string[]): Promise<void> {
   };
   await reloadSkills();
 
-  const plugins = new PluginHost();
+  const plugins = new PluginHost(config.review?.enabled === false ? [] : ["review"]);
   const reloadableTools = config.reloadableToolPlugins?.length
     ? new ReloadableTools({home:config.home,cwd:config.cwd,agent:config.agent},config.reloadableToolPlugins,log) : undefined;
   let memory!: MemoryService;
@@ -200,7 +199,7 @@ async function main(argv: string[]): Promise<void> {
         if (!current.hostEvent || !dispatchRuntime?.resultAllowed(key, current.hostEvent.executionId)) throw new ToolGuardError("authority_revoked", "Host event authority revoked");
         guardResultOrchestration(harness, key, tool);
       }
-      await guardReviewTool(review, config.cwd, tool, input);
+      await plugins.policies.beforeTool(config.cwd, tool, input);
     },
     personaSections: async () => {
       await protectedContent.verify();
@@ -213,6 +212,8 @@ async function main(argv: string[]): Promise<void> {
     log(`[review] ${message}`);
     harness.post({ sessionKey, text: "", source: "channel", replyTo: origin ?? harness.home }, `⚠️ Operator escalation: ${message}`);
   });
+  if (reviewSettings.enabled) plugins.policies.register(reviewPolicy(review, input =>
+    subagents.isChild(input.sessionKey) ? subagents.approvalTarget(input.sessionKey) : input.replyTo));
   let improvement: ImprovementController | undefined;
 
   harness = new Harness({
@@ -239,7 +240,7 @@ async function main(argv: string[]): Promise<void> {
       await protectedContent.verify();
       if (config.autoReloadToolPlugins) await reloadableTools?.refresh();
       await improvement?.before(input);
-      await review.prepare(config.cwd, subagents.isChild(input.sessionKey) ? subagents.approvalTarget(input.sessionKey) : input.replyTo, input.sessionKey);
+      await plugins.policies.prepare(config.cwd, input);
     },
     turnCommitted: async (input) => { await improvement?.committed(input); },
     continuationDeadline: input => config.completionCheck?.authorizations[input.sessionKey]?.expiresAt,
@@ -249,7 +250,7 @@ async function main(argv: string[]): Promise<void> {
       return assessCompletion(runtimeReviewer(runtime), input, reply, grant, signal, effectiveModels().reviewModel);
     },
     afterTurn: async (input, reply, session, options, signal) => {
-      const result = await finishWithReview(review, config.cwd, input, reply, session, options, signal);
+      const result = await plugins.policies.finish(config.cwd, input, reply, session, options, signal);
       await improvement?.completed(input, result);
       return result;
     },
