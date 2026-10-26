@@ -1,3 +1,4 @@
+import { ToolGuardError } from "./tool-guard-error.js";
 import { createHash } from "node:crypto";
 import { mkdir, readFile } from "node:fs/promises";
 import path from "node:path";
@@ -224,6 +225,6 @@ export class ReviewService {
     const state = await this.status(cwd);
     const change = await captureChangeset(state.root, state.base);
     if (!requiresReview(change, this.config)) return;
-    if (state.status !== "passed" || state.approvedFingerprint !== change.fingerprint) throw new Error(`Review gate blocks ${action}: current changeset has no successful review`);
+    if (state.status !== "passed" || state.approvedFingerprint !== change.fingerprint) throw new ToolGuardError("review_required", `Review gate blocks ${action}: current changeset has no successful review`);
   }
 }
