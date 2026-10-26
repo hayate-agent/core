@@ -53,6 +53,28 @@ test("gateway plugin override activation, disable, baseline and failed-start rol
   assert.deepEqual(restored.effective().gatewayPlugins, {});
 });
 
+test("adopted home follows replacement and removal across multiple gateways; explicit home wins", async t => {
+  const home = await mkdtemp(path.join(os.tmpdir(), "gateway-route-"));
+  t.after(() => rm(home, { recursive: true, force: true }));
+  for (const [name, room] of [["first", "old"], ["first", "new"], ["second", "fallback"]]) {
+    await writeFile(path.join(home, `${room}.mjs`), `export default {apiVersion:1,async create(){return {home:{channel:'${name}',target:'${room}'},channel:{name:'${name}',async start(){},async stop(){},async send(){}}}}}`);
+  }
+  const settings = new SettingsService(path.join(home, "settings.yaml"), {}); await settings.load();
+  const harness = new Harness({ runtime: new FakeRuntime(), tickMs: 60000 });
+  const manager = new GatewayManager(harness, settings, { home, agent: "test", approvers: [] }, { first: "old.mjs", second: "fallback.mjs" });
+  await manager.load();
+  assert.deepEqual(harness.home, { channel: "first", target: "old" });
+  await settings.setGatewayPlugin("first", { module: "new.mjs" }); await manager.request("first"); await manager.tick();
+  assert.deepEqual(harness.home, { channel: "first", target: "new" });
+  await settings.setGatewayPlugin("first", { disabled: true }); await manager.request("first"); await manager.tick();
+  assert.deepEqual(harness.home, { channel: "second", target: "fallback" });
+  await settings.setGatewayPlugin("second", { disabled: true }); await manager.request("second"); await manager.tick();
+  assert.equal(harness.home, undefined);
+  harness.home = { channel: "operator", target: "explicit" };
+  await settings.setGatewayPlugin("first", { module: "new.mjs" }); await manager.request("first"); await manager.tick();
+  assert.deepEqual(harness.home, { channel: "operator", target: "explicit" });
+});
+
 test("runtime activation adopts missing home without overwriting an explicit destination", async (t) => {
   const home = await mkdtemp(path.join(os.tmpdir(), "gateway-home-"));
   t.after(() => rm(home, { recursive: true, force: true }));
