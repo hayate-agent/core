@@ -24,6 +24,9 @@ export class PolicyRegistry {
     if (!this.policies.has(policy?.id)) throw Error(`Unknown policy: ${policy?.id}`);
     return this.install(policy);
   }
+  has(id: string): boolean { return this.policies.has(id); }
+  isRequired(id: string): boolean { return this.required.includes(id); }
+  get(id: string): Readonly<Policy> | undefined { return this.policies.get(id); }
   remove(id: string): void {
     if (this.required.includes(id)) throw Error(`Required policy cannot be removed: ${id}`);
     this.policies.delete(id);

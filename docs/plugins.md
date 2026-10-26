@@ -153,11 +153,11 @@ required calls fail closed. Resource cleanup belongs to the module owner and mus
 wait for its own in-flight calls; the registry does not dispose implementation
 resources or grant authority to reload arbitrary code.
 
-This is a composition/lifecycle primitive, not full policy extraction: the review
-engine and default selection still live in Core. Plugin registration is startup-only;
-there is no administrative runtime module loader or persistent policy overlay yet.
-Tool-only reload modules must not register policies. No baseline gate is silently
-removed by this contract.
+The review engine and default selection still live in Core. General plugin
+registration is startup-only; the separate [runtime policy module manager](policy-plugins.md)
+supports admin-selected local ESM overrides, persistent desired state and lifecycle
+rollback at idle turn boundaries. Tool-only reload modules must not register
+policies. No baseline gate is silently removed by this contract.
 
 ## Memory orchestration selection
 
