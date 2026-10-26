@@ -35,7 +35,7 @@ function validate(value: unknown, defaults: Partial<ContextPolicy> = {}, pruning
       validateGatewayOverlay(item);
     } else if (key === "memory") {
       if (!item || typeof item !== "object" || Array.isArray(item)) throw Error("Invalid memory overlay");
-      if (Object.keys(item).some((k) => !["enabled", "provider", "autoCapture", "autoRecall", "scanSeconds", "maxEntries", "maxIndexBytes", "embedding"].includes(k))) throw Error("Unsupported memory setting");
+      if (Object.keys(item).some((k) => !["enabled", "provider", "orchestration", "autoCapture", "autoRecall", "scanSeconds", "maxEntries", "maxIndexBytes", "embedding"].includes(k))) throw Error("Unsupported memory setting");
       memoryConfig(item);
     } else if (key === "gateways") {
       validateGatewayConfig(item);

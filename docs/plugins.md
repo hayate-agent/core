@@ -146,6 +146,28 @@ replacement, individual removal/unsubscription and persistent policy overlays ar
 not implemented; restart with the selected modules. Tool-only reload modules must
 not register policies. No baseline gate is silently removed by this contract.
 
+## Memory orchestration selection
+
+`api.registerMemoryOrchestrator(name, {recall, capture})` registers trusted
+recall/capture behavior separately from the MemoryProvider storage API. Both
+methods are required and class receivers are retained. Duplicate names and plugin
+use of reserved `default`/`none` names fail activation. Failed activation and host
+stop clear registrations. This is a single selected implementation, not broadcast.
+
+Select through `memory.orchestration: default | none | <plugin-name>` in installation
+configuration or the persistent memory settings overlay. Selection is resolved
+once after plugin activation and before Harness start. Unknown names fail startup;
+`memory.enabled: false` selects none regardless of the saved name. `none` disables
+automatic recall/capture without replacing the configured storage provider or
+explicit memory tools. The default is the existing MemoryService behavior.
+
+This is startup selection, not runtime replacement: changes require restart.
+Plugins must clean up their own resources with `onStop`. The Core default engine,
+provider reconnection and pending-write persistence remain unchanged; full default
+engine extraction and hot-reload/removal lifecycle are not provided here. No
+orchestrator means empty recall and no capture, not an implicit veto. Existing
+Harness recall-error behavior and best-effort capture-error logging apply.
+
 ## Channels
 
 During activation, call `api.registerChannel(transport)` with a unique lowercase

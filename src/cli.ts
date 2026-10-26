@@ -161,6 +161,7 @@ async function main(argv: string[]): Promise<void> {
   const dispatchPolicy = dispatcherConfig(settings.effective().dispatcher);
   config.memory = memoryConfig(settings.effective().memory);
   memory = new MemoryService(config.memory, log, config.home);
+  plugins.memoryOrchestration.register("default", memory);
   const maintenance = new ContextMaintenance(config.home, () => contextPolicy(settings.effective().contextMaintenance),
     evidence => boundaryAssessor(runtimeReviewer(runtime), () => effectiveModels().reviewModel)(evidence));
   const effectiveModels = () => {
@@ -221,7 +222,7 @@ async function main(argv: string[]): Promise<void> {
     runtime,
     executionStore: executions,
     contextMaintenance: maintenance,
-    memory,
+    memory: plugins.memoryOrchestration,
     approvalTarget: key => dispatchRuntime?.isWorker(key) ? dispatchRuntime.approvalTarget(key) : subagents.approvalTarget(key),
     conversationStopped: async key => {
       await stopDispatcherParent(executions, key, dispatcher);
@@ -420,6 +421,7 @@ async function main(argv: string[]): Promise<void> {
         replyTo: parent?.replyTo ?? harness.home });
     }, error => log(`[dispatcher] ${String(error)}`), key => harness.dependencyCheckpoint(key));
   }
+  plugins.memoryOrchestration.select(config.memory.enabled ? config.memory.orchestration ?? "default" : "none");
   let memoryConnecting = false;
   let memoryStopping = false;
   const connectMemory = async () => {

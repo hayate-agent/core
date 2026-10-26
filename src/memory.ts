@@ -57,6 +57,8 @@ export interface MemoryProvider {
 export interface MemoryConfig {
   enabled: boolean;
   provider: string;
+  /** Startup-selected recall/capture implementation; none disables orchestration only. */
+  orchestration?: string;
   autoCapture: boolean;
   autoRecall: boolean;
   scanSeconds: number;
@@ -65,8 +67,9 @@ export interface MemoryConfig {
   embedding?: { url: string; model: string; tokenEnv?: string; dimensions?: number };
 }
 export function memoryConfig(input: Partial<MemoryConfig> = {}): MemoryConfig {
-  const config: MemoryConfig = { enabled: true, provider: "local", autoCapture: true, autoRecall: true, scanSeconds: 60, maxEntries: 10000, maxIndexBytes: 64 * 1024 * 1024, ...input };
+  const config: MemoryConfig = { enabled: true, provider: "local", orchestration: "default", autoCapture: true, autoRecall: true, scanSeconds: 60, maxEntries: 10000, maxIndexBytes: 64 * 1024 * 1024, ...input };
   for (const key of ["enabled", "autoCapture", "autoRecall"] as const) if (typeof config[key] !== "boolean") throw Error(`Invalid memory.${key}`);
+  if (config.orchestration !== undefined && (typeof config.orchestration !== "string" || !/^[a-z][a-z0-9_-]*$/.test(config.orchestration))) throw Error("Invalid memory.orchestration");
   if (!/^[a-z][a-z0-9_-]*$/.test(config.provider)) throw Error("Invalid memory.provider");
   for (const [key, min, max] of [["scanSeconds", 5, 86400], ["maxEntries", 1, 100000], ["maxIndexBytes", 65536, 512 * 1024 * 1024]] as const) {
     if (!Number.isInteger(config[key]) || config[key] < min || config[key] > max) throw Error(`Invalid memory.${key}`);
