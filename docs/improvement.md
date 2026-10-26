@@ -1,5 +1,22 @@
 # Nightly improvement controller (initial implementation)
 
+Each night must select and try new bounded experiments, not recheck yesterday's
+proposals as its output. Missing independent evaluator configuration prevents
+automatic adoption, not isolated local experiments. The controller requests a
+structured `improvement-experiment` JSON block with hypothesis, baseline,
+candidate, evidence and outcome (`improved`, `rejected`, `inconclusive`). These are
+reported experiment receipts, not independently verified measurements or merge
+authorization. Recent normalized hypothesis strings (200 retained) are included
+in subsequent prompts; exact repeats do not count as new experiments. This is not
+semantic duplicate detection and does not prevent paraphrasing.
+
+A bare `[IMPROVEMENT_DONE]` without a new receipt does not finish the night.
+Three consecutive turns without new receipts stop the loop with an explicit
+failed-night diagnostic rather than pretending success or spending all remaining
+turns on repeated status checks. Blockers must be reported honestly; receipts must
+never be fabricated to satisfy the guard. The normal time/turn budget still
+bounds work.
+
 The optional controller is disabled by default. It reads `<home>/improvement.yaml`
 on each scheduler check, without needing a configuration reload:
 
