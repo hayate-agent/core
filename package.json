@@ -22,6 +22,10 @@
     "node": ">=22.19.0"
   },
   "scripts": {
+    "plugins:materialize": "node scripts/materialize-plugins.mjs",
+    "prebuild": "npm run plugins:materialize",
+    "pretypecheck": "npm run plugins:materialize",
+    "pretest": "npm run plugins:materialize",
     "build": "tsc -p tsconfig.json",
     "prepare": "npm run build",
     "typecheck": "tsc -p tsconfig.json --noEmit",

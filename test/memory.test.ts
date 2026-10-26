@@ -7,7 +7,7 @@ import path from "node:path";
 import { FileMemoryStore } from "../src/memory-worker.js";
 import { LocalMemory } from "../src/memory-local.js";
 import { memoryConfig } from "../src/memory.js";
-import { MemoryService } from "../src/memory-plugin.js";
+import { MemoryService } from "../src/memory-service.js";
 const ctx = { sessionKey: "matrix:one" };
 const input = { key: "lesson-1", title: "Deployment verification", text: "Check running artifact hashes, not only merge status.", source: "turn:1", kind: "lesson" as const };
 async function setup(t: any) {

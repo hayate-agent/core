@@ -24,11 +24,9 @@ async function readModule(file: string): Promise<Buffer> {
   } finally { await handle.close(); }
 }
 import path from "node:path";
-import type { PluginTool, PluginModule } from "./plugins.js";
+import type { PluginTool } from "./plugins.js";
 
-export function wasmToolsPlugin(home: string, config: WasmToolConfig[]): PluginModule {
-  return { apiVersion: 1, activate(api) { for (const tool of wasmTools(home, config)) api.registerTool(tool); } };
-}
+
 
 export interface WasmToolConfig {
   name: string;

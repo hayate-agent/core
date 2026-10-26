@@ -9,7 +9,7 @@ import { ReviewService, parseReview, type ReviewFinding } from "../src/review.js
 import { finishWithReview } from "../src/review-lifecycle.js";
 import { guardReviewTool } from "../src/review-guard.js";
 import { PluginHost } from "../src/plugins.js";
-import { reviewPlugin } from "../src/review-plugin.js";
+import { reviewPlugin } from "../src/builtin-plugins/review-plugin.js";
 
 const finding: ReviewFinding = { id: "bug", severity: "P1", file: "a.ts", line: 1, title: "A defect", evidence: "Concrete failure" };
 async function setup(t: TestContext, maxTurns = 3) {

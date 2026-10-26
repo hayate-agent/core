@@ -1,5 +1,24 @@
 # Harness plugins (API version 1)
 
+## Source ownership and build
+
+Bundled plugin adapters are maintained in `harness/plugins`, not copied into this
+repository. `plugins.lock.json` pins an immutable revision and SHA-256 per source
+file. Build, typecheck and test materialize verified sources into ignored
+`src/builtin-plugins/`; generated files are never edited or committed. Core owns
+engines, policy enforcement, generic plugin/runtime contracts and lifecycle.
+Registration, command parsing and tool schemas belong to the plugin repository.
+The PI tool bridge remains core runtime integration, not a bundled adapter.
+
+`npm run plugins:materialize` downloads the pinned public sources; for development
+`node scripts/materialize-plugins.mjs /path/to/plugins-checkout` verifies the same
+hashes against a local checkout. Do not update the pin until its plugin commit is
+published. Normal builds require network access to the pinned repository and
+fail closed on a mismatch/download failure. Docker uses the same lock and script.
+Sources are compiled into the package; this build-time pin does not fetch code at
+runtime or replace the separate runtime overlay/loading contracts.
+
+
 For a no-host-import, tool-only WebAssembly alternative, see [restricted Wasm
 tools](wasm-tools.md). It does not confer reduced privileges on ESM plugins.
 

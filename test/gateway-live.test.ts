@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { SettingsService } from "../src/settings.js";
 import { PluginHost } from "../src/plugins.js";
-import { gatewayPlugin } from "../src/gateway-plugin.js";
+import { gatewayPlugin } from "../src/builtin-plugins/gateway-plugin.js";
 import { Harness } from "../src/harness.js";
 
 test("gateway command persists and live applies settings, invalid changes have no effect", async (t) => {

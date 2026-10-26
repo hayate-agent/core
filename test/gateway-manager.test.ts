@@ -1,3 +1,4 @@
+import { gatewayManagerPlugin } from "../src/builtin-plugins/gateway-manager-plugin.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
@@ -32,7 +33,7 @@ test("gateway plugin override activation, disable, baseline and failed-start rol
   const manager = new GatewayManager(harness, settings, { home, agent: "test", approvers: [] }, { test: path.join(home, "baseline.mjs") });
   await manager.load();
   let command: any;
-  await manager.plugin().activate({ registerCommand: (c: any) => { command = c; } } as any, {} as any);
+  await gatewayManagerPlugin(manager, settings).activate({ registerCommand: (c: any) => { command = c; } } as any, {} as any);
   assert.equal(await command.run(""), manager.status());
   assert.equal((harness.channels.get("test") as any).label, "base");
   await settings.setGatewayPlugin("test", { module: "custom.mjs" });

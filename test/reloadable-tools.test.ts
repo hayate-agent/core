@@ -1,3 +1,4 @@
+import { reloadableToolsPlugin } from "../src/builtin-plugins/reloadable-tools-plugin.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { mkdtemp,writeFile,rm } from "node:fs/promises";
@@ -54,7 +55,7 @@ test("bundled reload command registers admin policy and stable tool delegates",a
  const host=new PluginHost();
  try {
   await writeFile(path.join(home,"tool.mjs"),moduleText("before"));
-  await host.load([],{home,cwd:home,agent:"test"},[],[],[manager.plugin()]);
+  await host.load([],{home,cwd:home,agent:"test"},[],[],[reloadableToolsPlugin(manager)]);
   const command=host.commands.get("tool-plugin")!;
   assert.equal(command.admin,true);
   assert.match(await command.run("",{sessionKey:"test"}) as string,/1 tool/);

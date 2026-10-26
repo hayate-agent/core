@@ -1,4 +1,8 @@
 #!/usr/bin/env node
+import { improvementPlugin } from "./builtin-plugins/improvement-plugin.js";
+import { gatewayManagerPlugin } from "./builtin-plugins/gateway-manager-plugin.js";
+import { reloadableToolsPlugin } from "./builtin-plugins/reloadable-tools-plugin.js";
+import { protectedContentPlugin } from "./builtin-plugins/protected-content-plugin.js";
 import { readdir } from "node:fs/promises";
 import path from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
@@ -12,17 +16,18 @@ import { nativeCompaction, type CompactionStrategy } from "./compaction.js";
 import { FilesystemSessionProvider, type SessionProvider } from "./sessions.js";
 import { memoryConfig } from "./memory.js";
 import { LocalMemory } from "./memory-local.js";
-import { MemoryService, memoryPlugin } from "./memory-plugin.js";
-import { gatewayPlugin } from "./gateway-plugin.js";
+import { MemoryService } from "./memory-service.js";
+import { memoryPlugin } from "./builtin-plugins/memory-plugin.js";
+import { gatewayPlugin } from "./builtin-plugins/gateway-plugin.js";
 import { PluginHost } from "./plugins.js";
 import { Subagents } from "./subagents.js";
 import { ExecutionStore } from "./execution.js";
 import { Dispatcher, stopDispatcherParent } from "./dispatcher.js";
 import { DispatcherRuntime } from "./dispatcher-runtime.js";
 import { dispatcherConfig } from "./dispatcher-config.js";
-import { dispatcherPlugin } from "./dispatcher-plugin.js";
-import { subagentPlugin } from "./subagent-plugin.js";
-import { wasmToolsPlugin } from "./wasm-tools.js";
+import { dispatcherPlugin } from "./builtin-plugins/dispatcher-plugin.js";
+import { subagentPlugin } from "./builtin-plugins/subagent-plugin.js";
+import { wasmToolsPlugin } from "./builtin-plugins/wasm-tools-plugin.js";
 import { ReloadableTools } from "./reloadable-tools.js";
 import { builtinCommandNames, installCommands, VERSION } from "./commands.js";
 import { loadConfig } from "./config.js";
@@ -32,8 +37,8 @@ import { startMemoryGuard } from "./memguard.js";
 import { loadPersona, personaSections } from "./persona.js";
 import { ProtectedContent } from "./protected-content.js";
 import { workflowTools } from "./workflow-tools.js";
-import { continuationPlugin } from "./continuation-plugin.js";
-import { loopPlugin } from "./loop-plugin.js";
+import { continuationPlugin } from "./builtin-plugins/continuation-plugin.js";
+import { loopPlugin } from "./builtin-plugins/loop-plugin.js";
 import { OverlayUpdater } from "./update.js";
 import { SkillUpdates } from "./skill-updates.js";
 import { ImprovementController } from "./improvement.js";
@@ -48,12 +53,12 @@ import { ReviewService } from "./review.js";
 import { type ModelSettings } from "./model-settings.js";
 import { pruningPolicy } from "./tool-result-pruning.js";
 import { ContextMaintenance, contextPolicy } from "./context-maintenance.js";
-import { contextPlugin } from "./context-plugin.js";
+import { contextPlugin } from "./builtin-plugins/context-plugin.js";
 import { SettingsService, type SettingPath } from "./settings.js";
 import { runtimeReviewer } from "./runtime/reviewer.js";
 import { assessCompletion } from "./completion-check.js";
 import { reviewConfig } from "./review-config.js";
-import { reviewPlugin } from "./review-plugin.js";
+import { reviewPlugin } from "./builtin-plugins/review-plugin.js";
 import { finishWithReview } from "./review-lifecycle.js";
 import { guardReviewTool } from "./review-guard.js";
 import { appendFileDurable } from "./durable.js";
@@ -382,7 +387,7 @@ async function main(argv: string[]): Promise<void> {
   }
   await scheduler.load();
 
-  await plugins.load(config.plugins ?? [], { agent: config.agent, home: config.home, cwd: config.cwd }, [...builtinCommandNames, "sessions", "resume", ...skills.map((s) => s.name)], ["console", "api", "matrix", "dispatch", ...harness.channels.keys()], [dispatcherPlugin(() => dispatcher), subagentPlugin(subagents,async()=>{await persist();}), ...(reloadableTools ? [reloadableTools.plugin()] : []), wasmToolsPlugin(config.home, config.wasmTools ?? []), continuationPlugin(harness), loopPlugin(harness), improvement!.plugin(), protectedContent.plugin(), gatewayManager.plugin(), gatewayPlugin(settings, harness), contextPlugin(maintenance, settings), ...(config.memory.enabled ? [memoryPlugin(memory)] : []), ...(reviewSettings.enabled ? [reviewPlugin(review, config.cwd)] : [])]);
+  await plugins.load(config.plugins ?? [], { agent: config.agent, home: config.home, cwd: config.cwd }, [...builtinCommandNames, "sessions", "resume", ...skills.map((s) => s.name)], ["console", "api", "matrix", "dispatch", ...harness.channels.keys()], [dispatcherPlugin(() => dispatcher), subagentPlugin(subagents,async()=>{await persist();}), ...(reloadableTools ? [reloadableToolsPlugin(reloadableTools)] : []), wasmToolsPlugin(config.home, config.wasmTools ?? []), continuationPlugin(harness), loopPlugin(harness), improvementPlugin(improvement!), protectedContentPlugin(protectedContent), gatewayManagerPlugin(gatewayManager, settings), gatewayPlugin(settings, harness), contextPlugin(maintenance, settings), ...(config.memory.enabled ? [memoryPlugin(memory)] : []), ...(reviewSettings.enabled ? [reviewPlugin(review, config.cwd)] : [])]);
   if (dispatchPolicy.enabled) {
     dispatchRuntime = new DispatcherRuntime(harness, executions);
     harness.addChannel(dispatchRuntime.channel);

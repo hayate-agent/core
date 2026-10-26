@@ -3,7 +3,8 @@ import { test } from "node:test";
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { wasmTools, wasmToolsPlugin, validateWasmTools } from "../src/wasm-tools.js";
+import { wasmToolsPlugin } from "../src/builtin-plugins/wasm-tools-plugin.js";
+import { wasmTools, validateWasmTools } from "../src/wasm-tools.js";
 import { PluginHost } from "../src/plugins.js";
 import { validateWasmLimits } from "../src/wasm-tool-limits.js";
 
