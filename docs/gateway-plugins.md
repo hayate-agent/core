@@ -41,7 +41,12 @@ ESM dependencies remain cached. Publish complete versioned module directories fo
 code changes; overwriting shared imported dependencies is not reliable hot reload.
 Old imported modules are not unloaded from Node's module cache. Use process
 isolation for untrusted code or unlimited repeated activations; this is follow-up,
-not implemented here. Admin and approver policies are resolved at startup and do
+not implemented here. A default reply destination adopted from a gateway follows successful replacement;
+disabling that gateway selects the first remaining configured home, or clears the
+adopted default when none remain. An explicitly assigned operator destination is
+not overwritten. Failed activation leaves the previous destination intact.
+
+Admin and approver policies are resolved at startup and do
 not broaden on plugin replacement. Console/API are core operator interfaces and
 are not replaceable through this command. TUI and existing general plugins retain
 their current lifecycle. This does not implement general policy inspection,

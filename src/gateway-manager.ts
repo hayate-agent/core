@@ -11,6 +11,14 @@ export class GatewayManager {
   private readonly pending = new Map<string, { instance?: GatewayInstance; label: string }>();
   private readonly errors = new Map<string, string>();
   private changing = false;
+  private adoptedHome?: import("./types.js").Address;
+  /** Only replace a default we adopted ourselves; explicit operator routes win. */
+  private reconcileHome(): void {
+    if (this.harness.home !== undefined && this.harness.home !== this.adoptedHome) return;
+    const home = [...this.active.values()].find(instance => instance.home)?.home;
+    this.harness.home = home;
+    this.adoptedHome = home;
+  }
   constructor(private readonly harness: Harness, private readonly settings: SettingsService,
     private readonly context: GatewayFactoryContext, private readonly baseline: Record<string, string>) {}
   private async prepare(name: string): Promise<GatewayInstance | undefined> {
@@ -31,7 +39,7 @@ export class GatewayManager {
   async load(): Promise<void> {
     for (const name of new Set([...Object.keys(this.baseline), ...Object.keys(this.settings.effective().gatewayPlugins ?? {})])) {
       const instance = await this.prepare(name);
-      if (instance) { this.harness.addChannel(instance.channel); this.active.set(name, instance); this.harness.home ??= instance.home; }
+      if (instance) { this.harness.addChannel(instance.channel); this.active.set(name, instance); this.reconcileHome(); }
     }
   }
   get approvers(): string[] { return [...new Set([...this.active.values()].flatMap((x) => x.approvers ?? []))]; }
@@ -68,8 +76,8 @@ export class GatewayManager {
           await this.harness.replaceGateway(name, change.instance?.channel);
           if (change.instance) {
             this.active.set(name, change.instance);
-            this.harness.home ??= change.instance.home;
           } else this.active.delete(name);
+          this.reconcileHome();
           if (this.pending.get(name) === change) this.pending.delete(name);
           if (this.generations.get(name) === generation) this.errors.delete(name);
         } catch (err) {
