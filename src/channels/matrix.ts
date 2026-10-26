@@ -3,6 +3,7 @@
  * Configured through the same MATRIX_* environment as the Hermes Matrix adapter, so
  * existing AgentOS manifests (MatrixAgent secrets, params) keep working.
  */
+import { NativeActivityDelivery } from "./native-activity.js";
 import { GatewayProgress, progressMode, type ProgressMode } from "./progress.js";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile } from "node:fs/promises";
@@ -15,6 +16,8 @@ import { type MatrixEvent, MatrixSyncRecovery } from "./matrix-sync.js";
 export interface MatrixOptions {
   homeserver: string;
   progress?: ProgressMode;
+  nativeActivity?: boolean;
+  nativeActivityCoalesceMs?: number;
   statusReactions?: boolean;
   accessToken?: string;
   userId?: string;
@@ -50,6 +53,8 @@ export function matrixOptionsFromEnv(env: NodeJS.ProcessEnv, home: string): Matr
   return {
     homeserver: env.MATRIX_HOMESERVER.replace(/\/+$/, ""),
     accessToken: env.MATRIX_ACCESS_TOKEN,
+    nativeActivity: truthy(env.MATRIX_NATIVE_ACTIVITY, false),
+    nativeActivityCoalesceMs: Number(env.MATRIX_NATIVE_ACTIVITY_COALESCE_MS ?? 1000),
     progress: env.MATRIX_PROGRESS === undefined ? undefined : progressMode(env.MATRIX_PROGRESS),
     statusReactions: env.MATRIX_STATUS_REACTIONS === undefined ? undefined : truthy(env.MATRIX_STATUS_REACTIONS, false),
     userId: env.MATRIX_USER_ID,
@@ -182,7 +187,18 @@ export class MatrixChannel implements Channel {
     this.react(to, input, status, { started: "👀", completed: "✅", failed: "❌", cancelled: "⏹️" }[status]);
   }
 
+  private readonly native: NativeActivityDelivery;
+  taskActivity(to: Address, event: import("../activity.js").ActivityEvent): void {
+    if (this.o.nativeActivity) this.native.event(to, event);
+  }
+  dispatcherActivity(to: Address, id: string, state: string): void {
+    if (this.o.nativeActivity) this.native.metadata(to, id, state);
+  }
+  async flushNativeActivity(): Promise<void> { await this.native.flush(); }
   constructor(private readonly o: MatrixOptions) {
+    this.native = new NativeActivityDelivery(`${o.syncStateFile}.activity.json`, async (to, id, text) => {
+      await this.send(to, text, { progressId: id, presentation: "progress" });
+    }, Number.isFinite(o.nativeActivityCoalesceMs) ? Math.max(100, Math.min(30000, o.nativeActivityCoalesceMs!)) : 1000);
     this.fetch = o.fetch ?? fetch;
     this.log = o.log ?? ((m) => console.error(`[matrix] ${m}`));
     this.recovery = new MatrixSyncRecovery(o.syncStateFile, this.log);
@@ -276,6 +292,7 @@ export class MatrixChannel implements Channel {
    * may then advance: anything the harness does not finish is persisted and replayed by it.
    */
   async stop(budgetMs = Infinity): Promise<void> {
+    this.native.stop();
     this.abort.abort();
     for (const t of this.typingTimers.values()) clearInterval(t);
     this.typingTimers.clear();
@@ -638,7 +655,7 @@ export class MatrixChannel implements Channel {
     const relation = to.thread ? { "m.relates_to": { rel_type: "m.thread", event_id: to.thread, is_falling_back: true, "m.in_reply_to": { event_id: to.thread } } } : {};
     // Reusing this transaction resolves the native reference even after restart or a lost response.
     const seed = await this.api("PUT", `/rooms/${encodeURIComponent(to.target)}/send/m.room.message/${logical}.seed`, {
-      ...renderContent("⏳ Wird bearbeitet …", { presentation: "progress" }), ...relation,
+      ...renderContent(meta.progressId?.startsWith("native:") ? text : "⏳ Wird bearbeitet …", { presentation: "progress" }), ...relation,
     });
     if (typeof seed.event_id !== "string") throw Error("Matrix progress reference missing");
     if (meta.presentation !== "progress") {

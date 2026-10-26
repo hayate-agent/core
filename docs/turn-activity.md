@@ -3,8 +3,19 @@
 Channels may implement the optional `taskActivity(to, event, input)` callback.
 Plugin channels expose the same hook. This is best-effort host telemetry, not a
 model prompt, durable message or grant of authority. No channel hook means no
-transport output. Matrix delivery and dispatcher-to-parent forwarding are not
-implemented by this slice.
+transport output. Matrix may opt in using `MATRIX_NATIVE_ACTIVITY=true`;
+`MATRIX_NATIVE_ACTIVITY_COALESCE_MS` controls coalescing (100–30000 ms, default
+1000). Each tool call uses a stable progress-message reference; later states edit
+that message instead of creating a second result message. Turn status has its own
+reference. Dispatcher-to-parent forwarding is not implemented by this slice.
+
+Matrix retains bounded deduplication hashes and in-flight call receipts beside its
+sync state (`.activity.json`). On reconstruction a previously running call is
+marked interrupted, not falsely reported as completed. Pending output is coalesced
+and bounded; transient send errors remain retryable with stable transaction IDs.
+This is best-effort telemetry, not a general durable outbox: a process crash can
+lose unsent updates. Stop cancels future retry timers. These tests use a fake
+homeserver; live Matrix one-message acceptance is not claimed.
 
 Events carry hashed turn/tool-call identifiers, role/context, phase, measured elapsed
 and inactive milliseconds and sanitized tool names. Tool arguments, results and
