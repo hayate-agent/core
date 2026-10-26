@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Harness } from "../src/harness.js";
 import { FakeRuntime } from "./fakes.js";
-import { loopPlugin } from "../src/loop-plugin.js";
+import { loopPlugin } from "../src/builtin-plugins/loop-plugin.js";
 
 function setup() {
   const harness = new Harness({ runtime: new FakeRuntime(), tickMs: 60000 });

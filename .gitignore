@@ -1,3 +1,6 @@
 node_modules/
 dist/
 *.log
+
+# Materialized from immutable harness/plugins sources
+src/builtin-plugins/

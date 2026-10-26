@@ -31,21 +31,8 @@ export class ReloadableTools {
     })().finally(() => { this.refreshing = undefined; });
   }
 
-  plugin(): PluginModule {
-    return { apiVersion: 1, activate: async api => {
-      api.onStop(() => this.stop());
-      await this.reload();
-      for (const tool of this.tools.values()) api.registerTool(tool);
-      api.registerCommand({ name: "tool-plugin", help: "Trusted tool plugins: status | reload", admin: true,
-        run: async args => {
-          const action = args.trim() || "status";
-          if (action === "reload") { await this.reload(); return "Tool plugins reloaded"; }
-          if (action !== "status") throw Error("usage: /tool-plugin status|reload");
-          return `${this.tools.size} tool(s); ${this.attempts}/50 load attempts; ${this.generations.size} live generation(s)`;
-        },
-      });
-    } };
-  }
+  get loadAttempts(): number { return this.attempts; }
+  get liveGenerations(): number { return this.generations.size; }
   readonly tools = new Map<string, PluginTool>();
   private readonly generations = new Set<Generation>();
 

@@ -1,3 +1,4 @@
+import { protectedContentPlugin } from "../src/builtin-plugins/protected-content-plugin.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -48,7 +49,7 @@ test("protected content rejects invalid pins and duplicate paths; inspection com
   const pin = { path: "SOUL.md", sha256: "a".repeat(64) };
   assert.throws(() => new ProtectedContent("/tmp", { files: [pin, pin] }), /Duplicate/);
   let command: any;
-  await new ProtectedContent("/tmp").plugin().activate({ registerCommand: (c: any) => { command = c; } } as any, {} as any);
+  await protectedContentPlugin(new ProtectedContent("/tmp")).activate({ registerCommand: (c: any) => { command = c; } } as any, {} as any);
   assert.equal(command.admin, true);
   assert.deepEqual(JSON.parse(await command.run("status")).files, []);
 });

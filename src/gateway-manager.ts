@@ -4,7 +4,6 @@ import { randomUUID } from "node:crypto";
 import type { Harness } from "./harness.js";
 import type { SettingsService } from "./settings.js";
 import type { GatewayFactoryContext, GatewayInstance, GatewayModule } from "./gateway-provider.js";
-import type { PluginModule } from "./plugins.js";
 
 /** Independently versioned trusted ESM gateway factories. Not a plugin sandbox. */
 export class GatewayManager {
@@ -85,19 +84,5 @@ export class GatewayManager {
     } finally { this.changing = false; }
   }
   status(): string { return JSON.stringify({ active: [...this.active.keys()], pending: [...this.pending.keys()], errors: Object.fromEntries(this.errors) }); }
-  plugin(): PluginModule {
-    return { apiVersion: 1, activate: (api) => {
-      api.registerCommand({ name: "gateway-plugin", help: "Runtime gateway modules: status | reload <id> | use <id> <module-path> | disable <id> | baseline <id>", run: async (args) => {
-        const [action = "status", name, ...rest] = args.trim().split(/\s+/).filter(Boolean);
-        if (action === "status") return this.status();
-        if (!name || !/^[a-z][a-z0-9_-]*$/.test(name) || ["console", "api", "subagents", "dispatch"].includes(name)) throw Error("Invalid gateway ID");
-        if (action === "use" && rest.length === 1) await this.settings.setGatewayPlugin(name, { module: rest[0] });
-        else if (action === "disable" && !rest.length) await this.settings.setGatewayPlugin(name, { disabled: true });
-        else if (action === "baseline" && !rest.length) await this.settings.setGatewayPlugin(name, undefined);
-        else if (action !== "reload" || rest.length) throw Error("Use status|reload <id>|use <id> <path>|disable <id>|baseline <id>");
-        await this.request(name);
-        return `Gateway ${name}: configuration saved, activation pending idle boundary. /gateway-plugin status reports active/pending/errors.`;
-      } });
-    } };
-  }
+
 }

@@ -4,7 +4,6 @@ import path from "node:path";
 import { parse } from "yaml";
 import { writeFileDurable } from "./durable.js";
 import { ExperimentEvaluator, type ExperimentSpec } from "./improvement-experiments.js";
-import type { PluginModule } from "./plugins.js";
 import type { Harness } from "./harness.js";
 import type { Address, Inbound } from "./types.js";
 
@@ -94,24 +93,18 @@ export class ImprovementController {
     await mkdir(path.dirname(this.file), { recursive: true, mode: 0o700 });
     await writeFileDurable(this.file, JSON.stringify(this.state));
   }
-  plugin(): PluginModule {
-    return { apiVersion: 1, activate: (api) => {
-      api.registerTool({ name: "plugin_improvement_evaluate", description: "Measure a nightly experiment against its baseline using an infrastructure-pinned evaluator. An improved verdict is evidence, not authorization to merge.",
-        parameters: { type: "object", properties: { baseline: { type: "string" }, candidate: { type: "string" }, hypothesis: { type: "string" }, metric: { type: "string" }, direction: { type: "string", enum: ["lower", "higher"] }, minimumDelta: { type: "number", minimum: 0 } }, required: ["baseline", "candidate", "hypothesis", "metric", "direction", "minimumDelta"], additionalProperties: false },
-        execute: async (input, ctx) => {
-          const p = await this.policy();
-          if (ctx.sessionKey !== KEY || !p.enabled || !improvementWindow(this.now(), p).active || !p.evaluator) throw Error("Nightly evaluator unavailable outside configured improvement session/window");
-          const key = JSON.stringify(p.evaluator);
-          if (key !== this.evaluatorKey) {
-            if (this.evaluator) throw Error("Evaluator configuration changed; restart required");
-            this.evaluator = new ExperimentEvaluator(api.cwd, path.join(this.home, "improvement", "experiments"), p.evaluator.runner, p.evaluator.sha256);
-            this.evaluatorKey = key;
-          }
-          return JSON.stringify(await this.evaluator!.evaluate(input as unknown as ExperimentSpec));
-        },
-      });
-    } };
+  async evaluate(sessionKey: string, cwd: string, input: ExperimentSpec): Promise<string> {
+    const p = await this.policy();
+    if (sessionKey !== KEY || !p.enabled || !improvementWindow(this.now(), p).active || !p.evaluator) throw Error("Nightly evaluator unavailable outside configured improvement session/window");
+    const key = JSON.stringify(p.evaluator);
+    if (key !== this.evaluatorKey) {
+      if (this.evaluator) throw Error("Evaluator configuration changed; restart required");
+      this.evaluator = new ExperimentEvaluator(cwd, path.join(this.home, "improvement", "experiments"), p.evaluator.runner, p.evaluator.sha256);
+      this.evaluatorKey = key;
+    }
+    return JSON.stringify(await this.evaluator!.evaluate(input));
   }
+
   async before(input: Inbound): Promise<void> {
     if (input.sessionKey !== KEY) return;
     await this.load();
