@@ -7,7 +7,12 @@ transport output. Matrix may opt in using `MATRIX_NATIVE_ACTIVITY=true`;
 `MATRIX_NATIVE_ACTIVITY_COALESCE_MS` controls coalescing (100–30000 ms, default
 1000). Each tool call uses a stable progress-message reference; later states edit
 that message instead of creating a second result message. Turn status has its own
-reference. Dispatcher-to-parent forwarding is not implemented by this slice.
+reference. Dispatcher workers forward activity to their parent's external reply
+channel only while the exact current claim is running and the parent is not
+stopped. Obsolete tokens, mismatched session envelopes and internal dispatch or
+subagent targets are ignored. The forwarded input is an empty synthetic host
+envelope: worker task text is not forwarded as parent input, and no parent prompt
+or authority is created. Transport callback errors do not affect settlement.
 
 Matrix retains bounded deduplication hashes and in-flight call receipts beside its
 sync state (`.activity.json`). On reconstruction a previously running call is
