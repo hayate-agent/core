@@ -162,9 +162,10 @@ automatic recall/capture without replacing the configured storage provider or
 explicit memory tools. The default is the existing MemoryService behavior.
 
 This is startup selection, not runtime replacement: changes require restart.
-Plugins must clean up their own resources with `onStop`. The Core default engine,
-provider reconnection and pending-write persistence remain unchanged; full default
-engine extraction and hot-reload/removal lifecycle are not provided here. No
+Plugins must clean up their own resources with `onStop`. The bundled default engine is owned by `harness/plugins` and materialized from the
+immutable pin; it retains the existing pending-write persistence behavior. Core
+still owns provider reconnection, contracts and selection. Engine source updates
+require image rollout; hot-reload/removal lifecycle is not provided here. No
 orchestrator means empty recall and no capture, not an implicit veto. Existing
 Harness recall-error behavior and best-effort capture-error logging apply.
 

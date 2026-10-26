@@ -18,7 +18,7 @@ import { nativeCompaction, type CompactionStrategy } from "./compaction.js";
 import { FilesystemSessionProvider, type SessionProvider } from "./sessions.js";
 import { memoryConfig } from "./memory.js";
 import { LocalMemory } from "./memory-local.js";
-import { MemoryService } from "./memory-service.js";
+import { MemoryService } from "./builtin-plugins/memory-service.js";
 import { memoryPlugin } from "./builtin-plugins/memory-plugin.js";
 import { gatewayPlugin } from "./builtin-plugins/gateway-plugin.js";
 import { PluginHost } from "./plugins.js";
