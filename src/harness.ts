@@ -1075,12 +1075,17 @@ export class Harness {
       throw new Error("shut down after inbox snapshot; input will replay");
     }
     let finalStatus: TurnOutcome | "completed" = outcome ?? "completed";
+    // A terminal model checkpoint is evidence, not proof that the original
+    // authorized task is finished. Other explicit states remain authoritative.
+    const checkpoint = input.continuation;
+    const assessmentEligible = () => input.continuation === checkpoint && (!checkpoint || checkpoint.state === "completed") &&
+      (input.continuationExpiresAt === undefined || (Number.isSafeInteger(input.continuationExpiresAt) && input.continuationExpiresAt > this.now()));
     if (finalStatus !== "completed") input.continuation = undefined;
-    else if ((input.source !== "host" || this.resultMandate(input)) && !input.continuation && this.opts.completionCheck && !this.paused && !this.stopping && !s.queue.length &&
+    else if ((input.source !== "host" || this.resultMandate(input)) && assessmentEligible() && this.opts.completionCheck && !this.paused && !this.stopping && !s.queue.length &&
         input.source !== "api" && s.key !== "improvement:nightly" && (input.continuationDepth ?? 0) < 20 && !assessmentAbort.signal.aborted) {
       try {
         const plan = await this.opts.completionCheck(structuredClone(input), reply, assessmentAbort.signal);
-        if ((input.source !== "host" || this.resultMandate(input)) && !input.continuation && !this.paused && !this.stopping && !s.queue.length && !assessmentAbort.signal.aborted && s.cancelling !== input &&
+        if ((input.source !== "host" || this.resultMandate(input)) && assessmentEligible() && !this.paused && !this.stopping && !s.queue.length && !assessmentAbort.signal.aborted && s.cancelling !== input &&
             plan?.state === "continue" && typeof plan.next === "string" && plan.next.trim() && plan.next.length <= 4000) input.continuation = plan;
       } catch { this.log("completion assessment failed; no automatic follow-up"); }
     }

@@ -24,6 +24,22 @@ test("uncertain, malformed, expired, cancelled and budget-exhausted assessments 
   const exhausted = input(); exhausted.continuationDepth = 20;
   assert.equal(await assessCompletion(yes, exhausted, "reply", auth, signal(), undefined, () => 1000), undefined);
 });
+test("explicit completed is independently assessed without erasing its checkpoint", async () => {
+  const planned = input(); planned.continuation = { state: "completed" };
+  const checkpoint = planned.continuation;
+  let prompt = "";
+  assert.deepEqual(await assessCompletion({review: async text => {
+    prompt = text; return '{"state":"continue","next":"Run original task tests"}';
+  }}, planned, "Implementation done; original tests remain", auth, signal(), undefined, () => 1000),
+  {state:"continue", next:"Run original task tests", expiresAt:2000});
+  assert.ok(prompt.includes(auth.task));
+  assert.equal(planned.continuation, checkpoint);
+  assert.equal(await assessCompletion(backend('{"state":"completed"}'), planned, "All done", auth, signal(), undefined, () => 1000), undefined);
+  assert.equal(await assessCompletion({review:async()=>{
+    planned.continuation={state:"waiting"};return '{"state":"continue","next":"test"}';
+  }}, planned, "reply", auth, signal(), undefined, () => 1000), undefined);
+});
+
 test("authorization expiring during assessment cannot schedule follow-up", async () => {
   let now = 1000;
   const result = await assessCompletion({ review: async () => { now = 3000; return '{"state":"continue","next":"test"}'; } }, input(), "reply", auth, signal(), undefined, () => now);
