@@ -92,6 +92,21 @@ export class DispatcherRuntime {
   };
   readonly channel: Channel = {
     name: "dispatch", start: async () => {}, stop: async () => {},
+    taskActivity: (to, event, input) => {
+      const sessionKey = `dispatch:${to.target}`;
+      const task = this.taskForSession(sessionKey);
+      if (!task || task.status !== "running" || task.parentStopped || input.sessionKey !== sessionKey) return;
+      const target = this.approvalTarget(sessionKey);
+      if (!target) return;
+      // Do not forward worker input/prose as parent input or authority. Preserve
+      // only host activity and a synthetic routing envelope.
+      const routed = { ...event, snapshot: { ...event.snapshot, parent: `task-${task.id.slice(0, 8)}` } };
+      try {
+        this.harness.channels.get(target.channel)?.taskActivity?.(target, routed, {
+          sessionKey: task.parent, source: "host", text: "", replyTo: target,
+        });
+      } catch { /* Best effort; telemetry cannot affect worker settlement. */ }
+    },
     send: async (to, text, meta?: SendMeta) => {
       if (meta?.approvalId) throw Error("Dispatcher approvals require trusted parent routing");
       const pending = this.pending.get(to.target);
