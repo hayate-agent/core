@@ -43,6 +43,8 @@ export interface DurableTask {
   depth: number;
   expiresAt?: number;
   anchor?: Inbound["completionAnchor"];
+  /** Durable one-shot startup claim. An interrupted assessment must not repeat. */
+  recoveryAssessment?: "claimed" | "decided";
 }
 
 export interface SessionState {
@@ -761,12 +763,14 @@ export class Harness {
     }
   }
 
-  /** Reconstruct only explicitly checkpointed active next steps. No status polling. */
+  /** Reconstruct checkpointed work, or assess a retained mandate once. No polling. */
   async recoverTasks(): Promise<void> {
     for (const s of this.sessions.values()) {
       if (this.opts.externallyRecoveredSession?.(s.key)) continue;
       const task = s.task;
-      if (!task || task.state !== "active" || !task.next?.trim() || !Number.isSafeInteger(task.depth) || task.depth < 0 || task.depth >= 20 ||
+      const assessed = task && !task.next?.trim();
+      if (assessed) await this.assessStartupTask(s, task);
+      if (!task || s.task !== task || (assessed && this.paused) || this.stopping || task.state !== "active" || !task.next?.trim() || !Number.isSafeInteger(task.depth) || task.depth < 0 || task.depth >= 20 ||
           (task.expiresAt !== undefined && (!Number.isSafeInteger(task.expiresAt) || task.expiresAt <= this.now())) ||
           s.current || s.queue.length || s.key === "improvement:nightly") continue;
       const input: Inbound = { id: `task:${task.id}:${task.depth + 1}`, source: "heartbeat", sessionKey: s.key,
@@ -777,6 +781,40 @@ export class Harness {
       try { await this.onStateChange?.(); }
       catch (error) { s.queue.splice(s.queue.indexOf(input),1); this.inbox.restored.delete(input); throw error; }
     }
+  }
+
+  private async assessStartupTask(s: SessionState, task: DurableTask): Promise<void> {
+    const eligible = () => s.task === task && task.state === "active" && !task.next?.trim() &&
+      !!task.id && !!task.original.trim() && task.original.length <= 8000 &&
+      (!task.anchor || task.anchor.task === task.original) &&
+      Number.isSafeInteger(task.depth) && task.depth >= 0 && task.depth < 20 &&
+      (task.expiresAt === undefined || (Number.isSafeInteger(task.expiresAt) && task.expiresAt > this.now())) &&
+      !s.current && !s.queue.length && !s.running && !this.paused && !this.stopping &&
+      s.key !== "improvement:nightly" && !this.stoppingHostParents.has(s.key) &&
+      !this.opts.executionStore?.list(s.key).some(e => !["completed", "cancelled"].includes(e.status));
+    if (!this.onStateChange || !this.opts.completionCheck || task.recoveryAssessment || !eligible()) return;
+    // Claim before inference; a crash or failed persistence can never replay inference.
+    task.recoveryAssessment = "claimed";
+    await this.onStateChange?.();
+    if (!eligible()) return;
+    const input: Inbound = { source: "heartbeat", sessionKey: s.key, text: task.original,
+      taskId: task.id, continuationDepth: task.depth, continuationExpiresAt: task.expiresAt,
+      completionAnchor: task.anchor ?? { id: task.id, task: task.original, receivedAt: this.now() } };
+    const evidence = JSON.stringify({ startup: true, reply: "No retained turn result. Completion is unknown. Assess the original mandate; any next step must first reconcile actual effects, never blindly replay work.",
+      executions: this.opts.executionStore?.list(s.key).slice(-20).map(e => ({ id: e.id, status: e.status, parentStopped: e.parentStopped })) ?? [] });
+    let plan: Inbound["continuation"];
+    try { plan = await this.opts.completionCheck(input, evidence, new AbortController().signal); }
+    catch { this.log("startup completion assessment failed; operator reconciliation required"); }
+    if (!eligible()) return;
+    task.recoveryAssessment = "decided";
+    if (plan?.state === "continue" && typeof plan.next === "string" && plan.next.trim() && plan.next.length <= 4000 &&
+        (plan.expiresAt === undefined || (Number.isSafeInteger(plan.expiresAt) && plan.expiresAt > this.now() &&
+          (task.expiresAt === undefined || plan.expiresAt <= task.expiresAt)))) {
+      task.next = `First reconcile the actual task state and completed side effects; do not blindly replay external effects. Then: ${plan.next.trim()}`;
+      task.anchor = input.completionAnchor;
+      if (plan.expiresAt !== undefined) task.expiresAt = plan.expiresAt;
+    } else task.state = "blocked";
+    await this.onStateChange?.();
   }
 
   releaseRestored(): void {
