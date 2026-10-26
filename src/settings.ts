@@ -63,14 +63,29 @@ function validate(value: unknown, defaults: Partial<ContextPolicy> = {}, pruning
 /** One owner per Harness home; atomic serialized updates, published only after durable save. */
 export class SettingsService {
   private overlay: LocalSettings = {};
+  private ignored: Record<string, unknown> = Object.create(null);
+  readonly diagnostics: string[] = [];
   private writing: Promise<unknown> = Promise.resolve();
   revision = 0;
-  constructor(readonly file: string, private readonly defaults: LocalSettings) {}
+  constructor(readonly file: string, private readonly defaults: LocalSettings, private readonly warn: (message: string) => void = () => {}) {}
   async load(): Promise<void> {
     try {
       const data = parse(await readFile(this.file, "utf8"));
-      validate(data, this.defaults.contextMaintenance, this.defaults.toolResultPruning, this.defaults.dispatcher);
-      this.overlay = data;
+      if (!data || typeof data !== "object" || Array.isArray(data)) throw Error("Invalid local settings overlay");
+      const supported = new Set(["dispatcher", "gateways", "gatewayPlugins", "memory", "model", "thinking", "review", "contextMaintenance", "toolResultPruning"]);
+      if (Object.keys(data).some(key => ["token", "apiKey", "secrets", "protectedContent", "admins", "approvers", "approvals"].includes(key))) throw Error("Unsupported local setting: infrastructure policy or credential field");
+      const active: Record<string, unknown> = Object.create(null);
+      const ignored: Record<string, unknown> = Object.create(null);
+      for (const [key, value] of Object.entries(data)) (supported.has(key) ? active : ignored)[key] = value;
+      validate(active, this.defaults.contextMaintenance, this.defaults.toolResultPruning, this.defaults.dispatcher);
+      this.overlay = active;
+      this.ignored = ignored;
+      this.diagnostics.length = 0;
+      if (Object.keys(ignored).length) {
+        const message = `Ignored ${Object.keys(ignored).length} unsupported local settings field(s); preserved but NOT active. Installation-only options belong in harness.yaml.`;
+        this.diagnostics.push(message);
+        this.warn(message);
+      }
     } catch (err) { if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err; }
   }
   snapshot(): LocalSettings { return structuredClone(this.overlay); }
@@ -92,7 +107,7 @@ export class SettingsService {
       updated.gatewayPlugins = { ...updated.gatewayPlugins };
       if (spec) updated.gatewayPlugins[name] = spec; else delete updated.gatewayPlugins[name];
       await mkdir(path.dirname(this.file), { recursive: true });
-      await writeFileDurable(this.file, stringify(updated));
+      await writeFileDurable(this.file, stringify({ ...this.ignored, ...updated }));
       this.overlay = updated;
     });
     this.writing = next;
@@ -104,7 +119,7 @@ export class SettingsService {
       updated.memory = { ...updated.memory, ...value };
       validate(updated, this.defaults.contextMaintenance, this.defaults.toolResultPruning, this.defaults.dispatcher);
       await mkdir(path.dirname(this.file), { recursive: true });
-      await writeFileDurable(this.file, stringify(updated));
+      await writeFileDurable(this.file, stringify({ ...this.ignored, ...updated }));
       this.overlay = updated;
     });
     this.writing = next;
@@ -122,7 +137,7 @@ export class SettingsService {
         ...(updated.gateways?.overrides || value.overrides ? { overrides } : {}),
       };
       await mkdir(path.dirname(this.file), { recursive: true });
-      await writeFileDurable(this.file, stringify(updated));
+      await writeFileDurable(this.file, stringify({ ...this.ignored, ...updated }));
       this.overlay = updated;
     });
     this.writing = next;
@@ -135,7 +150,7 @@ export class SettingsService {
       validate(updated, this.defaults.contextMaintenance, this.defaults.toolResultPruning, this.defaults.dispatcher);
       contextPolicy({ ...this.defaults.contextMaintenance, ...updated.contextMaintenance });
       await mkdir(path.dirname(this.file), { recursive: true });
-      await writeFileDurable(this.file, stringify(updated));
+      await writeFileDurable(this.file, stringify({ ...this.ignored, ...updated }));
       this.overlay = updated;
     });
     this.writing = next;
@@ -157,7 +172,7 @@ export class SettingsService {
       }
       validate(updated, this.defaults.contextMaintenance, this.defaults.toolResultPruning, this.defaults.dispatcher);
       await mkdir(path.dirname(this.file), { recursive: true });
-      await writeFileDurable(this.file, stringify(updated));
+      await writeFileDurable(this.file, stringify({ ...this.ignored, ...updated }));
       this.overlay = updated;
       if (key === "model" || key === "thinking") this.revision++;
     });

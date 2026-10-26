@@ -1,5 +1,16 @@
 # Harness plugins (API version 1)
 
+## Local settings compatibility
+
+Unknown top-level fields in `settings.local.yaml` are preserved on disk but
+excluded from effective settings. Startup logs a warning and continues, allowing
+operator channels to connect; unknown fields are not treated as active features.
+For example, `skills` belongs to installation configuration until explicitly
+supported as a local overlay. Invalid known settings (including dispatcher
+concurrency policy, routing and model types) still fail validation. The loader
+does not print unknown values, which may contain sensitive data. YAML comments
+are not preserved when subsequent settings updates serialize the document.
+
 ## Source ownership and build
 
 Bundled plugin adapters are maintained in `harness/plugins`, not copied into this
