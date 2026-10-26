@@ -1,3 +1,4 @@
+import { dispatcherConfig, type DispatcherConfig } from "./dispatcher-config.js";
 import { validateGatewayOverlay, type GatewayOverlay, type GatewayOverride } from "./gateway-provider.js";
 import { memoryConfig, type MemoryConfig } from "./memory.js";
 import { validateGatewayConfig, type GatewayConfig } from "./gateway-settings.js";
@@ -11,6 +12,7 @@ import { validateModelSetting, type ModelSetting } from "./model-settings.js";
 
 /** Explicit runtime-writable allowlist; security policy and secrets are deliberately excluded. */
 export interface LocalSettings {
+  dispatcher?: Partial<DispatcherConfig>;
   gateways?: GatewayConfig;
   gatewayPlugins?: GatewayOverlay;
   memory?: Partial<MemoryConfig>;
@@ -22,11 +24,14 @@ export interface LocalSettings {
 }
 export type SettingPath = "model" | "thinking" | "review.model" | "review.thinking";
 const keys: Record<SettingPath, ModelSetting> = { model: "model", thinking: "thinking", "review.model": "reviewModel", "review.thinking": "reviewThinking" };
-function validate(value: unknown, defaults: Partial<ContextPolicy> = {}, pruningDefaults: Partial<PruningPolicy> = {}): asserts value is LocalSettings {
+function validate(value: unknown, defaults: Partial<ContextPolicy> = {}, pruningDefaults: Partial<PruningPolicy> = {}, dispatcherDefaults: Partial<DispatcherConfig> = {}): asserts value is LocalSettings {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid local settings overlay");
   const data = value as Record<string, unknown>;
   for (const [key, item] of Object.entries(data)) {
-    if (key === "gatewayPlugins") {
+    if (key === "dispatcher") {
+      if (!item || typeof item !== "object" || Array.isArray(item) || Object.keys(item).some(key => !["enabled", "strategy", "concurrentRequests", "capacity", "retentionDays"].includes(key))) throw Error("Invalid dispatcher overlay");
+      dispatcherConfig({ ...dispatcherDefaults, ...item });
+    } else if (key === "gatewayPlugins") {
       validateGatewayOverlay(item);
     } else if (key === "memory") {
       if (!item || typeof item !== "object" || Array.isArray(item)) throw Error("Invalid memory overlay");
@@ -64,7 +69,7 @@ export class SettingsService {
   async load(): Promise<void> {
     try {
       const data = parse(await readFile(this.file, "utf8"));
-      validate(data, this.defaults.contextMaintenance, this.defaults.toolResultPruning);
+      validate(data, this.defaults.contextMaintenance, this.defaults.toolResultPruning, this.defaults.dispatcher);
       this.overlay = data;
     } catch (err) { if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err; }
   }
@@ -74,7 +79,7 @@ export class SettingsService {
     for (const name of new Set([...Object.keys(this.defaults.gateways?.overrides ?? {}), ...Object.keys(this.overlay.gateways?.overrides ?? {})])) {
       overrides[name] = { ...this.defaults.gateways?.overrides?.[name], ...this.overlay.gateways?.overrides?.[name] };
     }
-    return { ...this.defaults, ...this.overlay, memory: { ...this.defaults.memory, ...this.overlay.memory }, gateways: { ...this.defaults.gateways, ...this.overlay.gateways, overrides }, review: { ...this.defaults.review, ...this.overlay.review }, contextMaintenance: { ...this.defaults.contextMaintenance, ...this.overlay.contextMaintenance }, toolResultPruning: { ...this.defaults.toolResultPruning, ...this.overlay.toolResultPruning } };
+    return { ...this.defaults, ...this.overlay, dispatcher: dispatcherConfig({ ...this.defaults.dispatcher, ...this.overlay.dispatcher }), memory: { ...this.defaults.memory, ...this.overlay.memory }, gateways: { ...this.defaults.gateways, ...this.overlay.gateways, overrides }, review: { ...this.defaults.review, ...this.overlay.review }, contextMaintenance: { ...this.defaults.contextMaintenance, ...this.overlay.contextMaintenance }, toolResultPruning: { ...this.defaults.toolResultPruning, ...this.overlay.toolResultPruning } };
   }
   source(key: SettingPath): "local overlay" | "installation/default" {
     const value = key.startsWith("review.") ? this.overlay.review?.[key.slice(7) as "model" | "thinking"] : this.overlay[key as "model" | "thinking"];
@@ -97,7 +102,7 @@ export class SettingsService {
     const next = this.writing.catch(() => {}).then(async () => {
       const updated = this.snapshot();
       updated.memory = { ...updated.memory, ...value };
-      validate(updated, this.defaults.contextMaintenance, this.defaults.toolResultPruning);
+      validate(updated, this.defaults.contextMaintenance, this.defaults.toolResultPruning, this.defaults.dispatcher);
       await mkdir(path.dirname(this.file), { recursive: true });
       await writeFileDurable(this.file, stringify(updated));
       this.overlay = updated;
@@ -127,7 +132,7 @@ export class SettingsService {
     const next = this.writing.catch(() => {}).then(async () => {
       const updated = this.snapshot();
       updated.contextMaintenance = { ...updated.contextMaintenance, ...value };
-      validate(updated, this.defaults.contextMaintenance, this.defaults.toolResultPruning);
+      validate(updated, this.defaults.contextMaintenance, this.defaults.toolResultPruning, this.defaults.dispatcher);
       contextPolicy({ ...this.defaults.contextMaintenance, ...updated.contextMaintenance });
       await mkdir(path.dirname(this.file), { recursive: true });
       await writeFileDurable(this.file, stringify(updated));
@@ -150,7 +155,7 @@ export class SettingsService {
         const field = key as "model" | "thinking";
         if (value === undefined) delete updated[field]; else updated[field] = value;
       }
-      validate(updated, this.defaults.contextMaintenance, this.defaults.toolResultPruning);
+      validate(updated, this.defaults.contextMaintenance, this.defaults.toolResultPruning, this.defaults.dispatcher);
       await mkdir(path.dirname(this.file), { recursive: true });
       await writeFileDurable(this.file, stringify(updated));
       this.overlay = updated;

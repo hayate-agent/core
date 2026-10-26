@@ -14,6 +14,13 @@ claim/effect/event records. Main is not redirected through a background worker.
 
 ## Configuration
 
+The same `dispatcher` mapping may be set in writable
+`<home>/settings.local.yaml`. It overrides installation fields individually and
+is validated against the merged policy. Enable/strategy/capacity changes require
+a controlled process restart; changing the overlay alone does not activate a
+scheduler in the existing process. No modification of root-owned `harness.yaml`
+is necessary.
+
 ```yaml
 dispatcher:
   enabled: true

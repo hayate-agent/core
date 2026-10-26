@@ -138,7 +138,6 @@ async function main(argv: string[]): Promise<void> {
   let harness!: Harness;
   let dispatchRuntime: DispatcherRuntime | undefined;
   let dispatcher: Dispatcher | undefined;
-  const dispatchPolicy = dispatcherConfig(config.dispatcher);
   // One persistence foundation in both modes, also covering managed child turns.
   const executions = new ExecutionStore(path.join(config.home, "executions.json"), {
     protectedExecutions: () => new Set(harness?.pendingInputs().flatMap(input => input.hostEvent ? [input.hostEvent.executionId] : []) ?? []),
@@ -148,6 +147,7 @@ async function main(argv: string[]): Promise<void> {
   const reviewSettings = reviewConfig(config.review);
   const settings = new SettingsService(path.join(config.home, "settings.local.yaml"), {
     model: config.model, thinking: config.thinking,
+    dispatcher: config.dispatcher,
     gateways: config.gateways,
     memory: config.memory,
     contextMaintenance: contextPolicy(config.contextMaintenance),
@@ -155,6 +155,7 @@ async function main(argv: string[]): Promise<void> {
     review: { model: config.review?.model, thinking: config.review?.thinking ?? "medium" },
   });
   await settings.load();
+  const dispatchPolicy = dispatcherConfig(settings.effective().dispatcher);
   config.memory = memoryConfig(settings.effective().memory);
   memory = new MemoryService(config.memory, log, config.home);
   const maintenance = new ContextMaintenance(config.home, () => contextPolicy(settings.effective().contextMaintenance));
