@@ -1113,10 +1113,10 @@ export class Harness {
       throw new Error("shut down after inbox snapshot; input will replay");
     }
     let finalStatus: TurnOutcome | "completed" = outcome ?? "completed";
-    // A terminal model checkpoint is evidence, not proof that the original
-    // authorized task is finished. Other explicit states remain authoritative.
+    // Self-reported completion or blockage is evidence, not final authority.
+    // Recheck against the original mandate; retain explicit continuation plans.
     const checkpoint = input.continuation;
-    const assessmentEligible = () => input.continuation === checkpoint && (!checkpoint || checkpoint.state === "completed") &&
+    const assessmentEligible = () => input.continuation === checkpoint && checkpoint?.state !== "continue" &&
       (input.continuationExpiresAt === undefined || (Number.isSafeInteger(input.continuationExpiresAt) && input.continuationExpiresAt > this.now()));
     if (finalStatus !== "completed") input.continuation = undefined;
     else if ((input.source !== "host" || this.resultMandate(input)) && assessmentEligible() && this.opts.completionCheck && !this.paused && !this.stopping && !s.queue.length &&
