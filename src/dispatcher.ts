@@ -40,6 +40,7 @@ export class Dispatcher {
     private readonly capacity: number,
     private readonly deliver: (event: ExecutionEvent) => Promise<void>,
     private readonly report: (error: unknown) => void,
+    private readonly checkpoint?: (parent: string) => Execution["dependency"],
   ) {
     if (!Number.isSafeInteger(capacity) || capacity < 1) throw Error("Invalid dispatcher capacity");
     if (!strategy.name.trim() || !Number.isSafeInteger(strategy.version) || strategy.version < 1) throw Error("Invalid dispatcher strategy");
@@ -53,7 +54,7 @@ export class Dispatcher {
   }
   async submit(parent: string, requestId: string, input: string): Promise<Execution> {
     if (!this.recovered || this.stopped) throw Error("Dispatcher unavailable");
-    const task = await this.store.submit(parent, requestId, input, this.strategy.name, this.strategy.version);
+    const task = await this.store.submit(parent, requestId, input, this.strategy.name, this.strategy.version, this.checkpoint?.(parent));
     await this.kick();
     return task;
   }

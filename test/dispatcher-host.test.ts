@@ -47,12 +47,12 @@ test("parent stop while dispatcher is disabled survives restart and re-enabling"
   assert.ok(delivered.every(parent => parent === "other"));
 });
 
-test("host results are durable data turns, never commands or continuation authority", async () => {
+test("host results without a stored mandate are data, never commands or continuation authority", async () => {
   const runtime = new FakeRuntime();
   let commands = 0; let assessments = 0; let saves = 0;
   const harness = new Harness({ runtime, tickMs: 60000, busyMode: "queue", hostEventAllowed: () => true,
     completionCheck: async () => { assessments++; return { state: "continue", next: "unauthorized" }; },
-    beforeTurn: async input => { if (input.source === "host") assert.throws(() => harness.planContinuation(input.sessionKey, { state: "continue", next: "unauthorized" }), /cannot authorize/); },
+    beforeTurn: async input => { if (input.source === "host") assert.throws(() => harness.planContinuation(input.sessionKey, { state: "continue", next: "unauthorized" }), /No live parent mandate/); },
   });
   harness.commandHandler = async () => { commands++; return true; };
   harness.onStateChange = async () => { saves++; };

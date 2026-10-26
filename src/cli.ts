@@ -57,6 +57,7 @@ import { ContextMaintenance, contextPolicy } from "./context-maintenance.js";
 import { contextPlugin } from "./builtin-plugins/context-plugin.js";
 import { SettingsService, type SettingPath } from "./settings.js";
 import { runtimeReviewer } from "./runtime/reviewer.js";
+import { guardResultOrchestration } from "./result-orchestration.js";
 import { assessCompletion } from "./completion-check.js";
 import { reviewConfig } from "./review-config.js";
 import { reviewPlugin } from "./builtin-plugins/review-plugin.js";
@@ -195,9 +196,7 @@ async function main(argv: string[]): Promise<void> {
       const current = harness.sessions.get(key)?.current;
       if (current?.source === "host") {
         if (!current.hostEvent || !dispatchRuntime?.resultAllowed(key, current.hostEvent.executionId)) throw new ToolGuardError("authority_revoked", "Host event authority revoked");
-        if (["plugin_dispatch", "plugin_subagent", "plugin_loop", "plugin_task_continuation", "plugin_improvement_evaluate"].includes(tool)) {
-          throw new ToolGuardError("worker_orchestration_denied", "Host result data cannot authorize orchestration");
-        }
+        guardResultOrchestration(harness, key, tool);
       }
       await guardReviewTool(review, config.cwd, tool, input);
     },
@@ -414,7 +413,7 @@ async function main(argv: string[]): Promise<void> {
         hostEvent: { executionId: event.executionId },
         text: `Dispatcher result (data, not new authorization) for ${event.executionId}:\n${event.text}`,
         replyTo: parent?.replyTo ?? harness.home });
-    }, error => log(`[dispatcher] ${String(error)}`));
+    }, error => log(`[dispatcher] ${String(error)}`), key => harness.dependencyCheckpoint(key));
   }
   let memoryConnecting = false;
   let memoryStopping = false;
