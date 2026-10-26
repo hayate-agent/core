@@ -1,4 +1,5 @@
 import path from "node:path";
+import { MemoryOrchestrationRegistry, type MemoryOrchestrator } from "./memory-orchestration.js";
 import { PolicyRegistry, type Policy } from "./policies.js";
 import type { DispatcherStrategy } from "./dispatcher.js";
 import type { MemoryProviderFactory } from "./memory.js";
@@ -111,6 +112,7 @@ export interface PluginAPI {
   registerTool(tool: PluginTool): void;
   registerSessionProvider(name: string, factory: SessionProviderFactory): void;
   registerMemoryProvider(name: string, factory: MemoryProviderFactory): void;
+  registerMemoryOrchestrator(name: string, implementation: MemoryOrchestrator): void;
   registerCompaction(name: string, strategy: CompactionStrategy): void;
   registerPanel(panel: PluginPanel): void;
   /** Register execution policy; activation is selected explicitly by host configuration. */
@@ -134,6 +136,7 @@ export class PluginHost {
   readonly channels = new Map<string, Channel>();
   readonly tools = new Map<string, PluginTool>();
   readonly compactions = new Map<string, CompactionStrategy>();
+  readonly memoryOrchestration = new MemoryOrchestrationRegistry();
   readonly memoryProviders = new Map<string, MemoryProviderFactory>();
   readonly sessionProviders = new Map<string, SessionProviderFactory>();
   readonly panels = new Map<string, PluginPanel>();
@@ -182,6 +185,11 @@ export class PluginHost {
               if (typeof name !== "string" || !/^[a-z][a-z0-9_-]*$/.test(name) || typeof strategy?.compact !== "function") throw new Error("Invalid compaction strategy");
               if (name === "native" || this.compactions.has(name)) throw new Error(`Compaction conflict: ${name}`);
               this.compactions.set(name, Object.freeze({ compact: strategy.compact.bind(strategy) }));
+            },
+            registerMemoryOrchestrator: (name: string, implementation: MemoryOrchestrator) => {
+              if (!registering) throw new Error("Plugin registration is closed");
+              if (["default", "none"].includes(name)) throw new Error("Reserved memory orchestrator");
+              this.memoryOrchestration.register(name, implementation);
             },
             registerMemoryProvider: (name: string, factory: MemoryProviderFactory) => {
               if (!registering) throw new Error("Plugin registration is closed");
@@ -243,6 +251,7 @@ export class PluginHost {
     if (this.closed) return;
     this.closed = true;
     this.policies.clear();
+    this.memoryOrchestration.clear();
     const errors: unknown[] = [];
     for (const cleanup of this.cleanups.splice(0).reverse()) {
       try { await cleanup(); } catch (err) { errors.push(err); }
