@@ -43,6 +43,53 @@ test("startup catches up missed Cron only within the enabled night window and pr
   } finally { controller.stop(); await harness.stop(1000); }
 });
 
+test("old-status done marker is not a successful night; new evidence is required", async t => {
+  const home = await mkdtemp(path.join(os.tmpdir(), "improvement-new-"));
+  t.after(() => rm(home, { recursive: true, force: true }));
+  await writeFile(path.join(home, "improvement.yaml"), "enabled: true\nmaxTurns: 5\ntimezone: UTC\n");
+  const harness = new Harness({ runtime: new FakeRuntime(() => "Old commits checked; no candidate selected [IMPROVEMENT_DONE]"), tickMs: 60000 });
+  const controller = new ImprovementController(home, harness, "UTC", () => Date.parse("2026-10-24T23:00:00Z"));
+  const opts = (harness as any).opts;
+  opts.beforeTurn = (input: any) => controller.before(input);
+  opts.afterTurn = async (input: any, reply: string) => { await controller.completed(input, reply); return reply; };
+  for (let i = 0; i < 3; i++) {
+    await controller.tick(); await harness.drained();
+    const state = JSON.parse(await (await import("node:fs/promises")).readFile(path.join(home, "improvement/state.json"), "utf8"));
+    assert.equal(state.experiments.length, 0);
+    assert.equal(state.done, i === 2);
+    if (i === 2) assert.match(state.results.at(-1), /Nachtlauf fehlgeschlagen/);
+  }
+  await harness.stop(1000);
+});
+
+test("new measured hypothesis counts once and is excluded on the following night", async t => {
+  const home = await mkdtemp(path.join(os.tmpdir(), "improvement-novelty-"));
+  t.after(() => rm(home, { recursive: true, force: true }));
+  await writeFile(path.join(home, "improvement.yaml"), "enabled: true\nmaxTurns: 5\ntimezone: UTC\n");
+  let now = Date.parse("2026-10-24T23:00:00Z");
+  const receipt = '```improvement-experiment\n' + JSON.stringify({ hypothesis: "New bounded test", baseline: "baseline failed 1/1", candidate: "isolated fix passed 1/1", evidence: "node test/probe.ts; /tmp/probe.json", outcome: "rejected" }) + '\n```\n[IMPROVEMENT_DONE]';
+  const runtime = new FakeRuntime(() => receipt);
+  const harness = new Harness({ runtime, tickMs: 60000 });
+  const controller = new ImprovementController(home, harness, "UTC", () => now);
+  const opts = (harness as any).opts;
+  opts.beforeTurn = (input: any) => controller.before(input);
+  opts.afterTurn = async (input: any, reply: string) => { await controller.completed(input, reply); return reply; };
+  await controller.tick(); await harness.drained();
+  const read = async () => JSON.parse(await (await import("node:fs/promises")).readFile(path.join(home, "improvement/state.json"), "utf8"));
+  assert.equal((await read()).experiments.length, 1); assert.equal((await read()).done, true);
+  now = Date.parse("2026-10-25T23:00:00Z");
+  await controller.tick(); await harness.drained(); // archive previous night's report
+  await controller.tick(); await harness.drained();
+  assert.equal((await read()).experiments.length, 0); assert.equal((await read()).done, false);
+  assert.match(runtime.sessions.get("improvement:nightly")!.prompts.at(-1)!, /new bounded test/);
+  runtime.answer = () => receipt + '\n```improvement-experiment\n' + JSON.stringify({ hypothesis: "second new hypothesis", baseline: "measured baseline", candidate: "tested candidate", evidence: "synthetic test receipt", outcome: "inconclusive" }) + '\n```';
+  await controller.tick(); await harness.drained();
+  assert.equal((await read()).experiments.length, 1);
+  assert.equal((await read()).experiments[0].hypothesis, "second new hypothesis");
+  assert.equal((await read()).noExperimentTurns, 0);
+  await harness.stop(1000);
+});
+
 test("persistent improvement budget, early completion and unsolicited morning report", async (t) => {
   const home = await mkdtemp(path.join(os.tmpdir(), "improvement-"));
   t.after(() => rm(home, { recursive: true, force: true }));
