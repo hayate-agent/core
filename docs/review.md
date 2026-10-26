@@ -66,13 +66,22 @@ model may be the same as the working model if no separate reviewer is configured
 ## Critical assessment and budget
 
 After code work the local lifecycle gate invokes review. P0/P1 are blocking;
-P2/P3 are retained and nonblocking. The working agent must critically assess every
-finding, using `plugin_review` action `assess`, the latest round's fingerprint and
-an assessment for every finding: `confirmed`, `false-positive` or `uncertain`, each
-with concrete evidence. Confirmed defects should be fixed. Rebuttals are supplied
-to the next reviewer; they are not unilateral permission to bypass a P0/P1 finding.
-A persistent disagreement is escalated rather than automatically believed by either
-model. The final exhausted round is escalated with its findings for operator review.
+P2/P3 are retained and nonblocking. Reviewer findings are claims, not final authority.
+The working agent must check P0/P1 against code, failure paths and, where needed,
+reproductions or tests. Use `plugin_review` action `assess` with the latest round's
+fingerprint and `confirmed`, `false-positive` or `uncertain`, each with concrete
+evidence. Confirmed and uncertain P0/P1 remain blocking. An evidence-backed
+false-positive assessment resolves that finding; when no blockers remain, the
+exact reviewed fingerprint is approved without demanding another reviewer round.
+This also works after budget exhaustion. It cannot approve changed bytes; confirmed
+fixes require review of the changed candidate. P2/P3 assessments are optional.
+Findings and counter-evidence remain in the ledger for audit.
+
+An existing escalation does not decorate subsequent chat replies or trigger another
+review. Exhaustion is notified separately on the transition into escalation, not on
+repeated `run` calls or repeated escalation requests. Explicit status remains
+available, and publish/merge guards still enforce the unresolved review. This keeps
+conversation output separate from task review state without approving blocked code.
 
 Budget reservations are durable before external calls. Edits, session switches and
 process restarts do not reset an unresolved task. Reviewer failures consume budget.
@@ -126,6 +135,27 @@ configuration is another supported route.
 Fixing the provider does not reset an escalated review budget. Operator resolution
 of the existing escalation is still required; do not delete review state or
 start another session to evade it.
+
+## Administrative budget extensions (requires matching plugin)
+
+After explicit operator authorization an administrator can use the matching review
+plugin command, not the model tool:
+
+```text
+/review extend <grant-id> <rounds> <base-commit> <candidate-fingerprint> <operator-reason>
+```
+
+The service requires an exhausted, escalated review on that exact base and current
+candidate. It appends actor, reason, timestamp, count, candidate and prior round index
+to `budgetGrants`. Rounds, assessments and history remain intact; no approval is
+created. Identical grant IDs are idempotent even after consumption; conflicting reuse
+is rejected. Grants allow 1–20 rounds only for the named candidate, not subsequent
+changes or tasks. Completed-task history retains the audit records. Administrators
+must verify the operator's scope: a fingerprint binds bytes, not their meaning.
+
+Older installed plugins do not expose this command. Building does not activate it.
+Use the owning Harness's administrator command after reviewed activation; never write
+the live ledger from a second process. The model tool remains `status | run | assess`.
 
 ## Enforcement and limits
 

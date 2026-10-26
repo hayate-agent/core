@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "repository": "https://git.vanillacore.net/harness/plugins",
-  "revision": "d43e53ac278dfd418b1d8071f69c2bdbecc109c7",
+  "revision": "0d631ffe2b9a9d5407704fbfa2213e1c558c4da0",
   "files": {
     "context-plugin.ts": "1da424038b5f5dd8e88999d86c4b26fecca5d21ca4170b83fdba9958eef787f0",
     "continuation-plugin.ts": "548ca286ce661c03bc5ce948e490fa22378c5e106358693e480596b8f61a5de4",
@@ -13,7 +13,7 @@
     "memory-plugin.ts": "1fa1a44e6151fb3357cafaf20445263b27b68f8a910f17932f24890b073292be",
     "protected-content-plugin.ts": "1340a07212f5b30001478d1b761ef4e8c3c8e367fbfc36c02ccb80894b4fe9d0",
     "reloadable-tools-plugin.ts": "ae2680f7dd5f2bc1e95896599c349ec4fe61b5dc4f871f1896e6606f11b8e961",
-    "review-plugin.ts": "6c84479c1fdfbd0f256a67b33da1d3487aa37acb6f599f3ee713fd1ac3123c4a",
+    "review-plugin.ts": "026856223984fb18723b587f3e99468321fca4df04c72074b00baee6f8f1d9e7",
     "subagent-plugin.ts": "5b7ae55c28e50c48ce0a3671c400245ee0fd725ce7c5ad6866a8e63f0b65cd5e",
     "wasm-tools-plugin.ts": "438c6ac8899e283e4268f51ef451275bf16a37b584db84ee8302a26200cc70de"
   }

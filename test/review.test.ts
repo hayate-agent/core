@@ -71,7 +71,7 @@ test("P1 needs evidence-based assessment; three rounds persist and escalate with
   await assert.rejects(service.run(cwd, "work"), /assess/);
   await assert.rejects(service.assess(cwd, state.rounds[0].fingerprint, [{ id: "bug", disposition: "false-positive", evidence: "" }]), /evidence/);
   for (let n = 1; n < 3; n++) {
-    await service.assess(cwd, state.rounds.at(-1)!.fingerprint, [{ id: "bug", disposition: "false-positive", evidence: "Test proves the supposed failing path is guarded" }]);
+    await service.assess(cwd, state.rounds.at(-1)!.fingerprint, [{ id: "bug", disposition: "confirmed", evidence: "Test proves the failing path remains reachable" }]);
     await writeFile(path.join(cwd, "a.ts"), `edit ${n}\n`);
     state = await service.run(cwd, "work");
   }
@@ -82,6 +82,27 @@ test("P1 needs evidence-based assessment; three rounds persist and escalate with
   const restarted = new ReviewService(home, config, backend, async () => {});
   assert.equal((await restarted.run(cwd, "different-session")).rounds.length, 3);
   await assert.rejects(restarted.assertAllowed(cwd, "publish"), /gate blocks/);
+});
+
+test("evidence-backed rebuttal resolves final round but never approves changed bytes", async t => {
+  const { cwd, service, replies, prompts } = await setup(t, 1);
+  replies.push(JSON.stringify({ findings: [finding] }));
+  const round = await service.run(cwd, "work");
+  const fingerprint = round.rounds[0].fingerprint;
+  assert.equal(round.status, "escalated");
+  for (const disposition of ["confirmed", "uncertain"] as const) {
+    assert.equal((await service.assess(cwd, fingerprint, [{ id: "bug", disposition, evidence: "Failure remains possible" }])).status, "escalated");
+    await assert.rejects(service.assertAllowed(cwd, "publish"));
+  }
+  const assessed = await service.assess(cwd, fingerprint, [{ id: "bug", disposition: "false-positive", evidence: "Reproduction and guard test prove the path cannot occur" }]);
+  assert.equal(assessed.status, "passed");
+  await service.assertAllowed(cwd, "local");
+  assert.equal(prompts.length, 1);
+  assert.equal(JSON.parse(service.summarize(assessed)).blockers, 0);
+  assert.equal(assessed.rounds[0].findings?.[0].severity, "P1");
+  await writeFile(path.join(cwd, "a.ts"), "different bytes\n");
+  await assert.rejects(service.assertAllowed(cwd, "publish"));
+  assert.notEqual((await service.assess(cwd, fingerprint, [{ id: "bug", disposition: "false-positive", evidence: "Rebuttal for old code" }])).status, "passed");
 });
 
 test("P2/P3 pass, remain recorded, exact fingerprint required for publication", async (t) => {
@@ -97,6 +118,86 @@ test("P2/P3 pass, remain recorded, exact fingerprint required for publication", 
   await assert.rejects(service.assertAllowed(cwd, "merge"));
   const next = await service.run(cwd, "work");
   assert.equal(next.history?.[0].rounds[0].findings?.[0].severity, "P2", "old nonblocking findings remain archived");
+});
+
+test("unassessed P2 never blocks a re-review once the P1 assessment exists", async t => {
+  const { cwd, service, replies } = await setup(t);
+  replies.push(JSON.stringify({ findings: [finding, { ...finding, id: "optional", severity: "P2" }] }));
+  const state = await service.run(cwd, "work");
+  await service.assess(cwd, state.rounds[0].fingerprint, [
+    { id: "bug", disposition: "confirmed", evidence: "Reproduced high-impact defect" },
+  ]);
+  // Optional findings remain recorded without becoming an assessment prerequisite.
+  const loaded = await service.status(cwd);
+  assert.equal(loaded.status, "pending");
+  replies.push('{"findings":[]}');
+  await writeFile(path.join(cwd, "a.ts"), "P1 corrected; optional unchanged\n");
+  assert.equal((await service.run(cwd, "work")).status, "passed");
+});
+
+test("existing escalation leaves repeated chat replies untouched without prompts or notifications", async t => {
+  const { cwd, home, config, backend, service, replies } = await setup(t, 1);
+  replies.push(JSON.stringify({ findings: [finding] }));
+  await service.run(cwd, "work");
+  const saved = await service.status(cwd);
+  saved.history = Array.from({ length: 227 }, () => ({ rounds: [{ fingerprint: "OLD-HISTORY-MARKER", assessment: [], error: "x".repeat(2000) }] }));
+  await writeFile(service.evidencePath(saved.root), JSON.stringify(saved));
+  let notifications = 0;
+  const restored = new ReviewService(home, config, backend, async () => { notifications++; });
+  const before = JSON.stringify(await restored.status(cwd));
+  for (const reply of ["done", "Warum?", "Eine normale Antwort"]) {
+    assert.equal(await finishWithReview(restored, cwd, { sessionKey: "work", source: "channel", text: "chat" }, reply, {
+      prompt: async () => { throw Error("Escalated review must not prompt again"); },
+    } as never, {}), reply);
+  }
+  await restored.run(cwd, "work");
+  await restored.requireOperator(cwd, "work", "unchanged escalation");
+  assert.equal(notifications, 0);
+  assert.equal(JSON.stringify(await restored.status(cwd)), before);
+  await assert.rejects(restored.assertAllowed(cwd, "publish"));
+  await assert.rejects(restored.assertAllowed(cwd, "merge"));
+});
+
+test("new escalation notifies once separately without appending review text to reply", async t => {
+  const { cwd, service, replies, escalations, prompts } = await setup(t, 1);
+  replies.push(JSON.stringify({ findings: [finding] }));
+  const input = { sessionKey: "work", source: "channel" as const, text: "change" };
+  assert.equal(await finishWithReview(service, cwd, input, "answer", {} as never, {}), "answer");
+  assert.equal(escalations.length, 1);
+  assert.equal(prompts.length, 1);
+  assert.equal(await finishWithReview(service, cwd, input, "next answer", {} as never, {}), "next answer");
+  assert.equal(escalations.length, 1);
+  assert.equal(prompts.length, 1);
+});
+
+test("blocking lifecycle assessment prompt carries bounded state instead of history", async t => {
+  const { cwd, service, replies } = await setup(t);
+  replies.push(JSON.stringify({ findings: [{ ...finding, evidence: "x".repeat(20000) }] }));
+  await service.run(cwd, "work");
+  let promptText = "";
+  replies.push('{"findings":[]}');
+  const reply = await finishWithReview(service, cwd, { sessionKey: "work", source: "channel", text: "change" }, "done", {
+    prompt: async (text: string) => {
+      promptText = text;
+      const state = await service.status(cwd);
+      await service.assess(cwd, state.rounds.at(-1)!.fingerprint, [{ id: "bug", disposition: "confirmed", evidence: "Fixed locally" }]);
+      return "fixed";
+    },
+  } as never, {});
+  assert.equal(reply, "fixed");
+  assert.ok(promptText.length < 8000);
+  assert.equal(promptText.includes('"history"'), false);
+  assert.match(promptText, /reviews/);
+});
+
+test("P2-only lifecycle passes without mandatory assessment prompt", async t => {
+  const { cwd, service, replies } = await setup(t);
+  replies.push(JSON.stringify({ findings: [{ ...finding, severity: "P2" }] }));
+  const reply = await finishWithReview(service, cwd, { sessionKey: "work", source: "channel", text: "change" }, "done", {
+    prompt: async () => { throw Error("P2 cannot force another model turn"); },
+  } as never, {});
+  assert.equal(reply, "done");
+  assert.equal((await service.status(cwd)).rounds[0].findings!.length, 1);
 });
 
 test("invalid reviewer output consumes budget and fails closed", async (t) => {
