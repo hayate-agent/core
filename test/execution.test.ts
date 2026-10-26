@@ -23,6 +23,7 @@ test("load rejects malformed effect markers before recovery", async t => {
     { settledEffect: null }, { settledEffect: { key: "turn:x", result: 42 } },
     { settledEffect: { key: "", result: "ok" } }, { intent: null },
     { intent: { key: "effect", replay: "sure" } }, { checkpoint: {} },
+    { claimedRecoveryAction: "retry" }, { recoveryGrant: { action: "retry", restarts: -1 } },
   ]) {
     await writeFile(file, JSON.stringify({ version: 1, executions: [{ ...record, ...invalid }], events: [] }));
     await assert.rejects(new ExecutionStore(file).load(), /Invalid/);
@@ -81,7 +82,7 @@ test("safe recovery requires matching current policy and can settle before compl
     { strategy: "direct", version: 1, replaySafe: false },
     { strategy: "other", version: 1, replaySafe: true },
     { strategy: "direct", version: 2, replaySafe: true }]) {
-    await assert.rejects(fresh.claim(task.id, policy), /matching replay-safe policy/);
+    await assert.rejects(fresh.claim(task.id, policy), /Strategy .* unavailable|Uncertain effect/);
     assert.equal(fresh.list()[0]!.status, "ready");
   }
   const running = await fresh.claim(task.id, { strategy: "direct", version: 1, replaySafe: true });

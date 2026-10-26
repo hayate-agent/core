@@ -46,6 +46,21 @@ function make() {
   return { agent, session };
 }
 
+test("archive preserves tool-call arguments and result correlation for interrupted execution", () => {
+  const agent = fakeAgentSession();
+  const branch = [
+    { id: "call", type: "message", message: { role: "assistant", content: [{ type: "toolCall", id: "call42", name: "create_pr", arguments: { branch: "fix/a", title: "Already created" } }] } },
+    { id: "receipt", type: "message", message: { role: "toolResult", toolCallId: "call42", toolName: "create_pr", isError: false, content: [{ type: "text", text: "Created PR 12" }] } },
+  ];
+  Object.assign(agent, { sessionManager: { getBranch: () => branch } });
+  const session = new PiSession(agent as never, models as never, {});
+  const entries = session.archiveEntries();
+  assert.equal(entries.length, 2);
+  assert.deepEqual(JSON.parse(entries[0].text), { type: "toolCall", id: "call42", name: "create_pr", arguments: { branch: "fix/a", title: "Already created" } });
+  assert.deepEqual(JSON.parse(entries[1].text), { type: "toolResult", toolCallId: "call42", toolName: "create_pr", isError: false, text: "Created PR 12" });
+  assert.equal(branch[0].message.content[0].id, "call42");
+});
+
 test("maintenance deadline aborts compaction and rejects instead of hanging", async () => {
   let aborted = 0;
   await assert.rejects(boundedMaintenance(() => new Promise(() => {}), () => { aborted++; }, 10), /deadline/);
