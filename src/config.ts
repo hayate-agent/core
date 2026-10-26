@@ -23,6 +23,7 @@ export interface ReviewConfig {
 }
 
 export interface HarnessConfig {
+  activity?: import("./activity.js").ActivityPolicy;
   /** Agent identity key (e.g. "example-agent"). */
   agent: string;
   /** Harness home: sessions, state, persona files. */
@@ -116,8 +117,16 @@ export function defaultConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
   contextPolicy(overrides.contextMaintenance);
   pruningPolicy(overrides.toolResultPruning);
   validateGatewayConfig(overrides.gateways);
+  const activity = overrides.activity;
+  if (activity !== undefined && (!activity || typeof activity !== "object" || Array.isArray(activity) ||
+      (activity.enabled !== undefined && typeof activity.enabled !== "boolean") ||
+      (activity.intervalMs !== undefined && (!Number.isFinite(activity.intervalMs) || activity.intervalMs < 1000 || activity.intervalMs > 300000)) ||
+      (activity.maxAlive !== undefined && (!Number.isInteger(activity.maxAlive) || activity.maxAlive < 0 || activity.maxAlive > 120)))) {
+    throw Error("Invalid activity policy");
+  }
   const home = overrides.home ?? process.env.VANILLACORE_HARNESS_HOME ?? path.join(os.homedir(), ".vanillacore-harness");
   return {
+    activity: overrides.activity,
     agent: overrides.agent ?? process.env.VANILLACORE_HARNESS_AGENT ?? "agent",
     home,
     cwd: overrides.cwd ?? process.cwd(),

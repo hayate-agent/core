@@ -106,9 +106,9 @@ export function toTurnEvent(event: AgentSessionEvent): TurnEvent | undefined {
   if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
     return { type: "text", delta: event.assistantMessageEvent.delta };
   }
-  if (event.type === "tool_execution_start") return withDetail({ type: "tool", phase: "start", name: event.toolName } as const, event.args);
+  if (event.type === "tool_execution_start") return withDetail({ type: "tool", phase: "start", name: event.toolName, ...(event.toolCallId ? { callId: event.toolCallId } : {}) } as const, event.args);
   if (event.type === "tool_execution_end") {
-    return withDetail({ type: "tool", phase: "end", name: event.toolName, ...(event.isError ? { error: true } : {}) } as const, event.result);
+    return withDetail({ type: "tool", phase: "end", name: event.toolName, ...(event.toolCallId ? { callId: event.toolCallId } : {}), ...(event.isError ? { error: true } : {}) } as const, event.result);
   }
   if (event.type === "message_end" && event.message.role === "assistant") {
     const m = event.message;

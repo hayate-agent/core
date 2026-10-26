@@ -63,7 +63,7 @@ export interface TurnOptions {
 /** Progress of a running turn, for channels that stream it (API runs). */
 export type TurnEvent =
   | { type: "text"; delta: string }
-  | { type: "tool"; phase: "start" | "end"; name: string; error?: boolean; detail?: string }
+  | { type: "tool"; phase: "start" | "end"; name: string; callId?: string; error?: boolean; detail?: string }
   /** One assistant message finished; usage is for that message only. */
   | {
       type: "usage";
@@ -194,6 +194,8 @@ export interface Channel {
   /** Supports stable logical progress IDs and final replacement through send(). */
   editableProgress?: boolean;
   progressEnabled?(): boolean;
+  /** Optional host-only activity; never a model prompt or execution authority. */
+  taskActivity?(to: Address, event: import("./activity.js").ActivityEvent, input: Inbound): void;
   /** Optional live progress of the turn answering `to` (best effort, not durable). */
   turnEvent?(to: Address, event: TurnEvent, input?: Inbound): void;
   /** Best-effort status on the original input; completed means processing, not delivery. */
