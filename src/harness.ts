@@ -768,8 +768,9 @@ export class Harness {
     for (const s of this.sessions.values()) {
       if (this.opts.externallyRecoveredSession?.(s.key)) continue;
       const task = s.task;
-      if (task && !task.next?.trim()) await this.assessStartupTask(s, task);
-      if (!task || task.state !== "active" || !task.next?.trim() || !Number.isSafeInteger(task.depth) || task.depth < 0 || task.depth >= 20 ||
+      const assessed = task && !task.next?.trim();
+      if (assessed) await this.assessStartupTask(s, task);
+      if (!task || s.task !== task || (assessed && this.paused) || this.stopping || task.state !== "active" || !task.next?.trim() || !Number.isSafeInteger(task.depth) || task.depth < 0 || task.depth >= 20 ||
           (task.expiresAt !== undefined && (!Number.isSafeInteger(task.expiresAt) || task.expiresAt <= this.now())) ||
           s.current || s.queue.length || s.key === "improvement:nightly") continue;
       const input: Inbound = { id: `task:${task.id}:${task.depth + 1}`, source: "heartbeat", sessionKey: s.key,

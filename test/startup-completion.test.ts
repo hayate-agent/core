@@ -92,6 +92,21 @@ test("startup claim survives interrupted assessment and stop/new-input races fen
   }
 });
 
+test("startup decision persistence cannot resurrect superseded task ownership", async () => {
+  const h = new Harness({ runtime: new FakeRuntime(), tickMs: 60000,
+    completionCheck: async () => ({ state: "continue", next: "verify remaining test" }) });
+  h.restoreSessions([{ key: "mem:room1", task: task() }]);
+  h.onStateChange = async () => {
+    const s = h.state("mem:room1");
+    if (s.task?.recoveryAssessment === "decided") s.task = { ...task(), id: "new-authority", state: "waiting" };
+  };
+  try {
+    await h.recoverTasks();
+    assert.equal(h.pendingInputs().length, 0);
+    assert.equal(h.state("mem:room1").task?.id, "new-authority");
+  } finally { await h.stop(1000); }
+});
+
 test("failed checkpoint registration is rescued by independent turn-end completion assessment", async () => {
   let turns = 0, failures = 0;
   const h = new Harness({ runtime: new FakeRuntime(() => {
