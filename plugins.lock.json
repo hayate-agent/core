@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "repository": "https://git.vanillacore.net/harness/plugins",
-  "revision": "57233a4a961a424110a83f732bc956b23460aab1",
+  "revision": "519b12ffa6850d6f5b17f401c7b39027757b72eb",
   "files": {
     "context-plugin.ts": "1da424038b5f5dd8e88999d86c4b26fecca5d21ca4170b83fdba9958eef787f0",
     "continuation-plugin.ts": "548ca286ce661c03bc5ce948e490fa22378c5e106358693e480596b8f61a5de4",
@@ -21,6 +21,7 @@
     "matrix-gateway.ts": "cab666ab5d2675d9b459102f119598b4444dcbbdecb3a5d16d473a676a131be3",
     "native-activity.ts": "bf1fb9ab2e51f690a0d1b830d9ccea326067e5b9f6711646db7da353b1e474d2",
     "gateway-baselines.ts": "7e4422bfef1e74ad4e767d4c88947b88082c45aeccb9b3da2193ccbff9baaa1c",
-    "memory-service.ts": "44658bcf489fb676e9bfc03f8f6ba0590cf192cea057052acf77228ab379cfa9"
+    "memory-service.ts": "44658bcf489fb676e9bfc03f8f6ba0590cf192cea057052acf77228ab379cfa9",
+    "policy-manager-plugin.ts": "ef61d6f32c3fadd75f16bec3732763f15e0fa131a12a7af30240a0599a44ef44"
   }
 }

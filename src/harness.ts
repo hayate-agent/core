@@ -200,6 +200,20 @@ export class Harness {
   /** Refuse replacement while any turn or delivery is using the adapter. Caller retries at a safe boundary. */
   private gatewayChanging = false;
   private activeDeliveries = 0;
+  /** Reserve the same instance-wide boundary used for transport replacement. */
+  async atIdleBoundary(change: () => Promise<void>): Promise<void> {
+    if (this.gatewayChanging || this.activeDeliveries || this.stopping || this.inbox.accepting.size ||
+        [...this.sessions.values()].some(s => s.running)) throw Error("Change requires an idle turn boundary");
+    this.gatewayChanging = true;
+    try { await change(); }
+    finally {
+      this.gatewayChanging = false;
+      // Inputs already queued before reservation must not be stranded.
+      if (!this.stopping && !this.paused) for (const s of this.sessions.values()) {
+        if (s.queue.length || s.outbox.length) void this.pump(s);
+      }
+    }
+  }
   async replaceGateway(name: string, candidate?: Channel): Promise<void> {
     if (this.gatewayChanging || this.activeDeliveries || this.stopping) throw Error("Gateway replacement requires an idle turn boundary; retry after current work completes");
     if ([...this.sessions.values()].some((s) => s.running) || this.inbox.accepting.size) throw Error("Gateway replacement requires an idle turn boundary; retry after current work completes");
