@@ -118,6 +118,30 @@ Cleanup must terminate promptly; there is no timeout/sandbox guarantee. Invalid
 plugins fail startup rather than silently disappear. External side effects are
 not transactional. Use /help to inspect registered commands.
 
+## Composable policy hooks
+
+Trusted startup plugins may call `api.registerPolicy({id, prepare?, beforeTool?,
+finish?, assertAllowed?})`. IDs are unique lowercase names. Hooks execute in
+registration order; `finish` passes each returned reply to the next hook. Exceptions
+propagate and stop later hooks. Class-instance methods retain their receiver.
+With no registered policy, calls pass through; there is no implicit generic veto.
+These hooks do not grant tool permissions or override cancellation/approvals.
+
+The CLI routes turn preparation, tool checks and reply completion through this
+registry. The configured default review adapter is registered first and retains its
+existing ledger, budget, severity and assessment semantics. `review.enabled: false`
+omits it; it does not disable other plugin policies. The host may require named
+policies explicitly; missing required registration fails startup, including after
+partial activation cleanup. Plugin activation failure and stop clear registered
+hooks. `assertAllowed` is available to trusted host code; arbitrary shell commands
+are not automatically intercepted beyond the existing opt-in review shell guard.
+
+This is startup composition, not full policy extraction: the review engine and
+selection still live in Core. Duplicate IDs cannot replace a policy. Runtime
+replacement, individual removal/unsubscription and persistent policy overlays are
+not implemented; restart with the selected modules. Tool-only reload modules must
+not register policies. No baseline gate is silently removed by this contract.
+
 ## Channels
 
 During activation, call `api.registerChannel(transport)` with a unique lowercase
