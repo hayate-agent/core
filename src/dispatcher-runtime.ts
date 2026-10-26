@@ -1,3 +1,4 @@
+import { ToolGuardError } from "./tool-guard-error.js";
 import type { Harness } from "./harness.js";
 import type { Address, Channel, SendMeta } from "./types.js";
 import type { DispatcherStrategy } from "./dispatcher.js";
@@ -26,12 +27,12 @@ export class DispatcherRuntime {
   beforeTurn(key: string): void {
     if (!this.isWorker(key)) return;
     const task = this.taskForSession(key);
-    if (!task || task.status !== "running" || task.parentStopped) throw Error("Dispatcher worker no longer authorized");
+    if (!task || task.status !== "running" || task.parentStopped) throw new ToolGuardError("authority_revoked", "Dispatcher worker no longer authorized");
   }
   guardTool(key: string, tool: string): void {
     this.beforeTurn(key);
     if (this.isWorker(key) && ["plugin_dispatch", "plugin_subagent", "plugin_loop", "plugin_task_continuation", "plugin_improvement_evaluate"].includes(tool)) {
-      throw Error("Dispatcher worker orchestration is disabled; return a result or blocker");
+      throw new ToolGuardError("worker_orchestration_denied", "Dispatcher worker orchestration is disabled; return a result or blocker");
     }
   }
   readonly strategy: DispatcherStrategy = {

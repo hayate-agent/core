@@ -1,6 +1,7 @@
 /**
  * PI runtime adapter. The only module that imports the PI SDK.
  */
+import { toolGuardDenialReason } from "../tool-guard-error.js";
 import { pruneToolResults, type PruningPolicy } from "../tool-result-pruning.js";
 import { nativeCompaction, type CompactionStrategy } from "../compaction.js";
 import type { SessionProvider, SessionRecord, SessionSummary } from "../sessions.js";
@@ -469,7 +470,7 @@ export class PiRuntime implements AgentRuntime {
           factory: (pi) => {
             pi.on("tool_call", async (event) => {
               try { await this.opts.toolGuard?.(sessionKey, event.toolName, event.input); }
-              catch { return { block: true, reason: "Core review gate blocked this action; review the current changeset first." }; }
+              catch (error) { return { block: true, reason: toolGuardDenialReason(error) }; }
               if (approvals.mode !== "manual" || !requestApproval) return undefined;
               if (approvals.tools.length && !approvals.tools.includes(event.toolName)) return undefined;
               const ok = await requestApproval(sessionKey, event.toolName, event.input);

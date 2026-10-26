@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { ToolGuardError } from "./tool-guard-error.js";
 import { improvementPlugin } from "./builtin-plugins/improvement-plugin.js";
 import { gatewayManagerPlugin } from "./builtin-plugins/gateway-manager-plugin.js";
 import { reloadableToolsPlugin } from "./builtin-plugins/reloadable-tools-plugin.js";
@@ -193,9 +194,9 @@ async function main(argv: string[]): Promise<void> {
       dispatchRuntime?.guardTool(key, tool);
       const current = harness.sessions.get(key)?.current;
       if (current?.source === "host") {
-        if (!current.hostEvent || !dispatchRuntime?.resultAllowed(key, current.hostEvent.executionId)) throw Error("Host event authority revoked");
+        if (!current.hostEvent || !dispatchRuntime?.resultAllowed(key, current.hostEvent.executionId)) throw new ToolGuardError("authority_revoked", "Host event authority revoked");
         if (["plugin_dispatch", "plugin_subagent", "plugin_loop", "plugin_task_continuation", "plugin_improvement_evaluate"].includes(tool)) {
-          throw Error("Host result data cannot authorize orchestration");
+          throw new ToolGuardError("worker_orchestration_denied", "Host result data cannot authorize orchestration");
         }
       }
       await guardReviewTool(review, config.cwd, tool, input);

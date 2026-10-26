@@ -1,3 +1,4 @@
+import { ToolGuardError } from "./tool-guard-error.js";
 import { randomUUID } from "node:crypto";
 import type { Harness } from "./harness.js";
 import type { Address, Channel, SendMeta } from "./types.js";
@@ -43,13 +44,13 @@ export class Subagents {
     if (!this.isChild(key)) return;
     const record = [...this.records.values()].find(r => r.sessionKey === key);
     if (!record || !["queued", "running"].includes(record.state) || record.expiresAt <= Date.now()) {
-      throw Error("Subagent no longer authorized to execute");
+      throw new ToolGuardError("authority_revoked", "Subagent no longer authorized to execute");
     }
   }
   guardTool(key: string, tool: string): void {
     this.beforeTurn(key);
     if (this.isChild(key) && ["plugin_subagent", "plugin_loop", "plugin_task_continuation", "plugin_improvement_evaluate"].includes(tool)) {
-      throw Error("Subagent orchestration is disabled; return a result or blocker within this turn");
+      throw new ToolGuardError("worker_orchestration_denied", "Subagent orchestration is disabled; return a result or blocker within this turn");
     }
   }
   private arm(record: SubagentRecord): void {
