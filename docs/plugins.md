@@ -140,11 +140,24 @@ partial activation cleanup. Plugin activation failure and stop clear registered
 hooks. `assertAllowed` is available to trusted host code; arbitrary shell commands
 are not automatically intercepted beyond the existing opt-in review shell guard.
 
-This is startup composition, not full policy extraction: the review engine and
-selection still live in Core. Duplicate IDs cannot replace a policy. Runtime
-replacement, individual removal/unsubscription and persistent policy overlays are
-not implemented; restart with the selected modules. Tool-only reload modules must
-not register policies. No baseline gate is silently removed by this contract.
+`registerPolicy` returns an idempotent generation-bound unsubscribe callback for
+optional policies. An obsolete callback cannot remove a later replacement. The
+trusted host registry supports `replace(policy)` under the same ID, preserving its
+position, and `remove(id)` for optional policies. Invalid replacements retain the
+previous implementation. Each hook invocation snapshots its ordered implementations;
+a replacement affects later invocations, not an already running hook chain. There
+is no whole-turn snapshot spanning prepare, tools and finish: a host requiring that
+boundary must stage changes until the turn is idle. Required IDs may be replaced
+atomically but cannot be removed or unsubscribed; `clear()` is teardown, after which
+required calls fail closed. Resource cleanup belongs to the module owner and must
+wait for its own in-flight calls; the registry does not dispose implementation
+resources or grant authority to reload arbitrary code.
+
+This is a composition/lifecycle primitive, not full policy extraction: the review
+engine and default selection still live in Core. Plugin registration is startup-only;
+there is no administrative runtime module loader or persistent policy overlay yet.
+Tool-only reload modules must not register policies. No baseline gate is silently
+removed by this contract.
 
 ## Memory orchestration selection
 

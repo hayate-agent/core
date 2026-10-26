@@ -118,7 +118,7 @@ export interface PluginAPI {
   /** Register execution policy; activation is selected explicitly by host configuration. */
   registerDispatcher(strategy: DispatcherStrategy): void;
   /** Trusted optional hooks; ordered by registration, no implicit default veto. */
-  registerPolicy(policy: Policy): void;
+  registerPolicy(policy: Policy): () => void;
   /** Cleanup runs in reverse registration order, including failed initialization. */
   onStop(cleanup: () => Promise<void> | void): void;
 }
@@ -167,7 +167,7 @@ export class PluginHost {
             },
             registerPolicy: (policy: Policy) => {
               if (!registering) throw new Error("Plugin registration is closed");
-              this.policies.register(policy);
+              return this.policies.register(policy);
             },
             registerDispatcher: (strategy: DispatcherStrategy) => {
               if (!registering) throw new Error("Plugin registration is closed");

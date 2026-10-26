@@ -54,6 +54,43 @@ test("default review adapter composes once with a plugin policy and preserves or
   await host.stop();
 });
 
+test("replacement preserves order and in-flight snapshot; stale cleanup cannot remove replacement", async () => {
+  const registry = new PolicyRegistry();
+  let release!: () => void; let entered!: () => void;
+  const started = new Promise<void>(resolve => { entered = resolve; });
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const calls: string[] = [];
+  registry.register({ id: "first", async beforeTool() { calls.push("first"); entered(); await gate; } });
+  const unsubscribeOld = registry.register({ id: "changing", async beforeTool() { calls.push("old"); } });
+  const running = registry.beforeTool("/tmp", "read", {});
+  await started;
+  const unsubscribeNew = registry.replace({ id: "changing", async beforeTool() { calls.push("new"); } });
+  unsubscribeOld();
+  release(); await running;
+  assert.deepEqual(calls, ["first", "old"]);
+  calls.length = 0;
+  await registry.beforeTool("/tmp", "read", {});
+  assert.deepEqual(calls, ["first", "new"]);
+  unsubscribeNew(); unsubscribeNew();
+  calls.length = 0; await registry.beforeTool("/tmp", "read", {});
+  assert.deepEqual(calls, ["first"]);
+});
+
+test("required replacement is atomic; invalid candidates cannot erase a selected generation", async () => {
+  const registry = new PolicyRegistry(["required"]);
+  let calls = 0;
+  const unsubscribe = registry.register({ id: "required", async prepare() { calls++; } });
+  assert.throws(unsubscribe, /cannot be removed/);
+  assert.throws(() => registry.remove("required"), /cannot be removed/);
+  assert.throws(() => registry.replace({ id: "required", prepare: false } as never), /Invalid policy/);
+  await registry.prepare("/tmp", input); assert.equal(calls, 1);
+  registry.replace({ id: "required", async prepare() { calls += 10; } });
+  unsubscribe();
+  await registry.prepare("/tmp", input); assert.equal(calls, 11);
+  registry.clear();
+  await assert.rejects(registry.prepare("/tmp", input), /unavailable/);
+});
+
 test("plugin activation validates explicit required identities and clears hooks on failure/stop", async () => {
   const missing = new PluginHost(["review"]);
   await assert.rejects(missing.load([], context, []), /Required policy unavailable/);
