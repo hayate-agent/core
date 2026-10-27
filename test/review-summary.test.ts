@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { summarizeReview } from "../src/review-summary.js";
-import { reviewPrompt, type ReviewState, type ReviewRound } from "../src/review.js";
+import { summarizeReview } from "../src/builtin-plugins/review-summary.js";
+import { reviewPrompt, type ReviewState, type ReviewRound } from "../src/builtin-plugins/review.js";
 import type { Changeset } from "../src/changeset.js";
 
 test("review projection excludes full history and bounds current findings without mutating ledger", () => {

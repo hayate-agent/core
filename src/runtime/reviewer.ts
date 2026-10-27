@@ -1,5 +1,5 @@
 import type { AgentRuntime } from "../types.js";
-import type { ReviewBackend } from "../review.js";
+import type { AssessmentBackend as ReviewBackend } from "../assessment-backend.js";
 
 /** Shared by production wiring and live integration checks. */
 export function runtimeReviewer(runtime: AgentRuntime): ReviewBackend {

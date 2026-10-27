@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "repository": "https://git.vanillacore.net/harness/plugins",
-  "revision": "c6ac30163dd278ba77545797d4546cbebd8904b7",
+  "revision": "4493c9a0029f37ee1a1e0300a796d2f427235f24",
   "files": {
     "context-plugin.ts": "1da424038b5f5dd8e88999d86c4b26fecca5d21ca4170b83fdba9958eef787f0",
     "continuation-plugin.ts": "6c06371c5b791dadc27b440ee37444313006e869874d2e8ac372542cd2f0504e",
@@ -22,6 +22,13 @@
     "native-activity.ts": "45bdca1cf1cb9e4b93e7a64d1b7c7486adb91b5aef1f06b449b02e7e5e7f98e4",
     "gateway-baselines.ts": "7e4422bfef1e74ad4e767d4c88947b88082c45aeccb9b3da2193ccbff9baaa1c",
     "memory-service.ts": "44658bcf489fb676e9bfc03f8f6ba0590cf192cea057052acf77228ab379cfa9",
-    "policy-manager-plugin.ts": "ef61d6f32c3fadd75f16bec3732763f15e0fa131a12a7af30240a0599a44ef44"
+    "policy-manager-plugin.ts": "ef61d6f32c3fadd75f16bec3732763f15e0fa131a12a7af30240a0599a44ef44",
+    "review.ts": "9949609446c42b40f5c54b57442966f1827005572e1aa1577bb8c3e9bc75c00a",
+    "review-lifecycle.ts": "b58492dfc56c7a8fa119cd68d9627e5500eefa9bb34be71a1de6569eb6c958f1",
+    "review-scope.ts": "b3339cbf59042ebbcfc6d131469086eefd008279718712cd67362d1993493ce5",
+    "review-summary.ts": "097d9138cfb09ff69c49e282854a8c4e13462f40e8502e5d1bb68083db8649dd",
+    "review-guard.ts": "f2d135b0fea32b1a092d3d377555eec0aa3165fe8304fa08c50c5aef5cca1e4d",
+    "review-policy.ts": "f98ece923d85bd55758bc201a00b1151d99962b800541900c16594365e65d2b7",
+    "review-engine.ts": "e197d26a700ac8701b1f976fc200804d479f61e340d806217f89fc2e4264c9ca"
   }
 }
