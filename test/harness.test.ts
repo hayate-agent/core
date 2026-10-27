@@ -12,6 +12,31 @@ function setup(answer?: (t: string, k: string) => string) {
   return { runtime, harness, ch };
 }
 
+for (const source of ["channel", "api"] as const) {
+  test(`stop suppresses runtime prose for ${source}, clears queue and permits a fresh turn`, async () => {
+    const { harness, runtime, ch } = setup(() => "old handover");
+    harness.onStateChange = async () => {};
+    try {
+      const session = await harness.sessionFor("mem:room1");
+      runtime.sessions.get("mem:room1")!.hold();
+      await harness.submit({ ...msg("work"), id: "stopped", source, progressId: source === "channel" ? "progress" : undefined });
+      await new Promise<void>(r => setImmediate(r));
+      await harness.submit({ ...msg("queued"), source });
+      assert.equal(await harness.stopConversation("mem:room1"), 1);
+      await harness.drained();
+      assert.ok(ch.sent.every(entry => !entry.text.includes("old handover")));
+      assert.equal(ch.sent[0]?.meta?.outcome, "cancelled");
+      assert.deepEqual(harness.pendingInputs(), []);
+      assert.equal(harness.state("mem:room1").cancelling, undefined);
+      runtime.answer = () => "fresh answer";
+      await harness.submit({ ...msg("new work"), source });
+      await harness.drained();
+      assert.equal(ch.texts().at(-1), "fresh answer");
+      assert.deepEqual((session as import("./fakes.js").FakeSession).prompts, ["work", "new work"]);
+    } finally { await harness.stop(1000); }
+  });
+}
+
 test("editable gateway final references survive durable outbox restore and follow finished telemetry", async () => {
   const runtime = new FakeRuntime(() => "done");
   const harness = new Harness({ runtime, tickMs: 60000, gateways: { progress: "reduced" } });
