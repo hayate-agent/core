@@ -120,6 +120,7 @@ export interface HarnessOptions {
   memory?: { recall(sessionKey: string, text: string): Promise<string>; capture(turn: import("./memory.js").MemoryTurn): Promise<void> };
   contextMaintenance?: {
     guidance(key: string, session: RuntimeSession): Promise<string>;
+    admissionStatus?(key: string): Promise<{ execution?: string }>;
     request?(key: string, request: { action: "handover"; preserve: string; resume: string }): Promise<void>;
     beforeTurn?(key: string, session: RuntimeSession, rotate: (handover: import("./context-maintenance.js").ContextRecord["handover"]) => Promise<RuntimeSession>, target?: Address, incomingText?: string): Promise<string | undefined>;
     boundary(key: string, session: RuntimeSession, rotate: (handover: import("./context-maintenance.js").ContextRecord["handover"]) => Promise<RuntimeSession>, target?: Address): Promise<string | undefined>;
@@ -379,6 +380,55 @@ export class Harness {
       this.sessions.set(key, s);
     }
     return s;
+  }
+
+  /** Apply already-admitted maintenance without creating a working/model turn.
+   * Busy/paused owners leave durable intent pending for a later boundary.
+   */
+  async maintainIdle(key: string): Promise<"deferred" | "processed"> {
+    const s = this.sessions.get(key), maintenance = this.opts.contextMaintenance;
+    if (!s?.session || !maintenance || this.paused || this.stopping || this.gatewayChanging || this.activeDeliveries ||
+        s.running || s.current || s.queue.length || s.unsaved || s.outbox.length) return "deferred";
+    this.gatewayChanging = true;
+    s.running = true;
+    const abort = new AbortController();
+    this.turnAbort.set(key, abort);
+    const eligible = () => !abort.signal.aborted && !this.paused && !this.stopping &&
+      !s.current && !s.queue.length && !s.unsaved && !s.outbox.length && !this.inbox.accepting.size;
+    try {
+      if ((await maintenance.admissionStatus?.(key))?.execution !== "pending" || !eligible()) return "deferred";
+      let session = s.session;
+      const rotate = async (handover: import("./context-maintenance.js").ContextRecord["handover"]) => {
+        if (!handover) throw Error("Missing handover checkpoint");
+        if (!eligible()) throw Error("Idle maintenance interrupted before rotation");
+        const next = await this.runtime.open(key, { fresh: true });
+        try {
+          if (!eligible()) throw Error("Idle maintenance interrupted during rotation");
+          if (!next.seedHandover) throw Error("Runtime cannot seed handover");
+          await next.seedHandover(handover.text);
+          if (!eligible()) throw Error("Idle maintenance interrupted during seeding");
+        } catch (error) { await next.dispose(); throw error; }
+        const old = session;
+        session = next; s.session = next;
+        await old.dispose();
+        return next;
+      };
+      await maintenance.guidance(key, session);
+      if (!eligible()) return "deferred";
+      await maintenance.beforeTurn?.(key, session, rotate);
+      if (!eligible()) return "deferred";
+      await maintenance.boundary(key, session, rotate);
+      await this.onStateChange?.();
+      return "processed";
+    } finally {
+      abort.abort();
+      if (this.turnAbort.get(key) === abort) this.turnAbort.delete(key);
+      s.running = false; this.gatewayChanging = false;
+      this.notifyQuiet();
+      if (!this.stopping && !this.paused) for (const pending of this.sessions.values()) {
+        if (pending.queue.length || pending.outbox.length) void this.pump(pending);
+      }
+    }
   }
 
   /** Operator-only idle boundary, reserved synchronously against queued pumps. */
