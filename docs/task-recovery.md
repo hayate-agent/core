@@ -36,8 +36,20 @@ At queue-empty prompt boundaries and scheduler ticks, a concrete retained step i
 claimed once into the durable inbox. Intermediate questions are answered first, then
 the original work resumes, even when the question arrived during a working turn.
 Completion of the question cannot complete another task. Live, paused or blocked
-background executions suppress automatic resumption; completed host results are
-matched to their original task identity rather than the latest question. `/stop`
+background executions suppress execution of their associated task, not independent
+assessment or unrelated retained work. Legacy executions without a task identity
+conservatively suppress all autonomous execution. Completed host results are
+matched to their original task identity rather than the latest question.
+
+Independent post-turn assessment also runs for explicit continuation and timed-wait
+checkpoints; its result does not overwrite an already scheduled step or wait timer.
+Other active retained mandates lacking a next step are assessed separately against
+their own original authorization. The host supplies bounded evidence (last eight
+user/assistant excerpts, up to 2000 characters each, and up to eight retained task
+summaries), persisted across restart. The bundled plugin interprets that evidence;
+it cannot turn historical context into new authorization. Existing terminal/stopped
+tasks are not automatically resurrected. No full transcript reconstruction or
+arbitrary inferred parent-child relationship is claimed here. `/stop`
 revokes all retained mandates in the conversation. Pause, deadlines, chain limits,
 controller exclusions and durable-save-before-execution remain enforced. There is
 no natural-language cancel/supersede inference: use explicit stop/pause controls. A request interrupted before its first checkpoint uses

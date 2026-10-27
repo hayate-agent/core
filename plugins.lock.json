@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "repository": "https://git.vanillacore.net/harness/plugins",
-  "revision": "76d10edaecb58918759bb09715908619db33c516",
+  "revision": "5a1d8a5db899da39bcb24c9a4ba2f36106d6ac15",
   "files": {
     "context-plugin.ts": "1da424038b5f5dd8e88999d86c4b26fecca5d21ca4170b83fdba9958eef787f0",
     "continuation-plugin.ts": "6c06371c5b791dadc27b440ee37444313006e869874d2e8ac372542cd2f0504e",
@@ -32,7 +32,7 @@
     "review-engine.ts": "e197d26a700ac8701b1f976fc200804d479f61e340d806217f89fc2e4264c9ca",
     "boundary-assessor.ts": "50673771d39126c132829704b5b2ab6172092e867245f8edca8c9b0eb71615cb",
     "tool-result-projector.ts": "69658e2adef5d5327797762886199b87fd3bff94f20beab8a199280e0d517746",
-    "completion-prompt.ts": "8eb52e2e728084a331bf48c589ca0578b1b88856f9e63c35a1c1112a1dd38879",
+    "completion-prompt.ts": "29ca66c495da1270d9c5bbb096bfa36e3629e49f5744b22dab0412baeb485dcd",
     "nightly-default.ts": "d807ad49e01dcb867f97fc748362e73e877c3540892755538eb2cc1840da2736",
     "improvement-report.ts": "fa9bd1b1f18ba276539981c2c9e2c6c5c5f0c9764b2890cde818a72154ad5679",
     "extension-manager-plugin.ts": "51ea7b167e2683b180f510a005305975afabb22819e02aa03aafbc434061200c",

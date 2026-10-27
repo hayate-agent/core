@@ -17,7 +17,7 @@ export async function assessCompletion(backend: ReviewBackend, input: Inbound, r
   model: string | undefined = undefined, now = Date.now, promptStrategy?: CompletionPrompt): Promise<NonNullable<Inbound["continuation"]> | undefined> {
   if (!promptStrategy) return;
   const checkpoint = input.continuation;
-  if (checkpoint?.state === "continue" || input.source === "api" || input.sessionKey === "improvement:nightly" ||
+  if (input.source === "api" || input.sessionKey === "improvement:nightly" ||
       (input.continuationDepth ?? 0) >= 20 || signal.aborted || !authorization ||
       !authorization.task.trim() || authorization.task.length > 8000 ||
       (authorization.expiresAt !== undefined && (!Number.isSafeInteger(authorization.expiresAt) || authorization.expiresAt <= now()))) return;

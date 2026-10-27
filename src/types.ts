@@ -38,6 +38,11 @@ export interface Inbound {
   continuationExpiresAt?: number;
   /** Core-captured original chat input; inherited by generated follow-ups, never reply text. */
   completionAnchor?: { id: string; task: string; receivedAt: number };
+  /** Host-owned bounded evidence for independent completion assessment; never an authority grant. */
+  completionContext?: {
+    recent: Array<{ role: "user" | "assistant"; text: string }>;
+    tasks: Array<{ id: string; original: string; state: string; next?: string; wait?: { reason: string; deadline: number } }>;
+  };
   sender?: string;
   /** Where replies for this input are delivered. */
   replyTo?: Address;

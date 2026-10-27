@@ -10,7 +10,8 @@ test("completion classifier needs independent authorization and preserves explic
   const yes = backend('{"state":"continue","next":"Run the missing regression test"}');
   assert.equal(await assessCompletion(yes, input(), "Still need tests", undefined, signal(), undefined, () => 1000), undefined);
   const planned = input(); planned.continuation = { state: "continue", next: "Already scheduled" };
-  assert.equal(await assessCompletion(yes, planned, "Still need tests", auth, signal(), undefined, () => 1000), undefined);
+  assert.deepEqual(await assessCompletion(yes, planned, "Still need tests", auth, signal(), undefined, () => 1000), { state: "continue", next: "Run the missing regression test", expiresAt: 2000 });
+  assert.equal(planned.continuation.next, "Already scheduled");
   assert.deepEqual(await assessCompletion(yes, input(), "Still need tests", auth, signal(), undefined, () => 1000), { state: "continue", next: "Run the missing regression test", expiresAt: 2000 });
 });
 test("uncertain, malformed, expired, cancelled and budget-exhausted assessments fail closed", async () => {
