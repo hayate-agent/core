@@ -74,6 +74,17 @@ test("maintenance deadline aborts compaction and rejects instead of hanging", as
   assert.equal(aborted, 1);
 });
 
+test("maintenance timeout has a stable safe code", async () => {
+  await assert.rejects(boundedMaintenance(() => new Promise(() => {}), () => {}, 1), (err: any) => err.code === "timeout");
+});
+
+for (const kind of ["cancelled", "save"] as const) test(`maintenance ${kind} has a safe stage and code`, async () => {
+  const agent = fakeAgentSession();
+  Object.assign(agent, { compact: async () => { if (kind === "cancelled") throw Error("Compaction cancelled"); return { summary: "checkpoint" }; } });
+  const session = new PiSession(agent as never, models as never, {}, async () => { throw Object.assign(Error("secret path"), { code: "ENOSPC" }); });
+  await assert.rejects(session.summarize("state"), (err: any) => err.stage === (kind === "save" ? "save" : "summary") && err.code === (kind === "save" ? "ENOSPC" : "cancelled") && !err.message.includes("secret"));
+});
+
 test("explicit off supplies reasoning_effort none and restores model metadata", async () => {
   const agent = fakeAgentSession();
   const local = { provider: "local", id: "reasoner", api: "openai-completions", reasoning: true };

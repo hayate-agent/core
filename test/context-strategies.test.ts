@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { contextStrategies } from "../src/context-strategies.js";
+import { contextStrategies, diagnosedBoundaryAssessor } from "../src/context-strategies.js";
+import { boundaryAssessor } from "../src/builtin-plugins/boundary-assessor.js";
 import { pruningPolicy } from "../src/tool-result-pruning.js";
 
 const context = { backend: { async review() { throw Error("must not call bundled model"); } }, model: () => undefined };
@@ -23,4 +24,17 @@ test("missing or malformed strategy fails rather than silently loading bundled b
   await assert.rejects(contextStrategies(home, "bad.mjs", baseline, context), /Invalid context strategies/);
   const selected = await contextStrategies(home, undefined, { apiVersion: 1, create: () => ({ assess: async () => "unknown", project: messages => messages }) }, context);
   assert.equal(await selected.assess({ phase: "before", incoming: "", recent: "", pressureSinceCompaction: false }), "unknown");
+});
+
+for (const outcome of ["failed", "timeout", "malformed", "keep"] as const) test(`bundled assessor ${outcome} remains advisory with safe diagnostics`, async t => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const assess = diagnosedBoundaryAssessor({ review: async () => {
+    if (outcome === "failed") throw Error("secret provider token");
+    if (outcome === "timeout") return new Promise<string>(() => {});
+    return outcome === "malformed" ? "not json" : '{"action":"keep"}';
+  } }, () => undefined, boundaryAssessor);
+  const pending = assess({ phase: "before", incoming: "", recent: "", pressureSinceCompaction: false });
+  if (outcome === "timeout") t.mock.timers.tick(10000);
+  if (outcome === "failed" || outcome === "timeout") await assert.rejects(pending, (err: any) => err.stage === "assessment" && err.code === outcome && !err.message.includes("secret"));
+  else assert.equal(await pending, outcome === "keep" ? "keep" : "unknown");
 });
