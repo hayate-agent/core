@@ -52,6 +52,8 @@ export interface DurableTask {
 export interface SessionState {
   key: string;
   task?: DurableTask;
+  /** Retained mandates, independent of the most recent channel message. */
+  tasks?: DurableTask[];
   session?: RuntimeSession;
   opening?: Promise<RuntimeSession>;
   queue: Inbound[];
@@ -390,11 +392,41 @@ export class Harness {
     }
   }
 
+  private tasks(s: SessionState): DurableTask[] {
+    const tasks = [...(s.tasks ?? [])];
+    if (s.task && !tasks.some(task => task.id === s.task!.id)) tasks.push(s.task);
+    return tasks;
+  }
+
+  private hasPendingDependency(key: string): boolean {
+    const store = this.opts.executionStore;
+    return !!store?.list(key).some(e => !["completed", "cancelled"].includes(e.status));
+  }
+
+  /** Synchronous claim: queue and checkpoint are saved together before execution. */
+  private queueRunnableTask(s: SessionState): boolean {
+    if (!this.onStateChange || this.paused || this.stopping || s.queue.length || s.current ||
+        s.key === "improvement:nightly" || this.stoppingHostParents.has(s.key) ||
+        this.opts.externallyRecoveredSession?.(s.key) ||
+        this.hasPendingDependency(s.key)) return false;
+    const task = this.tasks(s).find(task => task.state === "active" && task.next?.trim() &&
+      Number.isSafeInteger(task.depth) && task.depth >= 0 && task.depth < 20 &&
+      (task.expiresAt === undefined || (Number.isSafeInteger(task.expiresAt) && task.expiresAt > this.now())));
+    if (!task) return false;
+    s.queue.push({ id: `task:${task.id}:${task.depth + 1}`, source: "cron", sessionKey: s.key,
+      taskId: task.id, continuationDepth: task.depth + 1, continuationExpiresAt: task.expiresAt,
+      completionAnchor: task.anchor, replyTo: s.replyTo,
+      text: `Resume the explicitly authorized task after an interruption. Verify actual state and completed side effects; do not repeat them or broaden authority. Original task:\n${task.original}\nNext step:\n${task.next}` });
+    s.unsaved = true;
+    return true;
+  }
+
   private resetContinuation(input: Inbound): void { input.continuation = undefined; }
 
   /** Capture trusted parent state, never model tool arguments. */
   dependencyCheckpoint(key: string): import("./execution.js").Execution["dependency"] {
-    const s = this.sessions.get(key), input = s?.current, task = s?.task;
+    const s = this.sessions.get(key), input = s?.current;
+    const task = s && this.tasks(s).find(task => task.id === input?.taskId);
     if (!input || !task || input.taskId !== task.id || ["stopped", "completed"].includes(task.state)) return;
     if (input.source === "host" && !this.resultMandate(input)) return;
     return { taskId: task.id, original: task.original, depth: input.continuationDepth ?? 0,
@@ -404,7 +436,8 @@ export class Harness {
   resultMandate(input: Inbound): import("./execution.js").Execution["dependency"] {
     if (input.source !== "host" || input.sessionKey.startsWith("dispatch:") || input.sessionKey.startsWith("subagent:")) return;
     const execution = this.opts.executionStore?.list(input.sessionKey).find(e => e.id === input.hostEvent?.executionId);
-    const mandate = execution?.dependency, task = this.sessions.get(input.sessionKey)?.task;
+    const mandate = execution?.dependency, session = this.sessions.get(input.sessionKey);
+    const task = session && this.tasks(session).find(task => task.id === mandate?.taskId);
     if (!mandate || !task || execution?.status !== "completed" || execution.parentStopped ||
         this.stoppingHostParents.has(input.sessionKey) || !this.opts.hostEventAllowed?.(input) ||
         task.id !== mandate.taskId || task.original !== mandate.original || task.depth !== mandate.depth ||
@@ -700,7 +733,7 @@ export class Harness {
     const dropped = s.queue.length;
     for (const input of s.queue) this.inbox.unsaved.delete(input);
     s.queue.length = 0;
-    if (s.task) s.task.state = "stopped";
+    for (const task of this.tasks(s)) task.state = "stopped";
     if (s.current) {
       s.cancelling = s.current; s.current.continuation = undefined;
       if (s.current.executionTurnId) await this.opts.executionStore?.stopTurn(s.current.executionTurnId, sessionKey);
@@ -812,11 +845,11 @@ export class Harness {
   /** Reconstruct checkpointed work, or assess a retained mandate once. No polling. */
   async recoverTasks(): Promise<void> {
     for (const s of this.sessions.values()) {
-      if (this.opts.externallyRecoveredSession?.(s.key)) continue;
-      const task = s.task;
-      const assessed = task && !task.next?.trim();
+      if (this.opts.externallyRecoveredSession?.(s.key) || this.hasPendingDependency(s.key)) continue;
+      for (const task of this.tasks(s)) {
+      const assessed = !task.next?.trim();
       if (assessed) await this.assessStartupTask(s, task);
-      if (!task || s.task !== task || (assessed && this.paused) || this.stopping || task.state !== "active" || !task.next?.trim() || !Number.isSafeInteger(task.depth) || task.depth < 0 || task.depth >= 20 ||
+      if (!this.tasks(s).includes(task) || (assessed && this.paused) || this.stopping || task.state !== "active" || !task.next?.trim() || !Number.isSafeInteger(task.depth) || task.depth < 0 || task.depth >= 20 ||
           (task.expiresAt !== undefined && (!Number.isSafeInteger(task.expiresAt) || task.expiresAt <= this.now())) ||
           s.current || s.queue.length || s.key === "improvement:nightly") continue;
       const input: Inbound = { id: `task:${task.id}:${task.depth + 1}`, source: "heartbeat", sessionKey: s.key,
@@ -826,11 +859,12 @@ export class Harness {
       this.inbox.restored.add(input);
       try { await this.onStateChange?.(); }
       catch (error) { s.queue.splice(s.queue.indexOf(input),1); this.inbox.restored.delete(input); throw error; }
+      }
     }
   }
 
   private async assessStartupTask(s: SessionState, task: DurableTask): Promise<void> {
-    const eligible = () => s.task === task && task.state === "active" && !task.next?.trim() &&
+    const eligible = () => this.tasks(s).includes(task) && task.state === "active" && !task.next?.trim() &&
       !!task.id && !!task.original.trim() && task.original.length <= 8000 &&
       (!task.anchor || task.anchor.task === task.original) &&
       Number.isSafeInteger(task.depth) && task.depth >= 0 && task.depth < 20 &&
@@ -838,7 +872,7 @@ export class Harness {
       !s.current && !s.queue.length && !s.running && !this.paused && !this.stopping &&
       s.key !== "improvement:nightly" && !this.stoppingHostParents.has(s.key) &&
       !this.opts.executionStore?.list(s.key).some(e => !["completed", "cancelled"].includes(e.status));
-    if (!this.onStateChange || !this.opts.completionCheck || task.recoveryAssessment || !eligible()) return;
+    if (!this.onStateChange || !this.opts.completionCheck || task.recoveryAssessment || this.hasPendingDependency(s.key) || !eligible()) return;
     // Claim before inference; a crash or failed persistence can never replay inference.
     task.recoveryAssessment = "claimed";
     await this.onStateChange?.();
@@ -897,6 +931,7 @@ export class Harness {
         }
         // Replies of finished turns go out first (FIFO) and are never recomputed.
         if (!(await this.outbox.flush(s.key, s.outbox))) break;
+        if (!s.queue.length && this.queueRunnableTask(s)) continue;
         if (!s.queue.length || this.paused) break;
         const input = s.queue[0]!;
         // Not yet durable (acceptance/inbox save pending) or restored before channels are ready.
@@ -918,7 +953,9 @@ export class Harness {
         this.resetContinuation(input);
         if (input.source === "channel" && !(input.continuationDepth ?? 0)) {
           input.taskId = input.taskId ?? input.id ?? randomUUID();
-          s.task = { id: input.taskId, original: input.text, state: "active", depth: 0, anchor: input.completionAnchor };
+          const existing = this.tasks(s).find(task => task.id === input.taskId);
+          s.tasks = this.tasks(s);
+          s.task = existing ?? { id: input.taskId, original: input.text, state: "active", depth: 0, anchor: input.completionAnchor };
         }
         if (this.opts.executionStore) input.executionTurnId ??= randomUUID();
         if (replayable(input)) {
@@ -949,13 +986,13 @@ export class Harness {
             s.outbox.push(...structuredClone(settled.outbox));
             input.continuation = structuredClone(settled.continuation);
             s.goal = structuredClone(settled.goal);
-            if (durableTurn?.stopped && s.task && input.taskId === s.task.id) s.task.state = "stopped";
+            if (durableTurn?.stopped) for (const task of this.tasks(s)) if (task.id === input.taskId) task.state = "stopped";
             const consumed = new Set(settled.consumed);
             s.queue = s.queue.filter(item => !item.executionTurnId || !consumed.has(item.executionTurnId));
           } else {
             if (durableTurn?.stopped) {
               s.cancelling = input;
-              if (s.task && input.taskId === s.task.id) s.task.state = "stopped";
+              for (const task of this.tasks(s)) if (task.id === input.taskId) task.state = "stopped";
             }
             if (ledger && input.executionTurnId) await ledger.beginTurn(input.executionTurnId, s.key);
             await this.runTurn(s, input);
@@ -998,16 +1035,18 @@ export class Harness {
         // Follow-up is part of the same inbox→outbox checkpoint, never a recursive
         // model call. A failed save holds both reply and continuation.
         const inheritedDeadline = Math.min(input.continuationExpiresAt ?? Infinity, input.continuation?.expiresAt ?? Infinity);
-        if (s.task && input.taskId === s.task.id && s.task.state !== "stopped") {
+        const task = this.tasks(s).find(task => task.id === input.taskId);
+        if (task && task.state !== "stopped") {
           const plan = input.continuation;
-          s.task.state = plan?.state === "continue" ? "active" : plan?.state ?? "waiting";
-          s.task.next = plan?.state === "continue" || plan?.wait ? plan.next : undefined;
-          s.task.wait = plan?.state === "waiting" && plan.wait ? { reason: plan.wait.reason,
+          task.state = plan?.state === "continue" ? "active" : plan?.state ?? "active";
+          task.next = plan?.state === "continue" || plan?.wait ? plan.next : undefined;
+          task.wait = plan?.state === "waiting" && plan.wait ? { reason: plan.wait.reason,
             nextAt: this.now() + plan.wait.retryAfterMs, deadline: Math.min(plan.wait.deadline, inheritedDeadline) } : undefined;
-          s.task.depth = input.continuationDepth ?? 0;
-          s.task.expiresAt = inheritedDeadline === Infinity ? undefined : inheritedDeadline;
+          task.depth = input.continuationDepth ?? 0;
+          task.expiresAt = inheritedDeadline === Infinity ? undefined : inheritedDeadline;
+          task.recoveryAssessment = undefined;
         }
-        if ((input.source !== "host" || this.resultMandate(input)) && input.continuation?.state === "continue" && input.continuation.next && (input.continuationDepth ?? 0) < 20 && input.source !== "api" && s.key !== "improvement:nightly" && !s.queue.length && !this.stopping) {
+        if ((input.source !== "host" || this.resultMandate(input)) && input.continuation?.state === "continue" && input.continuation.next && (input.continuationDepth ?? 0) < 20 && input.source !== "api" && s.key !== "improvement:nightly" && !s.queue.length && !this.stopping && !this.hasPendingDependency(s.key)) {
           s.queue.push({ id: randomUUID(), sessionKey: s.key, source: "cron", replyTo: input.replyTo ?? s.replyTo,
             text: `Continue the explicitly authorized task with this recorded next step. Recheck blockers and authorization; do not repeat completed side effects.\n${input.continuation.next}`,
             taskId: input.taskId,
@@ -1021,7 +1060,7 @@ export class Harness {
           await this.opts.turnCommitted?.(input);
           if (input.executionTurnId) await this.opts.executionStore?.acknowledgeTurn(input.executionTurnId, s.key);
           const tracked = this.activities.get(input);
-          tracked?.activity.finish(s.task?.state === "stopped" ? "cancelled" : tracked.outcome);
+          tracked?.activity.finish(task?.state === "stopped" ? "cancelled" : tracked.outcome);
           this.activities.delete(input);
         } catch (err) {
           this.activities.get(input)?.activity.finish("failed");
@@ -1339,7 +1378,9 @@ export class Harness {
     if (this.paused || this.stopping || this.gatewayChanging || this.activeDeliveries || this.outbox.held) return;
     for (const s of this.sessions.values()) {
       if (s.running || s.queue.length || s.outbox.length || s.unsaved) continue;
-      const task = s.task;
+      for (const task of this.tasks(s)) {
+      if (task.state === "active" && !task.next) await this.assessStartupTask(s, task);
+      if (this.queueRunnableTask(s)) break;
       if (task?.state === "waiting" && task.wait && (at >= task.wait.nextAt || at >= task.wait.deadline || (task.expiresAt !== undefined && at >= task.expiresAt)) && this.onStateChange &&
           s.key !== "improvement:nightly" && !this.opts.externallyRecoveredSession?.(s.key)) {
         const wait = task.wait;
@@ -1364,6 +1405,8 @@ export class Harness {
           text: `Recheck a persisted wait within the original authorized task. The timer is NOT evidence that the condition is satisfied. First verify the condition and completed side effects; do not repeat them or broaden authority. If still waiting, register another bounded wait within the same deadline.\nOriginal task: ${task.original}\nCondition: ${wait.reason}\nSafe verification step: ${task.next}` });
         continue;
       }
+      }
+      if (s.queue.length) { void this.pump(s); continue; }
       if (s.loop && !s.loop.paused && at >= s.loop.nextAt) {
         s.loop.nextAt = at + s.loop.everyMs;
         if (s.loop.remaining !== undefined && --s.loop.remaining <= 0) {
@@ -1397,8 +1440,8 @@ export class Harness {
   snapshotSessions(): PersistedSession[] {
     const out: PersistedSession[] = [];
     for (const s of this.sessions.values()) {
-      if (!s.task && !s.heartbeat && !s.heartbeatDisabled && !s.loop && !s.goal && !s.replyTo) continue;
-      out.push({ key: s.key, task: s.task ? structuredClone(s.task) : undefined, replyTo: s.replyTo, heartbeat: s.heartbeat, heartbeatDisabled: s.heartbeatDisabled, loop: s.loop, goal: s.goal });
+      if (!this.tasks(s).length && !s.heartbeat && !s.heartbeatDisabled && !s.loop && !s.goal && !s.replyTo) continue;
+      out.push({ key: s.key, task: s.task ? structuredClone(s.task) : undefined, tasks: structuredClone(this.tasks(s)), replyTo: s.replyTo, heartbeat: s.heartbeat, heartbeatDisabled: s.heartbeatDisabled, loop: s.loop, goal: s.goal });
     }
     return out;
   }
@@ -1406,7 +1449,8 @@ export class Harness {
   restoreSessions(list: PersistedSession[]): void {
     for (const p of list) {
       const s = this.state(p.key);
-      s.task = p.task ? structuredClone(p.task) : undefined;
+      s.tasks = p.tasks ? structuredClone(p.tasks) : [];
+      s.task = p.task ? s.tasks.find(task => task.id === p.task!.id) ?? structuredClone(p.task) : undefined;
       s.replyTo = p.replyTo;
       s.heartbeat = p.heartbeat;
       s.heartbeatDisabled = p.heartbeatDisabled;

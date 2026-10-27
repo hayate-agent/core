@@ -51,6 +51,7 @@ try {
    return 'Regression remains';
  };
  await harness.accept({id:'result',source:'host',sessionKey:'main',hostEvent:{executionId:child.id},text:child.result,taskId:'forged',completionAnchor:{id:'forged',task:'Deploy',receivedAt:0}});await harness.waitForSessionIdle('main');
+ await followDispatcher.stop(); await harness.tick(); await harness.waitForSessionIdle('main');
  assert.equal(assessments,explicit?0:1);assert.equal(harness.sessions.get('main').task.state,'completed');assert.equal(harness.sessions.get('main').task.original,task.original);
  const derived=store.list('main').find(e=>e.requestId==='derived');assert.equal(derived.dependency.taskId,task.id);assert.equal(derived.dependency.original,task.original);
  harness.sessions.get('main').current={source:'host',sessionKey:'main',hostEvent:{executionId:child.id},text:child.result};
