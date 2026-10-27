@@ -46,6 +46,7 @@ export interface ExecutionEvent {
   text: string;
 }
 export interface TurnSettlement {
+  cronOutput?: string;
   outbox: import("./delivery/outbox.js").OutboxEntry[];
   continuation?: import("./types.js").Inbound["continuation"];
   goal?: import("./harness.js").Goal;

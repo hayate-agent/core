@@ -62,7 +62,7 @@ tools. Plugins are trusted process code, not sandboxed extensions.
 
 - **Sessions:** `/new`, `/title`, `/sessions`, `/resume`, `/compact`.
 - **While working:** `/stop`, `/queue`, `/steer`, `/busy`.
-- **Ongoing tasks:** `/goal`, `/heartbeat`, `/loop`, `/cron`.
+- **Ongoing tasks:** `/goal`, `/heartbeat`, `/loop`, `/cron`. See [Cron reports](docs/cron-reports.md) for internal/user audiences and retained follow-through.
 - **Configuration:** `/model`, `/reasoning`, `/personality`, `/skills`.
 - **Discoverability:** `/help`, `/status`, `/harness` (bundled development guide).
 

@@ -56,6 +56,13 @@ export class Dispatcher {
     this.recovered = true;
     await this.kick();
   }
+  /** Host-only scheduled submission; never expose mandate as a model tool argument. */
+  async submitScheduled(parent: string, requestId: string, input: string, mandate: NonNullable<Execution["dependency"]>): Promise<Execution> {
+    if (!this.recovered || this.stopped) throw Error("Dispatcher unavailable");
+    const task = await this.store.submit(parent, requestId, input, this.strategy.name, this.strategy.version, mandate);
+    await this.kick();
+    return task;
+  }
   async submit(parent: string, requestId: string, input: string): Promise<Execution> {
     if (!this.recovered || this.stopped) throw Error("Dispatcher unavailable");
     const task = await this.store.submit(parent, requestId, input, this.strategy.name, this.strategy.version, this.checkpoint?.(parent));

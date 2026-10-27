@@ -23,6 +23,9 @@ export interface Inbound {
   source: InputSource;
   /** Host event identity for authority checks; event data never grants continuation. */
   hostEvent?: { executionId: string };
+  /** Trusted scheduler metadata; output never expands the configured follow-up scope. */
+  cronReport?: { job: string; runId: string; createdAt: number; audience: "agent" | "user";
+    original: string; authorization?: string; maxTasks: number; output?: string; completedOutput?: string };
   /** Stable core ledger identity, independent of transport IDs and runtime sessions. */
   executionTurnId?: string;
   /** Durable, bounded continuation plan supplied during this turn. */
