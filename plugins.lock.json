@@ -39,9 +39,10 @@
     "tool-result-projector.ts": "69658e2adef5d5327797762886199b87fd3bff94f20beab8a199280e0d517746",
     "wasm-tools-plugin.ts": "438c6ac8899e283e4268f51ef451275bf16a37b584db84ee8302a26200cc70de",
     "maintenance-control-plugin.ts": "6c8033b24190672a7200e6c60ed99c6a14b89de54e535c5ce33b2b07cea27cf4",
-    "maintenance-client.ts": "ed8a8178f38ed8c3dc7b58e339ca3f358baf48e6feee298c9f83ce2ac6c755c5"
+    "maintenance-client.ts": "ed8a8178f38ed8c3dc7b58e339ca3f358baf48e6feee298c9f83ce2ac6c755c5",
+    "completion-strategy-plugin.ts": "5f69464b4648d9b360020eac5b967e924549236eaff92f3c5e68f79826503b6f"
   },
   "repository": "https://git.vanillacore.net/harness/plugins",
-  "revision": "ca411a371f70969558c351a01d52b02827c655f8",
+  "revision": "46ef07bbb499193d9a5963a3c8fe4322ee321dd4",
   "schema": 1
 }
