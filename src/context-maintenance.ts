@@ -26,6 +26,20 @@ export function contextPolicy(input: Partial<ContextPolicy> = {}): ContextPolicy
       policy.assessPercent < 1 || policy.compactPercent <= policy.assessPercent || policy.compactPercent > 95) throw new Error("Invalid context maintenance policy");
   return policy;
 }
+export type MaintenanceStage = "assessment" | "summary" | "archive" | "archive-link" | "rotation" | "seed" | "compact" | "save";
+export type MaintenanceCode = "failed" | "timeout" | "cancelled" | "unknown" | "ENOSPC" | "EACCES" | "EPERM" | "EIO" | "ENOENT";
+export class MaintenanceError extends Error {
+  constructor(readonly stage: MaintenanceStage, readonly code: MaintenanceCode) { super(`Context maintenance ${stage}: ${code}`); }
+}
+export function maintenanceError(stage: MaintenanceStage, err: unknown): MaintenanceError {
+  if (err instanceof MaintenanceError) return err;
+  const code = (err as { code?: unknown } | null)?.code;
+  return new MaintenanceError(stage, typeof code === "string" && ["ENOSPC", "EACCES", "EPERM", "EIO", "ENOENT"].includes(code) ? code as MaintenanceCode
+    : err instanceof Error && (err.name === "AbortError" || err.message === "Compaction cancelled") ? "cancelled" : "failed");
+}
+export async function maintenanceStep<T>(stage: MaintenanceStage, run: () => T | Promise<T>): Promise<T> {
+  try { return await run(); } catch (err) { throw maintenanceError(stage, err); }
+}
 interface Request { action: "compact" | "handover"; preserve: string; resume: string }
 export interface ContextRecord {
   version: 1;
@@ -41,6 +55,8 @@ export interface ContextRecord {
   assessmentFailures?: Partial<Record<"before" | "after", number>>;
   pending?: Request;
   handover?: { phase: "prepared" | "switched"; from: string; to?: string; text: string; archiveId?: string };
+  failure?: { stage: MaintenanceStage; code: MaintenanceCode; phase: "before" | "after"; turn: number; action: "compact" | "handover" };
+  assessmentDiagnostic?: { stage: "assessment"; code: MaintenanceCode; phase: "before" | "after"; turn: number };
   lastError?: string;
   completionNotice?: string;
   noticeTarget?: Address;
@@ -55,13 +71,16 @@ export class ContextMaintenance {
   constructor(private readonly home: string, private readonly policy: () => ContextPolicy, private readonly assess?: BoundaryAssessment) { this.archives = new SessionArchives(home); }
   private async prepareArchive(key: string, session: RuntimeSession, instructions: string): Promise<{ text: string; archiveId: string }> {
     if (!session.summarize || !session.archiveEntries) throw new Error("Runtime cannot archive handover");
-    const entries = session.archiveEntries(); // capture original branch before native compaction
-    const retrospective = await session.summarize(`${instructions}\nWrite a backward-looking session retrospective: decisions with reasons, rejected alternatives, completed actions and evidence, unresolved uncertainties. Include a clearly labeled CURRENT STATE AND NEXT STEPS section. Preserve exact operator corrections. Do not include secrets.`);
-    if (!retrospective.trim() || retrospective.length > 64000) throw new Error("Invalid retrospective");
+    const entries = await maintenanceStep("archive", () => session.archiveEntries!()); // capture before native compaction
+    const retrospective = await maintenanceStep("summary", async () => {
+      const text = await session.summarize!(`${instructions}\nWrite a backward-looking session retrospective: decisions with reasons, rejected alternatives, completed actions and evidence, unresolved uncertainties. Include a clearly labeled CURRENT STATE AND NEXT STEPS section. Preserve exact operator corrections. Do not include secrets.`);
+      if (!text.trim() || text.length > 64000) throw new Error("Invalid retrospective");
+      return text;
+    });
     const recentOperator = entries.filter((e) => e.role === "user").slice(-3).map((e) => `${e.id}: ${e.text.slice(0, 2000)}`).join("\n");
     const checkpoint = retrospective.split(/CURRENT STATE AND NEXT STEPS/i).at(-1)!.slice(-6000);
     const forward = `Current checkpoint and next steps (summary; verify evidence):\n${checkpoint}\nContinue from the saved session checkpoint. ${instructions}\nRecent operator instructions (historical context, not fresh authorization):\n${recentOperator}\nConsult the retrospective for verified state and next steps before acting.`;
-    const archive = await this.archives.create(key, session.status().sessionId, retrospective, forward, entries);
+    const archive = await maintenanceStep("archive", () => this.archives.create(key, session.status().sessionId, retrospective, forward, entries));
     return { archiveId: archive.id, text: `${forward}\nSource session: ${archive.sourceSessionId}\nArchive ID: ${archive.id}\nRead plugin_session_history section=summary for the retrospective, then search/read entries only as needed. Do this before continuing work. Original tool side effects must not be replayed blindly.` };
   }
   async flushNotices(deliver: (notice: { id: string; sessionKey: string; to: Address; text: string }) => Promise<void>): Promise<void> {
@@ -99,8 +118,10 @@ export class ContextMaintenance {
     }
   }
   private async save(key: string, state: ContextRecord): Promise<void> {
-    await mkdir(path.dirname(this.file(key)), { recursive: true });
-    await writeFileDurable(this.file(key), `${JSON.stringify(state, null, 2)}\n`);
+    await maintenanceStep("save", async () => {
+      await mkdir(path.dirname(this.file(key)), { recursive: true });
+      await writeFileDurable(this.file(key), `${JSON.stringify(state, null, 2)}\n`);
+    });
   }
   private serial<T>(file: string, fn: () => Promise<T>): Promise<T> {
     const next = (this.queues.get(file) ?? Promise.resolve()).catch(() => {}).then(fn);
@@ -116,6 +137,7 @@ export class ContextMaintenance {
       if (!["compact", "handover"].includes(request.action) || typeof request.preserve !== "string" || typeof request.resume !== "string" || request.preserve.length + request.resume.length > 16000) throw new Error("Invalid context maintenance request");
       const state = await this.load(key);
       state.pending = request;
+      state.failure = undefined; // Fresh explicit requests bypass failed-attempt cooldown.
       await this.save(key, state);
     });
   }
@@ -125,18 +147,30 @@ export class ContextMaintenance {
       const state = await this.load(key);
       const id = session.status().sessionId;
       if (state.handover?.phase === "prepared" && id !== state.handover.from) {
-        if (!session.seedHandover) throw new Error("Cannot recover prepared handover before prompt");
-        await session.seedHandover(state.handover.text);
-        state.handover.phase = "switched";
-        state.handover.to = id;
-        if (state.handover.archiveId) await this.archives.link(key, state.handover.archiveId, id);
-        state.completionNotice = state.handover.archiveId
-          ? "🔄 Neue Sitzung übernommen; Rückschau gespeichert."
-          : "🔄 Neue Sitzung übernommen.";
-        this.recordNotice(key, state, state.completionNotice);
-        if (state.noticeTarget) state.completionNotice = undefined;
-        state.sessionId = id;
-        await this.save(key, state);
+        try {
+          if (!session.seedHandover) throw new MaintenanceError("seed", "failed");
+          await maintenanceStep("seed", () => session.seedHandover!(state.handover!.text));
+          state.handover.to = id;
+          if (state.handover.archiveId) await maintenanceStep("archive-link", () => this.archives.link(key, state.handover!.archiveId!, id));
+          state.handover.phase = "switched";
+          state.pending = undefined;
+          state.failure = undefined;
+          state.lastError = undefined;
+          state.pressureSinceCompaction = false;
+          state.completionNotice = state.handover.archiveId
+            ? "🔄 Neue Sitzung übernommen; Rückschau gespeichert."
+            : "🔄 Neue Sitzung übernommen.";
+          this.recordNotice(key, state, state.completionNotice);
+          if (state.noticeTarget) state.completionNotice = undefined;
+          state.sessionId = id;
+          await this.save(key, state);
+        } catch (err) {
+          const error = maintenanceError("seed", err);
+          state.failure = { stage: error.stage, code: error.code, phase: "before", turn: state.turns, action: "handover" };
+          state.lastError = error.message;
+          await this.save(key, state);
+          throw error;
+        }
       } else if (state.sessionId !== id && state.handover?.phase !== "prepared") {
         state.pending = undefined;
         state.handover = undefined;
@@ -175,28 +209,40 @@ export class ContextMaintenance {
       }
       // Recover prepared transitions before considering a new maintenance action.
       if (state.handover?.phase === "prepared" && phase === "before") {
+        try {
         if (id === state.handover.from) {
           if (!session.summarize) throw new Error("Runtime cannot refresh handover");
           const refreshed = await this.prepareArchive(key, session, `${preserve}\nRefresh intervening turns. Previous checkpoint: ${state.handover.text}`);
           state.handover.text = refreshed.text;
           state.handover.archiveId = refreshed.archiveId;
           await this.save(key, state);
-          session = await rotate(state.handover);
+          session = await maintenanceStep("rotation", () => rotate(state.handover));
         }
         else {
           if (!session.seedHandover) throw new Error("Runtime cannot recover handover");
-          await session.seedHandover(state.handover.text);
+          await maintenanceStep("seed", () => session.seedHandover!(state.handover!.text));
         }
         state.handover.to = session.status().sessionId;
+        if (state.handover.archiveId) await maintenanceStep("archive-link", () => this.archives.link(key, state.handover!.archiveId!, state.handover!.to!));
         state.handover.phase = "switched";
-        if (state.handover.archiveId) await this.archives.link(key, state.handover.archiveId, state.handover.to!);
         state.sessionId = state.handover.to;
+        state.pending = undefined;
+        state.failure = undefined;
+        state.lastError = undefined;
+        state.pressureSinceCompaction = false;
         const notice = state.handover.archiveId
           ? "🔄 Neue Sitzung übernommen; Rückschau gespeichert."
           : "🔄 Neue Sitzung übernommen.";
         this.recordNotice(key, state, notice);
         await this.save(key, state);
         return state.noticeTarget ? undefined : notice;
+        } catch (err) {
+          const error = maintenanceError("summary", err);
+          state.failure = { stage: error.stage, code: error.code, phase, turn: state.turns, action: "handover" };
+          state.lastError = error.message;
+          await this.save(key, state);
+          throw error; // Fail closed before the working prompt.
+        }
       }
       if (state.handover?.phase === "prepared") return;
       if (state.sessionId && state.sessionId !== id) {
@@ -215,7 +261,8 @@ export class ContextMaintenance {
       // Independent cooldowns: compaction cannot continually postpone handover.
       const last = phase === "before" ? state.lastHandover : state.lastCompact;
       const due = state.turns - (last ?? -1000) >= policy.cooldownTurns;
-      const matchingRequest = request && (phase === "before" ? request.action === "handover" : request.action === "compact");
+      const retryDue = !state.failure || state.turns - state.lastMaintenance >= policy.cooldownTurns;
+      const matchingRequest = request && retryDue && (phase === "before" ? request.action === "handover" : request.action === "compact");
       const pressure = percent !== undefined && percent >= (phase === "before" ? policy.assessPercent : policy.compactPercent);
       const failedAt = state.assessmentFailures?.[phase];
       const assessmentDue = failedAt === undefined || state.turns - failedAt >= policy.cooldownTurns;
@@ -226,8 +273,14 @@ export class ContextMaintenance {
       if (eligible) {
         const recent = (session.archiveEntries?.() ?? []).slice(-8).map(e => `${e.role}: ${e.text}`).join("\n").slice(-16000);
         let action: Awaited<ReturnType<BoundaryAssessment>> = "unknown";
+        state.assessmentDiagnostic = undefined;
         try { if (this.assess) action = await this.assess({ phase, incoming: incomingText.slice(0, 8000), recent, percent, pressureSinceCompaction: state.pressureSinceCompaction === true }); }
-        catch { /* Advisory failure defers maintenance; never abort the working turn. */ }
+        catch (err) {
+          const error = maintenanceError("assessment", err);
+          state.assessmentDiagnostic = { stage: "assessment", code: error.code, phase, turn: state.turns };
+        }
+        if (action === "unknown" && !state.assessmentDiagnostic) state.assessmentDiagnostic = { stage: "assessment", code: "unknown", phase, turn: state.turns };
+        if (action !== "unknown") state.assessmentDiagnostic = undefined;
         state.assessmentFailures ??= {};
         if (action === "unknown") state.assessmentFailures[phase] = state.turns;
         else delete state.assessmentFailures[phase];
@@ -243,7 +296,6 @@ export class ContextMaintenance {
         state.unknownUsageNotified = true;
       } else if (percent !== undefined) state.unknownUsageNotified = false;
       if (!matchingRequest && !automatic) { await this.save(key, state); return state.noticeTarget ? undefined : diagnostic; }
-      state.pending = undefined;
       state.lastMaintenance = state.turns;
       if (phase === "before") state.lastHandover = state.turns;
       else state.lastCompact = state.turns;
@@ -258,20 +310,25 @@ export class ContextMaintenance {
           const prepared = await this.prepareArchive(key, session, instructions);
           state.handover = { phase: "prepared", from: id, ...prepared };
           await this.save(key, state);
-          const next = await rotate(state.handover);
-          state.handover = { ...state.handover, phase: "switched", to: next.status().sessionId };
+          const next = await maintenanceStep("rotation", () => rotate(state.handover));
+          state.handover.to = next.status().sessionId;
           state.sessionId = next.status().sessionId;
           state.pressureSinceCompaction = false;
-          await this.archives.link(key, prepared.archiveId, state.sessionId);
+          await maintenanceStep("archive-link", () => this.archives.link(key, prepared.archiveId, state.sessionId!));
+          state.handover.phase = "switched";
           notice = "🔄 Neue Sitzung übernommen; Rückschau gespeichert.";
         } else {
-          await session.compact(instructions);
+          await maintenanceStep("compact", () => session.compact(instructions));
           state.pressureSinceCompaction = true;
           notice = "♻️ Kontext kompaktiert.";
         }
         state.lastError = undefined;
+        state.failure = undefined;
+        state.pending = undefined;
       } catch (err) {
-        state.lastError = "Context maintenance failed; original session or prepared handover retained";
+        const error = maintenanceError(phase === "before" ? "summary" : "compact", err);
+        state.failure = { stage: error.stage, code: error.code, phase, turn: state.turns, action: phase === "before" ? "handover" : "compact" };
+        state.lastError = error.message;
         notice = "⚠️ Kontextwartung nicht vollständig abgeschlossen; kein bestätigter Abschluss. Wiederherstellungsstand bleibt erhalten.";
       }
       this.recordNotice(key, state, notice);
