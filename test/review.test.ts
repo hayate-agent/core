@@ -5,9 +5,9 @@ import path from "node:path";
 import { test, type TestContext } from "node:test";
 import { captureChangeset, git } from "../src/changeset.js";
 import { reviewConfig } from "../src/review-config.js";
-import { ReviewService, parseReview, type ReviewFinding } from "../src/review.js";
-import { finishWithReview } from "../src/review-lifecycle.js";
-import { guardReviewTool } from "../src/review-guard.js";
+import { ReviewService, parseReview, type ReviewFinding } from "../src/builtin-plugins/review.js";
+import { finishWithReview } from "../src/builtin-plugins/review-lifecycle.js";
+import { guardReviewTool } from "../src/builtin-plugins/review-guard.js";
 import { PluginHost } from "../src/plugins.js";
 import { reviewPlugin } from "../src/builtin-plugins/review-plugin.js";
 

@@ -1,8 +1,11 @@
 # Built-in changeset review
 
 The review plugin ships with the Harness and is enabled by default. No local ESM
-module or PI extension installation is required. The Harness owns persisted state,
-budget and lifecycle integration; the bundled plugin exposes `/review status`,
+module or PI extension installation is required. The source plugin repository owns
+the engine, ledger implementation, budget, lifecycle/guards and default composition;
+Core supplies configuration compatibility, generic policy execution and runtime
+assessment plumbing. The immutable pin is built into the image, not hot-unloaded.
+Existing ledger paths/format/history/grants remain unchanged. The bundled plugin exposes `/review status`,
 `/review run`, and the `plugin_review` model tool. Commands require administrator
 access. With an explicit nonempty `tools` list the Harness includes `plugin_review`;
 `tools: []` still means no model-visible tools.

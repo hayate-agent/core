@@ -5,8 +5,8 @@ import path from "node:path";
 import { test, type TestContext } from "node:test";
 import { git } from "../src/changeset.js";
 import { reviewConfig } from "../src/review-config.js";
-import { ReviewService } from "../src/review.js";
-import { finishWithReview } from "../src/review-lifecycle.js";
+import { ReviewService } from "../src/builtin-plugins/review.js";
+import { finishWithReview } from "../src/builtin-plugins/review-lifecycle.js";
 
 async function fixture(t: TestContext) {
   const cwd = await mkdtemp(path.join(os.tmpdir(), "review-boundary-"));

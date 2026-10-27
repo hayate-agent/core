@@ -17,7 +17,8 @@ Bundled plugin adapters are maintained in `harness/plugins`, not copied into thi
 repository. `plugins.lock.json` pins an immutable revision and SHA-256 per source
 file. Build, typecheck and test materialize verified sources into ignored
 `src/builtin-plugins/`; generated files are never edited or committed. Core owns
-engines, policy enforcement, generic plugin/runtime contracts and lifecycle.
+generic plugin/runtime contracts, lifecycle and durable execution infrastructure.
+Bundled review and memory engines and transport behavior belong to the source plugin repository.
 Registration, command parsing and tool schemas belong to the plugin repository.
 The PI tool bridge remains core runtime integration, not a bundled adapter.
 
@@ -153,7 +154,9 @@ required calls fail closed. Resource cleanup belongs to the module owner and mus
 wait for its own in-flight calls; the registry does not dispose implementation
 resources or grant authority to reload arbitrary code.
 
-The review engine and default selection still live in Core. General plugin
+The review engine, ledger implementation, guards, lifecycle and bundled default
+composition are owned by `harness/plugins`. Ledger format/path and persistent
+budgets are unchanged; extraction does not grant new review rounds. General plugin
 registration is startup-only; the separate [runtime policy module manager](policy-plugins.md)
 supports admin-selected local ESM overrides, persistent desired state and lifecycle
 rollback at idle turn boundaries. Tool-only reload modules must not register

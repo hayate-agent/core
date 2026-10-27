@@ -53,7 +53,7 @@ import { StateStore } from "./state.js";
 import type { Inbound } from "./types.js";
 import { type SkillInfo } from "./skills.js";
 import { SkillCatalog } from "./skill-catalog.js";
-import { ReviewService } from "./review.js";
+import { createReviewEngine } from "./builtin-plugins/review-engine.js";
 import { type ModelSettings } from "./model-settings.js";
 import { pruningPolicy } from "./tool-result-pruning.js";
 import { ContextMaintenance, contextPolicy } from "./context-maintenance.js";
@@ -64,8 +64,6 @@ import { boundaryAssessor } from "./context-assessment.js";
 import { guardResultOrchestration } from "./result-orchestration.js";
 import { assessCompletion } from "./completion-check.js";
 import { reviewConfig } from "./review-config.js";
-import { reviewPlugin } from "./builtin-plugins/review-plugin.js";
-import { reviewPolicy } from "./review-policy.js";
 import { appendFileDurable } from "./durable.js";
 
 const USAGE = `VanillaCore Agent Harness ${VERSION}
@@ -134,7 +132,7 @@ async function main(argv: string[]): Promise<void> {
   };
   await reloadSkills();
 
-  const plugins = new PluginHost(config.review?.enabled === false ? [] : ["review"]);
+  const plugins = new PluginHost();
   const reloadableTools = config.reloadableToolPlugins?.length
     ? new ReloadableTools({home:config.home,cwd:config.cwd,agent:config.agent},config.reloadableToolPlugins,log) : undefined;
   let memory!: MemoryService;
@@ -148,7 +146,6 @@ async function main(argv: string[]): Promise<void> {
     protectedExecutions: () => new Set(harness?.pendingInputs().flatMap(input => input.hostEvent ? [input.hostEvent.executionId] : []) ?? []),
   });
   await executions.load();
-  let review!: ReviewService;
   const reviewSettings = reviewConfig(config.review);
   const settings = new SettingsService(path.join(config.home, "settings.local.yaml"), {
     model: config.model, thinking: config.thinking,
@@ -193,7 +190,7 @@ async function main(argv: string[]): Promise<void> {
     skillPaths: config.skills.paths,
     skillContext: async () => {
       await reloadSkills();
-      return `Available skills (metadata only; read the named SKILL.md when relevant):\n${JSON.stringify(skills)}\n${reviewSettings.enabled ? "Core review is enabled. Use plugin_review to inspect, critically assess and review code changes. P0/P1 block publication and completion. Budget cannot be reset by starting another session." : ""}`;
+      return `Available skills (metadata only; read the named SKILL.md when relevant):\n${JSON.stringify(skills)}\n${reviewEngine.instructions}`;
     },
     toolGuard: async (key, tool, input) => {
       subagents.guardTool(key, tool);
@@ -212,12 +209,13 @@ async function main(argv: string[]): Promise<void> {
     approvals,
     requestApproval: (key, tool, input) => harness.requestApproval(key, tool, input),
   });
-  review = new ReviewService(config.home, reviewSettings, runtimeReviewer(runtime), async (sessionKey, message, origin) => {
-    log(`[review] ${message}`);
-    harness.post({ sessionKey, text: "", source: "channel", replyTo: origin ?? harness.home }, `⚠️ Operator escalation: ${message}`);
-  });
-  if (reviewSettings.enabled) plugins.policies.register(reviewPolicy(review, input =>
-    subagents.isChild(input.sessionKey) ? subagents.approvalTarget(input.sessionKey) : input.replyTo));
+  const reviewEngine = createReviewEngine({ home: config.home, cwd: config.cwd, config: reviewSettings,
+    backend: runtimeReviewer(runtime), notify: async (sessionKey, message, origin) => {
+      log(`[review] ${message}`);
+      harness.post({ sessionKey, text: "", source: "channel", replyTo: origin ?? harness.home }, `⚠️ Operator escalation: ${message}`);
+    }, origin: input => subagents.isChild(input.sessionKey) ? subagents.approvalTarget(input.sessionKey) : input.replyTo });
+  plugins.policies.require(reviewEngine.required);
+  for (const policy of reviewEngine.policies) plugins.policies.register(policy);
   let improvement: ImprovementController | undefined;
 
   harness = new Harness({
@@ -397,7 +395,7 @@ async function main(argv: string[]): Promise<void> {
   await scheduler.load();
 
   const policyManager = new PolicyManager(harness, plugins.policies, settings, { home: config.home, cwd: config.cwd, agent: config.agent });
-  await plugins.load(config.plugins ?? [], { agent: config.agent, home: config.home, cwd: config.cwd }, [...builtinCommandNames, "sessions", "resume", ...skills.map((s) => s.name)], ["console", "api", "dispatch", ...Object.keys(bundledGatewayModules()), ...harness.channels.keys()], [dispatcherPlugin(() => dispatcher), subagentPlugin(subagents,async()=>{await persist();}), ...(reloadableTools ? [reloadableToolsPlugin(reloadableTools)] : []), wasmToolsPlugin(config.home, config.wasmTools ?? []), continuationPlugin(harness), loopPlugin(harness), improvementPlugin(improvement!), protectedContentPlugin(protectedContent), gatewayManagerPlugin(gatewayManager, settings), policyManagerPlugin(policyManager, settings), gatewayPlugin(settings, harness), contextPlugin(maintenance, settings), ...(config.memory.enabled ? [memoryPlugin(memory)] : []), ...(reviewSettings.enabled ? [reviewPlugin(review, config.cwd)] : [])]);
+  await plugins.load(config.plugins ?? [], { agent: config.agent, home: config.home, cwd: config.cwd }, [...builtinCommandNames, "sessions", "resume", ...skills.map((s) => s.name)], ["console", "api", "dispatch", ...Object.keys(bundledGatewayModules()), ...harness.channels.keys()], [dispatcherPlugin(() => dispatcher), subagentPlugin(subagents,async()=>{await persist();}), ...(reloadableTools ? [reloadableToolsPlugin(reloadableTools)] : []), wasmToolsPlugin(config.home, config.wasmTools ?? []), continuationPlugin(harness), loopPlugin(harness), improvementPlugin(improvement!), protectedContentPlugin(protectedContent), gatewayManagerPlugin(gatewayManager, settings), policyManagerPlugin(policyManager, settings), gatewayPlugin(settings, harness), contextPlugin(maintenance, settings), ...(config.memory.enabled ? [memoryPlugin(memory)] : []), ...reviewEngine.plugins]);
   if (dispatchPolicy.enabled) {
     dispatchRuntime = new DispatcherRuntime(harness, executions);
     harness.addChannel(dispatchRuntime.channel);

@@ -14,7 +14,13 @@ export interface Policy {
  */
 export class PolicyRegistry {
   private readonly policies = new Map<string, Readonly<Policy>>();
-  constructor(private readonly required: readonly string[] = []) {}
+  private readonly required: Set<string>;
+  constructor(required: readonly string[] = []) { this.required = new Set(required); }
+  /** Trusted host composition only; plugins cannot weaken required identities. */
+  require(ids: readonly string[]): void {
+    if (ids.some(id => !/^[a-z][a-z0-9-]*$/.test(id))) throw Error("Invalid required policy");
+    for (const id of ids) this.required.add(id);
+  }
   register(policy: Policy): () => void {
     if (this.policies.has(policy?.id)) throw Error(`Policy conflict: ${policy.id}`);
     return this.install(policy);
@@ -25,10 +31,10 @@ export class PolicyRegistry {
     return this.install(policy);
   }
   has(id: string): boolean { return this.policies.has(id); }
-  isRequired(id: string): boolean { return this.required.includes(id); }
+  isRequired(id: string): boolean { return this.required.has(id); }
   get(id: string): Readonly<Policy> | undefined { return this.policies.get(id); }
   remove(id: string): void {
-    if (this.required.includes(id)) throw Error(`Required policy cannot be removed: ${id}`);
+    if (this.required.has(id)) throw Error(`Required policy cannot be removed: ${id}`);
     this.policies.delete(id);
   }
   private install(policy: Policy): () => void {

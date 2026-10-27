@@ -1,5 +1,5 @@
 import type { Inbound } from "./types.js";
-import type { ReviewBackend } from "./review.js";
+import type { AssessmentBackend as ReviewBackend } from "./assessment-backend.js";
 
 export interface CompletionAuthorization {
   /** Trusted caller supplies the existing task boundary; never derive from reply. */

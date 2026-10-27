@@ -1,4 +1,4 @@
-import type { ReviewBackend } from "./review.js";
+import type { AssessmentBackend as ReviewBackend } from "./assessment-backend.js";
 
 export interface BoundaryEvidence {
   phase: "before" | "after";
