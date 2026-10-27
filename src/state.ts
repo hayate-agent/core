@@ -12,6 +12,7 @@ import type { Address, BusyMode, Inbound } from "./types.js";
 export interface PersistedSession {
   key: string;
   task?: import("./harness.js").DurableTask;
+  tasks?: import("./harness.js").DurableTask[];
   replyTo?: Address;
   heartbeat?: Recurring;
   heartbeatDisabled?: boolean;

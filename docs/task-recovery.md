@@ -9,7 +9,9 @@ The Harness stores the original accepted chat request separately from its inbox.
 Its task checkpoint records the most recent continuation decision, concrete next
 step, chain depth and inherited numeric deadline. Generated follow-ups carry the
 same host-assigned task identity; unrelated scheduled work cannot update it.
-A newer original chat turn replaces the session's task checkpoint.
+A newer original chat turn has its own task checkpoint; it does not erase earlier
+mandates. The persisted `tasks` collection retains them independently of the latest
+`task` compatibility pointer. Old single-task snapshots are accepted unchanged.
 
 On startup, after channels are ready, an active checkpoint with a concrete next
 step can reconstruct one durable continuation if no current/queued input exists.
@@ -25,8 +27,20 @@ snapshots. A repeated restart must not manufacture additional parallel steps.
 The existing crash replay cap, approval and execution-boundary checks still apply.
 
 Recovery does not invent a next step. Successful turns with no explicit or
-semantic continuation decision become waiting; this is not a general natural
-language task registry. A request interrupted before its first checkpoint uses
+semantic continuation decision remain active for one durable independent assessment
+against the original mandate. An uncertain or unavailable decision does not authorize
+execution. Explicit waiting, blocked, completed and stopped decisions remain distinct;
+missing a continuation tool call is not an instruction to wait.
+
+At queue-empty prompt boundaries and scheduler ticks, a concrete retained step is
+claimed once into the durable inbox. Intermediate questions are answered first, then
+the original work resumes, even when the question arrived during a working turn.
+Completion of the question cannot complete another task. Live, paused or blocked
+background executions suppress automatic resumption; completed host results are
+matched to their original task identity rather than the latest question. `/stop`
+revokes all retained mandates in the conversation. Pause, deadlines, chain limits,
+controller exclusions and durable-save-before-execution remain enforced. There is
+no natural-language cancel/supersede inference: use explicit stop/pause controls. A request interrupted before its first checkpoint uses
 ordinary inbox replay. Existing installations without task checkpoints continue
 using inbox replay; historical transcripts are not automatically converted into
 permission to work. Task checkpoints begin with requests processed by this version.
