@@ -207,11 +207,21 @@ once after plugin activation and before Harness start. Unknown names fail startu
 automatic recall/capture without replacing the configured storage provider or
 explicit memory tools. The default is the existing MemoryService behavior.
 
-This is startup selection, not runtime replacement: changes require restart.
+The bundled admin-only `/memory-orchestration status | use <registered-name> | disable`
+command also selects already registered behavior without restarting. `status` reports
+active and persisted desired selection, available names and startup enablement.
+Changes reserve a Harness-wide idle turn boundary: a running turn, delivery or other
+lifecycle change rejects the command; retry after it finishes. The command validates
+the name, persists the memory overlay, then applies selection. Unknown names and
+failed persistence leave the active selection unchanged. `disable` persists `none`;
+`use default` restores the bundled behavior. When memory was disabled at startup,
+enabling an orchestrator requires restart. Provider, tools and stored data are
+unchanged; this is neither provider migration nor plugin hot reload.
+
 Plugins must clean up their own resources with `onStop`. The bundled default engine is owned by `harness/plugins` and materialized from the
 immutable pin; it retains the existing pending-write persistence behavior. Core
 still owns provider reconnection, contracts and selection. Engine source updates
-require image rollout; hot-reload/removal lifecycle is not provided here. No
+require image rollout; dynamic registration/removal lifecycle is not provided here. No
 orchestrator means empty recall and no capture, not an implicit veto. Existing
 Harness recall-error behavior and best-effort capture-error logging apply.
 
