@@ -1,5 +1,16 @@
 # Cron audiences and retained follow-through
 
+Retention, report context, analysis and proposal planning are supplied by the
+`cronReportPlugin` in the independently versioned `harness/plugins` repository.
+Core provides settlement/delivery hooks, `ReportProcessingRegistry` and host-owned
+dispatch authority, not a concrete archive or analyzer. Trusted plugins can register
+another implementation through `api.registerReportProcessing(name, implementation)`;
+select it at startup with `reportProcessing: <name>` (default `cron`). The interface
+covers `record(input, output)`, `context(input)`, `tick()` and `stop()`.
+Implementations must make recording idempotent and stop ongoing processing during
+cleanup. Registration is rejected in tool-only and runtime-extension modules.
+There is no universal hot-swap claim for held processor instances.
+
 Legacy jobs without `audience` keep their existing behavior. Explicit jobs select:
 
 ```yaml

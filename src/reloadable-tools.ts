@@ -74,7 +74,7 @@ export class ReloadableTools {
         modules.push((await import(url.href)).default);
       }
       await host.load([],this.context,[],[],modules);
-      if (host.commands.size || host.channels.size || host.panels.size || host.compactions.size || host.memoryProviders.size || host.sessionProviders.size || host.policies.entries().length || host.memoryOrchestration.size || host.dispatchers.size) throw Error("Reloadable plugins may register tools only");
+      if (host.commands.size || host.channels.size || host.panels.size || host.compactions.size || host.memoryProviders.size || host.sessionProviders.size || host.policies.entries().length || host.memoryOrchestration.size || host.reportProcessing.size || host.dispatchers.size) throw Error("Reloadable plugins may register tools only");
       if (this.current && !this.dynamicCatalog) {
         if (host.tools.size !== this.tools.size) throw Error("Reload requires unchanged tool registrations");
         for (const [name,tool] of host.tools) {

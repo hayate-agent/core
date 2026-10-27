@@ -47,6 +47,8 @@ export interface HarnessConfig {
   reloadableToolPlugins?: string[];
   /** Opt-in entry-file checks before working turns. */
   autoReloadToolPlugins?: boolean;
+  /** Startup-selected output retention/processing implementation. */
+  reportProcessing?: string;
   /** Restricted no-import WebAssembly tool modules; no WASI or host capabilities. */
   wasmTools?: import("./wasm-tools.js").WasmToolConfig[];
   protectedContent?: import("./protected-content.js").ProtectedContentConfig;
@@ -106,6 +108,7 @@ export function defaultConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
   if (overrides.reloadableToolPlugins !== undefined && (!Array.isArray(overrides.reloadableToolPlugins) || overrides.reloadableToolPlugins.some(p => typeof p !== "string" || !p.trim()))) {
     throw Error("reloadableToolPlugins must be an array of local module paths");
   }
+  if (overrides.reportProcessing !== undefined && (typeof overrides.reportProcessing !== "string" || !/^[a-z][a-z0-9_-]*$/.test(overrides.reportProcessing))) throw Error("Invalid reportProcessing");
   if (overrides.autoReloadToolPlugins !== undefined && typeof overrides.autoReloadToolPlugins !== "boolean") throw Error("autoReloadToolPlugins must be a boolean");
   dispatcherConfig(overrides.dispatcher);
   validateWasmTools(overrides.wasmTools ?? []);
@@ -150,6 +153,7 @@ export function defaultConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
     plugins: overrides.plugins ?? [],
     reloadableToolPlugins: overrides.reloadableToolPlugins ?? [],
     autoReloadToolPlugins: overrides.autoReloadToolPlugins ?? false,
+    reportProcessing: overrides.reportProcessing ?? "cron",
     wasmTools: overrides.wasmTools ?? [],
     protectedContent: overrides.protectedContent,
     skillUpdateSource: overrides.skillUpdateSource,

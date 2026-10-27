@@ -67,7 +67,7 @@ export class ExtensionManager {
           try { await cleanup(); } catch (error) { this.cleanupFailed = true; this.failedHosts.add(host); throw error; }
         }), registerTool: deny, registerChannel: deny,
           registerCompaction: deny, registerMemoryProvider: deny, registerSessionProvider: deny,
-          registerMemoryOrchestrator: deny, registerDispatcher: deny }));
+          registerMemoryOrchestrator: deny, registerReportProcessing: deny, registerDispatcher: deny }));
       } }]);
       if (previous) this.assertOwned(previous);
       if (host.tools.size || host.channels.size || host.compactions.size || host.memoryProviders.size || host.sessionProviders.size ||
