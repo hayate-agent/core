@@ -15,6 +15,10 @@ export interface SessionRecord {
 export type SessionSummary = Omit<SessionRecord, "entries">;
 /** One owner process per provider directory. Database plugins must enforce equivalent revision checks. */
 export interface SessionProvider {
+  /** Optional host-owned cleanup, after all session checkpoints have drained. */
+  close?(): Promise<void>;
+  /** Optional host lifecycle pin; implementations normally leave this to the owner. */
+  retain?(): { provider: SessionProvider; release(): void };
   load(id: string): Promise<SessionRecord>;
   active(key: string): Promise<string | undefined>;
   bind(key: string, id: string): Promise<void>;

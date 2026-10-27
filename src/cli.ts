@@ -20,6 +20,7 @@ import { RunRegistry } from "./api/runs.js";
 import { API_CHANNEL, ApiChannel } from "./api/server.js";
 import { nativeCompaction, type CompactionStrategy } from "./compaction.js";
 import { FilesystemSessionProvider, type SessionProvider } from "./sessions.js";
+import { SessionProviderLifecycle } from "./session-provider-lifecycle.js";
 import { memoryConfig } from "./memory.js";
 import { LocalMemory } from "./memory-local.js";
 import { MemoryService } from "./builtin-plugins/memory-service.js";
@@ -501,6 +502,8 @@ async function main(argv: string[]): Promise<void> {
     if (!factory) throw new Error(`Unknown session provider: ${providerName}`);
     sessionProvider = await factory({ home: config.home, options: config.sessions?.options });
   }
+  const sessionProviderOwner = sessionProvider ? new SessionProviderLifecycle(sessionProvider) : undefined;
+  sessionProvider = sessionProviderOwner;
   if (localSessions) localSessions.provider = sessionProvider ?? new FilesystemSessionProvider(path.join(config.home, "session-store"));
   for (const channel of plugins.channels.values()) harness.addChannel(channel);
 
@@ -527,6 +530,7 @@ async function main(argv: string[]): Promise<void> {
     await memoryProvider.close().catch(() => console.error("[memory] cleanup failed"));
     await extensionManager.stop().catch(() => console.error("[extensions] cleanup failed"));
     await policyManager.stop().catch(() => console.error("[policies] cleanup failed"));
+    await sessionProviderOwner?.close().catch(() => console.error("[sessions] provider cleanup failed"));
     await plugins.stop().catch(() => console.error("[plugins] cleanup failed"));
     await sessionOwnership.release();
     process.exit(code);
@@ -610,6 +614,7 @@ async function main(argv: string[]): Promise<void> {
     clearInterval(gatewayTimer);
     clearInterval(memoryTimer);
     await memoryProvider.close().catch(() => {});
+    await sessionProviderOwner?.close().catch(() => {});
     await plugins.stop().catch(() => {});
     throw err;
   }
