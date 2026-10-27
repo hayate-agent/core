@@ -10,6 +10,17 @@ authorization. Recent normalized hypothesis strings (200 retained) are included
 in subsequent prompts; exact repeats do not count as new experiments. This is not
 semantic duplicate detection and does not prevent paraphrasing.
 
+Morning reports are rendered from complete validated receipts, not concatenated
+model replies. Exact normalized hypothesis duplicates appear once. Raw replies
+remain local diagnostic history (legacy entries may be truncated); they are never
+used as remote report markup. Every report first archives all structured receipts
+under `improvement/reports/<night>.json`, including when a remote destination exists.
+Archive failure leaves the night pending and does not publish a partial report.
+The remote summary has an explicit turn/experiment/outcome count and includes only
+whole JSON blocks within a bounded body; overflow points to the full local artifact.
+It labels measurements as reported, not independently verified. A report artifact
+marked `outbox-pending` is not a delivery acknowledgement.
+
 A bare `[IMPROVEMENT_DONE]` without a new receipt does not finish the night.
 Three consecutive turns without new receipts stop the loop with an explicit
 failed-night diagnostic rather than pretending success or spending all remaining

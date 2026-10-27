@@ -1,4 +1,5 @@
 import { Cron } from "croner";
+import { experimentReceipts, uniqueExperiments, improvementReport, type ExperimentReceipt } from "./improvement-report.js";
 import { mkdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { parse } from "yaml";
@@ -46,7 +47,7 @@ interface NightState {
   results: string[];
   reportQueued?: boolean;
   nextNightRequested?: string;
-  experiments?: Array<{ hypothesis: string; baseline: string; candidate: string; evidence: string; outcome: string }>;
+  experiments?: ExperimentReceipt[];
   recentHypotheses?: string[];
   noExperimentTurns?: number;
 }
@@ -121,21 +122,14 @@ export class ImprovementController {
     // A done marker alone is not evidence of experimentation. Keep reported
     // experiment evidence separate from independently verified adoption.
     let productive = false;
-    for (const match of reply.matchAll(/```improvement-experiment\s*\n([\s\S]*?)```/g)) {
+    for (const value of experimentReceipts(reply)) {
       if ((this.state.experiments?.length ?? 0) >= 200) break;
-      try {
-        const value = JSON.parse(match[1]!);
-        if (!value || !["hypothesis", "baseline", "candidate", "evidence", "outcome"].every(key =>
-            typeof value[key] === "string" && value[key].trim() && value[key].length <= 2000) ||
-            !["improved", "rejected", "inconclusive"].includes(value.outcome)) continue;
-        const normalized = value.hypothesis.trim().toLowerCase();
-        const prior = this.state.recentHypotheses ?? [];
-        if (prior.includes(normalized)) continue;
-        (this.state.experiments ??= []).push({ hypothesis: value.hypothesis, baseline: value.baseline,
-          candidate: value.candidate, evidence: value.evidence, outcome: value.outcome });
-        this.state.recentHypotheses = [...prior, normalized].slice(-200);
-        productive = true;
-      } catch { /* A malformed block must not hide subsequent valid receipts. */ }
+      const normalized = value.hypothesis.trim().toLowerCase();
+      const prior = this.state.recentHypotheses ?? [];
+      if (prior.includes(normalized)) continue;
+      (this.state.experiments ??= []).push(value);
+      this.state.recentHypotheses = [...prior, normalized].slice(-200);
+      productive = true;
     }
     this.state.noExperimentTurns = productive ? 0 : (this.state.noExperimentTurns ?? 0) + 1;
     this.state.done = reply.includes("[IMPROVEMENT_DONE]") && !!this.state.experiments?.length;
@@ -162,19 +156,23 @@ export class ImprovementController {
       // Report previous window even when disabled meanwhile. Outbox owns retry.
       if (this.state && !busy && (!w.active || this.state.night !== w.night) && !this.state.reportQueued) {
         const to = p.reportTo ?? this.harness.home;
+        // Prefer receipts parsed from the full response, before the legacy 4000-character
+        // diagnostic truncation. Old states without receipts recover complete blocks only.
+        const experiments = uniqueExperiments(this.state.experiments ?? this.state.results.flatMap(experimentReceipts));
+        const directory = path.join(this.home, "improvement", "reports");
+        const artifact = path.join(directory, `${this.state.night}.json`);
+        await mkdir(directory, { recursive: true, mode: 0o700 });
+        await writeFileDurable(artifact, JSON.stringify({
+          version: 1, night: this.state.night, timezone: p.timezone,
+          turns: this.state.turns, experiments, results: this.state.results,
+          delivery: to ? "outbox-pending" : "local-only",
+        }));
         if (!to) {
-          // No remote destination: preserve results durably before releasing the old night.
-          const directory = path.join(this.home, "improvement", "reports");
-          await mkdir(directory, { recursive: true, mode: 0o700 });
-          await writeFileDurable(path.join(directory, `${this.state.night}.json`), JSON.stringify({
-            version: 1, night: this.state.night, timezone: p.timezone,
-            turns: this.state.turns, results: this.state.results, delivery: "local-only",
-          }));
           this.state.reportQueued = true; // handled locally, not remotely delivered
           await this.save();
           return;
         }
-        this.harness.post({ id: `improvement-report:${this.state.night}`, sessionKey: KEY, source: "cron", text: "", replyTo: to }, `Nachtbericht ${this.state.night} (${p.timezone})\nArbeits-Turns: ${this.state.turns}.\n${this.state.results.join("\n\n") || "Keine abgeschlossenen Experimente protokolliert."}\nMerge ist kein Aktivierungsnachweis.`);
+        this.harness.post({ id: `improvement-report:${this.state.night}`, sessionKey: KEY, source: "cron", text: "", replyTo: to }, improvementReport(this.state, p.timezone, experiments, artifact));
         await this.harness.onStateChange?.(); // ensure report is durable before marking adopted
         this.state.reportQueued = true;
         await this.save();
