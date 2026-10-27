@@ -54,6 +54,7 @@ import type { Inbound } from "./types.js";
 import { type SkillInfo } from "./skills.js";
 import { SkillCatalog } from "./skill-catalog.js";
 import { createReviewEngine } from "./builtin-plugins/review-engine.js";
+import { loadPolicyEngine, createPolicyEngine } from "./policy-engine.js";
 import { type ModelSettings } from "./model-settings.js";
 import { pruningPolicy } from "./tool-result-pruning.js";
 import { ContextMaintenance, contextPolicy } from "./context-maintenance.js";
@@ -147,6 +148,9 @@ async function main(argv: string[]): Promise<void> {
   });
   await executions.load();
   const reviewSettings = reviewConfig(config.review);
+  const reviewModule = reviewSettings.enabled ? await loadPolicyEngine(config.home, config.reviewEngine, {
+    apiVersion: 1, modelTools: ["plugin_review"], create: context => createReviewEngine({ ...context, config: reviewSettings }),
+  }) : undefined;
   const settings = new SettingsService(path.join(config.home, "settings.local.yaml"), {
     model: config.model, thinking: config.thinking,
     dispatcher: config.dispatcher,
@@ -179,7 +183,8 @@ async function main(argv: string[]): Promise<void> {
     pruning: () => pruningPolicy(settings.effective().toolResultPruning),
     modelDefaults: () => ({ revision: settings.revision, model: effectiveModels().model, thinking: effectiveModels().thinking }),
     tools: (() => {
-      const tools = workflowTools(config.tools, config.memory.enabled, reviewSettings.enabled);
+      const workflow = workflowTools(config.tools, config.memory.enabled, false);
+      const tools = workflow?.length ? [...new Set([...workflow, ...(reviewModule?.modelTools ?? [])])] : workflow;
       return dispatchPolicy.enabled && tools?.length ? [...new Set([...tools, "plugin_dispatch"])] : tools;
     })(),
     pluginTools: () => plugins.tools.values(),
@@ -209,11 +214,11 @@ async function main(argv: string[]): Promise<void> {
     approvals,
     requestApproval: (key, tool, input) => harness.requestApproval(key, tool, input),
   });
-  const reviewEngine = createReviewEngine({ home: config.home, cwd: config.cwd, config: reviewSettings,
+  const reviewEngine = reviewModule ? await createPolicyEngine(reviewModule, { home: config.home, cwd: config.cwd, config: reviewSettings,
     backend: runtimeReviewer(runtime), notify: async (sessionKey, message, origin) => {
       log(`[review] ${message}`);
       harness.post({ sessionKey, text: "", source: "channel", replyTo: origin ?? harness.home }, `⚠️ Operator escalation: ${message}`);
-    }, origin: input => subagents.isChild(input.sessionKey) ? subagents.approvalTarget(input.sessionKey) : input.replyTo });
+    }, origin: input => subagents.isChild(input.sessionKey) ? subagents.approvalTarget(input.sessionKey) : input.replyTo }) : { required: [], policies: [], plugins: [], instructions: "" };
   plugins.policies.require(reviewEngine.required);
   for (const policy of reviewEngine.policies) plugins.policies.register(policy);
   let improvement: ImprovementController | undefined;
