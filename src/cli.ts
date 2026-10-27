@@ -27,6 +27,7 @@ import { MemoryService } from "./builtin-plugins/memory-service.js";
 import { MemoryProviderLifecycle } from "./memory-provider-lifecycle.js";
 import { memoryPlugin } from "./builtin-plugins/memory-plugin.js";
 import { memoryOrchestrationPlugin } from "./builtin-plugins/memory-orchestration-plugin.js";
+import { maintenanceClient } from "./builtin-plugins/maintenance-client.js";
 import { maintenanceControlPlugin } from "./builtin-plugins/maintenance-control-plugin.js";
 import { sessionObserverPlugin, attachObserver } from "./builtin-plugins/session-observer-plugin.js";
 import { gatewayPlugin } from "./builtin-plugins/gateway-plugin.js";
@@ -92,6 +93,7 @@ Usage:
   vanillacore-harness run --maintenance-directory <private-dir> --maintenance-session <exact-key> [--home <dir>]
   vanillacore-harness attach <local-socket-path>  Read-only JSON status; Ctrl+C detaches
   vanillacore-harness doctor [--home <dir>]
+  vanillacore-harness maintenance <socket> status | admit <id> <version> <request.json> | cancel <id> <version>
   vanillacore-harness version
 
 Home (default ~/.vanillacore-harness, env VANILLACORE_HARNESS_HOME): harness.yaml, SOUL.md, VOICE.md,
@@ -103,6 +105,14 @@ async function main(argv: string[]): Promise<void> {
   const interactive = launchMode(argv) === "interactive";
   if (interactive && (!process.stdin.isTTY || !process.stdout.isTTY)) throw new Error("Interactive mode requires a terminal; use 'run' for the gateway.");
   const [cmd, ...rest] = interactive ? ["run"] : argv;
+  if (cmd === "maintenance") {
+    const controller = new AbortController();
+    const abort = () => controller.abort();
+    process.once("SIGINT", abort); process.once("SIGTERM", abort);
+    try { console.log(await maintenanceClient(rest, controller.signal)); }
+    finally { process.off("SIGINT", abort); process.off("SIGTERM", abort); }
+    return;
+  }
   if (cmd === "attach") {
     if (rest.length !== 1 || !rest[0]) throw Error("Usage: attach <local-socket-path>");
     const controller = new AbortController();
