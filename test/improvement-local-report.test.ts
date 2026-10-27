@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import {mkdtemp,readFile,writeFile,rm} from 'node:fs/promises';
 import os from 'node:os';import path from 'node:path';import {test} from 'node:test';
 import {ImprovementController} from '../src/improvement.js';
-import {Harness} from '../src/harness.js';import {FakeRuntime} from './fakes.js';
+import {Harness} from '../src/harness.js';import {FakeRuntime, MemoryChannel, ROOM} from './fakes.js';
+import {experimentReceipts} from '../src/improvement-report.js';
 
 test('no report destination preserves results locally and allows the next night after restart',async(t)=>{
  const home=await mkdtemp(path.join(os.tmpdir(),'improvement-local-'));
@@ -31,4 +32,34 @@ test('no report destination preserves results locally and allows the next night 
  assert.equal(report.night,'2026-10-24');assert.equal(report.turns,1);
  assert.match(report.results[0],/synthetic result/);
  assert.equal(report.delivery,'local-only');assert.equal(harness.outboxEntries().length,0);
+});
+
+test('remote report uses full receipts, survives restart and archives before outbox publication',async(t)=>{
+ const home=await mkdtemp(path.join(os.tmpdir(),'improvement-remote-'));
+ let now=Date.parse('2026-10-24T23:00:00Z');
+ const receipt={hypothesis:'complete experiment',baseline:'failed',candidate:'passed',evidence:'test command',outcome:'improved'};
+ const block='```improvement-experiment\n'+JSON.stringify(receipt)+'\n```';
+ const reply='p'.repeat(3990)+'\n'+block+'\n'+block+'\n```improvement-experiment\n{unfinished';
+ const harness=new Harness({runtime:new FakeRuntime(()=>reply),tickMs:60000,log:()=>{}});
+ const channel=new MemoryChannel();harness.addChannel(channel);harness.home=ROOM;
+ t.after(async()=>{await harness.stop(0);await rm(home,{recursive:true,force:true});});
+ await writeFile(path.join(home,'improvement.yaml'),'enabled: true\nmaxTurns: 1\ntimezone: UTC\n');
+ let controller=new ImprovementController(home,harness,'UTC',()=>now);
+ (harness as any).opts.beforeTurn=(input:any)=>controller.before(input);
+ (harness as any).opts.afterTurn=async(input:any,text:string)=>{await controller.completed(input,text);return text;};
+ await controller.tick(true);await harness.drained();
+ controller=new ImprovementController(home,harness,'UTC',()=>now);
+ now=Date.parse('2026-10-25T05:00:00Z');
+ const reports=path.join(home,'improvement','reports');await writeFile(reports,'blocked');
+ await assert.rejects(controller.tick(false));
+ assert.equal(harness.outboxEntries().length,0,'archive failure must not publish a report');
+ await rm(reports);await controller.tick(false);await harness.drained();
+ const report=channel.texts().find(s=>s.startsWith('Nachtbericht'))!;
+ assert.ok(report);assert.deepEqual(experimentReceipts(report),[receipt]);
+ assert.doesNotMatch(report,/unfinished|ppppp/);
+ const artifact=JSON.parse(await readFile(path.join(reports,'2026-10-24.json'),'utf8'));
+ assert.deepEqual(artifact.experiments,[receipt]);
+ assert.equal(artifact.delivery,'outbox-pending');
+ await controller.tick(false);await harness.drained();
+ assert.equal(channel.texts().filter(s=>s.startsWith('Nachtbericht')).length,1);
 });
