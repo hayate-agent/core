@@ -120,7 +120,7 @@ export interface RuntimeSession {
   archiveEntries?(): import("./session-archive.js").ArchiveEntry[];
   seedHandover?(text: string): Promise<void>;
   setModel(ref: string): Promise<void>;
-  setThinking(level: string): void;
+  setThinking(level: string): void | Promise<void>;
   setTitle(title: string): void | Promise<void>;
   status(): RuntimeSessionStatus;
   dispose(): void | Promise<void>;

@@ -64,3 +64,20 @@ changed and which version is active. Automatic promotion/rollback is not shipped
 A guide cannot prove model behavior: verify actual tool actions and outcomes.
 
 See self-development.md for local workflow and operations.md for recovery limits.
+
+## Conversation model precedence
+
+Explicit `/model provider/model` and `/reasoning level` selections are independent
+conversation-local overrides. They survive resource reload and session resume;
+unselected fields inherit current installation/global defaults. `--global` changes
+instance defaults, not an existing explicit local choice. `reset --global` removes
+the instance overlay; `/new` (or `/reset`) starts a conversation without local
+overrides. Per-turn API/review overrides do not establish local intent.
+
+The PI adapter records local intent as `harness-session-selection-v1` custom
+transcript entries, included in external provider snapshots. Older transcripts
+have no reliable provenance: SDK model/thinking entries also represent defaults
+and temporary overrides, so they are not automatically treated as local choices.
+Reselect once after upgrading to establish intent. Native PI storage still creates
+a session file only after a user/assistant message; setup-only empty sessions are
+not resumable. External session providers checkpoint selections immediately.

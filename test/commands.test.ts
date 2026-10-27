@@ -83,6 +83,10 @@ test("global and reviewer model commands require admin for changes and support r
   assert.match(ch.texts().at(-1)!, /p\/b/);
   await send("/review-model reset", "owner");
   assert.equal(settings.reviewModel, undefined);
+  await send("/model reset --global", "owner");
+  await send("/reasoning reset --global", "owner");
+  assert.equal(settings.model, undefined);
+  assert.equal(settings.thinking, undefined);
   assert.equal(runtime.sessions.size, 0, "global commands do not mutate busy sessions directly");
 });
 
