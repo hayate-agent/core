@@ -1,5 +1,27 @@
 # Session providers
 
+## Provider ownership and cleanup
+
+The CLI wraps its startup-selected external provider in a lifecycle owner. Each
+SDK session holds a lease from open through its final checkpoint and dispose.
+Provider operations (including local session listings) are tracked independently.
+`SessionProvider.close?()` is optional for compatibility; the host calls it only
+after all leases and operations drain, before plugin cleanup. Plugins should not
+also close the same instance in an independent cleanup callback.
+
+During owner shutdown, new opens and direct calls are rejected. Existing leased
+sessions can still commit their final snapshots. Failed opens release their lease;
+repeated disposal/owner close does not repeat backend cleanup. A cleanup failure
+is reported, not retried blindly. The lifecycle `retain?()` hook returns an internal
+leased view and release callback; ordinary provider implementations need not supply
+it. Native PI storage and legacy filesystem imports retain their existing behavior.
+
+This is startup ownership, not runtime provider switching or datastore migration.
+Existing session IDs, revisions and checkpoint closures remain on their original
+backend. Trusted calls/cleanup can hang: provider draining may extend shutdown
+beyond the Harness's bounded transport drain. No forced close or data-loss guarantee
+is implied when the process is killed externally.
+
 The native default uses PI's SessionManager and append-only JSONL under Harness
 home/sessions. PI owns tree semantics, replay, branches and context compaction.
 Harness does not copy the entire native tree on append. The optional filesystem

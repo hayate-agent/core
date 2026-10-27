@@ -390,6 +390,9 @@ export class PiRuntime implements AgentRuntime {
     if (!options.ephemeral) await mkdir(dir, { recursive: true });
     let provider = options.ephemeral ? undefined : this.opts.sessionProvider?.();
     if (!options.ephemeral && !provider && await this.opts.legacySessionProvider?.active(sessionKey)) provider = this.opts.legacySessionProvider;
+    const lease = provider?.retain?.();
+    if (lease) provider = lease.provider;
+    try {
     let record: SessionRecord | undefined;
     let sessionManager: SessionManager;
     if (options.ephemeral) sessionManager = SessionManager.inMemory(cwd);
@@ -608,6 +611,11 @@ export class PiRuntime implements AgentRuntime {
       await wrapped.dispose().catch(() => {});
       throw err;
     }
+    if (lease) {
+      const dispose = wrapped.dispose.bind(wrapped);
+      wrapped.dispose = async () => { try { await dispose(); } finally { lease.release(); } };
+    }
     return wrapped;
+    } catch (error) { lease?.release(); throw error; }
   }
 }
