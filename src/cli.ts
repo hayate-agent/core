@@ -34,7 +34,7 @@ import { dispatcherConfig } from "./dispatcher-config.js";
 import { dispatcherPlugin } from "./builtin-plugins/dispatcher-plugin.js";
 import { subagentPlugin } from "./builtin-plugins/subagent-plugin.js";
 import { wasmToolsPlugin } from "./builtin-plugins/wasm-tools-plugin.js";
-import { ReloadableTools } from "./reloadable-tools.js";
+import { ReloadableTools, composeToolCatalog } from "./reloadable-tools.js";
 import { builtinCommandNames, installCommands, VERSION } from "./commands.js";
 import { loadConfig } from "./config.js";
 import { initialize, diagnose } from "./setup.js";
@@ -142,8 +142,11 @@ async function main(argv: string[]): Promise<void> {
   await reloadSkills();
 
   const plugins = new PluginHost();
+  const initialReloadableTools: PluginHost["tools"] = new Map();
   const reloadableTools = config.reloadableToolPlugins?.length
-    ? new ReloadableTools({home:config.home,cwd:config.cwd,agent:config.agent},config.reloadableToolPlugins,log) : undefined;
+    ? new ReloadableTools({home:config.home,cwd:config.cwd,agent:config.agent},config.reloadableToolPlugins,log,true, tools => {
+      composeToolCatalog(plugins.tools, initialReloadableTools, tools);
+    }) : undefined;
   let memory!: MemoryService;
   let sessionProvider: SessionProvider | undefined;
   let compaction = nativeCompaction as CompactionStrategy;
@@ -200,7 +203,7 @@ async function main(argv: string[]): Promise<void> {
       const tools = workflow?.length ? [...new Set([...workflow, ...(reviewModule?.modelTools ?? [])])] : workflow;
       return dispatchPolicy.enabled && tools?.length ? [...new Set([...tools, "plugin_dispatch"])] : tools;
     })(),
-    pluginTools: () => plugins.tools.values(),
+    pluginTools: () => composeToolCatalog(plugins.tools, initialReloadableTools, reloadableTools?.tools ?? new Map()),
     sessionProvider: () => sessionProvider,
     legacySessionProvider: new FilesystemSessionProvider(path.join(config.home, "session-store")),
     compaction: () => compaction,
@@ -462,6 +465,11 @@ async function main(argv: string[]): Promise<void> {
     finally { memoryConnecting = false; }
   };
   await connectMemory();
+  for (const name of reloadableTools?.tools.keys() ?? []) {
+    const tool = plugins.tools.get(name);
+    if (!tool) throw Error("Reloadable startup tool missing");
+    initialReloadableTools.set(name, tool);
+  }
   try { await policyManager.load(); await extensionManager.load(); }
   catch (err) { await extensionManager.stop().catch(() => {}); await policyManager.stop().catch(() => {}); await plugins.stop().catch(() => {}); throw err; }
   const policyTimer = setInterval(() => { void policyManager.tick().catch(() => {}); void extensionManager.tick().catch(() => {}); }, 1000);

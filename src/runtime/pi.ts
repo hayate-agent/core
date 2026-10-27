@@ -421,6 +421,9 @@ export class PiRuntime implements AgentRuntime {
     const settingsManager = SettingsManager.create(cwd, getAgentDir(), {
       projectTrusted: !options.ephemeral && new ProjectTrustStore(getAgentDir()).get(cwd) === true,
     });
+    let boundTools = [...(this.opts.pluginTools?.() ?? [])];
+    const catalogFingerprint = (tools: typeof boundTools) => JSON.stringify(tools.map(tool => [tool.name, tool.description, tool.parameters]));
+    let boundToolFingerprint = catalogFingerprint(boundTools);
     const loader = new DefaultResourceLoader({
       cwd,
       agentDir: getAgentDir(),
@@ -441,7 +444,7 @@ export class PiRuntime implements AgentRuntime {
         {
           name: "vanillacore-harness-plugin-tools",
           factory: (pi) => {
-            for (const tool of this.opts.pluginTools?.() ?? []) {
+            for (const tool of boundTools) {
               pi.registerTool({
                 name: tool.name, label: tool.name, description: tool.description,
                 // JSON Schema is the runtime-neutral contract; SDK consumes the same schema.
@@ -542,19 +545,26 @@ export class PiRuntime implements AgentRuntime {
       }
       return hash.digest("hex");
     };
+    const toolCatalogFingerprint = () => catalogFingerprint([...(this.opts.pluginTools?.() ?? [])]);
+    let appliedToolFingerprint = boundToolFingerprint;
     let appliedMcpFingerprint = "";
     const wrapped = new PiSession(session, models, slot, checkpoint, record, this.opts.compaction?.(), async () => {
       const fingerprint = await mcpFingerprint();
-      if (!options.ephemeral && (appliedResourceRevision !== this.resourceRevision || fingerprint !== appliedMcpFingerprint)) {
+      const tools = toolCatalogFingerprint();
+      if (!options.ephemeral && (appliedResourceRevision !== this.resourceRevision || fingerprint !== appliedMcpFingerprint || tools !== appliedToolFingerprint)) {
         const revision = this.resourceRevision;
         // SDK reload closes old MCP connections, rebuilds extension bindings and
         // keeps history. Failed reloads block this prompt and retry next time.
+        boundTools = [...(this.opts.pluginTools?.() ?? [])];
+        boundToolFingerprint = catalogFingerprint(boundTools);
         await session.reload();
         // Headless bindExtensions({}) has no UI bindings; SDK reload therefore
         // does not emit session_start. Rebind to start replacement MCP servers.
         await session.bindExtensions({});
         appliedResourceRevision = revision;
         appliedMcpFingerprint = fingerprint;
+        appliedToolFingerprint = boundToolFingerprint;
+        if (toolCatalogFingerprint() !== appliedToolFingerprint) throw Error("Tool catalog changed during session reload; retry prompt");
       }
       const defaults = this.opts.modelDefaults?.();
       if (!options.ephemeral && defaults && defaults.revision !== appliedDefaults?.revision) {
