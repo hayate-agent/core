@@ -141,6 +141,32 @@ retain their current setting and new sessions use the runtime default. Reviewer
 changes apply on the next review call; an in-flight review keeps its original model.
 These settings affect this Harness instance only, not other agents or GitOps files.
 
+## Scheduled jobs: local configuration ownership
+
+Cron job definitions are operator-owned configuration, not an immutable job catalog
+bundled with the Harness. The scheduler reads `cron.jobsFile`, defaulting to
+`<home>/cron/jobs.yaml`. This file is the authoritative editable definition source;
+there is no second local job-definition merge layer or automatic baseline restore.
+Installation tooling may provision the file separately; the scheduler does not
+infer its ownership or merge upstream definitions into it.
+
+After editing definitions, `/cron reload` prepares the replacement schedule before
+publishing it. Invalid YAML or schedules retain the previous active schedule.
+Removing definitions removes them on reload; a missing jobs file clears the
+schedule. Scripts and prompt files remain resolved relative to the configured
+jobs directory, with the existing script containment checks.
+
+`/cron pause <name>` and `/cron resume <name>` are administrative operations. Their
+name-based enabled overrides are saved with Harness state and survive restart;
+they override the definition's `enabled` value. These switches are not definition
+backups and do not restore deleted jobs. To restore a definition, edit or restore
+the operator-owned source file and reload it. Updating definitions does not grant
+additional authority to their follow-up work.
+
+This single editable source plus atomic reload and persistent enable overrides is
+the supported Cron lifecycle. It deliberately differs from components that need
+an immutable installation baseline and a separate local replacement overlay.
+
 ## Models and credentials
 
 Provider definitions live in PI's `models.json`; examples are in
