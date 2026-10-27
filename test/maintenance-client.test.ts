@@ -11,6 +11,10 @@ import { maintenanceClient } from "../src/builtin-plugins/maintenance-client.js"
 
 for (const response of [
   { name: "safe status", value: '{"ok":true,"result":{"version":1,"id":"req-1","execution":"pending","secret":"DO_NOT_PRINT"}}', valid: true },
+  { name: "initial status", value: '{"ok":true,"result":{"version":0}}', valid: true },
+  { name: "incomplete nonzero receipt", value: '{"ok":true,"result":{"version":1}}', valid: false },
+  { name: "zero with execution", value: '{"ok":true,"result":{"version":0,"execution":"applied"}}', valid: false },
+  { name: "zero with identity", value: '{"ok":true,"result":{"version":0,"id":"req-1"}}', valid: false },
   { name: "malformed", value: 'not-json', valid: false },
   { name: "rejection", value: '{"ok":false,"error":"SECRET"}', valid: false },
   { name: "terminal injection", value: JSON.stringify({ ok: true, result: { version: 1, id: '\u001b[31m' } }), valid: false },
@@ -22,7 +26,7 @@ for (const response of [
   try {
     if (response.valid) {
       const text = await maintenanceClient([endpoint, "status"]);
-      assert.equal(text, '{"version":1,"id":"req-1","execution":"pending"}');
+      assert.equal(text, response.name === "initial status" ? '{"version":0}' : '{"version":1,"id":"req-1","execution":"pending"}');
       assert.ok(!text.includes("DO_NOT_PRINT"));
     } else await assert.rejects(maintenanceClient([endpoint, "status"]), /response/);
   } finally { await new Promise<void>(resolve => server.close(() => resolve())); await rm(root, { recursive: true, force: true }); }
