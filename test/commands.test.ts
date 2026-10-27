@@ -139,21 +139,93 @@ test("commands do not reach the agent; replies go to the chat", async () => {
   assert.equal(runtime.sessions.size, 0);
 });
 
-test("unsupported /reload is rejected without starting or queueing a model turn", async () => {
-  const { send, harness, runtime, ch } = setup();
+for (const name of ["restart", "reload"]) {
+  test(`/${name} uses the authorized graceful restart path without model input or history reset`, async () => {
+    const { send, harness, runtime, ch, ctx } = setup({ admins: ["owner"] });
+    let restarts = 0;
+    const notices: string[] = [];
+    const post = harness.post.bind(harness);
+    harness.post = (input, text) => { notices.push(text); return post(input, text); };
+    ctx.restart = async () => {
+      restarts++;
+      assert.equal(notices.at(-1), "♻️ restarting after current work…", "notice precedes restart");
+    };
+    ctx.reloadSkills = async () => { throw Error("skill discovery must not run"); };
+    ctx.pluginCommands = new Map([[name, { name, help: "shadow", run: async () => { throw Error("plugin must not run"); } }]]);
+    ctx.skills = () => [{ name, description: "shadow", filePath: "/s/shadow/SKILL.md", baseDir: "/s/shadow" }];
+    try {
+      for (const text of [`/${name}`, `/${name}@agent now`, `/${name} --anything extra`]) {
+        const before = restarts;
+        await send(text, "owner");
+        assert.equal(restarts, before + 1);
+      }
+      assert.equal(runtime.sessions.size, 0);
+      assert.deepEqual(harness.pendingInputs(), []);
+      await send("existing history", "owner");
+      const session = runtime.sessions.get("mem:room1")!;
+      const state = harness.state("mem:room1");
+      await send(`/${name}`, "owner");
+      assert.equal(restarts, 4);
+      assert.equal(harness.state("mem:room1"), state);
+      assert.equal(runtime.sessions.get("mem:room1"), session);
+      assert.deepEqual(session.prompts, ["existing history"]);
+      assert.deepEqual(runtime.opened.map(o => o.fresh), [false]);
+      assert.equal(session.aborted, 0);
+      assert.equal(runtime.reloads, 0);
+      assert.equal(ch.texts().filter(t => t === "♻️ restarting after current work…").length, 4);
+      await send("/help", "owner");
+      assert.match(ch.texts().at(-1)!, /\/restart \(\/reload\) \[admin\] \[Harness\]/);
+    } finally { await harness.stop(1000); }
+  });
+
+  test(`/${name} preserves restart authorization for remote senders and local console`, async () => {
+    const { send, harness, runtime, ch, ctx } = setup({ admins: ["owner"] });
+    let restarts = 0;
+    ctx.restart = async () => { restarts++; };
+    try {
+      for (const sender of ["stranger", ""]) {
+        await send(`/${name}@agent ignored args`, sender);
+        assert.equal(ch.texts().at(-1), "⛔ admin only");
+      }
+      ctx.admins = [];
+      ctx.openAdmin = false;
+      await send(`/${name}`, "owner");
+      assert.equal(ch.texts().at(-1), "⛔ admin only");
+      assert.equal(restarts, 0);
+      assert.equal(runtime.sessions.size, 0);
+      assert.deepEqual(harness.pendingInputs(), []);
+      harness.addChannel({ name: "console", start: async () => {}, send: async () => {}, stop: async () => {} });
+      await harness.commandHandler!({ text: `/${name}`, source: "channel", sessionKey: "console:local", sender: "local", replyTo: { channel: "console", target: "local" } });
+      assert.equal(restarts, 1);
+      ctx.openAdmin = true;
+      await send(`/${name}`, "anyone");
+      assert.equal(restarts, 2);
+    } finally { await harness.stop(1000); }
+  });
+}
+
+test("skills/MCP reload aliases still reload resources without restarting", async () => {
+  const { send, harness, runtime, ch, ctx } = setup({ admins: ["owner"] });
+  let skillsReloaded = 0;
+  let restarts = 0;
+  ctx.reloadSkills = async () => { skillsReloaded++; };
+  ctx.restart = async () => { restarts++; };
   try {
-    await send("/reload");
-    await send("/reload@agent now");
+    for (const name of ["reload-skills", "reload_skills", "reload-mcp", "reload_mcp"]) {
+      await send(`/${name}`, "stranger");
+      assert.match(ch.texts().at(-1)!, /session resource\/MCP reload scheduled/);
+    }
+    assert.equal(skillsReloaded, 4);
+    assert.equal(runtime.reloads, 4);
+    assert.equal(restarts, 0);
     assert.equal(runtime.sessions.size, 0);
-    assert.deepEqual(harness.pendingInputs(), []);
-    assert.equal(ch.texts().length, 2);
-    for (const text of ch.texts()) assert.match(text, /Unsupported command \/reload.*\/reload-skills.*\/help/);
-    assert.equal(runtime.reloads, 0);
   } finally { await harness.stop(1000); }
 });
 
 test("/stop twice never replays runtime prose and /reload is not queued while running", async () => {
-  const { harness, runtime, ch, send } = setup();
+  const { harness, runtime, ch, send, ctx } = setup();
+  let restarts = 0;
+  ctx.restart = async () => { restarts++; };
   try {
     await send("first");
     for (let i = 0; i < 2; i++) {
@@ -167,7 +239,8 @@ test("/stop twice never replays runtime prose and /reload is not queued while ru
     }
     assert.deepEqual(runtime.sessions.get("mem:room1")!.prompts, ["first", "work 0", "work 1"]);
     assert.deepEqual(ch.texts().filter(t => t.startsWith("echo:")), ["echo: first"]);
-    assert.equal(ch.texts().filter(t => t.startsWith("Unsupported command /reload")).length, 2);
+    assert.equal(restarts, 2);
+    assert.equal(ch.texts().filter(t => t === "♻️ restarting after current work…").length, 2);
   } finally { await harness.stop(1000); }
 });
 

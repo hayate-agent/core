@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "repository": "https://git.vanillacore.net/harness/plugins",
-  "revision": "cefd869de9b470ddc204c1420ca634d4559718c1",
+  "revision": "76d10edaecb58918759bb09715908619db33c516",
   "files": {
     "context-plugin.ts": "1da424038b5f5dd8e88999d86c4b26fecca5d21ca4170b83fdba9958eef787f0",
     "continuation-plugin.ts": "6c06371c5b791dadc27b440ee37444313006e869874d2e8ac372542cd2f0504e",
@@ -38,6 +38,7 @@
     "extension-manager-plugin.ts": "51ea7b167e2683b180f510a005305975afabb22819e02aa03aafbc434061200c",
     "cron-report-plugin.ts": "71bb9d6432985d25defb18d4ef45653342c2243f42e215b972b0eb586d24a260",
     "cron-report-processing.ts": "4e40d3f4c9801d87af1bdd8e2624a12f21e02ad49378a504abaea7a1bb49856f",
-    "cron-reports.ts": "0bbf04e0c3ce1c8a499cdcc2e3bba1d27c88aacd71218f1b4027002591947991"
+    "cron-reports.ts": "0bbf04e0c3ce1c8a499cdcc2e3bba1d27c88aacd71218f1b4027002591947991",
+    "memory-orchestration-plugin.ts": "c796ff18def036016ac47095d18a490fab0d15ff8eaff342e463babc16bf78ea"
   }
 }
