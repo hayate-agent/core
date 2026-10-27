@@ -34,8 +34,10 @@ no named personality overlay is selected. Existing live sessions need a restart 
 
 The Harness maintains a derived index at `<home>/skills/index.json`, owned by the
 single Harness process holding that home. It is rebuilt from configured
-`skills.paths` (default `<home>/skills`), workspace `.pi/skills`, and the PI agent
-`skills` directory, in that priority order. First directory wins on name collisions.
+`skills.paths` (default `<home>/skills`), workspace `.pi/skills`, the Agent Skills
+project location `.agents/skills` (discovered from the workspace ancestors), and
+the PI agent `skills` directory, in that priority order. First directory wins on
+name collisions.
 The index stores validated metadata, canonical paths, SHA-256 content hashes,
 diagnostics, a schema version and a catalog generation. Body-only edits also change
 the generation; unchanged sources preserve it across restarts.
@@ -53,6 +55,20 @@ through the per-turn system context without reloading extensions or resetting th
 conversation. A skill created during a running prompt becomes discoverable on the
 next prompt; it can also be read directly immediately. No filesystem watcher is
 required. `/reload-skills` remains a manual fallback.
+
+Skill metadata injection is configurable via `skills.context` (harness.yaml) or
+`skills.context` in `settings.local.yaml`:
+
+- `auto` (default): inject the catalog metadata once per session, cached; the
+  leading prompt prefix stays byte-stable across turns, so prompt/prefix caches
+  are reused. Cache is invalidated whenever skills reload.
+- `lazy`: inject nothing; the model discovers skills on demand through the
+  `plugin_skill_search` tool (names + descriptions only).
+- `off`: inject nothing; no search tool injection beyond `lazy`.
+
+With `lazy`/`off`, a skill created during a running prompt stays invisible until
+its metadata would be needed; the search tool reads the live catalog on each
+query, so late-discovered skills are usable without a session restart.
 
 ## Built-in review
 

@@ -75,6 +75,8 @@ export interface HarnessConfig {
   skills: {
     /** Extra skill dirs in addition to PI's global/project discovery. */
     paths: string[];
+    /** Skill-metadata injection mode: 'auto' (inject once per session, cached), 'lazy' (none; discover via plugin_skill_search), 'off' (none). */
+    context?: "auto" | "lazy" | "off";
   };
   cron: {
     /** Hermes-compatible jobs.yaml; optional. */
@@ -172,7 +174,7 @@ export function defaultConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
       personalitiesDir: path.join(home, "personalities"),
       ...overrides.persona,
     },
-    skills: { paths: [path.join(home, "skills")], ...overrides.skills },
+    skills: { paths: [path.join(home, "skills")], context: "auto", ...overrides.skills },
     cron: { jobsFile: path.join(home, "cron", "jobs.yaml"), ...overrides.cron },
     loop,
     memoryGuard: { percent: 90, ...overrides.memoryGuard },

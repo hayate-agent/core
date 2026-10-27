@@ -24,6 +24,7 @@ export interface LocalSettings {
   review?: { model?: string; thinking?: string };
   contextMaintenance?: Partial<ContextPolicy>;
   toolResultPruning?: Partial<PruningPolicy>;
+  skills?: { paths?: string[]; context?: "auto" | "lazy" | "off" };
 }
 export type SettingPath = "model" | "thinking" | "review.model" | "review.thinking";
 const keys: Record<SettingPath, ModelSetting> = { model: "model", thinking: "thinking", "review.model": "reviewModel", "review.thinking": "reviewThinking" };
@@ -40,7 +41,7 @@ function validate(value: unknown, defaults: Partial<ContextPolicy> = {}, pruning
       validateGatewayOverlay(item);
     } else if (key === "memory") {
       if (!item || typeof item !== "object" || Array.isArray(item)) throw Error("Invalid memory overlay");
-      if (Object.keys(item).some((k) => !["enabled", "provider", "orchestration", "autoCapture", "autoRecall", "scanSeconds", "maxEntries", "maxIndexBytes", "embedding"].includes(k))) throw Error("Unsupported memory setting");
+      if (Object.keys(item).some((k) => !["enabled", "provider", "orchestration", "autoCapture", "autoRecall", "scanSeconds", "maxEntries", "maxIndexBytes", "recallLimit", "embedding"].includes(k))) throw Error("Unsupported memory setting");
       memoryConfig(item);
     } else if (key === "gateways") {
       validateGatewayConfig(item);
@@ -52,6 +53,14 @@ function validate(value: unknown, defaults: Partial<ContextPolicy> = {}, pruning
       const allowed = ["enabled", "checkEveryTurns", "assessPercent", "compactPercent", "cooldownTurns", "autoHandover"];
       if (Object.keys(item).some((k) => !allowed.includes(k))) throw new Error("Unsupported context setting");
       contextPolicy({ ...defaults, ...item });
+    } else if (key === "skills") {
+      if (!item || typeof item !== "object" || Array.isArray(item)) throw Error("Invalid skills overlay");
+      const skillItem = item as Record<string, unknown>;
+      if (Object.keys(skillItem).some((k) => !["paths", "context"].includes(k))) throw Error("Unsupported skills setting");
+      if (skillItem.paths !== undefined) {
+        if (!Array.isArray(skillItem.paths) || skillItem.paths.some((p) => typeof p !== "string" || !p.trim())) throw Error("Invalid skills.paths");
+      }
+      if (skillItem.context !== undefined && !["auto", "lazy", "off"].includes(skillItem.context as string)) throw Error("Invalid skills.context");
     } else if (key === "review") {
       if (!item || typeof item !== "object" || Array.isArray(item)) throw new Error("Invalid review settings overlay");
       for (const [field, v] of Object.entries(item)) {
@@ -77,7 +86,7 @@ export class SettingsService {
     try {
       const data = parse(await readFile(this.file, "utf8"));
       if (!data || typeof data !== "object" || Array.isArray(data)) throw Error("Invalid local settings overlay");
-      const supported = new Set(["dispatcher", "gateways", "gatewayPlugins", "policyPlugins", "extensionPlugins", "memory", "model", "thinking", "review", "contextMaintenance", "toolResultPruning"]);
+      const supported = new Set(["dispatcher", "gateways", "gatewayPlugins", "policyPlugins", "extensionPlugins", "memory", "model", "thinking", "review", "contextMaintenance", "toolResultPruning", "skills"]);
       if (Object.keys(data).some(key => ["token", "apiKey", "secrets", "protectedContent", "admins", "approvers", "approvals"].includes(key))) throw Error("Unsupported local setting: infrastructure policy or credential field");
       const active: Record<string, unknown> = Object.create(null);
       const ignored: Record<string, unknown> = Object.create(null);
@@ -99,7 +108,7 @@ export class SettingsService {
     for (const name of new Set([...Object.keys(this.defaults.gateways?.overrides ?? {}), ...Object.keys(this.overlay.gateways?.overrides ?? {})])) {
       overrides[name] = { ...this.defaults.gateways?.overrides?.[name], ...this.overlay.gateways?.overrides?.[name] };
     }
-    return { ...this.defaults, ...this.overlay, dispatcher: dispatcherConfig({ ...this.defaults.dispatcher, ...this.overlay.dispatcher }), memory: { ...this.defaults.memory, ...this.overlay.memory }, gateways: { ...this.defaults.gateways, ...this.overlay.gateways, overrides }, review: { ...this.defaults.review, ...this.overlay.review }, contextMaintenance: { ...this.defaults.contextMaintenance, ...this.overlay.contextMaintenance }, toolResultPruning: { ...this.defaults.toolResultPruning, ...this.overlay.toolResultPruning } };
+    return { ...this.defaults, ...this.overlay, dispatcher: dispatcherConfig({ ...this.defaults.dispatcher, ...this.overlay.dispatcher }), memory: { ...this.defaults.memory, ...this.overlay.memory }, gateways: { ...this.defaults.gateways, ...this.overlay.gateways, overrides }, review: { ...this.defaults.review, ...this.overlay.review }, skills: { ...this.defaults.skills, ...this.overlay.skills }, contextMaintenance: { ...this.defaults.contextMaintenance, ...this.overlay.contextMaintenance }, toolResultPruning: { ...this.defaults.toolResultPruning, ...this.overlay.toolResultPruning } };
   }
   source(key: SettingPath): "local overlay" | "installation/default" {
     const value = key.startsWith("review.") ? this.overlay.review?.[key.slice(7) as "model" | "thinking"] : this.overlay[key as "model" | "thinking"];
