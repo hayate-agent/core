@@ -16,10 +16,16 @@ must inject a prompt strategy; omission disables classification rather than impo
 a concrete default from Core. Existing timeout, numeric grants and chain cap remain.
 Build/merge does not activate a running installation.
 
-The optional completion assessor is invoked after successful working turns when
-no explicit continue checkpoint exists. Self-reported waiting/blocked/completed
-plans are advisory and may be reassessed against the original task. A registered
-bounded wait is handled by the durable task scheduler, not a release webhook. API runs, controller-owned nightly work, paused or
+The optional completion assessor is invoked after successful working turns,
+including turns with explicit continue or timed-wait checkpoints. Existing scheduled
+steps and bounded waits are preserved rather than overwritten by an advisory result.
+Self-reported waiting/blocked/completed plans without an explicit scheduled step may
+be reassessed against the original task. Other retained active mandates without a
+next step can be independently assessed under their own original anchors. Pending
+child executions do not suppress assessment; they still block execution of their
+associated task. Legacy dependencies without task identity conservatively block all
+autonomous execution. A registered bounded wait is handled by the durable task
+scheduler, not a release webhook. API runs, controller-owned nightly work, paused or
 stopping Harness instances, queued work, cancelled turns and exhausted chains
 are excluded. Conditions are rechecked after assessment; the ordinary durable
 inbox/outbox checkpoint commits any follow-up. Working approval cleanup and
@@ -52,8 +58,13 @@ well as working execution and clears waiting work. Already committed work cannot
 be undone by stopping. Installation grants take precedence over chat anchors.
 
 The classifier uses the existing ephemeral tool-free reviewer adapter (no skills,
-project context or extensions). It receives bounded task/request/reply text and
-returns JSON. Invalid, uncertain or failed assessments do not continue. A ten-second
+project context or extensions). It receives bounded task/request/reply text, plus
+host-provided conversation evidence: up to eight recent user/assistant excerpts
+of at most 2000 characters each and up to eight retained task summaries. Excerpts
+survive restart; this is not full transcript reconstruction. Context is evidence,
+not additional authority. Completed or stopped historical mandates are not
+resurrected automatically; a fresh explicit work request has its own task anchor.
+The classifier returns JSON. Invalid, uncertain or failed assessments do not continue. A ten-second
 deadline requests best-effort abort and bounds the waiting caller; runtime open or
 cleanup may still remain pending if the adapter does not honor cancellation.
 This does not establish hard process isolation or model semantic accuracy.
