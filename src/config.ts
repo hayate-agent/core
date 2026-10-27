@@ -37,6 +37,7 @@ export interface HarnessConfig {
   reviewEngine?: string;
   contextStrategy?: string;
   completionStrategy?: string;
+  nightlyStrategy?: string;
   review?: Partial<Omit<ReviewConfig, "mandatory" | "scope">> & { mandatory?: Partial<ReviewConfig["mandatory"]>; scope?: Partial<ReviewConfig["scope"]> };
   /** Literal tool names exposed to the model; omitted = runtime defaults, [] = no tools. */
   tools?: string[];
@@ -121,6 +122,7 @@ export function defaultConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
   if (overrides.reviewEngine !== undefined && (typeof overrides.reviewEngine !== "string" || !overrides.reviewEngine.trim() || overrides.reviewEngine.length > 2000)) throw Error("Invalid reviewEngine");
   if (overrides.contextStrategy !== undefined && (typeof overrides.contextStrategy !== "string" || !overrides.contextStrategy.trim() || overrides.contextStrategy.length > 2000)) throw Error("Invalid contextStrategy");
   if (overrides.completionStrategy !== undefined && (typeof overrides.completionStrategy !== "string" || !overrides.completionStrategy.trim() || overrides.completionStrategy.length > 2000)) throw Error("Invalid completionStrategy");
+  if (overrides.nightlyStrategy !== undefined && (typeof overrides.nightlyStrategy !== "string" || !overrides.nightlyStrategy.trim() || overrides.nightlyStrategy.length > 2000)) throw Error("Invalid nightlyStrategy");
   contextPolicy(overrides.contextMaintenance);
   pruningPolicy(overrides.toolResultPruning);
   validateGatewayConfig(overrides.gateways);
@@ -144,6 +146,7 @@ export function defaultConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
     reviewEngine: overrides.reviewEngine,
     contextStrategy: overrides.contextStrategy,
     completionStrategy: overrides.completionStrategy,
+    nightlyStrategy: overrides.nightlyStrategy,
     plugins: overrides.plugins ?? [],
     reloadableToolPlugins: overrides.reloadableToolPlugins ?? [],
     autoReloadToolPlugins: overrides.autoReloadToolPlugins ?? false,

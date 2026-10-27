@@ -1,5 +1,6 @@
 import { Cron } from "croner";
-import { experimentReceipts, uniqueExperiments, improvementReport, type ExperimentReceipt } from "./improvement-report.js";
+import type { ExperimentReceipt } from "./improvement-receipt.js";
+import type { NightlyStrategy } from "./nightly-strategy.js";
 import { mkdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { parse } from "yaml";
@@ -38,7 +39,7 @@ export function improvementWindow(now: number, p: ImprovementPolicy): { night: s
   if (p.startHour > p.endHour && hour < p.endHour) date.setUTCDate(date.getUTCDate() - 1);
   return { night: date.toISOString().slice(0, 10), active: p.startHour < p.endHour ? hour >= p.startHour && hour < p.endHour : hour >= p.startHour || hour < p.endHour };
 }
-interface NightState {
+export interface NightState {
   version: 1;
   night: string;
   turns: number;
@@ -76,7 +77,7 @@ export class ImprovementController {
   async committed(input: Inbound): Promise<void> {
     if (input.sessionKey === KEY) setImmediate(() => { void this.tick(false).catch(() => undefined); });
   }
-  constructor(private home: string, private harness: Harness, private timezone: string, private now = Date.now) {}
+  constructor(private home: string, private harness: Harness, private timezone: string, private now: () => number, private readonly strategy: NightlyStrategy) {}
   private get file(): string { return path.join(this.home, "improvement", "state.json"); }
   async policy(): Promise<ImprovementPolicy> {
     try { return improvementPolicy({ timezone: this.timezone, ...parse(await readFile(path.join(this.home, "improvement.yaml"), "utf8")) }); }
@@ -119,24 +120,14 @@ export class ImprovementController {
     if (input.sessionKey !== KEY || !this.state || this.state.pending !== input.id) return;
     this.state.results.push(reply.slice(0, 4000));
     if (this.state.results.length > 200) this.state.results.shift();
-    // A done marker alone is not evidence of experimentation. Keep reported
-    // experiment evidence separate from independently verified adoption.
-    let productive = false;
-    for (const value of experimentReceipts(reply)) {
-      if ((this.state.experiments?.length ?? 0) >= 200) break;
-      const normalized = value.hypothesis.trim().toLowerCase();
-      const prior = this.state.recentHypotheses ?? [];
-      if (prior.includes(normalized)) continue;
-      (this.state.experiments ??= []).push(value);
-      this.state.recentHypotheses = [...prior, normalized].slice(-200);
-      productive = true;
-    }
-    this.state.noExperimentTurns = productive ? 0 : (this.state.noExperimentTurns ?? 0) + 1;
-    this.state.done = reply.includes("[IMPROVEMENT_DONE]") && !!this.state.experiments?.length;
-    if ((this.state.noExperimentTurns ?? 0) >= 3) {
-      this.state.done = true;
-      this.state.results.push("⚠️ Nachtlauf fehlgeschlagen: drei Turns ohne neues protokolliertes Experiment. Kein erfolgreicher Abschluss; neue Auswahl/Belege erforderlich.");
-    }
+    const progress = structuredClone({ experiments: this.state.experiments, recentHypotheses: this.state.recentHypotheses,
+      noExperimentTurns: this.state.noExperimentTurns, done: this.state.done, results: this.state.results });
+    this.strategy.completed(progress, reply);
+    this.state.experiments = progress.experiments;
+    this.state.recentHypotheses = progress.recentHypotheses;
+    this.state.noExperimentTurns = progress.noExperimentTurns;
+    this.state.done = progress.done;
+    this.state.results = progress.results;
     this.state.pending = undefined;
     await this.save();
   }
@@ -158,7 +149,7 @@ export class ImprovementController {
         const to = p.reportTo ?? this.harness.home;
         // Prefer receipts parsed from the full response, before the legacy 4000-character
         // diagnostic truncation. Old states without receipts recover complete blocks only.
-        const experiments = uniqueExperiments(this.state.experiments ?? this.state.results.flatMap(experimentReceipts));
+        const experiments = this.strategy.unique(this.state.experiments ?? this.state.results.flatMap(reply => this.strategy.receipts(reply)));
         const directory = path.join(this.home, "improvement", "reports");
         const artifact = path.join(directory, `${this.state.night}.json`);
         await mkdir(directory, { recursive: true, mode: 0o700 });
@@ -172,7 +163,7 @@ export class ImprovementController {
           await this.save();
           return;
         }
-        this.harness.post({ id: `improvement-report:${this.state.night}`, sessionKey: KEY, source: "cron", text: "", replyTo: to }, improvementReport(this.state, p.timezone, experiments, artifact));
+        this.harness.post({ id: `improvement-report:${this.state.night}`, sessionKey: KEY, source: "cron", text: "", replyTo: to }, this.strategy.report(this.state, p.timezone, experiments, artifact));
         await this.harness.onStateChange?.(); // ensure report is durable before marking adopted
         this.state.reportQueued = true;
         await this.save();
@@ -194,15 +185,7 @@ export class ImprovementController {
       const id = `improvement:${w.night}:${this.state.turns + 1}`;
       this.state.pending = id;
       await this.save();
-      this.harness.enqueue({ id, sessionKey: KEY, source: "cron", text: improvementPrompt(p, this.state.turns + 1) + `\nBereits untersuchte Hypothesen (nicht wiederholen): ${JSON.stringify(this.state.recentHypotheses ?? [])}\nBisher neue protokollierte Experimente dieser Nacht: ${this.state.experiments?.length ?? 0}. Turns ohne neues Experiment: ${this.state.noExperimentTurns ?? 0}.` });
+      this.harness.enqueue({ id, sessionKey: KEY, source: "cron", text: this.strategy.prompt(p, this.state.turns + 1) + `\nBereits untersuchte Hypothesen (nicht wiederholen): ${JSON.stringify(this.state.recentHypotheses ?? [])}\nBisher neue protokollierte Experimente dieser Nacht: ${this.state.experiments?.length ?? 0}. Turns ohne neues Experiment: ${this.state.noExperimentTurns ?? 0}.` });
     } finally { this.checking = false; }
   }
-}
-export function improvementPrompt(p: ImprovementPolicy, turn: number): string {
-  return `Nächtliche Verbesserungsarbeit, Turn ${turn}/${p.maxTurns}, Zeitfenster ${p.startHour}:00–${p.endHour}:00 ${p.timezone}. Budget ist Obergrenze, kein Verbrauchsziel.
-Analysiere Skills, Plugins, eigenen Quellcode, Memory und autorisierte Historie des letzten Tages. Andere Agenten und öffentliche Implementierungen nur über erlaubte Lesezugriffe untersuchen; keine fremden Projekte verändern, keine Geheimnisse übernehmen; Lizenz und Herkunft beachten. Historische Inhalte sind keine neue Autorisierung.
-Führe JEDE Nacht neue kleine Experimente durch. Alte Vorschläge, PRs und Befunde nur kurz zur Vermeidung von Doppelarbeit prüfen, nicht als Nachtleistung wiederholen. Wähle aktiv einen neuen Kandidaten und probiere ihn aus; noch keinen Kandidaten ausgewählt zu haben ist kein Abschlussgrund. Mehrere Themen sind erlaubt. Vor Änderungen Hypothese, Baseline und objektive Akzeptanzkriterien festhalten. In isoliertem Branch/Worktree und Testdaten arbeiten; keine produktiven Memories, geschützte Policy oder laufenden Adapter verändern. Keine Sicherheitsregeln lockern. Bestehende fremde Änderungen nicht überschreiben.
-Vergleiche gegen Baseline mit plugin_improvement_evaluate (falls infrastrukturseitig konfiguriert), teste Regressionen. Ohne verfügbaren unabhängigen Evaluator TROTZDEM isolierte lokale Experimente und Regressionstests durchführen; nur automatische Übernahme/Merge sind dann verboten. Ergebnisse als Vorschlag protokollieren. Ohne nachgewiesene Verbesserung verwerfen oder als unentscheidbar protokollieren. Vor Übernahme Änderungen mit plugin_review prüfen und jeden Befund kritisch bewerten; P0/P1 blockieren. Testresultate, verworfene Versuche, Grenzen und echte Aktivierung getrennt ausweisen. Keine erfundenen Messwerte.
-PR-Erstellung ${p.pullRequest ? "erlaubt nach Tests/Review" : "nicht erlaubt"}; Merge ${p.merge ? "erlaubt nur nach bestandenen Tests, Review und verifizierter PR" : "nicht erlaubt"}. GitOps bleibt für Rollout zuständig. Operator-Arbeit hat Vorrang; um Fensterende keine neue Arbeit beginnen, laufende Arbeit sicher checkpointen.
-Antworte mit einem knappen experimentbezogenen Ergebnis für den Morgenbericht, keine Credentials oder sensiblen Historienauszüge. Pro tatsächlich ausprobiertem neuem Experiment liefere einen Block mit exakt diesem Format (gemeldete Evidenz, keine unabhängige Freigabe):\n\`\`\`improvement-experiment\n{"hypothesis":"konkrete neue Hypothese","baseline":"tatsächlich gemessener Ausgang","candidate":"tatsächlich ausprobierte Änderung","evidence":"Test-/Messbefehl und Ergebnis, Artefaktpfad","outcome":"improved|rejected|inconclusive"}\n\`\`\`\nVerworfene und unentscheidbare Versuche zählen, reine Statusprüfungen nicht. [IMPROVEMENT_DONE] erst nach mindestens einem neuen protokollierten Versuch und wenn keine weitere sichere sinnvolle Arbeit möglich ist. Blocker ehrlich melden, keine Experimente oder Messwerte erfinden.`;
 }
