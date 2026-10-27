@@ -22,6 +22,7 @@ export interface LocalSettings {
   /** null disables; absence restores the immutable installation selection. */
   completionStrategy?: string | null;
   nightlyStrategy?: string | null;
+  contextStrategy?: string | null;
   model?: string;
   thinking?: string;
   review?: { model?: string; thinking?: string };
@@ -35,8 +36,8 @@ function validate(value: unknown, defaults: Partial<ContextPolicy> = {}, pruning
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid local settings overlay");
   const data = value as Record<string, unknown>;
   for (const [key, item] of Object.entries(data)) {
-    if (key === "completionStrategy" || key === "nightlyStrategy") {
-      if (item !== null && (typeof item !== "string" || !item.trim())) throw Error(`Invalid ${key === "nightlyStrategy" ? "nightly" : "completion"} strategy selection`);
+    if (key === "completionStrategy" || key === "nightlyStrategy" || key === "contextStrategy") {
+      if (item !== null && (typeof item !== "string" || !item.trim())) throw Error(`Invalid ${key === "nightlyStrategy" ? "nightly" : key === "contextStrategy" ? "context" : "completion"} strategy selection`);
     } else if (key === "dispatcher") {
       if (!item || typeof item !== "object" || Array.isArray(item) || Object.keys(item).some(key => !["enabled", "strategy", "concurrentRequests", "capacity", "retentionDays"].includes(key))) throw Error("Invalid dispatcher overlay");
       dispatcherConfig({ ...dispatcherDefaults, ...item });
@@ -91,7 +92,7 @@ export class SettingsService {
     try {
       const data = parse(await readFile(this.file, "utf8"));
       if (!data || typeof data !== "object" || Array.isArray(data)) throw Error("Invalid local settings overlay");
-      const supported = new Set(["dispatcher", "gateways", "gatewayPlugins", "policyPlugins", "extensionPlugins", "memory", "completionStrategy", "nightlyStrategy", "model", "thinking", "review", "contextMaintenance", "toolResultPruning", "skills"]);
+      const supported = new Set(["dispatcher", "gateways", "gatewayPlugins", "policyPlugins", "extensionPlugins", "memory", "completionStrategy", "nightlyStrategy", "contextStrategy", "model", "thinking", "review", "contextMaintenance", "toolResultPruning", "skills"]);
       if (Object.keys(data).some(key => ["token", "apiKey", "secrets", "protectedContent", "admins", "approvers", "approvals"].includes(key))) throw Error("Unsupported local setting: infrastructure policy or credential field");
       const active: Record<string, unknown> = Object.create(null);
       const ignored: Record<string, unknown> = Object.create(null);
@@ -152,6 +153,18 @@ export class SettingsService {
       const updated = this.snapshot();
       updated.gatewayPlugins = { ...updated.gatewayPlugins };
       if (spec) updated.gatewayPlugins[name] = spec; else delete updated.gatewayPlugins[name];
+      await mkdir(path.dirname(this.file), { recursive: true });
+      await writeFileDurable(this.file, stringify({ ...this.ignored, ...updated }));
+      this.overlay = updated;
+    });
+    this.writing = next;
+    return next;
+  }
+  setContextStrategy(value: string | null | undefined): Promise<void> {
+    const next = this.writing.catch(() => {}).then(async () => {
+      const updated = this.snapshot();
+      if (value === undefined) delete updated.contextStrategy; else updated.contextStrategy = value;
+      validate(updated, this.defaults.contextMaintenance, this.defaults.toolResultPruning, this.defaults.dispatcher);
       await mkdir(path.dirname(this.file), { recursive: true });
       await writeFileDurable(this.file, stringify({ ...this.ignored, ...updated }));
       this.overlay = updated;

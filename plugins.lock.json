@@ -41,9 +41,10 @@
     "maintenance-control-plugin.ts": "6c8033b24190672a7200e6c60ed99c6a14b89de54e535c5ce33b2b07cea27cf4",
     "maintenance-client.ts": "ed8a8178f38ed8c3dc7b58e339ca3f358baf48e6feee298c9f83ce2ac6c755c5",
     "completion-strategy-plugin.ts": "5f69464b4648d9b360020eac5b967e924549236eaff92f3c5e68f79826503b6f",
-    "nightly-strategy-plugin.ts": "f2307c66003387167318055b7e49ce84e115ffd5d8e7d1a21ae8106318dbc0a8"
+    "nightly-strategy-plugin.ts": "f2307c66003387167318055b7e49ce84e115ffd5d8e7d1a21ae8106318dbc0a8",
+    "context-strategy-plugin.ts": "104c0e4a9b9619d361a8089b43724986366bc3665993c2146268e5f847698643"
   },
   "repository": "https://git.vanillacore.net/harness/plugins",
-  "revision": "8a70b1e05b29c583f4e9f4f8e1967d10cb90a82a",
+  "revision": "79a83fe54058a885b92751dc027602ab8c6f1d6d",
   "schema": 1
 }

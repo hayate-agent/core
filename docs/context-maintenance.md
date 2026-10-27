@@ -19,11 +19,37 @@ strategies must not start receivers or unmanaged background resources.
 
 Unknown/malformed modules fail startup, not silent fallback. This is trusted
 in-process code, not a sandbox; custom projectors can inspect context and must
-honor the runtime contract. Selection requires restart and is not a local writable
-overlay or hot reload. The stock PI adapter no longer imports a concrete pruning
+honor the runtime contract. The stock PI adapter no longer imports a concrete pruning
 algorithm: the CLI supplies the selected projector. Other hosts embedding PiRuntime
 must explicitly provide projectToolResults to enable projection. A missing projector
 leaves request messages unchanged. Build/merge is not activation evidence.
+
+### Local advisory/projection lifecycle
+
+The administrative `/context-strategy` plugin supports `status`, `use <module>`,
+`disable`, `baseline` and `reload`. Paths are trusted executable modules relative
+to Harness home; command paths cannot contain whitespace. The async factory is
+fully prepared and both receiver-bound methods validated before settings persist;
+the pair becomes visible atomically only after successful save. Busy owners,
+maintenance operations, invalid modules or save failures retain the current pair.
+The plugin reserves Harness idle first, then the maintenance service. Direct
+embedded maintenance operations also prevent a switch; during replacement new
+maintenance/status operations reject with a retryable error rather than waiting.
+
+`settings.local.yaml` stores `contextStrategy`: path replaces, null disables,
+absence restores the captured installation baseline. Disable supplies unknown
+advisory assessment and identity projection. It does not disable explicit manual
+maintenance, host pressure policy, native overflow compaction or change provider,
+compaction implementation, task grants or pending handover state. The runtime
+callback reads the current pair at each request; an assessment captures its method
+once and cannot be replaced while its maintenance operation is active.
+
+Baseline restoration uses the prepared startup instance. Reload cache-busts the
+selected entry module only; transitive imports retain Node ESM cache behavior,
+and generations remain until process exit. Async create must only prepare pure
+behavior; side effects of trusted imports/factories are not rolled back on failure.
+This is not provider migration or a live replacement of compaction objects already
+captured by existing runtime sessions. Existing startup default behavior is retained.
 
 The Harness checks context at serialized working-turn boundaries. PI native overflow
 compaction remains a fallback. Maintenance does not call manual compaction while a
