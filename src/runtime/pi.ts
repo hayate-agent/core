@@ -168,6 +168,7 @@ export class PiSession implements RuntimeSession {
     const turn = { aborted: false };
     this.turn = turn;
     let unsubscribe: (() => void) | undefined;
+    let last: Extract<AgentSession["messages"][number], { role: "assistant" }> | undefined;
     let prevModel: AgentSession["model"];
     let prevThinking: AgentSession["thinkingLevel"] | undefined;
     try {
@@ -180,12 +181,14 @@ export class PiSession implements RuntimeSession {
       }
       prevModel = this.session.model;
       prevThinking = this.session.thinkingLevel;
-      unsubscribe = onEvent
-        ? this.session.subscribe((event) => {
-            const mapped = toTurnEvent(event);
-            if (mapped) onEvent(mapped);
-          })
-        : undefined;
+      unsubscribe = this.session.subscribe((event) => {
+        // Attribute results to this invocation, never to a historical transcript lookup.
+        if (event.type === "message_end" && event.message.role === "assistant") last = event.message;
+        if (!turn.aborted && onEvent) {
+          const mapped = toTurnEvent(event);
+          if (mapped) onEvent(mapped);
+        }
+      });
       // Validate and apply every override before anything runs, then restore them afterwards
       // (the session's own model/thinking stay what /model and /reasoning set).
       if (model) await this.setModel(model);
@@ -208,7 +211,6 @@ export class PiSession implements RuntimeSession {
       await this.session.prompt(text, { source: "rpc" });
       await this.session.waitForIdle();
     } finally {
-      if (this.turn === turn) this.turn = undefined;
       this.slot.instructions = undefined;
       unsubscribe?.();
       // Model first: switching models may clamp the thinking level, which is restored after it.
@@ -222,13 +224,19 @@ export class PiSession implements RuntimeSession {
       if (!this.restore && (model || thinking) && prevThinking && this.session.thinkingLevel !== prevThinking) {
         this.session.setThinkingLevel(prevThinking);
       }
-      await this.checkpoint?.();
+      try {
+        await this.checkpoint?.();
+      } finally {
+        if (this.turn === turn) this.turn = undefined;
+      }
     }
-    const last = this.session.messages.findLast((m) => m.role === "assistant");
-    if (last?.role === "assistant" && last.stopReason === "error") {
+    // Keep cancellation live through idle, restoration and checkpoint barriers.
+    if (turn.aborted) return "";
+    if (last?.stopReason === "error") {
       throw new Error(last.errorMessage || "model request failed");
     }
-    return this.session.getLastAssistantText() ?? "";
+    if (!last || last.stopReason === "aborted") return "";
+    return last.content.filter(c => c.type === "text").map(c => c.text).join("").trim();
   }
 
   async steer(text: string): Promise<void> {

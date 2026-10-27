@@ -605,7 +605,13 @@ export function installCommands(ctx: CommandContext): void {
       // content verification fails. Only skill resolution needs discovery here.
       await ctx.reloadSkills();
       const skill = ctx.skills().find((s) => s.name === parsed.name);
-      if (!skill) return false;
+      if (!skill) {
+        // Preserve deliberate unknown-word passthrough, but never interpret an
+        // unsupported operational /reload as a model request.
+        if (parsed.name !== "reload") return false;
+        reply(ctx, input, "Unsupported command /reload. Use /reload-skills (or /reload-mcp) for session resources; /help lists supported commands.");
+        return true;
+      }
       ctx.harness.enqueue({ ...input, text: skillInvocationPrompt(skill, parsed.args) });
       return true;
     }

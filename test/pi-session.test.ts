@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { AgentSession } from "@earendil-works/pi-coding-agent";
 import { PiSession, toTurnEvent, boundedMaintenance } from "../src/runtime/pi.js";
 
 const A = { provider: "p", id: "a" };
@@ -23,14 +24,20 @@ function fakeAgentSession() {
     setThinkingLevel(l: string) {
       s.thinkingLevel = s.model === B ? "off" : l;
     },
-    subscribe: () => () => {},
+    listener: undefined as ((event: any) => void) | undefined,
+    subscribedAt: 0,
+    subscribe(listener: (event: any) => void) { s.subscribedAt = s.messages.length; s.listener = listener; return () => { s.listener = undefined; }; },
     last: "",
     async prompt(text: string) {
       s.prompts.push(text);
       s.last = `ran on ${(s.model as { id: string }).id}`;
-      s.messages.push({ role: "assistant", stopReason: "stop", content: [] });
+      s.messages.push({ role: "assistant", stopReason: "stop", content: [{ type: "text", text: s.last }] });
     },
-    async waitForIdle() {},
+    emitMessages() {
+      for (const message of s.messages.slice(s.subscribedAt)) s.listener?.({ type: "message_end", message });
+      s.subscribedAt = s.messages.length;
+    },
+    async waitForIdle() { s.emitMessages(); },
     async abort() {},
     abortCompaction() {},
     getLastAssistantText: () => s.last,
@@ -175,6 +182,49 @@ test("PiSession: thinking clamped by a per-turn model is restored after the mode
   assert.equal(agent.thinkingLevel, "high");
   await session.prompt("y", { model: "p/b", thinking: "medium" });
   assert.equal(agent.thinkingLevel, "high");
+});
+
+for (const ending of ["empty-abort", "partial-abort", "no-message", "empty", "tool-only", "fresh"] as const) {
+  test(`PiSession: ${ending} attributes output only to this prompt`, async () => {
+    const { agent, session } = make();
+    agent.messages.push({ role: "assistant", stopReason: "aborted", content: [{ type: "text", text: "old handover" }] });
+    agent.getLastAssistantText = () => AgentSession.prototype.getLastAssistantText.call(agent as never) ?? "";
+    agent.prompt = async () => {
+      if (ending === "no-message") return;
+      agent.messages.push({ role: "assistant", stopReason: ending.endsWith("abort") ? "aborted" : "stop",
+        content: ending === "fresh" || ending === "partial-abort" ? [{ type: "text", text: "fresh answer" }] : ending === "tool-only" ? [{ type: "toolCall", id: "t", name: "read", arguments: {} }] : [] });
+      if (ending === "fresh") agent.last = "fresh answer";
+      else if (ending !== "empty-abort") agent.last = "";
+    };
+    assert.equal(await session.prompt("next"), ending === "fresh" ? "fresh answer" : "");
+  });
+}
+
+for (const boundary of ["generation", "idle", "checkpoint"] as const) {
+  test(`PiSession: abort during ${boundary} suppresses final prose and next prompt recovers`, async () => {
+    const agent = fakeAgentSession();
+    let enter!: () => void, release!: () => void;
+    const entered = new Promise<void>(r => { enter = r; });
+    const gate = new Promise<void>(r => { release = r; });
+    const block = async () => { enter(); await gate; };
+    const original = agent.prompt;
+    agent.prompt = async text => { await original(text); if (boundary === "generation") await block(); };
+    if (boundary === "idle") agent.waitForIdle = block;
+    const session = new PiSession(agent as never, models as never, {}, boundary === "checkpoint" ? block : undefined);
+    const running = session.prompt("stopped");
+    await entered;
+    await session.abort(); release();
+    assert.equal(await running, "");
+    agent.waitForIdle = async () => { agent.emitMessages(); };
+    assert.equal(await session.prompt("next"), "ran on a");
+  });
+}
+
+test("PiSession: old provider failure is not attributed to an empty new prompt", async () => {
+  const { agent, session } = make();
+  agent.messages.push({ role: "assistant", stopReason: "error", errorMessage: "old failure", content: [] });
+  agent.prompt = async () => {};
+  assert.equal(await session.prompt("next"), "");
 });
 
 test("PiSession: provider error stop surfaces as a failure", async () => {

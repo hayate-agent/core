@@ -1233,7 +1233,7 @@ export class Harness {
     if (s.cancelling === input) {
       s.cancelling = undefined;
       if (!this.frozen) outcome = "cancelled";
-      if (outcome === "cancelled" && reply.startsWith("⚠️")) reply = "";
+      reply = ""; // Cancellation never publishes model prose as a final result.
     }
     if (this.frozen) {
       assessmentAbort.abort();
@@ -1259,7 +1259,7 @@ export class Harness {
       s.cancelling = undefined;
       outcome = finalStatus = "cancelled";
       input.continuation = undefined;
-      if (reply.startsWith("⚠️")) reply = "";
+      reply = "";
     }
     assessmentAbort.abort();
     this.turnAbort.delete(s.key);
@@ -1275,7 +1275,7 @@ export class Harness {
       s.cancelling = undefined;
       outcome = finalStatus = "cancelled";
       input.continuation = undefined;
-      if (reply.startsWith("⚠️")) reply = "";
+      reply = "";
       return true;
     };
     consumeLateCancellation();
@@ -1317,7 +1317,8 @@ export class Harness {
       return;
     }
     if (!reply || reply === NO_REPLY) {
-      if (input.progressId && input.replyTo) s.outbox.push({ ...this.outbox.create(s.key, input.replyTo, outcome === "cancelled" ? "⏹️ Abgebrochen." : outcome === "failed" ? "❌ Fehlgeschlagen." : "✅ Bearbeitung abgeschlossen.", outcome), progressId: input.progressId });
+      if (outcome === "cancelled" && to) s.outbox.push({ ...this.outbox.create(s.key, to, "⏹️ Abgebrochen.", outcome), ...(input.progressId ? { progressId: input.progressId } : {}) });
+      else if (input.progressId && input.replyTo) s.outbox.push({ ...this.outbox.create(s.key, input.replyTo, outcome === "failed" ? "❌ Fehlgeschlagen." : "✅ Bearbeitung abgeschlossen.", outcome), progressId: input.progressId });
       return;
     }
     if (input.source === "cron" && !input.replyTo) {

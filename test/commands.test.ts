@@ -139,6 +139,38 @@ test("commands do not reach the agent; replies go to the chat", async () => {
   assert.equal(runtime.sessions.size, 0);
 });
 
+test("unsupported /reload is rejected without starting or queueing a model turn", async () => {
+  const { send, harness, runtime, ch } = setup();
+  try {
+    await send("/reload");
+    await send("/reload@agent now");
+    assert.equal(runtime.sessions.size, 0);
+    assert.deepEqual(harness.pendingInputs(), []);
+    assert.equal(ch.texts().length, 2);
+    for (const text of ch.texts()) assert.match(text, /Unsupported command \/reload.*\/reload-skills.*\/help/);
+    assert.equal(runtime.reloads, 0);
+  } finally { await harness.stop(1000); }
+});
+
+test("/stop twice never replays runtime prose and /reload is not queued while running", async () => {
+  const { harness, runtime, ch, send } = setup();
+  try {
+    await send("first");
+    for (let i = 0; i < 2; i++) {
+      runtime.sessions.get("mem:room1")!.hold();
+      await harness.submit(msg(`work ${i}`));
+      await new Promise<void>(r => setImmediate(r));
+      await harness.submit(msg("/reload"));
+      assert.deepEqual(harness.state("mem:room1").queue, []);
+      await harness.submit(msg("/stop"));
+      await harness.drained();
+    }
+    assert.deepEqual(runtime.sessions.get("mem:room1")!.prompts, ["first", "work 0", "work 1"]);
+    assert.deepEqual(ch.texts().filter(t => t.startsWith("echo:")), ["echo: first"]);
+    assert.equal(ch.texts().filter(t => t.startsWith("Unsupported command /reload")).length, 2);
+  } finally { await harness.stop(1000); }
+});
+
 test("unknown /word falls through to the agent", async () => {
   const { send, ch } = setup();
   await send("/shrug what now");
