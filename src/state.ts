@@ -13,6 +13,7 @@ export interface PersistedSession {
   key: string;
   task?: import("./harness.js").DurableTask;
   tasks?: import("./harness.js").DurableTask[];
+  completionRecent?: NonNullable<Inbound["completionContext"]>["recent"];
   replyTo?: Address;
   heartbeat?: Recurring;
   heartbeatDisabled?: boolean;

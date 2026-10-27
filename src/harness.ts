@@ -54,6 +54,7 @@ export interface SessionState {
   task?: DurableTask;
   /** Retained mandates, independent of the most recent channel message. */
   tasks?: DurableTask[];
+  completionRecent?: NonNullable<Inbound["completionContext"]>["recent"];
   session?: RuntimeSession;
   opening?: Promise<RuntimeSession>;
   queue: Inbound[];
@@ -400,18 +401,18 @@ export class Harness {
     return tasks;
   }
 
-  private hasPendingDependency(key: string): boolean {
+  private hasPendingDependency(key: string, taskId?: string): boolean {
     const store = this.opts.executionStore;
-    return !!store?.list(key).some(e => !["completed", "cancelled"].includes(e.status));
+    return !!store?.list(key).some(e => !["completed", "cancelled"].includes(e.status) &&
+      (!taskId || !e.dependency?.taskId || e.dependency.taskId === taskId));
   }
 
   /** Synchronous claim: queue and checkpoint are saved together before execution. */
   private queueRunnableTask(s: SessionState): boolean {
     if (!this.onStateChange || this.paused || this.stopping || s.queue.length || s.current ||
         s.key === "improvement:nightly" || this.stoppingHostParents.has(s.key) ||
-        this.opts.externallyRecoveredSession?.(s.key) ||
-        this.hasPendingDependency(s.key)) return false;
-    const task = this.tasks(s).find(task => task.state === "active" && task.next?.trim() &&
+        this.opts.externallyRecoveredSession?.(s.key)) return false;
+    const task = this.tasks(s).find(task => task.state === "active" && task.next?.trim() && !this.hasPendingDependency(s.key, task.id) &&
       Number.isSafeInteger(task.depth) && task.depth >= 0 && task.depth < 20 &&
       (task.expiresAt === undefined || (Number.isSafeInteger(task.expiresAt) && task.expiresAt > this.now())));
     if (!task) return false;
@@ -424,6 +425,18 @@ export class Harness {
   }
 
   private resetContinuation(input: Inbound): void { input.continuation = undefined; }
+
+  private rememberCompletion(s: SessionState, role: "user" | "assistant", text: string): void {
+    s.completionRecent = [...(s.completionRecent ?? []), { role, text: text.slice(0, 2000) }].slice(-8);
+  }
+
+  private completionEvidence(s: SessionState): NonNullable<Inbound["completionContext"]> {
+    return { recent: structuredClone(s.completionRecent ?? []), tasks: this.tasks(s).slice(-8).map(task => ({
+      id: task.id.slice(0, 128), original: task.original.slice(0, 2000), state: task.state,
+      ...(task.next ? { next: task.next.slice(0, 1000) } : {}),
+      ...(task.wait ? { wait: { reason: task.wait.reason.slice(0, 1000), deadline: task.wait.deadline } } : {}),
+    })) };
+  }
 
   /** Install a host-configured scheduled mandate before submitting its worker.
    * The ID and original scope must remain identical across durable retries. */
@@ -862,13 +875,13 @@ export class Harness {
   /** Reconstruct checkpointed work, or assess a retained mandate once. No polling. */
   async recoverTasks(): Promise<void> {
     for (const s of this.sessions.values()) {
-      if (this.opts.externallyRecoveredSession?.(s.key) || this.hasPendingDependency(s.key)) continue;
+      if (this.opts.externallyRecoveredSession?.(s.key)) continue;
       for (const task of this.tasks(s)) {
       const assessed = !task.next?.trim();
       if (assessed) await this.assessStartupTask(s, task);
       if (!this.tasks(s).includes(task) || (assessed && this.paused) || this.stopping || task.state !== "active" || !task.next?.trim() || !Number.isSafeInteger(task.depth) || task.depth < 0 || task.depth >= 20 ||
           (task.expiresAt !== undefined && (!Number.isSafeInteger(task.expiresAt) || task.expiresAt <= this.now())) ||
-          s.current || s.queue.length || s.key === "improvement:nightly") continue;
+          s.current || s.queue.length || s.key === "improvement:nightly" || this.hasPendingDependency(s.key, task.id)) continue;
       const input: Inbound = { id: `task:${task.id}:${task.depth + 1}`, source: "heartbeat", sessionKey: s.key,
         text: `Resume the authorized task after restart. Verify completed side effects before acting. Original task:\n${task.original}\nNext step:\n${task.next}`,
         replyTo: s.replyTo, taskId: task.id, continuationDepth: task.depth + 1, continuationExpiresAt: task.expiresAt, completionAnchor: task.anchor };
@@ -880,16 +893,15 @@ export class Harness {
     }
   }
 
-  private async assessStartupTask(s: SessionState, task: DurableTask): Promise<void> {
+  private async assessStartupTask(s: SessionState, task: DurableTask, betweenTurns = false): Promise<void> {
     const eligible = () => this.tasks(s).includes(task) && task.state === "active" && !task.next?.trim() &&
       !!task.id && !!task.original.trim() && task.original.length <= 8000 &&
       (!task.anchor || task.anchor.task === task.original) &&
       Number.isSafeInteger(task.depth) && task.depth >= 0 && task.depth < 20 &&
       (task.expiresAt === undefined || (Number.isSafeInteger(task.expiresAt) && task.expiresAt > this.now())) &&
-      !s.current && !s.queue.length && !s.running && !this.paused && !this.stopping &&
-      s.key !== "improvement:nightly" && !this.stoppingHostParents.has(s.key) &&
-      !this.opts.executionStore?.list(s.key).some(e => !["completed", "cancelled"].includes(e.status));
-    if (!this.onStateChange || !this.opts.completionCheck || task.recoveryAssessment || this.hasPendingDependency(s.key) || !eligible()) return;
+      !s.current && !s.queue.length && (!s.running || betweenTurns) && !this.paused && !this.stopping &&
+      s.key !== "improvement:nightly" && !this.stoppingHostParents.has(s.key);
+    if (!this.onStateChange || !this.opts.completionCheck || task.recoveryAssessment || !eligible()) return;
     // Claim before inference; a crash or failed persistence can never replay inference.
     task.recoveryAssessment = "claimed";
     await this.onStateChange?.();
@@ -900,6 +912,7 @@ export class Harness {
     const evidence = JSON.stringify({ startup: true, reply: "No retained turn result. Completion is unknown. Assess the original mandate; any next step must first reconcile actual effects, never blindly replay work.",
       executions: this.opts.executionStore?.list(s.key).slice(-20).map(e => ({ id: e.id, status: e.status, parentStopped: e.parentStopped })) ?? [] });
     let plan: Inbound["continuation"];
+    input.completionContext = this.completionEvidence(s);
     try { plan = await this.opts.completionCheck(input, evidence, new AbortController().signal); }
     catch { this.log("startup completion assessment failed; operator reconciliation required"); }
     if (!eligible()) return;
@@ -959,6 +972,7 @@ export class Harness {
           continue;
         }
         if (input.source === "channel" || input.source === "api") s.lastInput = input;
+        if (input.source === "channel") this.rememberCompletion(s, "user", input.text);
         s.current = input;
         if (input.source === "host") {
           const mandate = this.resultMandate(input);
@@ -1080,6 +1094,10 @@ export class Harness {
             completionAnchor: input.completionAnchor ? structuredClone(input.completionAnchor) : undefined });
         }
         try {
+          // A child checkpoint must not hide other retained, independently authorized work.
+          for (const retained of this.tasks(s)) {
+            if (retained.id !== input.taskId && !retained.next?.trim()) await this.assessStartupTask(s, retained, true);
+          }
           await this.onStateChange?.();
           s.unsaved = false;
           await this.opts.turnCommitted?.(input);
@@ -1243,8 +1261,10 @@ export class Harness {
     let finalStatus: TurnOutcome | "completed" = outcome ?? "completed";
     // Self-reported completion or blockage is evidence, not final authority.
     // Recheck against the original mandate; retain explicit continuation plans.
+    if (reply && reply !== NO_REPLY && outcome !== "cancelled") this.rememberCompletion(s, "assistant", reply);
+    input.completionContext = this.completionEvidence(s);
     const checkpoint = input.continuation;
-    const assessmentEligible = () => input.continuation === checkpoint && checkpoint?.state !== "continue" && !checkpoint?.wait &&
+    const assessmentEligible = () => input.continuation === checkpoint &&
       (input.continuationExpiresAt === undefined || (Number.isSafeInteger(input.continuationExpiresAt) && input.continuationExpiresAt > this.now()));
     if (finalStatus !== "completed") input.continuation = undefined;
     else if ((input.source !== "host" || this.resultMandate(input)) && assessmentEligible() && this.opts.completionCheck && !this.paused && !this.stopping && !s.queue.length &&
@@ -1252,7 +1272,8 @@ export class Harness {
       try {
         const plan = await this.opts.completionCheck(structuredClone(input), reply, assessmentAbort.signal);
         if ((input.source !== "host" || this.resultMandate(input)) && assessmentEligible() && !this.paused && !this.stopping && !s.queue.length && !assessmentAbort.signal.aborted && s.cancelling !== input &&
-            plan?.state === "continue" && typeof plan.next === "string" && plan.next.trim() && plan.next.length <= 4000) input.continuation = plan;
+            plan?.state === "continue" && typeof plan.next === "string" && plan.next.trim() && plan.next.length <= 4000 &&
+            checkpoint?.state !== "continue" && !checkpoint?.wait) input.continuation = plan;
       } catch { this.log("completion assessment failed; no automatic follow-up"); }
     }
     if (s.cancelling === input) {
@@ -1471,7 +1492,7 @@ export class Harness {
     const out: PersistedSession[] = [];
     for (const s of this.sessions.values()) {
       if (!this.tasks(s).length && !s.heartbeat && !s.heartbeatDisabled && !s.loop && !s.goal && !s.replyTo) continue;
-      out.push({ key: s.key, task: s.task ? structuredClone(s.task) : undefined, tasks: structuredClone(this.tasks(s)), replyTo: s.replyTo, heartbeat: s.heartbeat, heartbeatDisabled: s.heartbeatDisabled, loop: s.loop, goal: s.goal });
+      out.push({ key: s.key, task: s.task ? structuredClone(s.task) : undefined, tasks: structuredClone(this.tasks(s)), completionRecent: structuredClone(s.completionRecent), replyTo: s.replyTo, heartbeat: s.heartbeat, heartbeatDisabled: s.heartbeatDisabled, loop: s.loop, goal: s.goal });
     }
     return out;
   }
@@ -1480,6 +1501,7 @@ export class Harness {
     for (const p of list) {
       const s = this.state(p.key);
       s.tasks = p.tasks ? structuredClone(p.tasks) : [];
+      s.completionRecent = p.completionRecent?.slice(-8).map(m => ({ role: m.role, text: m.text.slice(0, 2000) }));
       s.task = p.task ? s.tasks.find(task => task.id === p.task!.id) ?? structuredClone(p.task) : undefined;
       s.replyTo = p.replyTo;
       s.heartbeat = p.heartbeat;

@@ -87,7 +87,7 @@ test("working turn registers bounded wait, rejects unsafe intervals and keeps pl
   try {
     await h.submit(msg("deliver feature")); await h.drained();
     const task = h.snapshotSessions()[0].task!;
-    assert.equal(assessed, 0);
+    assert.equal(assessed, 1, "saved timer must not suppress independent assessment");
     assert.equal(task.state, "waiting"); assert.equal(task.next, "check exact release source");
     assert.deepEqual(task.wait, { reason: "new image", nextAt: 61000, deadline: 301000 });
   } finally { await h.stop(0); }
