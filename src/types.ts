@@ -26,7 +26,8 @@ export interface Inbound {
   /** Stable core ledger identity, independent of transport IDs and runtime sessions. */
   executionTurnId?: string;
   /** Durable, bounded continuation plan supplied during this turn. */
-  continuation?: { state: "continue" | "waiting" | "blocked" | "completed"; next?: string; expiresAt?: number };
+  continuation?: { state: "continue" | "waiting" | "blocked" | "completed"; next?: string; expiresAt?: number;
+    wait?: { reason: string; retryAfterMs: number; deadline: number } };
   continuationDepth?: number;
   /** Host-assigned durable task identity, never a model authorization grant. */
   taskId?: string;

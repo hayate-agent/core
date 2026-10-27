@@ -46,6 +46,7 @@ export interface DurableTask {
   anchor?: Inbound["completionAnchor"];
   /** Durable one-shot startup claim. An interrupted assessment must not repeat. */
   recoveryAssessment?: "claimed" | "decided";
+  wait?: { reason: string; nextAt: number; deadline: number };
 }
 
 export interface SessionState {
@@ -419,7 +420,13 @@ export class Harness {
     if (input?.source === "host" && !this.resultMandate(input)) throw Error("No live parent mandate for result continuation");
     if (!input || !this.sessions.get(key)?.prompting) throw Error("Continuation requires an active working turn");
     if (!["continue", "waiting", "blocked", "completed"].includes(plan.state) || (plan.state === "continue" && (!plan.next?.trim() || plan.next.length > 4000))) throw Error("Invalid continuation plan");
-    input.continuation = { state: plan.state, ...(plan.state === "continue" ? { next: plan.next } : {}) };
+    if (plan.wait && (input.source === "api" || key === "improvement:nightly" || !this.onStateChange || plan.state !== "waiting" || !plan.next?.trim() || plan.next.length > 4000 ||
+        typeof plan.wait.reason !== "string" || !plan.wait.reason.trim() || plan.wait.reason.length > 1000 ||
+        !Number.isSafeInteger(plan.wait.retryAfterMs) || plan.wait.retryAfterMs < 60000 || plan.wait.retryAfterMs > 86400000 ||
+        !Number.isSafeInteger(plan.wait.deadline) || plan.wait.deadline <= this.now() + plan.wait.retryAfterMs ||
+        plan.wait.deadline > this.now() + 7 * 86400000)) throw Error("Invalid bounded wait plan");
+    input.continuation = { state: plan.state, ...((plan.state === "continue" || plan.wait) ? { next: plan.next } : {}),
+      ...(plan.wait ? { wait: structuredClone(plan.wait) } : {}) };
   }
 
   /** Conversation-local loop control. Success is acknowledged only after persistence.
@@ -994,7 +1001,9 @@ export class Harness {
         if (s.task && input.taskId === s.task.id && s.task.state !== "stopped") {
           const plan = input.continuation;
           s.task.state = plan?.state === "continue" ? "active" : plan?.state ?? "waiting";
-          s.task.next = plan?.state === "continue" ? plan.next : undefined;
+          s.task.next = plan?.state === "continue" || plan?.wait ? plan.next : undefined;
+          s.task.wait = plan?.state === "waiting" && plan.wait ? { reason: plan.wait.reason,
+            nextAt: this.now() + plan.wait.retryAfterMs, deadline: Math.min(plan.wait.deadline, inheritedDeadline) } : undefined;
           s.task.depth = input.continuationDepth ?? 0;
           s.task.expiresAt = inheritedDeadline === Infinity ? undefined : inheritedDeadline;
         }
@@ -1171,7 +1180,7 @@ export class Harness {
     // Self-reported completion or blockage is evidence, not final authority.
     // Recheck against the original mandate; retain explicit continuation plans.
     const checkpoint = input.continuation;
-    const assessmentEligible = () => input.continuation === checkpoint && checkpoint?.state !== "continue" &&
+    const assessmentEligible = () => input.continuation === checkpoint && checkpoint?.state !== "continue" && !checkpoint?.wait &&
       (input.continuationExpiresAt === undefined || (Number.isSafeInteger(input.continuationExpiresAt) && input.continuationExpiresAt > this.now()));
     if (finalStatus !== "completed") input.continuation = undefined;
     else if ((input.source !== "host" || this.resultMandate(input)) && assessmentEligible() && this.opts.completionCheck && !this.paused && !this.stopping && !s.queue.length &&
@@ -1327,9 +1336,34 @@ export class Harness {
       // Queued turns too: one held back by a failed start checkpoint runs once the disk is back.
       for (const s of this.sessions.values()) if (!s.running && (s.outbox.length || s.unsaved || s.queue.length)) void this.pump(s);
     }
-    if (this.paused) return;
+    if (this.paused || this.stopping || this.gatewayChanging || this.activeDeliveries || this.outbox.held) return;
     for (const s of this.sessions.values()) {
       if (s.running || s.queue.length || s.outbox.length || s.unsaved) continue;
+      const task = s.task;
+      if (task?.state === "waiting" && task.wait && (at >= task.wait.nextAt || at >= task.wait.deadline || (task.expiresAt !== undefined && at >= task.expiresAt)) && this.onStateChange &&
+          s.key !== "improvement:nightly" && !this.opts.externallyRecoveredSession?.(s.key)) {
+        const wait = task.wait;
+        const valid = task.next?.trim() && task.original?.trim() && Number.isSafeInteger(wait.deadline) &&
+          Number.isSafeInteger(wait.nextAt) && typeof wait.reason === "string" && wait.reason.trim() && wait.reason.length <= 1000 &&
+          task.next!.length <= 4000 && Number.isSafeInteger(task.depth) && task.depth >= 0 && task.depth < 20 &&
+          at < wait.deadline && (task.expiresAt === undefined || (Number.isSafeInteger(task.expiresAt) && at < task.expiresAt));
+        if (!valid) {
+          task.state = "blocked"; task.wait = undefined; task.next = undefined;
+          s.unsaved = true;
+          this.post({ sessionKey: s.key, source: "cron", text: "", replyTo: s.replyTo }, "Warteauftrag abgelaufen oder Fortsetzungsgrenze erreicht; Operatorprüfung erforderlich.");
+          await this.onStateChange(); s.unsaved = false;
+          continue;
+        }
+        // Enqueue and state transition share the normal acceptance persistence barrier.
+        // Mark claimed synchronously so overlapping ticks cannot enqueue a duplicate.
+        task.state = "active"; task.wait = undefined;
+        await this.submit({ id: `wait:${task.id}:${task.depth + 1}`, sessionKey: s.key, source: "cron",
+          taskId: task.id, continuationDepth: task.depth + 1,
+          continuationExpiresAt: Math.min(task.expiresAt ?? Infinity, wait.deadline),
+          completionAnchor: task.anchor ?? { id: task.id, task: task.original, receivedAt: at }, replyTo: s.replyTo,
+          text: `Recheck a persisted wait within the original authorized task. The timer is NOT evidence that the condition is satisfied. First verify the condition and completed side effects; do not repeat them or broaden authority. If still waiting, register another bounded wait within the same deadline.\nOriginal task: ${task.original}\nCondition: ${wait.reason}\nSafe verification step: ${task.next}` });
+        continue;
+      }
       if (s.loop && !s.loop.paused && at >= s.loop.nextAt) {
         s.loop.nextAt = at + s.loop.everyMs;
         if (s.loop.remaining !== undefined && --s.loop.remaining <= 0) {

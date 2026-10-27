@@ -1,10 +1,10 @@
 {
   "schema": 1,
   "repository": "https://git.vanillacore.net/harness/plugins",
-  "revision": "f68009168e097cc77ced92207cd0821e635da442",
+  "revision": "c6ac30163dd278ba77545797d4546cbebd8904b7",
   "files": {
     "context-plugin.ts": "1da424038b5f5dd8e88999d86c4b26fecca5d21ca4170b83fdba9958eef787f0",
-    "continuation-plugin.ts": "548ca286ce661c03bc5ce948e490fa22378c5e106358693e480596b8f61a5de4",
+    "continuation-plugin.ts": "6c06371c5b791dadc27b440ee37444313006e869874d2e8ac372542cd2f0504e",
     "dispatcher-plugin.ts": "7a1b0b9c30437ac9d25e1728dc8913652ddd3511419fefe81be33d84f93ed293",
     "gateway-manager-plugin.ts": "520465902c186b429fde132b2a4120b0ff6bd8e68439c6ed35c1049e852a316a",
     "gateway-plugin.ts": "f75c78e301e972ac8b668de6522721cc5574d8c38876b02096a06b4a908c8434",

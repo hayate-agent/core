@@ -1,8 +1,9 @@
 # Semantic completion fallback
 
 The optional completion assessor is invoked after successful working turns when
-no explicit continuation checkpoint exists. Explicit waiting/blocked/completed
-plans are never overridden. API runs, controller-owned nightly work, paused or
+no explicit continue checkpoint exists. Self-reported waiting/blocked/completed
+plans are advisory and may be reassessed against the original task. A registered
+bounded wait is handled by the durable task scheduler, not a release webhook. API runs, controller-owned nightly work, paused or
 stopping Harness instances, queued work, cancelled turns and exhausted chains
 are excluded. Conditions are rechecked after assessment; the ordinary durable
 inbox/outbox checkpoint commits any follow-up. Working approval cleanup and
