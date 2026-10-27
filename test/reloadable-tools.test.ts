@@ -5,9 +5,65 @@ import { mkdtemp,writeFile,rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { PluginHost } from "../src/plugins.js";
-import { ReloadableTools } from "../src/reloadable-tools.js";
+import { ReloadableTools, composeToolCatalog } from "../src/reloadable-tools.js";
 
 const moduleText=(value:string,extra="")=>`export default {apiVersion:1,activate(api){api.registerTool({name:'plugin_reload',description:'Reload test',parameters:{type:'object'},async execute(){return '${value}'}});${extra}}};`;
+test("dynamic catalog permits new names and schemas while rejecting stale schema delegates",async()=>{
+ const home=await mkdtemp(path.join(os.tmpdir(),'tool-catalog-'));
+ const host=new ReloadableTools({home,cwd:home,agent:'test'},['tool.mjs'],()=>{},true);
+ try {
+  await writeFile(path.join(home,'tool.mjs'),moduleText('one'));await host.reload();
+  const stale=host.tools.get('plugin_reload')!;
+  await writeFile(path.join(home,'tool.mjs'),moduleText('two').replace("Reload test","New schema"));await host.reload();
+  await assert.rejects(stale.execute({},{sessionKey:'test'}),/catalog changed/);
+  assert.equal(await host.tools.get('plugin_reload')!.execute({},{sessionKey:'test'}),'two');
+  await writeFile(path.join(home,'tool.mjs'),moduleText('three').replace('plugin_reload','plugin_new'));await host.reload();
+  assert.equal(host.tools.has('plugin_reload'),false);assert.equal(host.tools.has('plugin_new'),true);
+  await assert.rejects(stale.execute({},{sessionKey:'test'}),/catalog changed/);
+ }finally{await host.stop();await rm(home,{recursive:true,force:true});}
+});
+
+test("catalog composition enforces identity ownership and rejects colliding candidates",async()=>{
+ const home=await mkdtemp(path.join(os.tmpdir(),'tool-collision-'));
+ const startup=new Map(), owned=new Map();
+ const host=new ReloadableTools({home,cwd:home,agent:'test'},['tool.mjs'],()=>{},true,tools=>{composeToolCatalog(startup,owned,tools);});
+ try {
+  await writeFile(path.join(home,'tool.mjs'),moduleText('old'));await host.reload();
+  const old=host.tools.get('plugin_reload')!;
+  startup.set(old.name,old);owned.set(old.name,old);
+  const other={...old,name:'plugin_other'};startup.set(other.name,other);
+  assert.deepEqual(composeToolCatalog(startup,owned,host.tools),[other,old]);
+  await writeFile(path.join(home,'tool.mjs'),moduleText('collision').replace('plugin_reload','plugin_other'));
+  await assert.rejects(host.reload(),/conflicts/);
+  assert.equal(await old.execute({},{sessionKey:'test'}),'old');
+  startup.set(old.name,{...old});
+  assert.throws(()=>composeToolCatalog(startup,owned,host.tools),/ownership/);
+  await assert.rejects(host.reload(),/ownership/);
+ }finally{await host.stop();await rm(home,{recursive:true,force:true});}
+});
+
+test("stop drains running calls and cleanup before resolving and rejects new calls",async()=>{
+ const home=await mkdtemp(path.join(os.tmpdir(),'tool-stop-drain-'));
+ const host=new ReloadableTools({home,cwd:home,agent:'test'},['tool.mjs']);
+ let release!:()=>void,entered!:()=>void,clean!:()=>void;
+ const gate=new Promise<void>(r=>{release=r;}); const started=new Promise<void>(r=>{entered=r;});
+ const cleanup=new Promise<void>(r=>{clean=r;});
+ const key='drain'+Date.now();
+ (globalThis as any)[key]={gate,entered,cleanup};
+ try {
+  await writeFile(path.join(home,'tool.mjs'),`export default {apiVersion:1,activate(api){api.onStop(()=>globalThis['${key}'].cleanup);api.registerTool({name:'plugin_reload',description:'Reload test',parameters:{type:'object'},async execute(){globalThis['${key}'].entered();await globalThis['${key}'].gate;return 'done'}})}};`);
+  await host.reload();const tool=host.tools.get('plugin_reload')!;
+  const running=tool.execute({},{sessionKey:'test'});await started;
+  let stopped=false;const stopping=host.stop();assert.equal(host.stop(),stopping);
+  void stopping.then(()=>{stopped=true;});
+  await assert.rejects(tool.execute({},{sessionKey:'test'}),/stopped/);
+  await new Promise(r=>setImmediate(r));assert.equal(stopped,false);
+  release();await new Promise(r=>setImmediate(r));assert.equal(stopped,false,'cleanup still draining');
+  clean();assert.equal(await running,'done');await stopping;
+  assert.equal(host.liveGenerations,0);
+ }finally{release();clean();await host.stop();delete (globalThis as any)[key];await rm(home,{recursive:true,force:true});}
+});
+
 test("tool-only reload keeps stable delegates and rolls back invalid candidates",async()=>{
  const home=await mkdtemp(path.join(os.tmpdir(),"tool-reload-"));
  const host=new ReloadableTools({home,cwd:home,agent:"test"},["tool.mjs"]);
@@ -81,7 +137,7 @@ test("stop during candidate activation prevents publication and cleans candidate
   await writeFile(path.join(home,"tool.mjs"),`export default {apiVersion:1,async activate(api){api.onStop(()=>globalThis['${key}'].cleanups++);globalThis['${key}'].entered();await globalThis['${key}'].gate;api.registerTool({name:'plugin_reload',description:'Reload test',parameters:{type:'object'},async execute(){return 'must not publish'}})}};`);
   const pending=manager.reload();await started;
   await assert.rejects(manager.reload(),/unavailable/);
-  await manager.stop();release();await assert.rejects(pending,/stopped/);
+  const stopping=manager.stop();release();await assert.rejects(pending,/stopped/);await stopping;
   assert.equal((globalThis as any)[key].cleanups,1);
   await assert.rejects(tool.execute({},{sessionKey:"test"}),/stopped/);
  } finally {release();await manager.stop();delete (globalThis as any)[key];await rm(home,{recursive:true,force:true});}

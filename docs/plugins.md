@@ -62,11 +62,24 @@ general hot reload, package marketplace and dependency management are not implem
 Trusted ESM modules that register **only tools** can instead be listed under
 `reloadableToolPlugins` (the same local-path syntax as `plugins`). The admin-only
 `/tool-plugin status|reload` command loads and validates a replacement generation.
-Tool names, descriptions and schemas must remain unchanged; restart for registration
-changes. Existing SDK sessions retain stable delegates, so no session/history reset
-is needed. Calls already running retain their old generation; its onStop cleanup
-runs after its last call finishes. New calls use the replacement. Invalid candidates
-leave the previous delegates active and their registered cleanups are attempted.
+The Harness supports adding/removing tool names and changing descriptions or JSON
+schemas. Existing working SDK sessions reconcile the catalog at their next prompt
+boundary through SDK reload/rebinding, preserving conversation history. A failed
+reload blocks that prompt and retries at the next boundary. A catalog changed during
+reconciliation also blocks the prompt rather than sending a mismatched schema.
+Explicit `tools` allowlists remain literal: new names are not automatically enabled,
+and `tools: []` stays inactive. Names conflicting with other startup plugin tools
+are rejected; native tools occupy a separate namespace (`plugin_` is required).
+
+Same-signature tools keep stable delegates. Removed or schema-changed delegates
+reject new execution until the session reconciles; calls already running retain
+their old generation. Its onStop cleanup runs after its last call finishes. New
+calls use the replacement. Shutdown waits for activation, running calls and cleanup;
+trusted code that waits recursively for its own shutdown can therefore deadlock.
+Invalid candidates leave the previous catalog active and their registered cleanups
+are attempted. Cleanup failure requires a restart before another replacement.
+The standalone `ReloadableTools` helper retains fixed-catalog compatibility by
+default; the Harness explicitly enables dynamic catalog reconciliation.
 
 By default reload is explicit. Set `autoReloadToolPlugins: true` to compare entry
 file contents before each working turn and reload changed entries. Concurrent
