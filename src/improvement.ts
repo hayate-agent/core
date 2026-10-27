@@ -1,6 +1,7 @@
 import { Cron } from "croner";
 import type { ExperimentReceipt } from "./improvement-receipt.js";
 import type { NightlyStrategy } from "./nightly-strategy.js";
+import type { PureStrategy, StrategySelection } from "./pure-strategy.js";
 import { mkdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { parse } from "yaml";
@@ -40,6 +41,8 @@ export function improvementWindow(now: number, p: ImprovementPolicy): { night: s
   return { night: date.toISOString().slice(0, 10), active: p.startHour < p.endHour ? hour >= p.startHour && hour < p.endHour : hour >= p.startHour || hour < p.endHour };
 }
 export interface NightState {
+  /** Absent on legacy/baseline nights; path identity, not an immutable code digest. */
+  strategySelection?: string;
   version: 1;
   night: string;
   turns: number;
@@ -57,6 +60,47 @@ const KEY = "improvement:nightly";
 export class ImprovementController {
   private state?: NightState;
   private checking = false;
+  private strategyChanging = false;
+  private strategyHolder?: PureStrategy<NightlyStrategy>;
+
+  /** Startup only, before owner input/ticks. Reconcile retained work before loading
+   * a local override; mismatch is an explicit startup error, never parser fallback.
+   */
+  async initializeStrategy(holder: PureStrategy<NightlyStrategy>, selection: StrategySelection): Promise<void> {
+    if (this.strategyHolder || this.checking || this.strategyChanging) throw Error("Nightly strategy already initialized or busy");
+    this.strategyChanging = true;
+    try {
+      await this.load();
+      if (this.state && (this.state.pending || !this.state.reportQueued) &&
+          (selection === null || this.state.strategySelection !== selection)) {
+        throw Error("Nightly strategy does not match retained work; restore its original selection");
+      }
+      if (selection !== undefined) await holder.change(selection, async () => {});
+      this.strategyHolder = holder;
+    } finally { this.strategyChanging = false; }
+  }
+
+  private get currentStrategy(): NightlyStrategy | undefined {
+    return this.strategyHolder ? this.strategyHolder.current : this.strategy;
+  }
+
+  /** Reserve controller ticks as well as the owner boundary. Strategy changes are
+   * deliberately between nights: no migration of pending work or old receipts.
+   * The callback validates and persists before publishing its new generation.
+   */
+  async atStrategyBoundary(change: () => Promise<void>): Promise<void> {
+    if (this.checking || this.strategyChanging) throw Error("Nightly strategy busy");
+    this.strategyChanging = true;
+    try {
+      await this.harness.atIdleBoundary(async () => {
+        await this.load();
+        const session = this.harness.sessions.get(KEY);
+        if (session?.running || session?.queue.length || session?.outbox.length) throw Error("Nightly strategy busy");
+        if (this.state && (this.state.pending || !this.state.reportQueued)) throw Error("Unreported or pending nightly work; retain current strategy");
+        await change();
+      });
+    } finally { this.strategyChanging = false; }
+  }
   private evaluator?: ExperimentEvaluator;
   private evaluatorKey?: string;
   private cronJobs: Cron[] = [];
@@ -120,9 +164,11 @@ export class ImprovementController {
     if (input.sessionKey !== KEY || !this.state || this.state.pending !== input.id) return;
     this.state.results.push(reply.slice(0, 4000));
     if (this.state.results.length > 200) this.state.results.shift();
+    const strategy = this.currentStrategy;
+    if (!strategy) throw Error("Nightly strategy disabled with retained work");
     const progress = structuredClone({ experiments: this.state.experiments, recentHypotheses: this.state.recentHypotheses,
       noExperimentTurns: this.state.noExperimentTurns, done: this.state.done, results: this.state.results });
-    this.strategy.completed(progress, reply);
+    strategy.completed(progress, reply);
     this.state.experiments = progress.experiments;
     this.state.recentHypotheses = progress.recentHypotheses;
     this.state.noExperimentTurns = progress.noExperimentTurns;
@@ -132,10 +178,13 @@ export class ImprovementController {
     await this.save();
   }
   async tick(cronStart = true): Promise<void> {
-    if (this.checking) return;
+    if (this.checking || this.strategyChanging) return;
     this.checking = true;
     try {
       await this.load();
+      const strategy = this.currentStrategy;
+      // Disabled selection never creates a new reservation or empty night state.
+      if (!strategy) return;
       const p = await this.policy();
       const w = improvementWindow(this.now(), p);
       if (cronStart && p.enabled && w.active && this.state && this.state.night !== w.night) {
@@ -149,7 +198,7 @@ export class ImprovementController {
         const to = p.reportTo ?? this.harness.home;
         // Prefer receipts parsed from the full response, before the legacy 4000-character
         // diagnostic truncation. Old states without receipts recover complete blocks only.
-        const experiments = this.strategy.unique(this.state.experiments ?? this.state.results.flatMap(reply => this.strategy.receipts(reply)));
+        const experiments = strategy.unique(this.state.experiments ?? this.state.results.flatMap(reply => strategy.receipts(reply)));
         const directory = path.join(this.home, "improvement", "reports");
         const artifact = path.join(directory, `${this.state.night}.json`);
         await mkdir(directory, { recursive: true, mode: 0o700 });
@@ -163,7 +212,7 @@ export class ImprovementController {
           await this.save();
           return;
         }
-        this.harness.post({ id: `improvement-report:${this.state.night}`, sessionKey: KEY, source: "cron", text: "", replyTo: to }, this.strategy.report(this.state, p.timezone, experiments, artifact));
+        this.harness.post({ id: `improvement-report:${this.state.night}`, sessionKey: KEY, source: "cron", text: "", replyTo: to }, strategy.report(this.state, p.timezone, experiments, artifact));
         await this.harness.onStateChange?.(); // ensure report is durable before marking adopted
         this.state.reportQueued = true;
         await this.save();
@@ -173,11 +222,13 @@ export class ImprovementController {
       if (!this.state || this.state.night !== w.night) {
         if (!cronStart && this.state?.nextNightRequested !== w.night) return;
         if (this.state && !this.state.reportQueued) return;
-        this.state = { version: 1, night: w.night, turns: 0, results: [], experiments: [], recentHypotheses: this.state?.recentHypotheses ?? [] };
+        this.state = { version: 1, strategySelection: this.strategyHolder?.selection ?? undefined, night: w.night, turns: 0, results: [], experiments: [], recentHypotheses: this.state?.recentHypotheses ?? [] };
         await this.save(); // persist Cron intent even if interactive work delays execution
       }
       if (this.harness.paused || busy || [...this.harness.sessions.values()].some((s) => s.running || s.queue.length)) return;
-      if (this.state.done || this.state.turns >= p.maxTurns) return;
+      // An adopted night is closed even if wall time re-enters its old window.
+      // Never resume it under a newly selected strategy generation.
+      if (this.state.reportQueued || this.state.done || this.state.turns >= p.maxTurns) return;
       if (this.state.pending) {
         this.state.results.push("Vorheriger Versuch unterbrochen oder fehlgeschlagen; vor Fortsetzung tatsächlichen Zustand prüfen.");
         this.state.pending = undefined;
@@ -185,7 +236,7 @@ export class ImprovementController {
       const id = `improvement:${w.night}:${this.state.turns + 1}`;
       this.state.pending = id;
       await this.save();
-      this.harness.enqueue({ id, sessionKey: KEY, source: "cron", text: this.strategy.prompt(p, this.state.turns + 1) + `\nBereits untersuchte Hypothesen (nicht wiederholen): ${JSON.stringify(this.state.recentHypotheses ?? [])}\nBisher neue protokollierte Experimente dieser Nacht: ${this.state.experiments?.length ?? 0}. Turns ohne neues Experiment: ${this.state.noExperimentTurns ?? 0}.` });
+      this.harness.enqueue({ id, sessionKey: KEY, source: "cron", text: strategy.prompt(p, this.state.turns + 1) + `\nBereits untersuchte Hypothesen (nicht wiederholen): ${JSON.stringify(this.state.recentHypotheses ?? [])}\nBisher neue protokollierte Experimente dieser Nacht: ${this.state.experiments?.length ?? 0}. Turns ohne neues Experiment: ${this.state.noExperimentTurns ?? 0}.` });
     } finally { this.checking = false; }
   }
 }

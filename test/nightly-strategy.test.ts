@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, writeFile, rm, readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { nightlyStrategy } from "../src/nightly-strategy.js";
+import { nightlyStrategy, nightlyStrategyHolder } from "../src/nightly-strategy.js";
 import bundled from "../src/builtin-plugins/nightly-default.js";
 import { ImprovementController } from "../src/improvement.js";
 import { Harness } from "../src/harness.js";
@@ -28,6 +28,27 @@ test("custom nightly strategy selects prompt, conclusions and report without cha
   assert.equal(state.turns, 1); assert.equal(state.pending, undefined); assert.equal(state.done, true);
   assert.ok(runtime.sessions.get("improvement:nightly")!.prompts[0].startsWith("custom"));
 });
+test("holder binds all five methods, pins generations and retains selection on invalid replacement", async t => {
+  const home = await mkdtemp(path.join(os.tmpdir(), "nightly-holder-")); t.after(() => rm(home, { recursive: true, force: true }));
+  const module = (label: string) => `export default {apiVersion:1,label:${JSON.stringify(label)},prompt(){return this.label},completed(s){s.results=[this.label]},receipts(){return [{label:this.label}]},unique(r){return r.filter(x=>x.label===this.label)},report(){return this.label}}`;
+  await writeFile(path.join(home, "custom.mjs"), module("custom"));
+  const holder = await nightlyStrategyHolder(home, undefined, bundled);
+  await holder.change("custom.mjs", async () => {});
+  const pinned = holder.current!;
+  assert.equal(pinned.prompt({} as any, 1), "custom");
+  const progress = { results: [] } as any; pinned.completed(progress, "reply"); assert.deepEqual(progress.results, ["custom"]);
+  assert.deepEqual(pinned.receipts("reply"), [{ label: "custom" }]);
+  assert.deepEqual(pinned.unique([{ label: "custom" }, { label: "other" }] as any), [{ label: "custom" }]);
+  assert.equal(pinned.report({ night: "test", turns: 1 }, "UTC", [], "artifact"), "custom");
+  await writeFile(path.join(home, "custom.mjs"), module("new"));
+  await holder.change("custom.mjs", async () => {});
+  assert.equal(holder.current!.prompt({} as any, 1), "new");
+  assert.equal(pinned.prompt({} as any, 1), "custom");
+  await writeFile(path.join(home, "bad.mjs"), "export default {apiVersion:1,prompt(){}}");
+  await assert.rejects(holder.change("bad.mjs", async () => {}), /Invalid nightly strategy/);
+  assert.equal(holder.current!.prompt({} as any, 1), "new");
+});
+
 test("nightly selection fails on invalid module instead of silently using default", async t => {
   const home = await mkdtemp(path.join(os.tmpdir(), "nightly-invalid-")); t.after(() => rm(home, { recursive: true, force: true }));
   await assert.rejects(nightlyStrategy(home, "missing.mjs", bundled));
