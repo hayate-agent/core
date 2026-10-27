@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "repository": "https://git.vanillacore.net/harness/plugins",
-  "revision": "2efc1db0f34de8aef6275cce4ca6ec9e2e6268f4",
+  "revision": "3cd8ece96ceb939796703c2100f4e1b1f05c1679",
   "files": {
     "context-plugin.ts": "1da424038b5f5dd8e88999d86c4b26fecca5d21ca4170b83fdba9958eef787f0",
     "continuation-plugin.ts": "6c06371c5b791dadc27b440ee37444313006e869874d2e8ac372542cd2f0504e",
@@ -32,6 +32,8 @@
     "review-engine.ts": "e197d26a700ac8701b1f976fc200804d479f61e340d806217f89fc2e4264c9ca",
     "boundary-assessor.ts": "50673771d39126c132829704b5b2ab6172092e867245f8edca8c9b0eb71615cb",
     "tool-result-projector.ts": "69658e2adef5d5327797762886199b87fd3bff94f20beab8a199280e0d517746",
-    "completion-prompt.ts": "8eb52e2e728084a331bf48c589ca0578b1b88856f9e63c35a1c1112a1dd38879"
+    "completion-prompt.ts": "8eb52e2e728084a331bf48c589ca0578b1b88856f9e63c35a1c1112a1dd38879",
+    "nightly-default.ts": "d807ad49e01dcb867f97fc748362e73e877c3540892755538eb2cc1840da2736",
+    "improvement-report.ts": "fa9bd1b1f18ba276539981c2c9e2c6c5c5f0c9764b2890cde818a72154ad5679"
   }
 }

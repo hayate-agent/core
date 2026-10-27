@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { ImprovementController, improvementPolicy, improvementWindow } from "../src/improvement.js";
+import { ImprovementController, improvementPolicy, improvementWindow } from "./improvement-default.js";
 import { Harness } from "../src/harness.js";
 import { FakeRuntime, MemoryChannel, ROOM } from "./fakes.js";
 

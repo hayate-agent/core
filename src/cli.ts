@@ -46,6 +46,8 @@ import { loopPlugin } from "./builtin-plugins/loop-plugin.js";
 import { OverlayUpdater } from "./update.js";
 import { SkillUpdates } from "./skill-updates.js";
 import { ImprovementController } from "./improvement.js";
+import nightlyDefault from "./builtin-plugins/nightly-default.js";
+import { nightlyStrategy } from "./nightly-strategy.js";
 import { PiRuntime } from "./runtime/pi.js";
 import { launchMode } from "./launch.js";
 import { Scheduler } from "./scheduler.js";
@@ -287,7 +289,8 @@ async function main(argv: string[]): Promise<void> {
   const gatewayApprovers = gatewayManager.approvers;
   const admins = config.admins.length ? config.admins : gatewayApprovers;
   const approvers = config.approvers.length ? config.approvers : gatewayApprovers.length ? gatewayApprovers : admins;
-  improvement = new ImprovementController(config.home, harness, config.timezone);
+  improvement = new ImprovementController(config.home, harness, config.timezone, Date.now,
+    await nightlyStrategy(config.home, config.nightlyStrategy, nightlyDefault));
   let nextLedgerCompact = 0;
   let ledgerRecoveryReady = false;
   const gatewayTimer = setInterval(() => {

@@ -1,4 +1,29 @@
-# Nightly improvement controller (initial implementation)
+# Nightly improvement controller
+
+## Strategy ownership
+
+The bundled work prompt, experiment receipt parser/deduplication, productivity and
+completion decisions, and bounded report renderer are owned by `harness/plugins`.
+Core retains calendar scheduling, durable turn reservations/window checks, inbox/
+outbox coordination and the infrastructure-pinned evaluator/process runner. Existing
+state files and report archives require no migration.
+
+`nightlyStrategy: plugins/my-night.mjs` selects a trusted local startup ESM default
+export implementing `{apiVersion:1, prompt, completed, receipts, unique, report}`.
+`prompt(policy, turn)` returns work instructions. `completed(progress, reply)`
+updates a copy of experiment conclusions (experiments, recentHypotheses,
+noExperimentTurns, done, results); it cannot accidentally overwrite host reservation
+fields through that object. `receipts(reply)` and `unique(receipts)` prepare reported
+evidence; `report(state, timezone, receipts, artifact)` renders the remote summary.
+Use the bundled source as the exact typed contract example. Invalid/missing modules
+fail startup, never silently fall back. Class methods retain receivers.
+
+These are trusted in-process pure methods, not a sandbox or new authority. They must
+not start receivers/background resources, falsify evidence or bypass the operator's
+scope. Selection requires restart; no runtime writable overlay/hot reload. The
+controller now requires explicit strategy injection when embedded; CLI injects the
+bundled default. The evaluator remains infrastructure-pinned, not replaceable by
+this strategy selection. Merge/build is not running activation.
 
 Each night must select and try new bounded experiments, not recheck yesterday's
 proposals as its output. Missing independent evaluator configuration prevents

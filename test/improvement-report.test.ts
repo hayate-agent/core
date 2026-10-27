@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { experimentReceipts, uniqueExperiments, improvementReport, type ExperimentReceipt } from "../src/improvement-report.js";
+import { experimentReceipts, uniqueExperiments, improvementReport, type ExperimentReceipt } from "../src/builtin-plugins/improvement-report.js";
 
 const receipt: ExperimentReceipt = { hypothesis: "BOM", baseline: "failed", candidate: "passed", evidence: "node --test; /tmp/evidence", outcome: "improved" };
 const block = (value: unknown) => '```improvement-experiment\n' + JSON.stringify(value) + '\n```';

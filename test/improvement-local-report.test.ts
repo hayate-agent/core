@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import {mkdtemp,readFile,writeFile,rm} from 'node:fs/promises';
 import os from 'node:os';import path from 'node:path';import {test} from 'node:test';
-import {ImprovementController} from '../src/improvement.js';
+import {ImprovementController} from './improvement-default.js';
 import {Harness} from '../src/harness.js';import {FakeRuntime, MemoryChannel, ROOM} from './fakes.js';
-import {experimentReceipts} from '../src/improvement-report.js';
+import {experimentReceipts} from '../src/builtin-plugins/improvement-report.js';
 
 test('no report destination preserves results locally and allows the next night after restart',async(t)=>{
  const home=await mkdtemp(path.join(os.tmpdir(),'improvement-local-'));
