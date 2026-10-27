@@ -14,6 +14,8 @@ import { ConsoleChannel } from "./channels/console.js";
 import { GatewayManager } from "./gateway-manager.js";
 import { PolicyManager } from "./policy-manager.js";
 import { policyManagerPlugin } from "./builtin-plugins/policy-manager-plugin.js";
+import { ExtensionManager } from "./extension-manager.js";
+import { extensionManagerPlugin } from "./builtin-plugins/extension-manager-plugin.js";
 import { RunRegistry } from "./api/runs.js";
 import { API_CHANNEL, ApiChannel } from "./api/server.js";
 import { nativeCompaction, type CompactionStrategy } from "./compaction.js";
@@ -411,8 +413,10 @@ async function main(argv: string[]): Promise<void> {
   }
   await scheduler.load();
 
+  const extensionManager = new ExtensionManager(harness, plugins, settings, { home: config.home, cwd: config.cwd, agent: config.agent },
+    [...builtinCommandNames, "sessions", "resume", ...skills.map(s => s.name)]);
   const policyManager = new PolicyManager(harness, plugins.policies, settings, { home: config.home, cwd: config.cwd, agent: config.agent });
-  await plugins.load(config.plugins ?? [], { agent: config.agent, home: config.home, cwd: config.cwd }, [...builtinCommandNames, "sessions", "resume", ...skills.map((s) => s.name)], ["console", "api", "dispatch", ...Object.keys(bundledGatewayModules()), ...harness.channels.keys()], [dispatcherPlugin(() => dispatcher), subagentPlugin(subagents,async()=>{await persist();}), ...(reloadableTools ? [reloadableToolsPlugin(reloadableTools)] : []), wasmToolsPlugin(config.home, config.wasmTools ?? []), continuationPlugin(harness), loopPlugin(harness), improvementPlugin(improvement!), protectedContentPlugin(protectedContent), gatewayManagerPlugin(gatewayManager, settings), policyManagerPlugin(policyManager, settings), gatewayPlugin(settings, harness), contextPlugin(maintenance, settings), ...(config.memory.enabled ? [memoryPlugin(memory)] : []), ...reviewEngine.plugins]);
+  await plugins.load(config.plugins ?? [], { agent: config.agent, home: config.home, cwd: config.cwd }, [...builtinCommandNames, "sessions", "resume", ...skills.map((s) => s.name)], ["console", "api", "dispatch", ...Object.keys(bundledGatewayModules()), ...harness.channels.keys()], [dispatcherPlugin(() => dispatcher), subagentPlugin(subagents,async()=>{await persist();}), ...(reloadableTools ? [reloadableToolsPlugin(reloadableTools)] : []), wasmToolsPlugin(config.home, config.wasmTools ?? []), continuationPlugin(harness), loopPlugin(harness), improvementPlugin(improvement!), protectedContentPlugin(protectedContent), gatewayManagerPlugin(gatewayManager, settings), policyManagerPlugin(policyManager, settings), extensionManagerPlugin(extensionManager, settings), gatewayPlugin(settings, harness), contextPlugin(maintenance, settings), ...(config.memory.enabled ? [memoryPlugin(memory)] : []), ...reviewEngine.plugins]);
   if (dispatchPolicy.enabled) {
     dispatchRuntime = new DispatcherRuntime(harness, executions);
     harness.addChannel(dispatchRuntime.channel);
@@ -458,9 +462,9 @@ async function main(argv: string[]): Promise<void> {
     finally { memoryConnecting = false; }
   };
   await connectMemory();
-  try { await policyManager.load(); }
-  catch (err) { await policyManager.stop().catch(() => {}); await plugins.stop().catch(() => {}); throw err; }
-  const policyTimer = setInterval(() => { void policyManager.tick().catch(() => {}); }, 1000);
+  try { await policyManager.load(); await extensionManager.load(); }
+  catch (err) { await extensionManager.stop().catch(() => {}); await policyManager.stop().catch(() => {}); await plugins.stop().catch(() => {}); throw err; }
+  const policyTimer = setInterval(() => { void policyManager.tick().catch(() => {}); void extensionManager.tick().catch(() => {}); }, 1000);
   policyTimer.unref();
   const memoryTimer = config.memory.enabled ? setInterval(() => { void connectMemory().then(() => memory.flush()).catch(() => log("[memory] capture backlog retained")); }, 30000) : undefined;
   memoryTimer?.unref();
@@ -501,6 +505,7 @@ async function main(argv: string[]): Promise<void> {
     memoryStopping = true;
     clearInterval(memoryTimer);
     await memory.provider?.close().catch(() => console.error("[memory] cleanup failed"));
+    await extensionManager.stop().catch(() => console.error("[extensions] cleanup failed"));
     await policyManager.stop().catch(() => console.error("[policies] cleanup failed"));
     await plugins.stop().catch(() => console.error("[plugins] cleanup failed"));
     await sessionOwnership.release();
@@ -578,6 +583,7 @@ async function main(argv: string[]): Promise<void> {
   catch (err) {
     clearInterval(policyTimer);
     await harness.stop(0).catch(() => {});
+    await extensionManager.stop().catch(() => {});
     await policyManager.stop().catch(() => {});
     clearInterval(gatewayTimer);
     memoryStopping = true;

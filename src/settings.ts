@@ -17,6 +17,7 @@ export interface LocalSettings {
   gateways?: GatewayConfig;
   gatewayPlugins?: GatewayOverlay;
   policyPlugins?: PolicyOverlay;
+  extensionPlugins?: PolicyOverlay;
   memory?: Partial<MemoryConfig>;
   model?: string;
   thinking?: string;
@@ -33,7 +34,7 @@ function validate(value: unknown, defaults: Partial<ContextPolicy> = {}, pruning
     if (key === "dispatcher") {
       if (!item || typeof item !== "object" || Array.isArray(item) || Object.keys(item).some(key => !["enabled", "strategy", "concurrentRequests", "capacity", "retentionDays"].includes(key))) throw Error("Invalid dispatcher overlay");
       dispatcherConfig({ ...dispatcherDefaults, ...item });
-    } else if (key === "policyPlugins") {
+    } else if (key === "policyPlugins" || key === "extensionPlugins") {
       validatePolicyOverlay(item);
     } else if (key === "gatewayPlugins") {
       validateGatewayOverlay(item);
@@ -76,7 +77,7 @@ export class SettingsService {
     try {
       const data = parse(await readFile(this.file, "utf8"));
       if (!data || typeof data !== "object" || Array.isArray(data)) throw Error("Invalid local settings overlay");
-      const supported = new Set(["dispatcher", "gateways", "gatewayPlugins", "policyPlugins", "memory", "model", "thinking", "review", "contextMaintenance", "toolResultPruning"]);
+      const supported = new Set(["dispatcher", "gateways", "gatewayPlugins", "policyPlugins", "extensionPlugins", "memory", "model", "thinking", "review", "contextMaintenance", "toolResultPruning"]);
       if (Object.keys(data).some(key => ["token", "apiKey", "secrets", "protectedContent", "admins", "approvers", "approvals"].includes(key))) throw Error("Unsupported local setting: infrastructure policy or credential field");
       const active: Record<string, unknown> = Object.create(null);
       const ignored: Record<string, unknown> = Object.create(null);
@@ -104,6 +105,20 @@ export class SettingsService {
     const value = key.startsWith("review.") ? this.overlay.review?.[key.slice(7) as "model" | "thinking"] : this.overlay[key as "model" | "thinking"];
     return value === undefined ? "installation/default" : "local overlay";
   }
+  setExtensionPlugin(name: string, spec?: PolicyOverride): Promise<void> {
+    validatePolicyOverlay({ [name]: spec ?? {} });
+    const next = this.writing.catch(() => {}).then(async () => {
+      const updated = structuredClone(this.overlay);
+      updated.extensionPlugins = { ...updated.extensionPlugins };
+      if (spec) updated.extensionPlugins[name] = spec; else delete updated.extensionPlugins[name];
+      validate(updated, this.defaults.contextMaintenance, this.defaults.toolResultPruning, this.defaults.dispatcher);
+      await mkdir(path.dirname(this.file), { recursive: true });
+      await writeFileDurable(this.file, stringify({ ...this.ignored, ...updated }));
+      this.overlay = updated;
+    });
+    this.writing = next; return next;
+  }
+
   setPolicyPlugin(name: string, spec?: PolicyOverride): Promise<void> {
     const next = this.writing.catch(() => {}).then(async () => {
       validatePolicyOverlay({ [name]: spec ?? {} });

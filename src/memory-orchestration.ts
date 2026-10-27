@@ -8,6 +8,7 @@ export interface MemoryOrchestrator {
 export class MemoryOrchestrationRegistry implements MemoryOrchestrator {
   private readonly implementations = new Map<string, MemoryOrchestrator>();
   private selected?: MemoryOrchestrator;
+  get size(): number { return this.implementations.size; }
   register(name: string, implementation: MemoryOrchestrator): void {
     if (!/^[a-z][a-z0-9_-]*$/.test(name) || this.implementations.has(name) ||
         !implementation || typeof implementation.recall !== "function" || typeof implementation.capture !== "function") throw Error("Invalid or duplicate memory orchestrator");

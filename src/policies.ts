@@ -30,6 +30,7 @@ export class PolicyRegistry {
     if (!this.policies.has(policy?.id)) throw Error(`Unknown policy: ${policy?.id}`);
     return this.install(policy);
   }
+  entries(): ReadonlyArray<readonly [string, Readonly<Policy>]> { return [...this.policies.entries()]; }
   has(id: string): boolean { return this.policies.has(id); }
   isRequired(id: string): boolean { return this.required.has(id); }
   get(id: string): Readonly<Policy> | undefined { return this.policies.get(id); }
