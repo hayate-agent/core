@@ -175,6 +175,23 @@ supports admin-selected local ESM overrides, persistent desired state and lifecy
 rollback at idle turn boundaries. Tool-only reload modules must not register
 policies. No baseline gate is silently removed by this contract.
 
+## Memory provider reconnect lifecycle
+
+The CLI gives memory tools, orchestration and background capture one stable provider
+facade. All asynchronous provider operations retain a lease. A failed periodic health
+check reserves an exclusive reconnect: new calls fail as unavailable, running calls
+drain, then the old provider closes **before** the factory opens its replacement.
+This supports exclusive backing stores such as LocalMemory's file lock; it is not
+parallel preparation or datastore migration. Pending capture files remain durable
+and retry after recovery. A failed factory can retry at the next maintenance tick.
+
+Shutdown waits for factory activation, running operations and cleanup. A candidate
+opened during shutdown is closed without becoming usable. Failed cleanup blocks
+reopening until restart and is not retried blindly. Trusted calls/factories/cleanup
+can hang; there is no forced cancellation or rollback of their external effects.
+Provider selection remains startup-only. Session providers have a separate lifetime
+bound to existing session checkpoints; this facade does not replace them or channels.
+
 ## Memory orchestration selection
 
 `api.registerMemoryOrchestrator(name, {recall, capture})` registers trusted

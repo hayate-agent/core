@@ -23,6 +23,7 @@ import { FilesystemSessionProvider, type SessionProvider } from "./sessions.js";
 import { memoryConfig } from "./memory.js";
 import { LocalMemory } from "./memory-local.js";
 import { MemoryService } from "./builtin-plugins/memory-service.js";
+import { MemoryProviderLifecycle } from "./memory-provider-lifecycle.js";
 import { memoryPlugin } from "./builtin-plugins/memory-plugin.js";
 import { gatewayPlugin } from "./builtin-plugins/gateway-plugin.js";
 import { PluginHost } from "./plugins.js";
@@ -447,22 +448,16 @@ async function main(argv: string[]): Promise<void> {
     }, error => log(`[dispatcher] ${String(error)}`), key => harness.dependencyCheckpoint(key));
   }
   plugins.memoryOrchestration.select(config.memory.enabled ? config.memory.orchestration ?? "default" : "none");
-  let memoryConnecting = false;
-  let memoryStopping = false;
+  const memoryProvider = new MemoryProviderLifecycle(async () => {
+    const factory = config.memory.provider === "local" ? undefined : plugins.memoryProviders.get(config.memory.provider);
+    if (config.memory.provider !== "local" && !factory) throw Error("Unknown memory provider");
+    return factory ? factory({ home: config.home, config: config.memory }) : LocalMemory.open(config.home, config.memory);
+  });
+  if (config.memory.enabled) memory.provider = memoryProvider;
   const connectMemory = async () => {
-    if (!config.memory.enabled || memoryConnecting || memoryStopping) return;
-    memoryConnecting = true;
-    try {
-      if (memory.provider) {
-        try { await memory.provider.status(); return; }
-        catch { await memory.provider.close().catch(() => {}); memory.provider = undefined; }
-      }
-      const factory = config.memory.provider === "local" ? undefined : plugins.memoryProviders.get(config.memory.provider);
-      if (config.memory.provider !== "local" && !factory) throw Error("Unknown memory provider");
-      const provider = factory ? await factory({ home: config.home, config: config.memory }) : await LocalMemory.open(config.home, config.memory);
-      if (memoryStopping) await provider.close(); else memory.provider = provider;
-    } catch { log("[memory] provider unavailable; retrying on next maintenance tick"); }
-    finally { memoryConnecting = false; }
+    if (!config.memory.enabled) return;
+    try { await memoryProvider.ensureConnected(); }
+    catch { log("[memory] provider unavailable; failed cleanup requires restart, otherwise retrying on next maintenance tick"); }
   };
   await connectMemory();
   for (const name of reloadableTools?.tools.keys() ?? []) {
@@ -510,9 +505,8 @@ async function main(argv: string[]): Promise<void> {
     await persist(unfinished).catch((err) => console.error(`[state] save failed: ${err}`));
     if (unfinished.length) console.error(`[harness] ${unfinished.length} unfinished input(s) saved for replay`);
     clearInterval(gatewayTimer);
-    memoryStopping = true;
     clearInterval(memoryTimer);
-    await memory.provider?.close().catch(() => console.error("[memory] cleanup failed"));
+    await memoryProvider.close().catch(() => console.error("[memory] cleanup failed"));
     await extensionManager.stop().catch(() => console.error("[extensions] cleanup failed"));
     await policyManager.stop().catch(() => console.error("[policies] cleanup failed"));
     await plugins.stop().catch(() => console.error("[plugins] cleanup failed"));
@@ -594,9 +588,8 @@ async function main(argv: string[]): Promise<void> {
     await extensionManager.stop().catch(() => {});
     await policyManager.stop().catch(() => {});
     clearInterval(gatewayTimer);
-    memoryStopping = true;
     clearInterval(memoryTimer);
-    await memory.provider?.close().catch(() => {});
+    await memoryProvider.close().catch(() => {});
     await plugins.stop().catch(() => {});
     throw err;
   }
