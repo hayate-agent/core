@@ -35,6 +35,7 @@ export interface HarnessConfig {
   thinking?: string;
   /** Trusted local startup engine module; selects policy and tools together. */
   reviewEngine?: string;
+  contextStrategy?: string;
   review?: Partial<Omit<ReviewConfig, "mandatory" | "scope">> & { mandatory?: Partial<ReviewConfig["mandatory"]>; scope?: Partial<ReviewConfig["scope"]> };
   /** Literal tool names exposed to the model; omitted = runtime defaults, [] = no tools. */
   tools?: string[];
@@ -117,6 +118,7 @@ export function defaultConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
   }
   reviewConfig(overrides.review); // validate before startup
   if (overrides.reviewEngine !== undefined && (typeof overrides.reviewEngine !== "string" || !overrides.reviewEngine.trim() || overrides.reviewEngine.length > 2000)) throw Error("Invalid reviewEngine");
+  if (overrides.contextStrategy !== undefined && (typeof overrides.contextStrategy !== "string" || !overrides.contextStrategy.trim() || overrides.contextStrategy.length > 2000)) throw Error("Invalid contextStrategy");
   contextPolicy(overrides.contextMaintenance);
   pruningPolicy(overrides.toolResultPruning);
   validateGatewayConfig(overrides.gateways);
@@ -138,6 +140,7 @@ export function defaultConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
     thinking: overrides.thinking,
     review: reviewConfig(overrides.review),
     reviewEngine: overrides.reviewEngine,
+    contextStrategy: overrides.contextStrategy,
     plugins: overrides.plugins ?? [],
     reloadableToolPlugins: overrides.reloadableToolPlugins ?? [],
     autoReloadToolPlugins: overrides.autoReloadToolPlugins ?? false,

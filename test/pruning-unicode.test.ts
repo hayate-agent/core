@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { pruneToolResults, pruningPolicy } from '../src/tool-result-pruning.js';
+import { pruningPolicy } from '../src/tool-result-pruning.js';
+import { pruneToolResults } from '../src/builtin-plugins/tool-result-projector.js';
 
 test('head and tail excerpts preserve surrogate pairs without mutating source', () => {
  const policy=pruningPolicy({proactivePruneTokens:1,minResultChars:1000,maxResultChars:500,keepRecent:1});

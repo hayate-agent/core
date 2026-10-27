@@ -61,7 +61,9 @@ import { ContextMaintenance, contextPolicy } from "./context-maintenance.js";
 import { contextPlugin } from "./builtin-plugins/context-plugin.js";
 import { SettingsService, type SettingPath } from "./settings.js";
 import { runtimeReviewer } from "./runtime/reviewer.js";
-import { boundaryAssessor } from "./context-assessment.js";
+import { boundaryAssessor } from "./builtin-plugins/boundary-assessor.js";
+import { pruneToolResults } from "./builtin-plugins/tool-result-projector.js";
+import { contextStrategies } from "./context-strategies.js";
 import { guardResultOrchestration } from "./result-orchestration.js";
 import { assessCompletion } from "./completion-check.js";
 import { reviewConfig } from "./review-config.js";
@@ -165,8 +167,11 @@ async function main(argv: string[]): Promise<void> {
   config.memory = memoryConfig(settings.effective().memory);
   memory = new MemoryService(config.memory, log, config.home);
   plugins.memoryOrchestration.register("default", memory);
+  const strategies = await contextStrategies(config.home, config.contextStrategy, {
+    apiVersion: 1, create: ({ backend, model }) => ({ assess: boundaryAssessor(backend, model), project: pruneToolResults }),
+  }, { backend: { review: (...args) => runtimeReviewer(runtime).review(...args) }, model: () => effectiveModels().reviewModel });
   const maintenance = new ContextMaintenance(config.home, () => contextPolicy(settings.effective().contextMaintenance),
-    evidence => boundaryAssessor(runtimeReviewer(runtime), () => effectiveModels().reviewModel)(evidence));
+    strategies.assess);
   const effectiveModels = () => {
     const values = settings.effective();
     return { model: values.model, thinking: values.thinking, reviewModel: values.review?.model ?? values.model, reviewThinking: values.review?.thinking ?? "medium" };
@@ -181,6 +186,7 @@ async function main(argv: string[]): Promise<void> {
     model: config.model,
     thinking: config.thinking,
     pruning: () => pruningPolicy(settings.effective().toolResultPruning),
+    projectToolResults: strategies.project,
     modelDefaults: () => ({ revision: settings.revision, model: effectiveModels().model, thinking: effectiveModels().thinking }),
     tools: (() => {
       const workflow = workflowTools(config.tools, config.memory.enabled, false);

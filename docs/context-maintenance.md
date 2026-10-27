@@ -1,5 +1,30 @@
 # Context maintenance
 
+## Strategy ownership and startup selection
+
+The bundled semantic boundary assessor and pure tool-result projection algorithm
+are maintained in `harness/plugins`, pinned with immutable revision and hashes.
+Core keeps the boundary state machine, persistence, usage observations, cooldowns,
+authority checks, provider rotation and compatibility configuration validation.
+No state/checkpoint format or default behavior changes in this extraction.
+
+`contextStrategy: plugins/my-context.mjs` selects trusted local startup strategies.
+The ESM default export is `{apiVersion:1, create({backend, model})}` and returns
+`{assess, project}`. `assess(evidence)` is advisory and returns compact/handover/keep/
+unknown; host boundaries still decide eligibility. `project(messages, policy)` is
+a synchronous pure per-request projection, never a transcript rewrite. Preserve
+call IDs, errors, nontext content and live result correlation. Return the original
+array when unchanged. Class methods retain their receiver. Create only prepares;
+strategies must not start receivers or unmanaged background resources.
+
+Unknown/malformed modules fail startup, not silent fallback. This is trusted
+in-process code, not a sandbox; custom projectors can inspect context and must
+honor the runtime contract. Selection requires restart and is not a local writable
+overlay or hot reload. The stock PI adapter no longer imports a concrete pruning
+algorithm: the CLI supplies the selected projector. Other hosts embedding PiRuntime
+must explicitly provide projectToolResults to enable projection. A missing projector
+leaves request messages unchanged. Build/merge is not activation evidence.
+
 The Harness checks context at serialized working-turn boundaries. PI native overflow
 compaction remains a fallback. Maintenance does not call manual compaction while a
 working tool is executing. Reviewer calls are not maintenance turns.
