@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Harness, type DurableTask } from "../src/harness.js";
-import { assessCompletion } from "../src/completion-check.js";
+import { assessCompletion } from "./completion-default.js";
 import { FakeRuntime, MemoryChannel, msg } from "./fakes.js";
 import type { ExecutionStore } from "../src/execution.js";
 

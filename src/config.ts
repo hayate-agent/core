@@ -36,6 +36,7 @@ export interface HarnessConfig {
   /** Trusted local startup engine module; selects policy and tools together. */
   reviewEngine?: string;
   contextStrategy?: string;
+  completionStrategy?: string;
   review?: Partial<Omit<ReviewConfig, "mandatory" | "scope">> & { mandatory?: Partial<ReviewConfig["mandatory"]>; scope?: Partial<ReviewConfig["scope"]> };
   /** Literal tool names exposed to the model; omitted = runtime defaults, [] = no tools. */
   tools?: string[];
@@ -119,6 +120,7 @@ export function defaultConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
   reviewConfig(overrides.review); // validate before startup
   if (overrides.reviewEngine !== undefined && (typeof overrides.reviewEngine !== "string" || !overrides.reviewEngine.trim() || overrides.reviewEngine.length > 2000)) throw Error("Invalid reviewEngine");
   if (overrides.contextStrategy !== undefined && (typeof overrides.contextStrategy !== "string" || !overrides.contextStrategy.trim() || overrides.contextStrategy.length > 2000)) throw Error("Invalid contextStrategy");
+  if (overrides.completionStrategy !== undefined && (typeof overrides.completionStrategy !== "string" || !overrides.completionStrategy.trim() || overrides.completionStrategy.length > 2000)) throw Error("Invalid completionStrategy");
   contextPolicy(overrides.contextMaintenance);
   pruningPolicy(overrides.toolResultPruning);
   validateGatewayConfig(overrides.gateways);
@@ -141,6 +143,7 @@ export function defaultConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
     review: reviewConfig(overrides.review),
     reviewEngine: overrides.reviewEngine,
     contextStrategy: overrides.contextStrategy,
+    completionStrategy: overrides.completionStrategy,
     plugins: overrides.plugins ?? [],
     reloadableToolPlugins: overrides.reloadableToolPlugins ?? [],
     autoReloadToolPlugins: overrides.autoReloadToolPlugins ?? false,

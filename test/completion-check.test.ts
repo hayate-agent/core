@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { assessCompletion } from "../src/completion-check.js";
+import { assessCompletion } from "./completion-default.js";
 import type { Inbound } from "../src/types.js";
 const input = (): Inbound => ({ sessionKey: "chat", source: "channel", text: "Finish the authorized update implementation" });
 const auth = { task: "Finish update implementation and tests", expiresAt: 2000 };

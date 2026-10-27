@@ -1,5 +1,21 @@
 # Semantic completion fallback
 
+The bundled advisory classification wording is owned by `harness/plugins` and
+injected into the host assessor. Core keeps eligibility, task anchors, deadline,
+cancellation, output validation and durable follow-up admission. No authorization
+checks or task-state persistence move into the wording implementation.
+
+`completionStrategy: plugins/my-completion.mjs` selects a trusted local startup
+module exporting default `{apiVersion:1, prompt(input, reply, authorization, now)}`.
+It returns the model prompt string; it cannot change host parsing or deadline
+checks. Model classifications remain advisory. Missing/invalid modules fail startup,
+never silently select another strategy. No sandbox, download, hot replacement or
+background resource lifecycle is provided; prompt methods must be pure. The CLI
+injects the bundled default when unconfigured. Other hosts calling assessCompletion
+must inject a prompt strategy; omission disables classification rather than importing
+a concrete default from Core. Existing timeout, numeric grants and chain cap remain.
+Build/merge does not activate a running installation.
+
 The optional completion assessor is invoked after successful working turns when
 no explicit continue checkpoint exists. Self-reported waiting/blocked/completed
 plans are advisory and may be reassessed against the original task. A registered

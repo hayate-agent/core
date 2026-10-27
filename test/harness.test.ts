@@ -903,7 +903,7 @@ test("explicit continuation plans inherit the installation deadline without asse
 
 
 for (const premature of ["completed", "waiting", "blocked"] as const) test(`premature ${premature} assesses original task and durably executes only its missing step`, async () => {
-  const { assessCompletion } = await import("../src/completion-check.js");
+  const { assessCompletion } = await import("./completion-default.js");
   let turns = 0, checks = 0, persisted = false;
   const original = "Implement update and run its regression test";
   const h = new Harness({runtime:new FakeRuntime(() => {

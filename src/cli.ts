@@ -66,6 +66,8 @@ import { pruneToolResults } from "./builtin-plugins/tool-result-projector.js";
 import { contextStrategies } from "./context-strategies.js";
 import { guardResultOrchestration } from "./result-orchestration.js";
 import { assessCompletion } from "./completion-check.js";
+import { completionPrompt } from "./builtin-plugins/completion-prompt.js";
+import { completionStrategy } from "./completion-strategy.js";
 import { reviewConfig } from "./review-config.js";
 import { appendFileDurable } from "./durable.js";
 
@@ -149,6 +151,7 @@ async function main(argv: string[]): Promise<void> {
     protectedExecutions: () => new Set(harness?.pendingInputs().flatMap(input => input.hostEvent ? [input.hostEvent.executionId] : []) ?? []),
   });
   await executions.load();
+  const completion = await completionStrategy(config.home, config.completionStrategy, { apiVersion: 1, prompt: completionPrompt });
   const reviewSettings = reviewConfig(config.review);
   const reviewModule = reviewSettings.enabled ? await loadPolicyEngine(config.home, config.reviewEngine, {
     apiVersion: 1, modelTools: ["plugin_review"], create: context => createReviewEngine({ ...context, config: reviewSettings }),
@@ -260,7 +263,7 @@ async function main(argv: string[]): Promise<void> {
     completionCheck: async (input, reply, signal) => {
       const grant = config.completionCheck?.authorizations[input.sessionKey] ??
         (input.completionAnchor ? { task: input.completionAnchor.task } : undefined);
-      return assessCompletion(runtimeReviewer(runtime), input, reply, grant, signal, effectiveModels().reviewModel);
+      return assessCompletion(runtimeReviewer(runtime), input, reply, grant, signal, effectiveModels().reviewModel, Date.now, completion);
     },
     afterTurn: async (input, reply, session, options, signal) => {
       const result = await plugins.policies.finish(config.cwd, input, reply, session, options, signal);
