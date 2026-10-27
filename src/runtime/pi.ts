@@ -2,6 +2,7 @@
  * PI runtime adapter. The only module that imports the PI SDK.
  */
 import { toolGuardDenialReason } from "../tool-guard-error.js";
+import { MaintenanceError, maintenanceStep, type MaintenanceStage } from "../context-maintenance.js";
 import type { PruningPolicy, ToolResultProjector } from "../tool-result-pruning.js";
 import { nativeCompaction, type CompactionStrategy } from "../compaction.js";
 import type { SessionProvider, SessionRecord, SessionSummary } from "../sessions.js";
@@ -128,13 +129,13 @@ export function toTurnEvent(event: AgentSessionEvent): TurnEvent | undefined {
 }
 
 /** Bound slow/stalled maintenance independently of ordinary tool-turn duration. */
-export async function boundedMaintenance<T>(run: () => Promise<T>, abort: () => void, timeoutMs = 300000): Promise<T> {
+export async function boundedMaintenance<T>(run: () => Promise<T>, abort: () => void, timeoutMs = 300000, stage: MaintenanceStage = "summary"): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([Promise.resolve().then(run), new Promise<never>((_resolve, reject) => {
       timer = setTimeout(() => {
         try { abort(); } catch { /* Deadline remains a failure even if abort itself fails. */ }
-        reject(Error("Context maintenance deadline exceeded; checkpoint retained"));
+        reject(Object.assign(new MaintenanceError(stage, "timeout"), { message: "Context maintenance deadline exceeded; checkpoint retained" }));
       }, timeoutMs);
     })]);
   } finally { if (timer) clearTimeout(timer); }
@@ -252,13 +253,13 @@ export class PiSession implements RuntimeSession {
   }
 
   async compact(instructions?: string): Promise<void> {
-    await boundedMaintenance(() => this.compaction.compact({ instructions, compactNative: (text) => this.session.compact(text).then(() => {}) }), () => this.session.abortCompaction());
-    await this.checkpoint?.();
+    await maintenanceStep("compact", () => boundedMaintenance(() => this.compaction.compact({ instructions, compactNative: (text) => this.session.compact(text).then(() => {}) }), () => this.session.abortCompaction(), 300000, "compact"));
+    await maintenanceStep("save", async () => { await this.checkpoint?.(); });
   }
 
   async summarize(instructions: string): Promise<string> {
-    const result = await boundedMaintenance(() => this.session.compact(instructions), () => this.session.abortCompaction());
-    await this.checkpoint?.();
+    const result = await maintenanceStep("summary", () => boundedMaintenance(() => this.session.compact(instructions), () => this.session.abortCompaction()));
+    await maintenanceStep("save", async () => { await this.checkpoint?.(); });
     return result.summary;
   }
 
