@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "repository": "https://git.vanillacore.net/harness/plugins",
-  "revision": "d00eb9432375ba7e2e16fb05930e30f7a290775d",
+  "revision": "cefd869de9b470ddc204c1420ca634d4559718c1",
   "files": {
     "context-plugin.ts": "1da424038b5f5dd8e88999d86c4b26fecca5d21ca4170b83fdba9958eef787f0",
     "continuation-plugin.ts": "6c06371c5b791dadc27b440ee37444313006e869874d2e8ac372542cd2f0504e",
@@ -35,6 +35,9 @@
     "completion-prompt.ts": "8eb52e2e728084a331bf48c589ca0578b1b88856f9e63c35a1c1112a1dd38879",
     "nightly-default.ts": "d807ad49e01dcb867f97fc748362e73e877c3540892755538eb2cc1840da2736",
     "improvement-report.ts": "fa9bd1b1f18ba276539981c2c9e2c6c5c5f0c9764b2890cde818a72154ad5679",
-    "extension-manager-plugin.ts": "51ea7b167e2683b180f510a005305975afabb22819e02aa03aafbc434061200c"
+    "extension-manager-plugin.ts": "51ea7b167e2683b180f510a005305975afabb22819e02aa03aafbc434061200c",
+    "cron-report-plugin.ts": "71bb9d6432985d25defb18d4ef45653342c2243f42e215b972b0eb586d24a260",
+    "cron-report-processing.ts": "4e40d3f4c9801d87af1bdd8e2624a12f21e02ad49378a504abaea7a1bb49856f",
+    "cron-reports.ts": "0bbf04e0c3ce1c8a499cdcc2e3bba1d27c88aacd71218f1b4027002591947991"
   }
 }

@@ -7,8 +7,8 @@ import { Harness } from "../src/harness.js";
 import { Scheduler } from "../src/scheduler.js";
 import { ExecutionStore } from "../src/execution.js";
 import { Dispatcher } from "../src/dispatcher.js";
-import { CronReports } from "../src/cron-reports.js";
-import { CronReportProcessing } from "../src/cron-report-processing.js";
+import { CronReports } from "../src/builtin-plugins/cron-reports.js";
+import { CronReportProcessing } from "../src/builtin-plugins/cron-report-processing.js";
 import { FakeRuntime, MemoryChannel, msg } from "./fakes.js";
 
 test("explicit cron report archives before delivery, survives archive failure without rerunning model, supplies scoped context", async () => {

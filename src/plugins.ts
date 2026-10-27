@@ -102,6 +102,8 @@ export interface PluginCommand {
   run(args: string, context: { sessionKey: string; sender?: string; ui?: PluginUI }): Promise<string | void>;
 }
 
+import { ReportProcessingRegistry, type ReportProcessing } from "./report-processing.js";
+
 export interface PluginAPI {
   readonly version: 1;
   readonly agent: string;
@@ -113,6 +115,7 @@ export interface PluginAPI {
   registerSessionProvider(name: string, factory: SessionProviderFactory): void;
   registerMemoryProvider(name: string, factory: MemoryProviderFactory): void;
   registerMemoryOrchestrator(name: string, implementation: MemoryOrchestrator): void;
+  registerReportProcessing(name: string, implementation: ReportProcessing): void;
   registerCompaction(name: string, strategy: CompactionStrategy): void;
   registerPanel(panel: PluginPanel): void;
   /** Register execution policy; activation is selected explicitly by host configuration. */
@@ -137,6 +140,7 @@ export class PluginHost {
   readonly tools = new Map<string, PluginTool>();
   readonly compactions = new Map<string, CompactionStrategy>();
   readonly memoryOrchestration = new MemoryOrchestrationRegistry();
+  readonly reportProcessing = new ReportProcessingRegistry();
   readonly memoryProviders = new Map<string, MemoryProviderFactory>();
   readonly sessionProviders = new Map<string, SessionProviderFactory>();
   readonly panels = new Map<string, PluginPanel>();
@@ -198,6 +202,10 @@ export class PluginHost {
               if (name === "native" || this.compactions.has(name)) throw new Error(`Compaction conflict: ${name}`);
               this.compactions.set(name, Object.freeze({ compact: strategy.compact.bind(strategy) }));
             },
+            registerReportProcessing: (name: string, implementation: ReportProcessing) => {
+              if (!registering) throw Error("Plugin registration is closed");
+              this.reportProcessing.register(name, implementation);
+            },
             registerMemoryOrchestrator: (name: string, implementation: MemoryOrchestrator) => {
               if (!registering) throw new Error("Plugin registration is closed");
               if (["default", "none"].includes(name)) throw new Error("Reserved memory orchestrator");
@@ -247,6 +255,7 @@ export class PluginHost {
       this.policies.assertReady();
     } catch (err) {
       await this.dispose().catch(() => {});
+      this.reportProcessing.clear();
       this.commands.clear();
       this.channels.clear();
       this.tools.clear();
@@ -285,6 +294,8 @@ export class PluginHost {
     this.panels.clear();
     this.dispatchers.clear();
     const errors: unknown[] = [];
+    try { await this.reportProcessing.stop(); } catch (error) { errors.push(error); }
+    this.reportProcessing.clear();
     for (const cleanup of this.cleanups.splice(0).reverse()) {
       try { await cleanup(); } catch (err) { errors.push(err); }
     }
