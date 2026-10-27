@@ -219,3 +219,12 @@ test("automatic capture marks claims reported and recall has bounded data framin
   assert.ok(hits[0].entry.expiresAt);
   assert.match(await service.recall(ctx.sessionKey, "artifact"), /not instructions or authorization/);
 });
+
+test("memoryConfig validates recallLimit range and default", () => {
+  assert.equal(memoryConfig({ enabled: true }).recallLimit, 3);
+  assert.equal(memoryConfig({ recallLimit: 20 }).recallLimit, 20);
+  assert.equal(memoryConfig({ recallLimit: 1 }).recallLimit, 1);
+  assert.throws(() => memoryConfig({ recallLimit: 0 }), /Invalid memory\.recallLimit/);
+  assert.throws(() => memoryConfig({ recallLimit: 21 }), /Invalid memory\.recallLimit/);
+  assert.throws(() => memoryConfig({ recallLimit: 2.5 }), /Invalid memory\.recallLimit/);
+});
