@@ -52,6 +52,7 @@ import { continuationPlugin } from "./builtin-plugins/continuation-plugin.js";
 import { loopPlugin } from "./builtin-plugins/loop-plugin.js";
 import { OverlayUpdater } from "./update.js";
 import { SkillUpdates } from "./skill-updates.js";
+import { skillSearchPlugin } from "./skill-search-plugin.js";
 import { ImprovementController } from "./improvement.js";
 import nightlyDefault from "./builtin-plugins/nightly-default.js";
 import { nightlyStrategy } from "./nightly-strategy.js";
@@ -150,12 +151,14 @@ async function main(argv: string[]): Promise<void> {
   let skills: SkillInfo[] = [];
   const skillUpdates = new SkillUpdates(config.home, config.skillUpdateSource);
   await skillUpdates.restore();
-  const skillDirs = () => [...skillUpdates.roots, ...config.skills.paths, path.join(config.cwd, ".pi", "skills"), path.join(getAgentDir(), "skills")];
+  const skillDirs = () => [...skillUpdates.roots, ...config.skills.paths, path.join(config.cwd, ".pi", "skills"), path.join(config.cwd, ".agents", "skills"), path.join(getAgentDir(), "skills")];
   const skillCatalog = new SkillCatalog(path.join(config.home, "skills", "index.json"), skillDirs);
+  let skillContextCache: string | undefined; // invalidated whenever skills reload
   const reloadSkills = async () => {
     await protectedContent.verify();
     const snapshot = await skillCatalog.refresh();
     skills = skillCatalog.skills;
+    skillContextCache = undefined;
     for (const diagnostic of snapshot.diagnostics) log(`[skills] ${diagnostic.filePath}: ${diagnostic.message}`);
     return { warnings: snapshot.diagnostics.length };
   };
@@ -188,6 +191,7 @@ async function main(argv: string[]): Promise<void> {
     dispatcher: config.dispatcher,
     gateways: config.gateways,
     memory: config.memory,
+    skills: config.skills,
     contextMaintenance: contextPolicy(config.contextMaintenance),
     toolResultPruning: pruningPolicy(config.toolResultPruning),
     review: { model: config.review?.model, thinking: config.review?.thinking ?? "medium" },
@@ -230,8 +234,12 @@ async function main(argv: string[]): Promise<void> {
     mcp: config.mcp,
     skillPaths: config.skills.paths,
     skillContext: async () => {
-      await reloadSkills();
-      return `Available skills (metadata only; read the named SKILL.md when relevant):\n${JSON.stringify(skills)}\n${reviewEngine.instructions}`;
+      const mode = settings.effective().skills?.context ?? "auto";
+      if (mode !== "auto") return "";
+      // Skill metadata is computed once per session and reused, so the leading prompt
+      // prefix stays byte-stable across turns (prefix-cache friendly) and skill dirs are
+      // not re-scanned every turn; invalidated whenever skills reload.
+      return skillContextCache ??= `Available skills (metadata only; read the named SKILL.md when relevant):\n${JSON.stringify(skills)}\n${reviewEngine.instructions}`;
     },
     toolGuard: async (key, tool, input) => {
       subagents.guardTool(key, tool);
@@ -456,7 +464,7 @@ async function main(argv: string[]): Promise<void> {
     admit: (id: string, request: import("./context-maintenance.js").MaintenanceRequest, version: number) => maintenance.admit(values["--maintenance-session"]!, id, request, version),
     cancel: (id: string, version: number) => maintenance.cancelAdmission(values["--maintenance-session"]!, id, version),
     maintain: () => harness.maintainIdle(values["--maintenance-session"]!),
-  }), path.resolve(values["--maintenance-directory"]))] : []), ...(values["--observe-directory"] ? [sessionObserverPlugin(Object.freeze({ observeSession: (key: string) => harness.observeSession(key) }), path.resolve(values["--observe-directory"]), values["--observe-session"]!)] : []), memoryOrchestrationPlugin(plugins.memoryOrchestration, settings, harness, config.memory.enabled), reportPlugin, dispatcherPlugin(() => dispatcher), subagentPlugin(subagents,async()=>{await persist();}), ...(reloadableTools ? [reloadableToolsPlugin(reloadableTools)] : []), wasmToolsPlugin(config.home, config.wasmTools ?? []), continuationPlugin(harness), loopPlugin(harness), improvementPlugin(improvement!), protectedContentPlugin(protectedContent), gatewayManagerPlugin(gatewayManager, settings), policyManagerPlugin(policyManager, settings), extensionManagerPlugin(extensionManager, settings), gatewayPlugin(settings, harness), contextPlugin(maintenance, settings), ...(config.memory.enabled ? [memoryPlugin(memory)] : []), ...reviewEngine.plugins]);
+  }), path.resolve(values["--maintenance-directory"]))] : []), ...(values["--observe-directory"] ? [sessionObserverPlugin(Object.freeze({ observeSession: (key: string) => harness.observeSession(key) }), path.resolve(values["--observe-directory"]), values["--observe-session"]!)] : []), memoryOrchestrationPlugin(plugins.memoryOrchestration, settings, harness, config.memory.enabled), reportPlugin, dispatcherPlugin(() => dispatcher), subagentPlugin(subagents,async()=>{await persist();}), ...(reloadableTools ? [reloadableToolsPlugin(reloadableTools)] : []), wasmToolsPlugin(config.home, config.wasmTools ?? []), continuationPlugin(harness), loopPlugin(harness), improvementPlugin(improvement!), protectedContentPlugin(protectedContent), gatewayManagerPlugin(gatewayManager, settings), policyManagerPlugin(policyManager, settings), extensionManagerPlugin(extensionManager, settings), gatewayPlugin(settings, harness), contextPlugin(maintenance, settings), ...(config.memory.enabled ? [memoryPlugin(memory)] : []), skillSearchPlugin(skillCatalog), ...reviewEngine.plugins]);
   if (dispatchPolicy.enabled) {
     dispatchRuntime = new DispatcherRuntime(harness, executions);
     harness.addChannel(dispatchRuntime.channel);

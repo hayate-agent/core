@@ -106,7 +106,8 @@ are marked **reported**, not magically promoted to verified facts. Links are IDs
 not an automatic graph traversal or permission bypass.
 
 `/memory status|search <query>|show <id>|forget <id> <revision>|reindex` is admin-only.
-Automatic recall fetches up to three conversation-scoped memories, bounded to
+Automatic recall fetches up to `memory.recallLimit` (default 3, range 1–20, configurable
+via harness.yaml or settings.local.yaml) conversation-scoped memories, bounded to
 5,000 characters and framed as untrusted historical data, never authorization.
 A read does not renew verification or expiry.
 
