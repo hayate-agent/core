@@ -49,6 +49,15 @@ export interface DurableTask {
   wait?: { reason: string; nextAt: number; deadline: number };
 }
 
+/** Content-free owner-process inspection; not an authorization or transcript API. */
+export interface SessionObservation {
+  running: boolean;
+  prompting: boolean;
+  queued: number;
+  paused: boolean;
+  tasks: Record<DurableTask["state"], number>;
+}
+
 export interface SessionState {
   key: string;
   task?: DurableTask;
@@ -141,6 +150,15 @@ export type CommandHandler = (input: Inbound) => Promise<boolean>;
 
 export class Harness {
   readonly sessions = new Map<string, SessionState>();
+
+  /** Does not create/open sessions; caller owns access control and transport scope. */
+  observeSession(key: string): SessionObservation | undefined {
+    const s = this.sessions.get(key);
+    if (!s) return;
+    const tasks: SessionObservation["tasks"] = { active: 0, waiting: 0, blocked: 0, completed: 0, stopped: 0 };
+    for (const task of this.tasks(s)) tasks[task.state]++;
+    return { running: s.running, prompting: !!s.prompting, queued: s.queue.length, paused: this.paused, tasks };
+  }
   readonly channels = new Map<string, Channel>();
   readonly approvals = new Map<string, PendingApproval>();
   paused = false;

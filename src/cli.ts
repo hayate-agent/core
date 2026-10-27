@@ -27,6 +27,7 @@ import { MemoryService } from "./builtin-plugins/memory-service.js";
 import { MemoryProviderLifecycle } from "./memory-provider-lifecycle.js";
 import { memoryPlugin } from "./builtin-plugins/memory-plugin.js";
 import { memoryOrchestrationPlugin } from "./builtin-plugins/memory-orchestration-plugin.js";
+import { sessionObserverPlugin, attachObserver } from "./builtin-plugins/session-observer-plugin.js";
 import { gatewayPlugin } from "./builtin-plugins/gateway-plugin.js";
 import { PluginHost } from "./plugins.js";
 import { Subagents } from "./subagents.js";
@@ -85,6 +86,8 @@ Usage:
   vanillacore-harness                      Interactive Harness TUI in the current directory
   vanillacore-harness run [--home <dir>]   Start the agent loop (console channel on stdin/stdout)
   vanillacore-harness init [--home <dir>] [--cwd <dir>] [--agent <name>] [--model <provider/model>]
+  vanillacore-harness run --observe-directory <private-dir> --observe-session <exact-key> [--home <dir>]
+  vanillacore-harness attach <local-socket-path>  Read-only JSON status; Ctrl+C detaches
   vanillacore-harness doctor [--home <dir>]
   vanillacore-harness version
 
@@ -97,9 +100,18 @@ async function main(argv: string[]): Promise<void> {
   const interactive = launchMode(argv) === "interactive";
   if (interactive && (!process.stdin.isTTY || !process.stdout.isTTY)) throw new Error("Interactive mode requires a terminal; use 'run' for the gateway.");
   const [cmd, ...rest] = interactive ? ["run"] : argv;
+  if (cmd === "attach") {
+    if (rest.length !== 1 || !rest[0]) throw Error("Usage: attach <local-socket-path>");
+    const controller = new AbortController();
+    const abort = () => controller.abort();
+    process.once("SIGINT", abort); process.once("SIGTERM", abort);
+    try { await attachObserver(rest[0], line => console.log(line), controller.signal); }
+    finally { process.off("SIGINT", abort); process.off("SIGTERM", abort); }
+    return;
+  }
   if (cmd === "version" || cmd === "--version") return void console.log(VERSION);
   if (!["run", "init", "doctor"].includes(cmd ?? "")) return void console.log(USAGE);
-  const allowed = cmd === "init" ? ["--home", "--cwd", "--agent", "--model"] : ["--home", ...(cmd === "run" ? ["--console"] : [])];
+  const allowed = cmd === "init" ? ["--home", "--cwd", "--agent", "--model"] : ["--home", ...(cmd === "run" ? ["--console", "--observe-directory", "--observe-session"] : [])];
   const values: Record<string, string> = {};
   for (let i = 0; i < rest.length; i++) {
     const flag = rest[i]!;
@@ -120,6 +132,7 @@ async function main(argv: string[]): Promise<void> {
     if (!result.ok) process.exitCode = 1;
     return;
   }
+  if (!!values["--observe-directory"] !== !!values["--observe-session"]) throw Error("Observer requires both directory and exact session key");
   const config = await loadConfig(values["--home"]);
   if (interactive) config.cwd = process.cwd();
   const protectedContent = new ProtectedContent(config.home, config.protectedContent);
@@ -435,7 +448,7 @@ async function main(argv: string[]): Promise<void> {
       await dispatcher.submitScheduled(key, requestId, task, mandate);
     },
   });
-  await plugins.load(config.plugins ?? [], { agent: config.agent, home: config.home, cwd: config.cwd }, [...builtinCommandNames, "sessions", "resume", ...skills.map((s) => s.name)], ["console", "api", "dispatch", ...Object.keys(bundledGatewayModules()), ...harness.channels.keys()], [memoryOrchestrationPlugin(plugins.memoryOrchestration, settings, harness, config.memory.enabled), reportPlugin, dispatcherPlugin(() => dispatcher), subagentPlugin(subagents,async()=>{await persist();}), ...(reloadableTools ? [reloadableToolsPlugin(reloadableTools)] : []), wasmToolsPlugin(config.home, config.wasmTools ?? []), continuationPlugin(harness), loopPlugin(harness), improvementPlugin(improvement!), protectedContentPlugin(protectedContent), gatewayManagerPlugin(gatewayManager, settings), policyManagerPlugin(policyManager, settings), extensionManagerPlugin(extensionManager, settings), gatewayPlugin(settings, harness), contextPlugin(maintenance, settings), ...(config.memory.enabled ? [memoryPlugin(memory)] : []), ...reviewEngine.plugins]);
+  await plugins.load(config.plugins ?? [], { agent: config.agent, home: config.home, cwd: config.cwd }, [...builtinCommandNames, "sessions", "resume", ...skills.map((s) => s.name)], ["console", "api", "dispatch", ...Object.keys(bundledGatewayModules()), ...harness.channels.keys()], [...(values["--observe-directory"] ? [sessionObserverPlugin(Object.freeze({ observeSession: (key: string) => harness.observeSession(key) }), path.resolve(values["--observe-directory"]), values["--observe-session"]!)] : []), memoryOrchestrationPlugin(plugins.memoryOrchestration, settings, harness, config.memory.enabled), reportPlugin, dispatcherPlugin(() => dispatcher), subagentPlugin(subagents,async()=>{await persist();}), ...(reloadableTools ? [reloadableToolsPlugin(reloadableTools)] : []), wasmToolsPlugin(config.home, config.wasmTools ?? []), continuationPlugin(harness), loopPlugin(harness), improvementPlugin(improvement!), protectedContentPlugin(protectedContent), gatewayManagerPlugin(gatewayManager, settings), policyManagerPlugin(policyManager, settings), extensionManagerPlugin(extensionManager, settings), gatewayPlugin(settings, harness), contextPlugin(maintenance, settings), ...(config.memory.enabled ? [memoryPlugin(memory)] : []), ...reviewEngine.plugins]);
   if (dispatchPolicy.enabled) {
     dispatchRuntime = new DispatcherRuntime(harness, executions);
     harness.addChannel(dispatchRuntime.channel);
