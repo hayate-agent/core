@@ -9,6 +9,7 @@
  * - NO_REPLY output stays silent.
  */
 import { execFile } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -26,6 +27,10 @@ export interface CronJob {
   prompt_file?: string;
   script?: string;
   no_agent?: boolean;
+  /** Explicit audience; omitted preserves legacy delivery behavior. */
+  audience?: "agent" | "user";
+  /** Execution scope for post-report follow-up; absent means analysis only. */
+  follow_up?: { authorization: string; max_tasks: number };
   model?: string | { model: string; provider?: string };
   /** "origin" | "local" | "<channel>:<target>" */
   deliver?: string;
@@ -40,12 +45,18 @@ export function parseJobs(text: string): CronJob[] {
   for (const j of jobs) {
     if (!j || typeof j.name !== "string") throw new Error("cron job without name");
     if (!j.absent && typeof j.schedule !== "string") throw new Error(`cron job "${j.name}" has no schedule`);
+    if (j.audience !== undefined && !["agent", "user"].includes(j.audience)) throw Error("Invalid cron audience");
+    if (j.audience === "agent" && j.no_agent) throw Error("Agent-only cron requires agent processing");
+    if (j.follow_up && (!j.audience || typeof j.follow_up.authorization !== "string" ||
+        !j.follow_up.authorization.trim() || j.follow_up.authorization.length > 4000 ||
+        !Number.isInteger(j.follow_up.max_tasks) || j.follow_up.max_tasks < 1 || j.follow_up.max_tasks > 3)) throw Error("Invalid cron follow_up");
   }
   return jobs.filter((j) => !j.absent);
 }
 
 /** Resolve the delivery address; undefined = local (log only). */
 export function resolveDelivery(job: CronJob, home?: Address): Address | undefined | "home" {
+  if (job.audience === "agent") return undefined;
   const d = job.deliver ?? "origin";
   if (d === "local") return undefined;
   if (d === "origin") {
@@ -158,6 +169,15 @@ export class Scheduler {
     const delivery = resolveDelivery(job, this.harness.home);
     const to = delivery === "home" ? this.harness.home : delivery;
 
+    if (job.audience === "user" && !to) throw Error("User cron requires a delivery destination");
+    const metadata = job.audience ? { job: job.name, runId: randomUUID(), createdAt: Date.now(), audience: job.audience,
+      original: job.prompt ?? job.prompt_file ?? `Run configured script for ${job.name}`,
+      authorization: job.follow_up?.authorization, maxTasks: job.follow_up?.max_tasks ?? 0 } : undefined;
+    if (job.no_agent && metadata) {
+      if (scriptOut && scriptOut !== NO_REPLY) await this.harness.accept({ id: metadata.runId, sessionKey: `cron:${job.name}`,
+        text: metadata.original, source: "cron", replyTo: to, cronReport: { ...metadata, output: scriptOut } });
+      return;
+    }
     if (job.no_agent) {
       if (scriptOut && scriptOut !== NO_REPLY) {
         if (to) await this.harness.deliver(to, scriptOut);
@@ -171,6 +191,9 @@ export class Scheduler {
     if (scriptOut) prompt += `\n\n## Script output\n\n${scriptOut}`;
     if (!prompt.trim()) return;
     prompt += `\n\n(Scheduled job "${job.name}". If there is nothing worth reporting, reply exactly ${NO_REPLY}.)`;
-    this.harness.enqueue({ sessionKey: `cron:${job.name}`, text: prompt, source: "cron", replyTo: to });
+    if (metadata) {
+      metadata.original = prompt;
+      await this.harness.accept({ id: metadata.runId, sessionKey: `cron:${job.name}`, text: prompt, source: "cron", replyTo: to, cronReport: metadata });
+    } else this.harness.enqueue({ sessionKey: `cron:${job.name}`, text: prompt, source: "cron", replyTo: to });
   }
 }
