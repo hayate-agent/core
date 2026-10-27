@@ -30,7 +30,24 @@ and reconcile before retrying an uncertain/disconnected admission.
 {"op":"cancel","id":"maintenance-1","version":1}
 ```
 
-Send each example on a separate connection using a local Unix-socket client.
+Use the dedicated CLI without starting another runtime or acquiring a home lock:
+
+```sh
+vanillacore-harness maintenance /private/path/maintenance.sock status
+vanillacore-harness maintenance /private/path/maintenance.sock admit maintenance-1 0 request.json
+vanillacore-harness maintenance /private/path/maintenance.sock cancel maintenance-1 1
+```
+
+`request.json` contains only `action`, `preserve`, and `resume`. The client reads a
+bounded regular file rather than putting maintenance text in process arguments.
+It validates and projects receipt fields, limits responses to 4096 bytes and waits
+at most ten seconds. Server rejection or malformed responses produce a nonzero
+exit. Ctrl+C aborts waiting, not an already accepted operation. There is no automatic
+mutation retry: after timeout/disconnect, reconcile status and reuse the original
+ID/version only when appropriate. Output `state: accepted` is a persistence receipt,
+not successful execution. The raw JSON protocol remains available to local clients.
+
+Send each protocol example on a separate connection.
 `status` returns the sanitized latest receipt/version. Admission returns only after
 persistence, independently of a running working prompt and its reply outbox. It
 is not proof of execution. See [maintenance-admission.md](maintenance-admission.md)
