@@ -27,6 +27,7 @@ import { MemoryService } from "./builtin-plugins/memory-service.js";
 import { MemoryProviderLifecycle } from "./memory-provider-lifecycle.js";
 import { memoryPlugin } from "./builtin-plugins/memory-plugin.js";
 import { memoryOrchestrationPlugin } from "./builtin-plugins/memory-orchestration-plugin.js";
+import { maintenanceControlPlugin } from "./builtin-plugins/maintenance-control-plugin.js";
 import { sessionObserverPlugin, attachObserver } from "./builtin-plugins/session-observer-plugin.js";
 import { gatewayPlugin } from "./builtin-plugins/gateway-plugin.js";
 import { PluginHost } from "./plugins.js";
@@ -88,6 +89,7 @@ Usage:
   vanillacore-harness run [--home <dir>]   Start the agent loop (console channel on stdin/stdout)
   vanillacore-harness init [--home <dir>] [--cwd <dir>] [--agent <name>] [--model <provider/model>]
   vanillacore-harness run --observe-directory <private-dir> --observe-session <exact-key> [--home <dir>]
+  vanillacore-harness run --maintenance-directory <private-dir> --maintenance-session <exact-key> [--home <dir>]
   vanillacore-harness attach <local-socket-path>  Read-only JSON status; Ctrl+C detaches
   vanillacore-harness doctor [--home <dir>]
   vanillacore-harness version
@@ -112,7 +114,7 @@ async function main(argv: string[]): Promise<void> {
   }
   if (cmd === "version" || cmd === "--version") return void console.log(VERSION);
   if (!["run", "init", "doctor"].includes(cmd ?? "")) return void console.log(USAGE);
-  const allowed = cmd === "init" ? ["--home", "--cwd", "--agent", "--model"] : ["--home", ...(cmd === "run" ? ["--console", "--observe-directory", "--observe-session"] : [])];
+  const allowed = cmd === "init" ? ["--home", "--cwd", "--agent", "--model"] : ["--home", ...(cmd === "run" ? ["--console", "--observe-directory", "--observe-session", "--maintenance-directory", "--maintenance-session"] : [])];
   const values: Record<string, string> = {};
   for (let i = 0; i < rest.length; i++) {
     const flag = rest[i]!;
@@ -134,6 +136,7 @@ async function main(argv: string[]): Promise<void> {
     return;
   }
   if (!!values["--observe-directory"] !== !!values["--observe-session"]) throw Error("Observer requires both directory and exact session key");
+  if (!!values["--maintenance-directory"] !== !!values["--maintenance-session"]) throw Error("Maintenance requires both directory and exact session key");
   const config = await loadConfig(values["--home"]);
   if (interactive) config.cwd = process.cwd();
   const protectedContent = new ProtectedContent(config.home, config.protectedContent);
@@ -456,7 +459,12 @@ async function main(argv: string[]): Promise<void> {
       await dispatcher.submitScheduled(key, requestId, task, mandate);
     },
   });
-  await plugins.load(config.plugins ?? [], { agent: config.agent, home: config.home, cwd: config.cwd }, [...builtinCommandNames, "sessions", "resume", ...skills.map((s) => s.name)], ["console", "api", "dispatch", ...Object.keys(bundledGatewayModules()), ...harness.channels.keys()], [...(values["--observe-directory"] ? [sessionObserverPlugin(Object.freeze({ observeSession: (key: string) => harness.observeSession(key) }), path.resolve(values["--observe-directory"]), values["--observe-session"]!)] : []), memoryOrchestrationPlugin(plugins.memoryOrchestration, settings, harness, config.memory.enabled), reportPlugin, dispatcherPlugin(() => dispatcher), subagentPlugin(subagents,async()=>{await persist();}), ...(reloadableTools ? [reloadableToolsPlugin(reloadableTools)] : []), wasmToolsPlugin(config.home, config.wasmTools ?? []), continuationPlugin(harness), loopPlugin(harness), improvementPlugin(improvement!), protectedContentPlugin(protectedContent), gatewayManagerPlugin(gatewayManager, settings), policyManagerPlugin(policyManager, settings), extensionManagerPlugin(extensionManager, settings), gatewayPlugin(settings, harness), contextPlugin(maintenance, settings), ...(config.memory.enabled ? [memoryPlugin(memory)] : []), skillSearchPlugin(skillCatalog), ...reviewEngine.plugins]);
+  await plugins.load(config.plugins ?? [], { agent: config.agent, home: config.home, cwd: config.cwd }, [...builtinCommandNames, "sessions", "resume", ...skills.map((s) => s.name)], ["console", "api", "dispatch", ...Object.keys(bundledGatewayModules()), ...harness.channels.keys()], [...(values["--maintenance-directory"] ? [maintenanceControlPlugin(Object.freeze({
+    status: () => maintenance.admissionStatus(values["--maintenance-session"]!),
+    admit: (id: string, request: import("./context-maintenance.js").MaintenanceRequest, version: number) => maintenance.admit(values["--maintenance-session"]!, id, request, version),
+    cancel: (id: string, version: number) => maintenance.cancelAdmission(values["--maintenance-session"]!, id, version),
+    maintain: () => harness.maintainIdle(values["--maintenance-session"]!),
+  }), path.resolve(values["--maintenance-directory"]))] : []), ...(values["--observe-directory"] ? [sessionObserverPlugin(Object.freeze({ observeSession: (key: string) => harness.observeSession(key) }), path.resolve(values["--observe-directory"]), values["--observe-session"]!)] : []), memoryOrchestrationPlugin(plugins.memoryOrchestration, settings, harness, config.memory.enabled), reportPlugin, dispatcherPlugin(() => dispatcher), subagentPlugin(subagents,async()=>{await persist();}), ...(reloadableTools ? [reloadableToolsPlugin(reloadableTools)] : []), wasmToolsPlugin(config.home, config.wasmTools ?? []), continuationPlugin(harness), loopPlugin(harness), improvementPlugin(improvement!), protectedContentPlugin(protectedContent), gatewayManagerPlugin(gatewayManager, settings), policyManagerPlugin(policyManager, settings), extensionManagerPlugin(extensionManager, settings), gatewayPlugin(settings, harness), contextPlugin(maintenance, settings), ...(config.memory.enabled ? [memoryPlugin(memory)] : []), skillSearchPlugin(skillCatalog), ...reviewEngine.plugins]);
   if (dispatchPolicy.enabled) {
     dispatchRuntime = new DispatcherRuntime(harness, executions);
     harness.addChannel(dispatchRuntime.channel);
