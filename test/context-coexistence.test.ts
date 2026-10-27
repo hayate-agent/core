@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { ContextMaintenance, contextPolicy } from "../src/context-maintenance.js";
-import { boundaryAssessor } from "../src/context-assessment.js";
+import { boundaryAssessor } from "../src/builtin-plugins/boundary-assessor.js";
 import type { RuntimeSession } from "../src/types.js";
 
 async function fixture(t: { after(fn: () => Promise<void>): void }) {
