@@ -20,10 +20,38 @@ fail startup, never silently fall back. Class methods retain receivers.
 
 These are trusted in-process pure methods, not a sandbox or new authority. They must
 not start receivers/background resources, falsify evidence or bypass the operator's
-scope. Selection requires restart; no runtime writable overlay/hot reload. The
-controller now requires explicit strategy injection when embedded; CLI injects the
-bundled default. The evaluator remains infrastructure-pinned, not replaceable by
+scope. The controller requires explicit strategy injection when embedded; CLI
+injects the bundled default. The evaluator remains infrastructure-pinned, not replaceable by
 this strategy selection. Merge/build is not running activation.
+
+### Between-night local selection
+
+The administrative `/nightly-strategy` plugin supports `status`, `use <module>`,
+`disable`, `baseline` and `reload`. Paths are trusted executable local modules,
+relative to Harness home (command grammar does not support whitespace in paths).
+The controller reserves both its asynchronous tick and the Harness idle boundary;
+queued/running owner work, pending night turns or unreported results reject changes.
+There is no mid-night strategy migration. Validation and durable settings save
+precede publication; failures keep the active generation. Disable prevents new
+night state/reservations, not just prompts. It cannot strand an unfinished report
+because such a change is rejected until the old report is adopted.
+
+`settings.local.yaml` stores `nightlyStrategy`: path selects, null disables, absence
+restores the captured installation baseline. `baseline` restores that startup
+instance; `reload` reloads only an explicitly selected entry module. Transitive
+imports retain Node ESM cache semantics; imported generations remain until exit.
+All five methods are receiver-bound. Imported code is trusted: side effects during
+an unsuccessful import are not rolled back.
+
+New nights persist their local selection path. Startup restores a matching pending
+night without applying the between-night switch restriction. Mismatched or disabled
+selection with unresolved state fails startup without rewriting the old state.
+Legacy state without selection identity permits only the installation baseline;
+restore that selection to finish its report before switching. The identity is NOT
+a code digest: editing module contents or installation config across restart can
+change behavior and requires operator discipline. No immutable-code or exactly-once
+crash guarantee is implied. An adopted night cannot resume if the clock returns to
+its old window. Host calendar, turn budget, authorization and evaluator are unchanged.
 
 Each night must select and try new bounded experiments, not recheck yesterday's
 proposals as its output. Missing independent evaluator configuration prevents

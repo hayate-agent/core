@@ -56,7 +56,8 @@ import { SkillUpdates } from "./skill-updates.js";
 import { skillSearchPlugin } from "./skill-search-plugin.js";
 import { ImprovementController } from "./improvement.js";
 import nightlyDefault from "./builtin-plugins/nightly-default.js";
-import { nightlyStrategy } from "./nightly-strategy.js";
+import { nightlyStrategyHolder } from "./nightly-strategy.js";
+import { nightlyStrategyPlugin } from "./builtin-plugins/nightly-strategy-plugin.js";
 import { PiRuntime } from "./runtime/pi.js";
 import { launchMode } from "./launch.js";
 import { Scheduler } from "./scheduler.js";
@@ -336,8 +337,9 @@ async function main(argv: string[]): Promise<void> {
   const gatewayApprovers = gatewayManager.approvers;
   const admins = config.admins.length ? config.admins : gatewayApprovers;
   const approvers = config.approvers.length ? config.approvers : gatewayApprovers.length ? gatewayApprovers : admins;
-  improvement = new ImprovementController(config.home, harness, config.timezone, Date.now,
-    await nightlyStrategy(config.home, config.nightlyStrategy, nightlyDefault));
+  const nightly = await nightlyStrategyHolder(config.home, config.nightlyStrategy, nightlyDefault);
+  improvement = new ImprovementController(config.home, harness, config.timezone, Date.now, nightly.current!);
+  await improvement.initializeStrategy(nightly, settings.snapshot().nightlyStrategy);
   let nextLedgerCompact = 0;
   let ledgerRecoveryReady = false;
   const gatewayTimer = setInterval(() => {
@@ -476,7 +478,7 @@ async function main(argv: string[]): Promise<void> {
     admit: (id: string, request: import("./context-maintenance.js").MaintenanceRequest, version: number) => maintenance.admit(values["--maintenance-session"]!, id, request, version),
     cancel: (id: string, version: number) => maintenance.cancelAdmission(values["--maintenance-session"]!, id, version),
     maintain: () => harness.maintainIdle(values["--maintenance-session"]!),
-  }), path.resolve(values["--maintenance-directory"]))] : []), ...(values["--observe-directory"] ? [sessionObserverPlugin(Object.freeze({ observeSession: (key: string) => harness.observeSession(key) }), path.resolve(values["--observe-directory"]), values["--observe-session"]!)] : []), memoryOrchestrationPlugin(plugins.memoryOrchestration, settings, harness, config.memory.enabled), completionStrategyPlugin(completion, settings, harness), reportPlugin, dispatcherPlugin(() => dispatcher), subagentPlugin(subagents,async()=>{await persist();}), ...(reloadableTools ? [reloadableToolsPlugin(reloadableTools)] : []), wasmToolsPlugin(config.home, config.wasmTools ?? []), continuationPlugin(harness), loopPlugin(harness), improvementPlugin(improvement!), protectedContentPlugin(protectedContent), gatewayManagerPlugin(gatewayManager, settings), policyManagerPlugin(policyManager, settings), extensionManagerPlugin(extensionManager, settings), gatewayPlugin(settings, harness), contextPlugin(maintenance, settings), ...(config.memory.enabled ? [memoryPlugin(memory)] : []), skillSearchPlugin(skillCatalog), ...reviewEngine.plugins]);
+  }), path.resolve(values["--maintenance-directory"]))] : []), ...(values["--observe-directory"] ? [sessionObserverPlugin(Object.freeze({ observeSession: (key: string) => harness.observeSession(key) }), path.resolve(values["--observe-directory"]), values["--observe-session"]!)] : []), memoryOrchestrationPlugin(plugins.memoryOrchestration, settings, harness, config.memory.enabled), completionStrategyPlugin(completion, settings, harness), nightlyStrategyPlugin(nightly, settings, improvement), reportPlugin, dispatcherPlugin(() => dispatcher), subagentPlugin(subagents,async()=>{await persist();}), ...(reloadableTools ? [reloadableToolsPlugin(reloadableTools)] : []), wasmToolsPlugin(config.home, config.wasmTools ?? []), continuationPlugin(harness), loopPlugin(harness), improvementPlugin(improvement!), protectedContentPlugin(protectedContent), gatewayManagerPlugin(gatewayManager, settings), policyManagerPlugin(policyManager, settings), extensionManagerPlugin(extensionManager, settings), gatewayPlugin(settings, harness), contextPlugin(maintenance, settings), ...(config.memory.enabled ? [memoryPlugin(memory)] : []), skillSearchPlugin(skillCatalog), ...reviewEngine.plugins]);
   if (dispatchPolicy.enabled) {
     dispatchRuntime = new DispatcherRuntime(harness, executions);
     harness.addChannel(dispatchRuntime.channel);
