@@ -9,12 +9,37 @@ checks or task-state persistence move into the wording implementation.
 module exporting default `{apiVersion:1, prompt(input, reply, authorization, now)}`.
 It returns the model prompt string; it cannot change host parsing or deadline
 checks. Model classifications remain advisory. Missing/invalid modules fail startup,
-never silently select another strategy. No sandbox, download, hot replacement or
-background resource lifecycle is provided; prompt methods must be pure. The CLI
+never silently select another strategy. No sandbox, download or background resource
+lifecycle is provided; prompt methods must be pure. The CLI
 injects the bundled default when unconfigured. Other hosts calling assessCompletion
 must inject a prompt strategy; omission disables classification rather than importing
 a concrete default from Core. Existing timeout, numeric grants and chain cap remain.
 Build/merge does not activate a running installation.
+
+## Local prompt strategy lifecycle
+
+The administrative `/completion-strategy` plugin supports `status`, `use <module>`,
+`disable`, `baseline` and `reload`. Module paths are trusted executable code, resolved
+relative to Harness home; this is not a remote code loader or an untrusted plugin
+sandbox. These commands do not modify task grants, deadlines, model selection or
+operator-stop semantics. Disable removes advisory classification only.
+
+The installation selection (configured module or bundled default) is captured at
+startup. `baseline` removes the local override and restores that captured generation;
+it does not reload changed installation code. `use` and `reload` cache-bust the entry
+module, while transitive dependencies retain Node's ESM cache semantics. Node retains
+imported generations until process exit, so this is not an unbounded hot-code service.
+A disabled or baseline selection reloads to itself. Paths containing whitespace are
+not supported by the command grammar.
+
+Local overrides persist as `completionStrategy` in `settings.local.yaml`: a path
+replaces, null disables, absence restores the installation selection on restart.
+Changes reserve the Harness idle boundary, validate before persistence, then publish
+the new generation only after durable save. Busy owners reject and require a later
+explicit retry; invalid modules or failed writes retain the active generation. Each
+assessment captures its prompt function once. A module can still execute arbitrary
+trusted code during import; failed imports are not transactional side-effect rollback.
+No running installation changes until this implementation is deployed.
 
 The optional completion assessor is invoked after successful working turns,
 including turns with explicit continue or timed-wait checkpoints. Existing scheduled

@@ -79,7 +79,8 @@ import { contextStrategies, diagnosedBoundaryAssessor } from "./context-strategi
 import { guardResultOrchestration } from "./result-orchestration.js";
 import { assessCompletion } from "./completion-check.js";
 import { completionPrompt } from "./builtin-plugins/completion-prompt.js";
-import { completionStrategy } from "./completion-strategy.js";
+import { completionStrategyHolder } from "./completion-strategy.js";
+import { completionStrategyPlugin } from "./builtin-plugins/completion-strategy-plugin.js";
 import { reviewConfig } from "./review-config.js";
 import { appendFileDurable } from "./durable.js";
 
@@ -191,7 +192,6 @@ async function main(argv: string[]): Promise<void> {
     protectedExecutions: () => new Set(harness?.pendingInputs().flatMap(input => input.hostEvent ? [input.hostEvent.executionId] : []) ?? []),
   });
   await executions.load();
-  const completion = await completionStrategy(config.home, config.completionStrategy, { apiVersion: 1, prompt: completionPrompt });
   const reviewSettings = reviewConfig(config.review);
   const reviewModule = reviewSettings.enabled ? await loadPolicyEngine(config.home, config.reviewEngine, {
     apiVersion: 1, modelTools: ["plugin_review"], create: context => createReviewEngine({ ...context, config: reviewSettings }),
@@ -207,6 +207,8 @@ async function main(argv: string[]): Promise<void> {
     review: { model: config.review?.model, thinking: config.review?.thinking ?? "medium" },
   }, message => log(`[settings] ${message}`));
   await settings.load();
+  const completion = await completionStrategyHolder(config.home, config.completionStrategy,
+    { apiVersion: 1, prompt: completionPrompt }, settings.snapshot().completionStrategy);
   const dispatchPolicy = dispatcherConfig(settings.effective().dispatcher);
   config.memory = memoryConfig(settings.effective().memory);
   memory = new MemoryService(config.memory, log, config.home);
@@ -310,7 +312,7 @@ async function main(argv: string[]): Promise<void> {
     completionCheck: async (input, reply, signal) => {
       const grant = config.completionCheck?.authorizations[input.sessionKey] ??
         (input.completionAnchor ? { task: input.completionAnchor.task } : undefined);
-      return assessCompletion(runtimeReviewer(runtime), input, reply, grant, signal, effectiveModels().reviewModel, Date.now, completion);
+      return assessCompletion(runtimeReviewer(runtime), input, reply, grant, signal, effectiveModels().reviewModel, Date.now, completion.current);
     },
     afterTurn: async (input, reply, session, options, signal) => {
       const result = await plugins.policies.finish(config.cwd, input, reply, session, options, signal);
@@ -474,7 +476,7 @@ async function main(argv: string[]): Promise<void> {
     admit: (id: string, request: import("./context-maintenance.js").MaintenanceRequest, version: number) => maintenance.admit(values["--maintenance-session"]!, id, request, version),
     cancel: (id: string, version: number) => maintenance.cancelAdmission(values["--maintenance-session"]!, id, version),
     maintain: () => harness.maintainIdle(values["--maintenance-session"]!),
-  }), path.resolve(values["--maintenance-directory"]))] : []), ...(values["--observe-directory"] ? [sessionObserverPlugin(Object.freeze({ observeSession: (key: string) => harness.observeSession(key) }), path.resolve(values["--observe-directory"]), values["--observe-session"]!)] : []), memoryOrchestrationPlugin(plugins.memoryOrchestration, settings, harness, config.memory.enabled), reportPlugin, dispatcherPlugin(() => dispatcher), subagentPlugin(subagents,async()=>{await persist();}), ...(reloadableTools ? [reloadableToolsPlugin(reloadableTools)] : []), wasmToolsPlugin(config.home, config.wasmTools ?? []), continuationPlugin(harness), loopPlugin(harness), improvementPlugin(improvement!), protectedContentPlugin(protectedContent), gatewayManagerPlugin(gatewayManager, settings), policyManagerPlugin(policyManager, settings), extensionManagerPlugin(extensionManager, settings), gatewayPlugin(settings, harness), contextPlugin(maintenance, settings), ...(config.memory.enabled ? [memoryPlugin(memory)] : []), skillSearchPlugin(skillCatalog), ...reviewEngine.plugins]);
+  }), path.resolve(values["--maintenance-directory"]))] : []), ...(values["--observe-directory"] ? [sessionObserverPlugin(Object.freeze({ observeSession: (key: string) => harness.observeSession(key) }), path.resolve(values["--observe-directory"]), values["--observe-session"]!)] : []), memoryOrchestrationPlugin(plugins.memoryOrchestration, settings, harness, config.memory.enabled), completionStrategyPlugin(completion, settings, harness), reportPlugin, dispatcherPlugin(() => dispatcher), subagentPlugin(subagents,async()=>{await persist();}), ...(reloadableTools ? [reloadableToolsPlugin(reloadableTools)] : []), wasmToolsPlugin(config.home, config.wasmTools ?? []), continuationPlugin(harness), loopPlugin(harness), improvementPlugin(improvement!), protectedContentPlugin(protectedContent), gatewayManagerPlugin(gatewayManager, settings), policyManagerPlugin(policyManager, settings), extensionManagerPlugin(extensionManager, settings), gatewayPlugin(settings, harness), contextPlugin(maintenance, settings), ...(config.memory.enabled ? [memoryPlugin(memory)] : []), skillSearchPlugin(skillCatalog), ...reviewEngine.plugins]);
   if (dispatchPolicy.enabled) {
     dispatchRuntime = new DispatcherRuntime(harness, executions);
     harness.addChannel(dispatchRuntime.channel);
