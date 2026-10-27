@@ -40,6 +40,7 @@ import assert from 'node:assert/strict';
 import {PiRuntime} from './src/runtime/pi.ts';
 import {FilesystemSessionProvider} from './src/sessions.ts';
 import {SessionProviderLifecycle} from './src/session-provider-lifecycle.ts';
+import {AgentSession} from '@earendil-works/pi-coding-agent';
 const backend=new FilesystemSessionProvider(process.env.TEST_HOME+'/store');
 let closes=0;
 backend.close=async()=>{closes++;};
@@ -63,6 +64,17 @@ await broken.close();assert.equal(closes,2);
 const failing=new SessionProviderLifecycle({active:backend.active.bind(backend),load:backend.load.bind(backend),create:backend.create.bind(backend),bind:backend.bind.bind(backend),list:backend.list.bind(backend),save:async()=>{throw Error('checkpoint failure');},close:async()=>{closes++;}});
 await assert.rejects(new PiRuntime({...options,sessionProvider:()=>failing}).open('conversation'),/checkpoint failure/);
 await failing.close();assert.equal(closes,3);
+// SDK exists, but binding fails before a PiSession can own its cleanup.
+const bind=AgentSession.prototype.bindExtensions, dispose=AgentSession.prototype.dispose;
+let disposed=0;
+AgentSession.prototype.bindExtensions=async()=>{throw Error('extension bind failure');};
+AgentSession.prototype.dispose=function(){disposed++;dispose.call(this);throw Error('cleanup fixture failure');};
+const bindOwner=new SessionProviderLifecycle(backend);
+try {
+ await assert.rejects(new PiRuntime({...options,sessionProvider:()=>bindOwner}).open('conversation'),/extension bind failure/);
+ assert.equal(disposed,1,'SDK session is disposed once even before wrapper creation');
+ await bindOwner.close();assert.equal(closes,4,'failed binding releases provider ownership');
+} finally {AgentSession.prototype.bindExtensions=bind;AgentSession.prototype.dispose=dispose;}
 console.log('SESSION_OWNER_OK');`;
     const result = await promisify(execFile)(process.execPath, ["--import", "tsx", "--input-type=module", "-e", code], {
       env: { ...process.env, PI_CODING_AGENT_DIR: home, TEST_HOME: home }, timeout: 30000,

@@ -392,6 +392,7 @@ export class PiRuntime implements AgentRuntime {
     if (!options.ephemeral && !provider && await this.opts.legacySessionProvider?.active(sessionKey)) provider = this.opts.legacySessionProvider;
     const lease = provider?.retain?.();
     if (lease) provider = lease.provider;
+    let unownedSession: AgentSession | undefined;
     try {
     let record: SessionRecord | undefined;
     let sessionManager: SessionManager;
@@ -502,6 +503,7 @@ export class PiRuntime implements AgentRuntime {
       tools: options.ephemeral ? [] : this.opts.tools,
       noTools: options.ephemeral || this.opts.tools?.length === 0 ? "all" : undefined,
     });
+    unownedSession = session;
     // Extensions may register providers (e.g. a custom AI gateway), so resolve the
     // configured model only after they are bound.
     await session.bindExtensions({});
@@ -602,6 +604,8 @@ export class PiRuntime implements AgentRuntime {
       sessionManager.appendCustomEntry(selectionType, selection);
       await checkpoint?.();
     });
+    // From here the wrapper owns SDK shutdown and final checkpoint cleanup.
+    unownedSession = undefined;
     try {
       appliedMcpFingerprint = await mcpFingerprint();
       await applySelection();
@@ -616,6 +620,10 @@ export class PiRuntime implements AgentRuntime {
       wrapped.dispose = async () => { try { await dispose(); } finally { lease.release(); } };
     }
     return wrapped;
-    } catch (error) { lease?.release(); throw error; }
+    } catch (error) {
+      try { unownedSession?.dispose(); } catch { /* preserve the opening failure */ }
+      finally { lease?.release(); }
+      throw error;
+    }
   }
 }
