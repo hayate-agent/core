@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "repository": "https://git.vanillacore.net/harness/plugins",
-  "revision": "519b12ffa6850d6f5b17f401c7b39027757b72eb",
+  "revision": "f68009168e097cc77ced92207cd0821e635da442",
   "files": {
     "context-plugin.ts": "1da424038b5f5dd8e88999d86c4b26fecca5d21ca4170b83fdba9958eef787f0",
     "continuation-plugin.ts": "548ca286ce661c03bc5ce948e490fa22378c5e106358693e480596b8f61a5de4",
@@ -16,10 +16,10 @@
     "review-plugin.ts": "026856223984fb18723b587f3e99468321fca4df04c72074b00baee6f8f1d9e7",
     "subagent-plugin.ts": "5b7ae55c28e50c48ce0a3671c400245ee0fd725ce7c5ad6866a8e63f0b65cd5e",
     "wasm-tools-plugin.ts": "438c6ac8899e283e4268f51ef451275bf16a37b584db84ee8302a26200cc70de",
-    "matrix-channel.ts": "326fdcdb158593a135fdc8377008ef8d47f37da4de31da9d15898ba184dda8c2",
+    "matrix-channel.ts": "cb518647a90b7acd19f5047225bba2f5cc92008ab4b0fca9a27a2f87968293e8",
     "matrix-sync.ts": "b86e52e78c3c251743c71b5903b7e64ac45b4b3649ec58e6df985ce28d794003",
     "matrix-gateway.ts": "cab666ab5d2675d9b459102f119598b4444dcbbdecb3a5d16d473a676a131be3",
-    "native-activity.ts": "bf1fb9ab2e51f690a0d1b830d9ccea326067e5b9f6711646db7da353b1e474d2",
+    "native-activity.ts": "45bdca1cf1cb9e4b93e7a64d1b7c7486adb91b5aef1f06b449b02e7e5e7f98e4",
     "gateway-baselines.ts": "7e4422bfef1e74ad4e767d4c88947b88082c45aeccb9b3da2193ccbff9baaa1c",
     "memory-service.ts": "44658bcf489fb676e9bfc03f8f6ba0590cf192cea057052acf77228ab379cfa9",
     "policy-manager-plugin.ts": "ef61d6f32c3fadd75f16bec3732763f15e0fa131a12a7af30240a0599a44ef44"
