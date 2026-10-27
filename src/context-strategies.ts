@@ -4,6 +4,7 @@ import type { AssessmentBackend } from "./assessment-backend.js";
 import type { BoundaryAssessment } from "./context-assessment.js";
 import type { ToolResultProjector } from "./tool-result-pruning.js";
 
+import { PureStrategy, type StrategySelection } from "./pure-strategy.js";
 import { MaintenanceError, maintenanceError } from "./context-maintenance.js";
 
 /** Preserve safe backend failures even when an advisory plugin returns unknown. */
@@ -30,12 +31,36 @@ export interface ContextStrategyModule {
   apiVersion: 1;
   create(context: { backend: AssessmentBackend; model: () => string | undefined }): ContextStrategies | Promise<ContextStrategies>;
 }
-/** Trusted startup-only strategy selection; durable maintenance state stays in host. */
+function bindStrategies(strategies: ContextStrategies): ContextStrategies {
+  if (!strategies || typeof strategies.assess !== "function" || typeof strategies.project !== "function") throw Error("Invalid context strategies");
+  return { assess: strategies.assess.bind(strategies), project: strategies.project.bind(strategies) };
+}
+
+async function prepareStrategies(value: unknown, context: Parameters<ContextStrategyModule["create"]>[0]): Promise<ContextStrategies> {
+  const selected = value as ContextStrategyModule;
+  if (selected?.apiVersion !== 1 || typeof selected.create !== "function") throw Error("Invalid context strategy module");
+  return bindStrategies(await selected.create(context));
+}
+
+/** Disabled advisory behavior: no classification and no result projection. */
+const identityProjector: ToolResultProjector = messages => messages;
+export const disabledContextStrategies: ContextStrategies = Object.freeze({
+  assess: async () => "unknown" as const,
+  project: identityProjector,
+});
+
+export async function contextStrategyHolder(home: string, module: string | undefined, baseline: ContextStrategyModule,
+  context: Parameters<ContextStrategyModule["create"]>[0], overlay: StrategySelection): Promise<PureStrategy<ContextStrategies>> {
+  const initial = await contextStrategies(home, module, baseline, context);
+  const holder = new PureStrategy(home, initial, value => bindStrategies(value as ContextStrategies),
+    value => prepareStrategies(value, context));
+  if (overlay !== undefined) await holder.change(overlay, async () => {});
+  return holder;
+}
+
+/** Trusted strategy selection; durable maintenance state stays in host. */
 export async function contextStrategies(home: string, module: string | undefined, baseline: ContextStrategyModule,
   context: Parameters<ContextStrategyModule["create"]>[0]): Promise<ContextStrategies> {
   const selected = module ? (await import(pathToFileURL(path.resolve(home, module)).href)).default : baseline;
-  if (selected?.apiVersion !== 1 || typeof selected.create !== "function") throw Error("Invalid context strategy module");
-  const strategies = await selected.create(context);
-  if (!strategies || typeof strategies.assess !== "function" || typeof strategies.project !== "function") throw Error("Invalid context strategies");
-  return { assess: strategies.assess.bind(strategies), project: strategies.project.bind(strategies) };
+  return prepareStrategies(selected, context);
 }

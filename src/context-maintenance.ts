@@ -69,6 +69,16 @@ const preserve = "Preserve operator intent and corrections, decisions and reject
 /** Called only at Harness turn boundaries. Model tools request work, never compact themselves. */
 export class ContextMaintenance {
   private readonly queues = new Map<string, Promise<unknown>>();
+  private strategyChanging = false;
+  /** Reserve all serialized maintenance operations, including direct embedded
+   * callers. The composition must additionally reserve its owner's idle boundary
+   * to exclude working turns and request projection. No durable state is migrated.
+   */
+  async atStrategyBoundary(change: () => Promise<void>): Promise<void> {
+    if (this.strategyChanging || this.queues.size) throw Error("Context strategy busy");
+    this.strategyChanging = true;
+    try { await change(); } finally { this.strategyChanging = false; }
+  }
   readonly archives: SessionArchives;
   constructor(private readonly home: string, private readonly policy: () => ContextPolicy, private readonly assess?: BoundaryAssessment) { this.archives = new SessionArchives(home); }
   private async prepareArchive(key: string, session: RuntimeSession, instructions: string): Promise<{ text: string; archiveId: string }> {
@@ -129,6 +139,7 @@ export class ContextMaintenance {
     });
   }
   private serial<T>(file: string, fn: () => Promise<T>): Promise<T> {
+    if (this.strategyChanging) return Promise.reject(Error("Context strategy changing; retry after current change"));
     const next = (this.queues.get(file) ?? Promise.resolve()).catch(() => {}).then(fn);
     this.queues.set(file, next);
     const cleanup = () => { if (this.queues.get(file) === next) this.queues.delete(file); };

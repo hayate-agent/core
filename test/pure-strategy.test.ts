@@ -33,6 +33,26 @@ test("absent baseline stays absent; failed validation or persistence retains act
   await strategy.change(undefined, persist); assert.equal(strategy.current, undefined); assert.equal(saved, undefined);
 });
 
+test("async preparation publishes only after validation and persistence; concurrent changes reject", async t => {
+  const home = await mkdtemp(path.join(os.tmpdir(), "pure-async-"));
+  t.after(() => rm(home, { recursive: true, force: true }));
+  await writeFile(path.join(home, "custom.mjs"), "export default {value:'candidate'}");
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const holder = new PureStrategy(home, "baseline", value => String(value), async value => {
+    await gate; return (value as { value: string }).value;
+  });
+  let saved = false;
+  const change = holder.change("custom.mjs", async () => { assert.equal(holder.current, "baseline"); saved = true; });
+  assert.equal(holder.current, "baseline");
+  await assert.rejects(holder.change(null, async () => {}), /already in progress/);
+  release(); await change;
+  assert.equal(saved, true); assert.equal(holder.current, "candidate");
+  const failing = new PureStrategy(home, "baseline", value => String(value), async () => { throw Error("factory failed"); });
+  await assert.rejects(failing.change("custom.mjs", async () => { throw Error("must not save"); }), /factory failed/);
+  assert.equal(failing.current, "baseline");
+});
+
 test("baseline is captured at construction; restoring it does not reload or mutate its receiver", async () => {
   const baseline = { label: "baseline", prompt() { return this.label; } };
   const strategy = new PureStrategy("/unused", baseline, (value: unknown) => {

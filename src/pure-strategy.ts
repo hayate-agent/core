@@ -16,7 +16,8 @@ export class PureStrategy<T> {
   private selected: StrategySelection;
   private changing = false;
   constructor(private readonly home: string, baseline: unknown | undefined,
-    private readonly validate: (module: unknown) => T) {
+    private readonly validate: (module: unknown) => T,
+    private readonly prepare: (module: unknown) => T | Promise<T> = validate) {
     this.baseline = baseline === undefined ? undefined : validate(baseline);
     this.value = this.baseline;
   }
@@ -36,7 +37,7 @@ export class PureStrategy<T> {
       else {
         const url = pathToFileURL(path.resolve(this.home, selection));
         url.searchParams.set("generation", randomUUID());
-        candidate = this.validate((await import(url.href)).default);
+        candidate = await this.prepare((await import(url.href)).default);
       }
       await persist(selection);
       this.value = candidate;
