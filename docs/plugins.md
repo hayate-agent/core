@@ -342,6 +342,17 @@ claim fencing, effect intents, cancellation and a complete example are described
 in [durable dispatcher](dispatcher.md). Registration does not enable dispatcher
 mode or grant credentials, subagent access or automatic replay permission.
 
+## Shutdown serialization
+
+PluginHost rejects overlapping load calls. stop() closes admission immediately,
+waits for an asynchronous activation to settle, and then runs registered cleanup
+in reverse order once. Concurrent stop callers share the same completion promise
+and cleanup failure. All host registration maps are revoked during disposal; a
+stopped host cannot load more modules. A module must settle activation and honor
+its cleanup contract: no forced termination or timeout for hung in-process code
+is provided. This does not implement individual plugin unload or runtime tool
+replacement; callers must still drain working turns before host shutdown.
+
 ## Deliberate limits
 
 Version 1 exposes commands, channels, model tools, text panels, interactive local
