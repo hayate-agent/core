@@ -40,7 +40,7 @@ export function maintenanceError(stage: MaintenanceStage, err: unknown): Mainten
 export async function maintenanceStep<T>(stage: MaintenanceStage, run: () => T | Promise<T>): Promise<T> {
   try { return await run(); } catch (err) { throw maintenanceError(stage, err); }
 }
-interface Request { action: "compact" | "handover"; preserve: string; resume: string }
+export interface MaintenanceRequest { action: "compact" | "handover"; preserve: string; resume: string }
 export interface ContextRecord {
   version: 1;
   sessionId?: string;
@@ -53,7 +53,9 @@ export interface ContextRecord {
   beforeObservation?: ContextRecord["observation"];
   unknownUsageNotified?: boolean;
   assessmentFailures?: Partial<Record<"before" | "after", number>>;
-  pending?: Request;
+  pending?: MaintenanceRequest;
+  /** Bounded durable admission dedupe, not proof of completed runtime effects. */
+  admission?: { id: string; digest: string; version: number; execution: "pending" | "applied" | "failed" | "superseded" | "cancelled" };
   handover?: { phase: "prepared" | "switched"; from: string; to?: string; text: string; archiveId?: string };
   failure?: { stage: MaintenanceStage; code: MaintenanceCode; phase: "before" | "after"; turn: number; action: "compact" | "handover" };
   assessmentDiagnostic?: { stage: "assessment"; code: MaintenanceCode; phase: "before" | "after"; turn: number };
@@ -111,6 +113,9 @@ export class ContextMaintenance {
     try {
       const state = JSON.parse(await readFile(this.file(key), "utf8"));
       if (state.version !== 1 || !Number.isInteger(state.turns) || !Number.isInteger(state.lastMaintenance)) throw new Error("Invalid context maintenance state");
+      if (state.admission && (!/^[a-zA-Z0-9_-]{1,128}$/.test(state.admission.id) ||
+          !/^[a-f0-9]{64}$/.test(state.admission.digest) || !Number.isSafeInteger(state.admission.version) || state.admission.version < 1 ||
+          !["pending", "applied", "failed", "superseded", "cancelled"].includes(state.admission.execution))) throw Error("Invalid maintenance admission state");
       return state;
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
@@ -132,13 +137,59 @@ export class ContextMaintenance {
   }
   /** Read-only decision diagnostics; serialized with maintenance operations. */
   status(key: string): Promise<ContextRecord> { return this.serial(this.file(key), () => this.load(key)); }
-  request(key: string, request: Request): Promise<void> {
+  /** Idempotent receipt for explicitly identified external admission. No execution is implied. */
+  admit(key: string, id: string, request: MaintenanceRequest, expectedVersion = 0): Promise<{ id: string; version: number; state: "accepted" }> {
+    return this.serial(this.file(key), async () => {
+      if (!/^[a-zA-Z0-9_-]{1,128}$/.test(id)) throw Error("Invalid maintenance request ID");
+      if (!["compact", "handover"].includes(request.action) || typeof request.preserve !== "string" || typeof request.resume !== "string" || request.preserve.length + request.resume.length > 16000) throw Error("Invalid context maintenance request");
+      if (!Number.isSafeInteger(expectedVersion) || expectedVersion < 0 || expectedVersion >= Number.MAX_SAFE_INTEGER) throw Error("Invalid maintenance version");
+      const digest = createHash("sha256").update(JSON.stringify([expectedVersion, request.action, request.preserve, request.resume])).digest("hex");
+      const state = await this.load(key);
+      if (state.admission?.id === id) {
+        if (state.admission.digest !== digest) throw Error("Maintenance request ID conflict");
+        return { id, version: state.admission.version, state: "accepted" };
+      }
+      if ((state.admission?.version ?? 0) !== expectedVersion) throw Error("Maintenance version conflict");
+      if (state.pending || state.handover?.phase === "prepared") throw Error("Maintenance already pending");
+      const version = expectedVersion + 1;
+      state.pending = structuredClone(request);
+      state.admission = { id, digest, version, execution: "pending" };
+      state.failure = undefined;
+      await this.save(key, state);
+      return { id, version, state: "accepted" };
+    });
+  }
+  request(key: string, request: MaintenanceRequest): Promise<void> {
     return this.serial(this.file(key), async () => {
       if (!["compact", "handover"].includes(request.action) || typeof request.preserve !== "string" || typeof request.resume !== "string" || request.preserve.length + request.resume.length > 16000) throw new Error("Invalid context maintenance request");
       const state = await this.load(key);
-      state.pending = request;
+      if (state.admission && state.pending) throw Error("Identified maintenance already pending");
+      state.pending = structuredClone(request);
       state.failure = undefined; // Fresh explicit requests bypass failed-attempt cooldown.
       await this.save(key, state);
+    });
+  }
+  private finishAdmission(state: ContextRecord, execution: NonNullable<ContextRecord["admission"]>["execution"]): void {
+    if (state.admission && ["pending", "failed"].includes(state.admission.execution)) state.admission.execution = execution;
+  }
+  /** Retract intent only before a prepared handover exists; never undo runtime effects. */
+  cancelAdmission(key: string, id: string, version: number): Promise<void> {
+    return this.serial(this.file(key), async () => {
+      const state = await this.load(key);
+      if (!state.admission || state.admission.id !== id || state.admission.version !== version) throw Error("Maintenance version conflict");
+      if (state.admission.execution === "cancelled") return;
+      if (state.admission.execution !== "pending" || !state.pending || state.handover?.phase === "prepared") throw Error("Maintenance cannot be cancelled at this stage");
+      state.pending = undefined;
+      state.failure = undefined;
+      state.admission.execution = "cancelled";
+      await this.save(key, state);
+    });
+  }
+  /** Sanitized latest receipt; no preservation text or raw failure data. */
+  admissionStatus(key: string): Promise<{ version: number; id?: string; execution?: NonNullable<ContextRecord["admission"]>["execution"] }> {
+    return this.serial(this.file(key), async () => {
+      const state = await this.load(key);
+      return state.admission ? { version: state.admission.version, id: state.admission.id, execution: state.admission.execution } : { version: 0 };
     });
   }
   /** A lightweight reminder, not an additional model call. Unknown usage never triggers automatic compaction. */
@@ -153,6 +204,7 @@ export class ContextMaintenance {
           state.handover.to = id;
           if (state.handover.archiveId) await maintenanceStep("archive-link", () => this.archives.link(key, state.handover!.archiveId!, id));
           state.handover.phase = "switched";
+          this.finishAdmission(state, "applied");
           state.pending = undefined;
           state.failure = undefined;
           state.lastError = undefined;
@@ -166,13 +218,18 @@ export class ContextMaintenance {
           await this.save(key, state);
         } catch (err) {
           const error = maintenanceError("seed", err);
+          this.finishAdmission(state, "failed");
           state.failure = { stage: error.stage, code: error.code, phase: "before", turn: state.turns, action: "handover" };
           state.lastError = error.message;
           await this.save(key, state);
           throw error;
         }
       } else if (state.sessionId !== id && state.handover?.phase !== "prepared") {
-        state.pending = undefined;
+        // First owner binding is not a replacement; preserve explicitly admitted intent.
+        if (state.sessionId !== undefined || !state.admission || state.admission.execution !== "pending") {
+          this.finishAdmission(state, "superseded");
+          state.pending = undefined;
+        }
         state.handover = undefined;
         state.pressureSinceCompaction = false;
         state.lastCompact = undefined;
@@ -226,6 +283,7 @@ export class ContextMaintenance {
         if (state.handover.archiveId) await maintenanceStep("archive-link", () => this.archives.link(key, state.handover!.archiveId!, state.handover!.to!));
         state.handover.phase = "switched";
         state.sessionId = state.handover.to;
+        this.finishAdmission(state, "applied");
         state.pending = undefined;
         state.failure = undefined;
         state.lastError = undefined;
@@ -238,6 +296,7 @@ export class ContextMaintenance {
         return state.noticeTarget ? undefined : notice;
         } catch (err) {
           const error = maintenanceError("summary", err);
+          this.finishAdmission(state, "failed");
           state.failure = { stage: error.stage, code: error.code, phase, turn: state.turns, action: "handover" };
           state.lastError = error.message;
           await this.save(key, state);
@@ -246,6 +305,7 @@ export class ContextMaintenance {
       }
       if (state.handover?.phase === "prepared") return;
       if (state.sessionId && state.sessionId !== id) {
+        this.finishAdmission(state, "superseded");
         state.pending = undefined;
         state.pressureSinceCompaction = false;
         state.lastCompact = undefined;
@@ -324,9 +384,11 @@ export class ContextMaintenance {
         }
         state.lastError = undefined;
         state.failure = undefined;
+        this.finishAdmission(state, "applied");
         state.pending = undefined;
       } catch (err) {
         const error = maintenanceError(phase === "before" ? "summary" : "compact", err);
+        this.finishAdmission(state, "failed");
         state.failure = { stage: error.stage, code: error.code, phase, turn: state.turns, action: phase === "before" ? "handover" : "compact" };
         state.lastError = error.message;
         notice = "⚠️ Kontextwartung nicht vollständig abgeschlossen; kein bestätigter Abschluss. Wiederherstellungsstand bleibt erhalten.";
