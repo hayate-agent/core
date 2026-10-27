@@ -143,8 +143,20 @@ export class PluginHost {
   readonly dispatchers = new Map<string, DispatcherStrategy>();
   private cleanups: Array<() => Promise<void> | void> = [];
   private closed = false;
+  private closing = false;
+  private loading?: Promise<void>;
+  private stopping?: Promise<void>;
 
-  async load(files: string[], context: Pick<PluginAPI, "agent" | "home" | "cwd">, reserved: Iterable<string>, reservedChannels: Iterable<string> = ["console", "api", "matrix"], bundled: PluginModule[] = []): Promise<void> {
+  load(files: string[], context: Pick<PluginAPI, "agent" | "home" | "cwd">, reserved: Iterable<string>, reservedChannels: Iterable<string> = ["console", "api", "matrix"], bundled: PluginModule[] = []): Promise<void> {
+    if (this.closed || this.closing) return Promise.reject(new Error("Plugin host is closed"));
+    if (this.loading) return Promise.reject(new Error("Plugin activation already in progress"));
+    const loading = this.activate(files, context, reserved, reservedChannels, bundled);
+    this.loading = loading;
+    void loading.finally(() => { if (this.loading === loading) this.loading = undefined; }).catch(() => {});
+    return loading;
+  }
+
+  private async activate(files: string[], context: Pick<PluginAPI, "agent" | "home" | "cwd">, reserved: Iterable<string>, reservedChannels: Iterable<string> = ["console", "api", "matrix"], bundled: PluginModule[] = []): Promise<void> {
     if (this.closed) throw new Error("Plugin host is closed");
     const names = new Set([...reserved, ...this.commands.keys()]);
     const channelNames = new Set([...reservedChannels, ...this.channels.keys()]);
@@ -234,7 +246,7 @@ export class PluginHost {
       }
       this.policies.assertReady();
     } catch (err) {
-      await this.stop().catch(() => {});
+      await this.dispose().catch(() => {});
       this.commands.clear();
       this.channels.clear();
       this.tools.clear();
@@ -247,11 +259,31 @@ export class PluginHost {
     }
   }
 
-  async stop(): Promise<void> {
+  stop(): Promise<void> {
+    if (this.stopping) return this.stopping;
+    this.closing = true;
+    this.stopping = (async () => {
+      // An async activation owns its resources until it settles. Never acknowledge
+      // shutdown while it can still register new resources after cleanup.
+      await this.loading?.catch(() => {});
+      await this.dispose();
+    })();
+    return this.stopping;
+  }
+
+  private async dispose(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
     this.policies.clear();
     this.memoryOrchestration.clear();
+    this.commands.clear();
+    this.channels.clear();
+    this.tools.clear();
+    this.memoryProviders.clear();
+    this.sessionProviders.clear();
+    this.compactions.clear();
+    this.panels.clear();
+    this.dispatchers.clear();
     const errors: unknown[] = [];
     for (const cleanup of this.cleanups.splice(0).reverse()) {
       try { await cleanup(); } catch (err) { errors.push(err); }
