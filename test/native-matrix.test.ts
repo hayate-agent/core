@@ -9,12 +9,12 @@ import type { ActivityEvent } from "../src/activity.js";
 import { Harness } from "../src/harness.js";
 import { FakeRuntime, msg } from "./fakes.js";
 
-async function fixture() {
+async function fixture(progress: "off" | "tools" = "off") {
   const home = await mkdtemp(path.join(os.tmpdir(), "native-matrix-"));
   const calls: Array<{ url: string; body: any }> = [];
   const ids = new Map<string, string>();
   const options = {
-    homeserver: "https://matrix.test", accessToken: "secret", nativeActivity: true,
+    homeserver: "https://matrix.test", accessToken: "secret", nativeActivity: true, progress,
     allowedUsers: [], allowedRooms: [], freeRooms: [], optionalReplyRooms: [], approvers: [],
     allowAllUsers: false, requireMention: true, autoThread: true, dmAutoThread: false,
     processNotices: false, batchDelayMs: 0, syncStateFile: path.join(home, "sync.json"),
@@ -28,7 +28,7 @@ async function fixture() {
 }
 const to = { channel: "matrix", target: "!operator:test", thread: "$thread" };
 
-test("actual Matrix sends one seed per PI call, edits concurrent running/failure/cancel, restart dedup", async () => {
+test("actual Matrix uses one turn reference for concurrent tool calls, host status and cancellation",  async () => {
   const f = await fixture(); const channel = f.create();
   let last!: ActivityEvent;
   const activity = new TurnActivity({ id: "input", role: "worker", context: "worker" }, event => { last = event; channel.taskActivity(to, event); });
@@ -39,21 +39,30 @@ test("actual Matrix sends one seed per PI call, edits concurrent running/failure
   activity.event({ type: "tool", phase: "end", name: "bash", callId: "PI-A", error: true, detail: "PRIVATE_RESULT" });
   await channel.flushNativeActivity();
   activity.finish("cancelled"); await channel.flushNativeActivity();
-  const seeds = f.calls.filter(c => !c.url.endsWith(".edit") && c.body.body.startsWith("Werkzeug"));
-  assert.equal(new Set(seeds.map(c => c.url)).size, 2);
-  assert.ok([...new Map(seeds.map(c => [c.url, c])).values()].length === 2);
-  assert.ok(seeds.filter((c, i) => seeds.findIndex(x => x.url === c.url) === i).every(c => c.body.body.endsWith("started")));
-  const edits = f.calls.filter(c => c.body["m.new_content"]?.body.startsWith("Werkzeug"));
-  assert.ok(edits.some(c => c.body["m.new_content"].body.endsWith("running")));
+  const seeds = f.calls.filter(c => !c.body["m.new_content"]);
+  assert.equal(new Set(seeds.map(c => c.url)).size, 1, "all states retry the same seed transaction");
+  const edits = f.calls.filter(c => c.body["m.new_content"]);
+  assert.ok(edits.some(c => c.body["m.new_content"].body.endsWith("started")));
   assert.ok(edits.some(c => c.body["m.new_content"].body.endsWith("failed")));
-  assert.ok(edits.some(c => c.body["m.new_content"].body.endsWith("cancelled")));
-  assert.equal(new Set(edits.map(c => c.body["m.relates_to"].event_id)).size, 2);
+  assert.ok(edits.some(c => c.body["m.new_content"].body.includes("cancelled")));
+  assert.equal(new Set(edits.map(c => c.body["m.relates_to"].event_id)).size, 1, "not one message per tool call");
   assert.ok(seeds.every(c => c.body["m.relates_to"].event_id === "$thread"));
   assert.ok(!JSON.stringify(f.calls).includes("PRIVATE"));
   assert.ok(!JSON.stringify(f.calls).includes("PI-A"));
   const before = f.calls.length;
   const restarted = f.create(); restarted.taskActivity(to, last);
   await restarted.flushNativeActivity(); assert.equal(f.calls.length, before);
+});
+
+test("native activity suppresses legacy progress notices when both are configured", async () => {
+  const f = await fixture("tools"); const ch = f.create();
+  const input = { ...msg("test"), id: "$input", replyTo: to };
+  await ch.turnStatus(to, input, "started");
+  ch.turnEvent(to, { type: "tool", phase: "start", name: "bash", callId: "call" }, input);
+  ch.turnEvent(to, { type: "tool", phase: "end", name: "bash", callId: "call" }, input);
+  await ch.turnStatus(to, input, "completed");
+  await ch.stop(1000);
+  assert.equal(f.calls.length, 0, "legacy tool progress must not send separate chat lines");
 });
 
 test("Matrix restart closes a persisted in-flight tool with the original event reference", async () => {
@@ -94,6 +103,6 @@ for (const key of ["main", "dispatch:task:claim"]) test(`Harness blocked ${key} 
   release(); await harness.waitForSessionIdle(key); await ch.flushNativeActivity();
   assert.ok(f.calls.some(c => c.body["m.new_content"]?.body.includes("completed")));
   // FakeRuntime echoes the prompt as its normal final reply; inspect native notices only.
-  const notices = f.calls.filter(c => c.body.body?.startsWith("Main:") || c.body.body?.startsWith("Worker:") || c.body["m.new_content"]?.body?.startsWith("Main:") || c.body["m.new_content"]?.body?.startsWith("Worker:"));
+  const notices = f.calls.filter(c => c.body.body?.startsWith("Main ·") || c.body.body?.startsWith("Worker ·") || c.body["m.new_content"]?.body?.startsWith("Main ·") || c.body["m.new_content"]?.body?.startsWith("Worker ·"));
   assert.ok(!JSON.stringify(notices).includes("PRIVATE_OPERATOR"));
 });
