@@ -33,6 +33,8 @@ export interface HarnessConfig {
   timezone: string;
   model?: string;
   thinking?: string;
+  /** Trusted local startup engine module; selects policy and tools together. */
+  reviewEngine?: string;
   review?: Partial<Omit<ReviewConfig, "mandatory" | "scope">> & { mandatory?: Partial<ReviewConfig["mandatory"]>; scope?: Partial<ReviewConfig["scope"]> };
   /** Literal tool names exposed to the model; omitted = runtime defaults, [] = no tools. */
   tools?: string[];
@@ -114,6 +116,7 @@ export function defaultConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
     throw new Error("loop.tickMs must be an integer between 1 and 2147483647 milliseconds");
   }
   reviewConfig(overrides.review); // validate before startup
+  if (overrides.reviewEngine !== undefined && (typeof overrides.reviewEngine !== "string" || !overrides.reviewEngine.trim() || overrides.reviewEngine.length > 2000)) throw Error("Invalid reviewEngine");
   contextPolicy(overrides.contextMaintenance);
   pruningPolicy(overrides.toolResultPruning);
   validateGatewayConfig(overrides.gateways);
@@ -134,6 +137,7 @@ export function defaultConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
     model: overrides.model,
     thinking: overrides.thinking,
     review: reviewConfig(overrides.review),
+    reviewEngine: overrides.reviewEngine,
     plugins: overrides.plugins ?? [],
     reloadableToolPlugins: overrides.reloadableToolPlugins ?? [],
     autoReloadToolPlugins: overrides.autoReloadToolPlugins ?? false,

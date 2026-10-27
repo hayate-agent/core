@@ -1,4 +1,24 @@
-# Built-in changeset review
+# Bundled or selected changeset review
+
+`reviewEngine: plugins/my-engine.mjs` selects a trusted local startup engine instead
+of the bundled implementation. Paths resolve against Harness home. The module
+exports default `{apiVersion:1, modelTools:['plugin_custom_review'], create(context)}`.
+The context supplies home/cwd, compatibility review config, a tool-free assessment
+backend, notification and origin callbacks. Return `{policies, plugins, required,
+instructions}`; policies and command/tool plugin modules are selected together.
+Required identities must be supplied by the selected policies. `modelTools` names
+are included under an explicit nonempty tool selection; `tools: []` stays empty.
+`review.enabled: false` disables selection entirely, including local import.
+Invalid/missing engines fail startup, never silently fall back to a different gate.
+
+This is trusted in-process code, not a sandbox. `create` must prepare only; register
+resource cleanup through returned plugin lifecycle hooks. Selection is startup-only,
+not an atomic hot-replacement of live tools and policy state. Existing policy-only
+runtime overrides remain narrower and do not replace the selected tool service.
+Custom implementations own compatibility with existing review ledgers; selection
+does not migrate, erase or grant permission to reset them. The bundled default
+continues using the unchanged ledger and budgets. Review configuration/model
+compatibility still lives in the host; this is not universal settings extraction.
 
 The review plugin ships with the Harness and is enabled by default. No local ESM
 module or PI extension installation is required. The source plugin repository owns
