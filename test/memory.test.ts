@@ -228,3 +228,15 @@ test("memoryConfig validates recallLimit range and default", () => {
   assert.throws(() => memoryConfig({ recallLimit: 21 }), /Invalid memory\.recallLimit/);
   assert.throws(() => memoryConfig({ recallLimit: 2.5 }), /Invalid memory\.recallLimit/);
 });
+
+test("recall honors recallLimit instead of hardcoded three", async (t) => {
+  const { store } = await setup(t);
+  const service = new MemoryService(memoryConfig({ enabled: true, recallLimit: 1 }), () => {}); service.provider = store;
+  await service.capture({ sessionKey: ctx.sessionKey, id: "turn1", text: "Diagnose deployment", reply: "artifact mismatch", outcome: "failed" });
+  await service.capture({ sessionKey: ctx.sessionKey, id: "turn2", text: "Second lesson", reply: "second", outcome: "completed", tools: ["x"] });
+  await service.capture({ sessionKey: ctx.sessionKey, id: "turn3", text: "Third lesson", reply: "third", outcome: "completed", tools: ["x"] });
+  const recalled = await service.recall(ctx.sessionKey, "lesson");
+  const hits = (recalled.match(/"id":"/g) || []).length;
+  assert.equal(hits, 1);
+  assert.ok(!recalled.includes("Third lesson"));
+});
