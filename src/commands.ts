@@ -379,7 +379,7 @@ export const COMMANDS: Command[] = [
       if (global !== undefined) return globalSetting("thinking", global, input, ctx);
       const session = await ctx.harness.sessionFor(input.sessionKey);
       if (!args.trim()) return `reasoning: ${session.status().thinking ?? "default"}`;
-      session.setThinking(args.trim());
+      await session.setThinking(args.trim());
       return `reasoning: ${args.trim()}`;
     },
   },

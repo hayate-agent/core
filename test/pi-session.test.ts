@@ -119,15 +119,15 @@ test("PiSession: authorization is rechecked after runtime preparation", async ()
   assert.deepEqual(agent.prompts, []);
 });
 
-test("PiSession: explicit session selections acknowledge defaults, per-turn overrides do not", async () => {
+test("PiSession: explicit session selections record provenance, per-turn overrides do not", async () => {
   const agent = fakeAgentSession();
   let selections = 0;
   const session = new PiSession(agent as any, models as any, {}, undefined, undefined, undefined, undefined, () => { selections++; });
   await session.setModel("p/a");
-  session.setThinking("medium");
+  await session.setThinking("medium");
   assert.equal(selections, 2);
   await session.prompt("override", { model: "p/b", thinking: "low" });
-  assert.equal(selections, 2, "temporary API overrides must not acknowledge global revisions");
+  assert.equal(selections, 2, "temporary API overrides must not record local intent");
 });
 
 test("PiSession: abort during override setup prevents the prompt from starting", async () => {

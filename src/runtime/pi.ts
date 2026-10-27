@@ -154,7 +154,7 @@ export class PiSession implements RuntimeSession {
     private readonly record?: SessionRecord,
     private readonly compaction: CompactionStrategy = nativeCompaction,
     private readonly beforePrompt?: () => Promise<void>,
-    private readonly onSessionSelection?: () => void,
+    private readonly onSessionSelection?: (selection: { model?: string; thinking?: string }) => void | Promise<void>,
     private readonly reasoningEffortNoneModels: () => readonly string[] = () =>
       (process.env.HARNESS_REASONING_EFFORT_NONE_MODELS ?? "").split(",").map(value => value.trim()).filter(Boolean),
   ) {}
@@ -189,7 +189,7 @@ export class PiSession implements RuntimeSession {
       // Validate and apply every override before anything runs, then restore them afterwards
       // (the session's own model/thinking stay what /model and /reasoning set).
       if (model) await this.setModel(model);
-      if (thinking) this.setThinking(thinking);
+      if (thinking) await this.setThinking(thinking);
       // Explicit off must reach OpenAI-compatible local servers as a wire
       // parameter, not just the SDK's internal thinking-level selection.
       if (thinking === "off" && this.session.model?.api === "openai-completions" &&
@@ -199,7 +199,7 @@ export class PiSession implements RuntimeSession {
           samplingParamsByThinkingLevel: { ...selected.samplingParamsByThinkingLevel,
             off: { ...selected.samplingParamsByThinkingLevel?.off, reasoning_effort: "none" } },
         });
-        this.setThinking("off");
+        await this.setThinking("off");
       }
       this.slot.instructions = instructions?.trim() || undefined;
       // Aborted while setting up: nothing has run yet, so nothing runs.
@@ -207,7 +207,6 @@ export class PiSession implements RuntimeSession {
       options.beforeExecution?.();
       await this.session.prompt(text, { source: "rpc" });
       await this.session.waitForIdle();
-      await this.checkpoint?.();
     } finally {
       if (this.turn === turn) this.turn = undefined;
       this.slot.instructions = undefined;
@@ -223,6 +222,7 @@ export class PiSession implements RuntimeSession {
       if (!this.restore && (model || thinking) && prevThinking && this.session.thinkingLevel !== prevThinking) {
         this.session.setThinkingLevel(prevThinking);
       }
+      await this.checkpoint?.();
     }
     const last = this.session.messages.findLast((m) => m.role === "assistant");
     if (last?.role === "assistant" && last.stopReason === "error") {
@@ -281,13 +281,13 @@ export class PiSession implements RuntimeSession {
     if (!model) throw new Error(`unknown model: ${ref}`);
     await this.session.setModel(model);
     this.restore = undefined;
-    if (!this.turn) this.onSessionSelection?.();
+    if (!this.turn) await this.onSessionSelection?.({ model: ref });
   }
 
-  setThinking(level: string): void {
+  async setThinking(level: string): Promise<void> {
     if (!(THINKING as readonly string[]).includes(level)) throw new Error(`thinking must be one of ${THINKING.join(", ")}`);
     this.session.setThinkingLevel(level as Thinking);
-    if (!this.turn) this.onSessionSelection?.();
+    if (!this.turn) await this.onSessionSelection?.({ thinking: level });
   }
 
   async setTitle(title: string): Promise<void> {
@@ -523,7 +523,33 @@ export class PiRuntime implements AgentRuntime {
       return task;
     } : undefined;
     // External providers checkpoint at explicit durability barriers, never by replacing SDK internals.
-    let appliedDefaults = this.opts.modelDefaults?.();
+    // SDK model/thinking entries also record inherited defaults and temporary
+    // overrides. Only Harness selection entries establish explicit local intent.
+    const selectionType = "harness-session-selection-v1";
+    let selection: { model?: string; thinking?: string } = {};
+    for (const entry of sessionManager.getBranch()) {
+      if (entry.type !== "custom" || entry.customType !== selectionType) continue;
+      const data = entry.data as { model?: unknown; thinking?: unknown } | undefined;
+      selection = {
+        ...(typeof data?.model === "string" ? { model: data.model } : {}),
+        ...(typeof data?.thinking === "string" ? { thinking: data.thinking } : {}),
+      };
+    }
+    const applySelection = async () => {
+      const defaults = this.opts.modelDefaults?.();
+      const model = selection.model ?? defaults?.model ?? this.opts.model;
+      const thinking = selection.thinking ?? defaults?.thinking ?? this.opts.thinking;
+      if (model && `${session.model?.provider}/${session.model?.id}` !== model) {
+        const ref = parseModelRef(model);
+        const resolved = models.getModel(ref.provider, ref.id);
+        if (!resolved) throw new Error(`unknown model: ${model}`);
+        await session.setModel(resolved);
+      }
+      if (thinking) {
+        if (!(THINKING as readonly string[]).includes(thinking)) throw new Error(`thinking must be one of ${THINKING.join(", ")}`);
+        session.setThinkingLevel(thinking as Thinking);
+      }
+    };
     let appliedResourceRevision = this.resourceRevision;
     // Observe only MCP configuration, not arbitrary extension directory changes.
     // SDK project trust still decides whether project server definitions can load.
@@ -566,21 +592,17 @@ export class PiRuntime implements AgentRuntime {
         appliedToolFingerprint = boundToolFingerprint;
         if (toolCatalogFingerprint() !== appliedToolFingerprint) throw Error("Tool catalog changed during session reload; retry prompt");
       }
-      const defaults = this.opts.modelDefaults?.();
-      if (!options.ephemeral && defaults && defaults.revision !== appliedDefaults?.revision) {
-        if (defaults.model) await wrapped.setModel(defaults.model);
-        if (defaults.thinking) wrapped.setThinking(defaults.thinking);
-        appliedDefaults = defaults;
-      }
+      if (!options.ephemeral) await applySelection();
       if (!options.ephemeral && this.opts.skillContext) skillContext = await this.opts.skillContext();
-    }, () => { appliedDefaults = this.opts.modelDefaults?.(); });
+    }, async (update) => {
+      selection = { ...selection, ...update };
+      sessionManager.appendCustomEntry(selectionType, selection);
+      await checkpoint?.();
+    });
     try {
       appliedMcpFingerprint = await mcpFingerprint();
+      await applySelection();
       if (checkpoint) await checkpoint();
-      const defaultModel = appliedDefaults?.model ?? this.opts.model;
-      const defaultThinking = appliedDefaults?.thinking ?? this.opts.thinking;
-      if (defaultModel && wrapped.status().model !== defaultModel) await wrapped.setModel(defaultModel);
-      if (defaultThinking) wrapped.setThinking(defaultThinking);
       if (provider && record) await provider.bind(sessionKey, record.id);
     } catch (err) {
       await wrapped.dispose().catch(() => {});
