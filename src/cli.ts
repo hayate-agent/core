@@ -18,7 +18,8 @@ import { ExtensionManager } from "./extension-manager.js";
 import { extensionManagerPlugin } from "./builtin-plugins/extension-manager-plugin.js";
 import { RunRegistry } from "./api/runs.js";
 import { API_CHANNEL, ApiChannel } from "./api/server.js";
-import { nativeCompaction, type CompactionStrategy } from "./compaction.js";
+import { CompactionSelection, type CompactionStrategy } from "./compaction.js";
+import { compactionStrategyPlugin } from "./builtin-plugins/compaction-strategy-plugin.js";
 import { FilesystemSessionProvider, type SessionProvider } from "./sessions.js";
 import { SessionProviderLifecycle } from "./session-provider-lifecycle.js";
 import { memoryConfig } from "./memory.js";
@@ -185,7 +186,12 @@ async function main(argv: string[]): Promise<void> {
     }) : undefined;
   let memory!: MemoryService;
   let sessionProvider: SessionProvider | undefined;
-  let compaction = nativeCompaction as CompactionStrategy;
+  let compaction: CompactionSelection | undefined;
+  const selectedCompaction = (): CompactionSelection => {
+    if (!compaction) throw Error("Compaction selection not initialized");
+    return compaction;
+  };
+  const compactionAdapter: CompactionStrategy = { compact: context => selectedCompaction().compact(context) };
   let harness!: Harness;
   let dispatchRuntime: DispatcherRuntime | undefined;
   let dispatcher: Dispatcher | undefined;
@@ -244,7 +250,7 @@ async function main(argv: string[]): Promise<void> {
     pluginTools: () => composeToolCatalog(plugins.tools, initialReloadableTools, reloadableTools?.tools ?? new Map()),
     sessionProvider: () => sessionProvider,
     legacySessionProvider: new FilesystemSessionProvider(path.join(config.home, "session-store")),
-    compaction: () => compaction,
+    compaction: () => compactionAdapter,
     mcp: config.mcp,
     skillPaths: config.skills.paths,
     skillContext: async () => {
@@ -479,7 +485,7 @@ async function main(argv: string[]): Promise<void> {
     admit: (id: string, request: import("./context-maintenance.js").MaintenanceRequest, version: number) => maintenance.admit(values["--maintenance-session"]!, id, request, version),
     cancel: (id: string, version: number) => maintenance.cancelAdmission(values["--maintenance-session"]!, id, version),
     maintain: () => harness.maintainIdle(values["--maintenance-session"]!),
-  }), path.resolve(values["--maintenance-directory"]))] : []), ...(values["--observe-directory"] ? [sessionObserverPlugin(Object.freeze({ observeSession: (key: string) => harness.observeSession(key) }), path.resolve(values["--observe-directory"]), values["--observe-session"]!)] : []), memoryOrchestrationPlugin(plugins.memoryOrchestration, settings, harness, config.memory.enabled), completionStrategyPlugin(completion, settings, harness), contextStrategyPlugin(strategies, settings, harness, maintenance), nightlyStrategyPlugin(nightly, settings, improvement), reportPlugin, dispatcherPlugin(() => dispatcher), subagentPlugin(subagents,async()=>{await persist();}), ...(reloadableTools ? [reloadableToolsPlugin(reloadableTools)] : []), wasmToolsPlugin(config.home, config.wasmTools ?? []), continuationPlugin(harness), loopPlugin(harness), improvementPlugin(improvement!), protectedContentPlugin(protectedContent), gatewayManagerPlugin(gatewayManager, settings), policyManagerPlugin(policyManager, settings), extensionManagerPlugin(extensionManager, settings), gatewayPlugin(settings, harness), contextPlugin(maintenance, settings), ...(config.memory.enabled ? [memoryPlugin(memory)] : []), skillSearchPlugin(skillCatalog), ...reviewEngine.plugins]);
+  }), path.resolve(values["--maintenance-directory"]))] : []), ...(values["--observe-directory"] ? [sessionObserverPlugin(Object.freeze({ observeSession: (key: string) => harness.observeSession(key) }), path.resolve(values["--observe-directory"]), values["--observe-session"]!)] : []), memoryOrchestrationPlugin(plugins.memoryOrchestration, settings, harness, config.memory.enabled), completionStrategyPlugin(completion, settings, harness), contextStrategyPlugin(strategies, settings, harness, maintenance), compactionStrategyPlugin(selectedCompaction, settings, harness, maintenance), nightlyStrategyPlugin(nightly, settings, improvement), reportPlugin, dispatcherPlugin(() => dispatcher), subagentPlugin(subagents,async()=>{await persist();}), ...(reloadableTools ? [reloadableToolsPlugin(reloadableTools)] : []), wasmToolsPlugin(config.home, config.wasmTools ?? []), continuationPlugin(harness), loopPlugin(harness), improvementPlugin(improvement!), protectedContentPlugin(protectedContent), gatewayManagerPlugin(gatewayManager, settings), policyManagerPlugin(policyManager, settings), extensionManagerPlugin(extensionManager, settings), gatewayPlugin(settings, harness), contextPlugin(maintenance, settings), ...(config.memory.enabled ? [memoryPlugin(memory)] : []), skillSearchPlugin(skillCatalog), ...reviewEngine.plugins]);
   if (dispatchPolicy.enabled) {
     dispatchRuntime = new DispatcherRuntime(harness, executions);
     harness.addChannel(dispatchRuntime.channel);
@@ -534,11 +540,9 @@ async function main(argv: string[]): Promise<void> {
   const memoryTimer = config.memory.enabled ? setInterval(() => { void connectMemory().then(() => memory.flush()).catch(() => log("[memory] capture backlog retained")); }, 30000) : undefined;
   memoryTimer?.unref();
   void memory.flush().catch(() => log("[memory] capture backlog retained"));
-  const strategyName = config.compaction?.strategy ?? "native";
-  if (strategyName !== "native") {
-    const strategy = plugins.compactions.get(strategyName);
-    if (!strategy) throw new Error(`Unknown compaction strategy: ${strategyName}`);
-    compaction = strategy;
+  compaction = new CompactionSelection(plugins.compactions, config.compaction?.strategy ?? "native");
+  if (settings.snapshot().compactionStrategy !== undefined) {
+    await compaction.change(settings.snapshot().compactionStrategy, async () => {});
   }
   const providerName = config.sessions?.provider ?? "native";
   if (providerName === "filesystem") sessionProvider = new FilesystemSessionProvider(path.join(config.home, "session-store"));

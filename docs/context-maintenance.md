@@ -51,6 +51,29 @@ behavior; side effects of trusted imports/factories are not rolled back on failu
 This is not provider migration or a live replacement of compaction objects already
 captured by existing runtime sessions. Existing startup default behavior is retained.
 
+### Registered compaction wrapper selection
+
+The administrative `/compaction-strategy` plugin supports `status`,
+`use <registered-name>` and `baseline`. It selects only already registered trusted
+wrappers, not module paths or downloadable code. The installation baseline is
+`compaction.strategy` (default `native`); `settings.local.yaml` may persist a
+`compactionStrategy` name. Removing the override restores the installation baseline
+on restart. Missing names fail startup rather than silently selecting native.
+
+A stable forwarding adapter lets already-open CLI-owned sessions use the selected
+wrapper on their next explicit compaction. Each operation captures one strategy;
+a running compact, working turn or maintenance operation blocks selection changes.
+Validation and durable save precede publication. Unknown names, busy boundaries
+or save failures retain the previous selection. Embedded sessions explicitly given
+a fixed strategy retain that behavior; no provider replacement is performed.
+
+`use native` removes an optional wrapper and performs real native compaction.
+There is deliberately no no-op `disable` that could falsely acknowledge applied
+maintenance. Automatic-maintenance policy is separate. Timeout, abort, checkpoint
+after success, native overflow compaction and native handover summaries are unchanged.
+Plugin registration/removal and code reload are not supplied by this command.
+Source merge/build does not activate a running installation.
+
 The Harness checks context at serialized working-turn boundaries. PI native overflow
 compaction remains a fallback. Maintenance does not call manual compaction while a
 working tool is executing. Reviewer calls are not maintenance turns.
