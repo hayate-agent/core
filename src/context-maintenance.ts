@@ -365,7 +365,9 @@ export class ContextMaintenance {
         diagnostic = "ℹ️ Kontextauslastung derzeit unbekannt; automatische Schwellenentscheidung ausgesetzt. Es wurde kein Prozentwert geschätzt.";
         this.recordNotice(key, state, diagnostic);
         state.unknownUsageNotified = true;
-      } else if (percent !== undefined) state.unknownUsageNotified = false;
+      }
+      // PI usage becomes temporarily unknown after every compaction. A known
+      // response must not re-arm the chat notice; only a new runtime session does.
       if (!matchingRequest && !automatic) { await this.save(key, state); return state.noticeTarget ? undefined : diagnostic; }
       state.lastMaintenance = state.turns;
       if (phase === "before") state.lastHandover = state.turns;
@@ -402,7 +404,7 @@ export class ContextMaintenance {
         this.finishAdmission(state, "failed");
         state.failure = { stage: error.stage, code: error.code, phase, turn: state.turns, action: phase === "before" ? "handover" : "compact" };
         state.lastError = error.message;
-        notice = "⚠️ Kontextwartung nicht vollständig abgeschlossen; kein bestätigter Abschluss. Wiederherstellungsstand bleibt erhalten.";
+        notice = `⚠️ Kontextwartung nicht vollständig abgeschlossen; kein bestätigter Abschluss. Wiederherstellungsstand bleibt erhalten. Stufe: ${error.stage}; Code: ${error.code}.`;
       }
       this.recordNotice(key, state, notice);
       await this.save(key, state);

@@ -93,10 +93,12 @@ The same partial object may be stored in `settings.local.yaml`. The core command
 only). Threshold changes currently use the file and require restart. Unknown context
 usage never becomes an invented percentage. It persists as `observation.usage=unknown`,
 suspends automatic threshold actions and produces one durable informational notice
-per unknown-usage episode (not a completion notice). Fresh known usage rearms that
-notice. PI intentionally reports unknown immediately after compaction until a fresh
+per runtime session (not a completion notice). Fresh known usage does not rearm that
+notice; repeated compactions must not repeatedly notify chat. PI intentionally reports unknown immediately after compaction until a fresh
 successful assistant response supplies usage. `beforeObservation` retains the latest
-pre-turn decision independently of the post-turn observation.
+pre-turn decision independently of the post-turn observation. Failed-operation notices
+include the sanitized stage and code already recorded in maintenance state, never
+raw provider errors or checkpoint contents.
 
 At assessment threshold the working agent gets a lightweight reminder on every
 configured turn interval. Eligible automatic boundaries additionally use a bounded,
