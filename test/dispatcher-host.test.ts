@@ -238,3 +238,44 @@ test("host result never steers a busy operator turn", async () => {
   await harness.waitForSessionIdle("parent");
   assert.equal(runtime.sessions.get("parent")!.prompts.length, 2);
 });
+
+test("direct dispatcher routes worker turns through model rules", async t => {
+  const home = await mkdtemp(path.join(os.tmpdir(), "dispatch-rules-e2e-"));
+  const file = path.join(home, "ledger.json");
+  const store = new ExecutionStore(file); await store.load();
+  const rules = [
+    { match: { minChars: 100 }, model: "p/big", thinking: "medium" },
+    { match: {}, model: "p/small" },
+  ];
+  const runtime = new FakeRuntime((text, key) => key.startsWith("dispatch:") ? "worker evidence" : `received: ${text}`);
+  let bridge!: DispatcherRuntime;
+  const harness = new Harness({ runtime, tickMs: 60000, busyMode: "queue",
+    beforeExecution: input => bridge.beforeTurn(input.sessionKey),
+    hostEventAllowed: input => !!input.hostEvent && bridge.resultAllowed(input.sessionKey, input.hostEvent.executionId),
+  });
+  harness.onStateChange = async () => {};
+  const replies = new MemoryChannel(); harness.addChannel(replies);
+  bridge = new DispatcherRuntime(harness, store, rules); harness.addChannel(bridge.channel);
+  const results: string[] = [];
+  const dispatcher = new Dispatcher(store, bridge.strategy, 1, async event => {
+    if (event.type !== "result") return;
+    await harness.accept({ id: `dispatch-event:${event.id}:${results.length}`, sessionKey: event.parent, source: "host",
+      hostEvent: { executionId: event.executionId }, text: event.text, replyTo: { channel: replies.name, target: "operator" } });
+    results.push(event.text);
+  }, error => { throw error; });
+  t.after(async () => { await dispatcher.stop(); await harness.waitForSessionIdle("parent"); await rm(home, { recursive: true, force: true }); });
+  await dispatcher.start();
+  await dispatcher.submit("parent", "long", "x".repeat(200));
+  await dispatcher.submit("parent", "short", "simple work");
+  const done = new Promise<void>(resolve => { const check = () => { if (results.length === 2) resolve(); else setImmediate(check); }; check(); });
+  await done; await harness.waitForSessionIdle("parent");
+  assert.equal(results.length, 2);
+  assert.equal(store.list().filter(item => item.status === "completed").length, 2);
+  const workers = runtime.opened.filter(item => item.key.startsWith("dispatch:")).length;
+  assert.equal(workers, 2);
+  const sessions = [...runtime.sessions.keys()].filter(key => key.startsWith("dispatch:"));
+  const byModel = sessions.map(key => runtime.sessions.get(key)!.options[0]);
+  assert.deepEqual(byModel.map(options => options.model).sort(), ["p/big", "p/small"]);
+  assert.equal(byModel.find(options => options.model === "p/big")!.thinking, "medium");
+  assert.equal(byModel.find(options => options.model === "p/small")!.thinking, undefined);
+});

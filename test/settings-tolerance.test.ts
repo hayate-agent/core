@@ -24,3 +24,23 @@ test("skills section is a supported overlay: active, validated, preserved throug
  await writeFile(file,'model: 42\nskills: {}\n');
  await assert.rejects(new SettingsService(file,{}).load());
 });
+
+test("dispatcher rules pass through the settings overlay and validate", async () => {
+  const { SettingsService } = await import("../src/settings.js");
+  const { writeFile, readFile, mkdtemp, rm } = await import("node:fs/promises");
+  const os = await import("node:os");
+  const path = await import("node:path");
+  const dir = await (await import("node:fs/promises")).mkdtemp(path.join(os.tmpdir(), "settings-rules-"));
+  const file = path.join(dir, "settings.local.yaml");
+  try {
+    await writeFile(file, "skills: {}\ndispatcher:\n  enabled: true\n  concurrentRequests: true\n  rules:\n    - match: {minChars: 1200}\n      model: p/big\n      thinking: medium\n    - match: {}\n      model: p/small\n");
+    const settings = new SettingsService(file, {});
+    await settings.load();
+    assert.deepEqual(settings.effective().dispatcher.rules, [
+      { match: { minChars: 1200 }, model: "p/big", thinking: "medium" },
+      { match: {}, model: "p/small" },
+    ]);
+    await writeFile(file, "skills: {}\ndispatcher:\n  rules:\n    - match: {nonsense: 1}\n      model: p/big\n");
+    await assert.rejects(new SettingsService(file, {}).load(), /Invalid/);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});

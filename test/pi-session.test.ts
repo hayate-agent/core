@@ -97,6 +97,26 @@ test("explicit off supplies reasoning_effort none and restores model metadata", 
   assert.equal(agent.model, local);
 });
 
+test("config-owned model opt-in works without environment and stays model scoped", async () => {
+  const agent = fakeAgentSession();
+  (agent as any).model = { ...A, api: "openai-completions" };
+  const session = new PiSession(agent as never, models as never, {}, undefined, undefined, undefined, undefined, undefined, () => ["p/a"]);
+  let payload: any;
+  agent.prompt = async () => {
+    payload = { temperature: 0, reasoning_effort: "medium",
+      ...(agent.model as any).samplingParamsByThinkingLevel?.[agent.thinkingLevel] };
+    agent.messages.push({ role: "assistant", stopReason: "stop", content: [{ type: "text", text: "{}" }] });
+  };
+  await session.prompt("JSON", { thinking: "off" });
+  assert.equal(payload.reasoning_effort, "none");
+  assert.equal(payload.temperature, 0);
+  await session.prompt("JSON", { thinking: "medium" });
+  assert.equal(payload.reasoning_effort, "medium", "opt-in must not override explicit thinking");
+  (agent as any).model = { ...A, id: "other", api: "openai-completions" };
+  await session.prompt("JSON", { thinking: "off" });
+  assert.equal(payload.reasoning_effort, "medium", "opt-in must match the exact model");
+});
+
 test("off does not inject unsupported none into models without explicit opt-in", async () => {
   const agent = fakeAgentSession();
   const model = { provider: "openai", id: "o3-mini", api: "openai-completions", reasoning: true };

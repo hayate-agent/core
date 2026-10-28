@@ -42,7 +42,7 @@ function validate(value: unknown, defaults: Partial<ContextPolicy> = {}, pruning
     } else if (key === "completionStrategy" || key === "nightlyStrategy" || key === "contextStrategy") {
       if (item !== null && (typeof item !== "string" || !item.trim())) throw Error(`Invalid ${key === "nightlyStrategy" ? "nightly" : key === "contextStrategy" ? "context" : "completion"} strategy selection`);
     } else if (key === "dispatcher") {
-      if (!item || typeof item !== "object" || Array.isArray(item) || Object.keys(item).some(key => !["enabled", "strategy", "concurrentRequests", "capacity", "retentionDays"].includes(key))) throw Error("Invalid dispatcher overlay");
+      if (!item || typeof item !== "object" || Array.isArray(item) || Object.keys(item).some(key => !["enabled", "strategy", "concurrentRequests", "capacity", "retentionDays", "rules"].includes(key))) throw Error("Invalid dispatcher overlay");
       dispatcherConfig({ ...dispatcherDefaults, ...item });
     } else if (key === "policyPlugins" || key === "extensionPlugins") {
       validatePolicyOverlay(item);

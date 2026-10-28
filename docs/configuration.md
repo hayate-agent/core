@@ -30,6 +30,58 @@ integrations. SOUL and VOICE add your configured identity and writing style even
 no named personality overlay is selected. Existing live sessions need a restart or
 `/new` to receive changed system context. See README for Matrix settings.
 
+## Dispatcher model routing rules
+
+The dispatcher executes operator-authorized worker tasks. With the built-in `direct`
+strategy, workers can route to different models per task through `dispatcher.rules`.
+Each rule has an optional `match` (task classification) plus a required `model`
+(`provider/model`) and an optional `thinking` level. The first matching rule wins;
+a rule with an empty `match` is the fallback and must be the last rule. At most one
+fallback is allowed. Without a matching rule (and without a fallback rule) workers
+use the session model. `match` supports `minChars`/`maxChars` (task brief length),
+`keywords` (case-insensitive substrings) and `regex` (unanchored, applied to the task
+brief). At most 8 rules are allowed.
+
+```yaml
+dispatcher:
+  enabled: true
+  strategy: direct
+  concurrentRequests: true
+  capacity: 2
+  retentionDays: 7
+  rules:
+    - match: {minChars: 1200}   # complex task briefs -> model A
+      model: example-provider/big-model
+      thinking: medium
+    - match: {}                 # simple tasks -> model B (fallback)
+      model: example-provider/small-model
+      thinking: off
+```
+
+Rules are validated on startup and through `settings.local.yaml` overlays (the
+`dispatcher` key accepts `rules` too). Rules apply only to dispatcher worker turns;
+the parent agent keeps the session model. Reasoning levels above `off` require models
+that handle `reasoning_content` correctly; models listed in
+`HARNESS_REASONING_EFFORT_NONE_MODELS` or `reasoningEffortNoneModels` are exempt for
+`thinking: off` turns.
+
+## Reasoning effort none opt-in
+
+Some OpenAI-compatible servers only accept `reasoning_effort: "none"` instead of a
+thinking switch. Opt in models verified to accept that parameter via
+`reasoningEffortNoneModels` in `harness.yaml` (preferred, config-owned) or the
+`HARNESS_REASONING_EFFORT_NONE_MODELS` environment variable; both lists are merged:
+
+```yaml
+reasoningEffortNoneModels:
+  - homelab/deepseek-v4-flash
+```
+
+For opted-in `openai-completions` models, a per-turn thinking `off` injects
+`samplingParamsByThinkingLevel.off.reasoning_effort = "none"` into the selected
+model and restores the original selection after the turn. Requires a restart or
+`/restart` after changing `harness.yaml`.
+
 ## Skill catalog
 
 The Harness maintains a derived index at `<home>/skills/index.json`, owned by the
