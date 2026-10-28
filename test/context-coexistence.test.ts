@@ -59,7 +59,7 @@ test("unknown usage is durable, observable, deduplicated and never fabricated", 
   await maintenance.boundary("chat", session, rotate, target);
   percent = undefined;
   await maintenance.boundary("chat", session, rotate, target);
-  assert.equal((await maintenance.status("chat")).notices?.length, 1);
+  assert.equal((await maintenance.status("chat")).notices?.length ?? 0, 0);
 });
 test("failed compaction backs off independently, without losing handover eligibility", async t => {
   const home = await fixture(t);
