@@ -22,7 +22,7 @@ test("wait survives serialized restart, wakes once with original authority and p
   const runtime = new FakeRuntime(() => { assert.ok(saved); return "checked"; });
   const h = new Harness({ runtime, tickMs: 60000, now: () => now }); h.addChannel(new MemoryChannel());
   h.restoreSessions(sessions);
-  h.onStateChange = async () => { if (h.pendingInputs().some(i => i.id === "wait:task:3")) saved = true; };
+  h.onStateChange = async () => { if (h.pendingInputs().some(i => i.id === "wait:task:1")) saved = true; };
   try {
     now = 60000; await h.tick(); assert.equal(runtime.sessions.size, 0);
     now = 61000; await Promise.all([h.tick(), h.tick()]); await h.drained();
@@ -47,15 +47,18 @@ test("pause, stop, queued operator work and unavailable persistence suppress wai
   }
 });
 
-test("expiry and chain limit block visibly without starting a model turn", async () => {
-  for (const limit of ["expiry", "depth"] as const) {
-    const f = fixture(); f.time(limit === "expiry" ? 301000 : 61000);
-    if (limit === "depth") f.h.state("mem:room1").task!.depth = 20;
+test("expiry and malformed checkpoints retain diagnosis without generic operator chat", async () => {
+  for (const malformed of [false, true]) {
+    const f = fixture(); f.time(301000);
+    if (malformed) f.h.state("mem:room1").task!.depth = -1;
     try {
       await f.h.tick(); await f.h.drained();
-      assert.equal(f.h.state("mem:room1").task!.state, "blocked");
+      const task = f.h.state("mem:room1").task!;
+      assert.equal(task.state, "blocked");
+      assert.equal(task.termination, malformed ? "malformed_checkpoint" : "deadline_expired");
+      assert.ok(task.next); assert.ok(task.wait);
       assert.equal(f.runtime.sessions.size, 0);
-      assert.ok(f.channel.texts().some(s => s.includes("Operatorprüfung")));
+      assert.deepEqual(f.channel.texts(), []);
     } finally { await f.h.stop(0); }
   }
 });
@@ -66,7 +69,7 @@ test("failed wait checkpoint holds queued recheck and retries without duplicatio
   try {
     await f.h.tick().catch(() => {});
     assert.equal(f.runtime.sessions.size, 0);
-    assert.equal(f.h.pendingInputs().filter(i => i.id === "wait:task:3").length, 1);
+    assert.equal(f.h.pendingInputs().filter(i => i.id === "wait:task:1").length, 1);
     f.h.onStateChange = async () => {};
     await f.h.tick(); await f.h.drained();
     assert.equal(f.runtime.sessions.get("mem:room1")?.prompts.length, 1);

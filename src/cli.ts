@@ -264,6 +264,7 @@ async function main(argv: string[]): Promise<void> {
     toolGuard: async (key, tool, input) => {
       subagents.guardTool(key, tool);
       dispatchRuntime?.guardTool(key, tool);
+      await harness.guardWaitTool(key, tool, input);
       const current = harness.sessions.get(key)?.current;
       if (current?.source === "host") {
         if (!current.hostEvent || !dispatchRuntime?.resultAllowed(key, current.hostEvent.executionId)) throw new ToolGuardError("authority_revoked", "Host event authority revoked");
