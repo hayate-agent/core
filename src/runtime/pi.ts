@@ -50,6 +50,8 @@ export interface PiRuntimeOptions {
   legacySessionProvider?: SessionProvider;
   mcp?: { enabled: boolean };
   skillPaths: string[];
+  /** Models that accept reasoning_effort "none" for thinking "off" turns (env list is merged at the call site). */
+  reasoningEffortNoneModels?: () => readonly string[];
   /** Fresh validated skill context before each turn, without reloading extensions. */
   skillContext?: () => Promise<string>;
   toolGuard?: (sessionKey: string, tool: string, input: unknown) => Promise<void>;
@@ -612,7 +614,7 @@ export class PiRuntime implements AgentRuntime {
       selection = { ...selection, ...update };
       sessionManager.appendCustomEntry(selectionType, selection);
       await checkpoint?.();
-    });
+    }, this.opts.reasoningEffortNoneModels);
     // From here the wrapper owns SDK shutdown and final checkpoint cleanup.
     unownedSession = undefined;
     try {

@@ -183,10 +183,19 @@ round budget remain enforced; a second empty/invalid response still fails.
 
 Some local OpenAI-compatible servers require `reasoning_effort: "none"` rather
 than their ordinary thinking switch. Opt in only models verified to accept that
-parameter through the Harness process environment:
+parameter — through the Harness process environment or, preferred, the
+`reasoningEffortNoneModels` key in `harness.yaml` (the process environment
+variable keeps working and both lists are merged):
 
 ```sh
 HARNESS_REASONING_EFFORT_NONE_MODELS='homelab/deepseek-v4-flash,homelab/glm-5.3-flash'
+```
+
+```yaml
+# harness.yaml
+reasoningEffortNoneModels:
+  - homelab/deepseek-v4-flash
+  - homelab/glm-5.3-flash
 ```
 
 Entries are exact `provider/model-id` references from the installation, not display

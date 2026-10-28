@@ -38,3 +38,24 @@ test("YAML tool selections reach configuration unchanged, including no tools", a
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test("YAML reasoning opt-in reaches config and rejects malformed values", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "harness-reasoning-"));
+  try {
+    await writeFile(path.join(dir, "harness.yaml"), "reasoningEffortNoneModels:\n  - homelab/gpt-6.1-sol\n");
+    assert.deepEqual((await loadConfig(dir)).reasoningEffortNoneModels, ["homelab/gpt-6.1-sol"]);
+    await writeFile(path.join(dir, "harness.yaml"), "reasoningEffortNoneModels: invalid\n");
+    await assert.rejects(loadConfig(dir), /reasoningEffortNoneModels/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("reasoningEffortNoneModels validates provider/model refs", () => {
+  assert.deepEqual(defaultConfig({ reasoningEffortNoneModels: ["local/reasoner", "homelab/deepseek-v4-flash", "homelab/openai/gpt-oss:120b"] }).reasoningEffortNoneModels,
+    ["local/reasoner", "homelab/deepseek-v4-flash", "homelab/openai/gpt-oss:120b"]);
+  assert.deepEqual(defaultConfig({}).reasoningEffortNoneModels, []);
+  for (const value of ["no-slash", "", 5, ["x"], ["/model"], ["provider/"], ["local/reasoner", "bad space"], ["a/b", "a/b", "a/b", "a/b", "a/b", "a/b", "a/b", "a/b", "a/b", "a/b", "a/b", "a/b", "a/b", "a/b", "a/b", "a/b", "a/b", "a/b", "a/b", "a/b", "a/b", "a/b"]]) {
+    assert.throws(() => defaultConfig({ reasoningEffortNoneModels: value } as never), /reasoningEffortNoneModels/, JSON.stringify(value));
+  }
+});

@@ -43,6 +43,8 @@ export interface HarnessConfig {
   tools?: string[];
   /** Trusted local ESM plugin paths, relative to Harness home or absolute. */
   plugins?: string[];
+  /** Models that accept reasoning_effort "none" for thinking "off" turns; merged with HARNESS_REASONING_EFFORT_NONE_MODELS at the runtime call site. */
+  reasoningEffortNoneModels?: string[];
   /** Trusted tool-only ESM modules with explicit generation replacement. */
   reloadableToolPlugins?: string[];
   /** Opt-in entry-file checks before working turns. */
@@ -110,6 +112,10 @@ export function defaultConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
   if (overrides.reloadableToolPlugins !== undefined && (!Array.isArray(overrides.reloadableToolPlugins) || overrides.reloadableToolPlugins.some(p => typeof p !== "string" || !p.trim()))) {
     throw Error("reloadableToolPlugins must be an array of local module paths");
   }
+  if (overrides.reasoningEffortNoneModels !== undefined && (!Array.isArray(overrides.reasoningEffortNoneModels) || overrides.reasoningEffortNoneModels.length > 20 ||
+      overrides.reasoningEffortNoneModels.some((ref) => typeof ref !== "string" || !ref || ref.length > 200 || !/^[^/\s]+\/[^\s]+$/.test(ref)))) {
+    throw Error("reasoningEffortNoneModels must be an array of 'provider/model' refs");
+  }
   if (overrides.reportProcessing !== undefined && (typeof overrides.reportProcessing !== "string" || !/^[a-z][a-z0-9_-]*$/.test(overrides.reportProcessing))) throw Error("Invalid reportProcessing");
   if (overrides.autoReloadToolPlugins !== undefined && typeof overrides.autoReloadToolPlugins !== "boolean") throw Error("autoReloadToolPlugins must be a boolean");
   dispatcherConfig(overrides.dispatcher);
@@ -153,6 +159,7 @@ export function defaultConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
     completionStrategy: overrides.completionStrategy,
     nightlyStrategy: overrides.nightlyStrategy,
     plugins: overrides.plugins ?? [],
+    reasoningEffortNoneModels: overrides.reasoningEffortNoneModels ?? [],
     reloadableToolPlugins: overrides.reloadableToolPlugins ?? [],
     autoReloadToolPlugins: overrides.autoReloadToolPlugins ?? false,
     reportProcessing: overrides.reportProcessing ?? "cron",
