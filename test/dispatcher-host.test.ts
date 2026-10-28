@@ -202,7 +202,7 @@ test("direct dispatcher executes through Harness and durably returns one host re
   assert.deepEqual(errors, []);
 });
 
-test("operator requests never become steering data within a host-result turn", async () => {
+test("operator steering yields a host turn without promoting result data to a mandate", async () => {
   const runtime = new FakeRuntime();
   const harness = new Harness({ runtime, tickMs: 60000, busyMode: "steer", hostEventAllowed: () => true });
   harness.onStateChange = async () => {};
@@ -211,13 +211,16 @@ test("operator requests never become steering data within a host-result turn", a
   const release = session.hold();
   try {
     await harness.accept(host());
-    await harness.accept({ id: "operator-new", source: "channel", sessionKey: "parent", text: "new authorized task" });
-    assert.equal(harness.sessions.get("parent")!.queue.length, 1);
-    assert.deepEqual(session.steered, []);
+    await new Promise(resolve => setImmediate(resolve));
+    await harness.accept({ id: "operator-new", source: "channel", sessionKey: "parent", text: "direct question" });
+    assert.equal(harness.sessions.get("parent")!.queue.length, 0);
+    assert.deepEqual(session.steered, ["direct question"]);
+    assert.equal(harness.sessions.get("parent")!.current!.source, "host");
+    assert.equal(harness.sessions.get("parent")!.task, undefined);
   } finally { release(); }
   await harness.waitForSessionIdle("parent");
-  assert.deepEqual(session.prompts, ["/not-a-command", "new authorized task"]);
-  assert.equal(harness.sessions.get("parent")!.task!.original, "new authorized task");
+  assert.deepEqual(session.prompts, ["/not-a-command"]);
+  assert.equal(harness.sessions.get("parent")!.task, undefined);
 });
 
 test("host result never steers a busy operator turn", async () => {
