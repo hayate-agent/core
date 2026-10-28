@@ -254,13 +254,33 @@ export class PiSession implements RuntimeSession {
     await this.session.abort();
   }
 
-  async compact(instructions?: string): Promise<void> {
-    await maintenanceStep("compact", () => boundedMaintenance(() => this.compaction.compact({ instructions, compactNative: (text) => this.session.compact(text).then(() => {}) }), () => this.session.abortCompaction(), 300000, "compact"));
+  /** Cancellation waits for native compaction to settle before releasing the owner.
+   * compaction_start closes PI's await-abort/controller-installation setup race. */
+  private async cancellableCompaction<T>(signal: AbortSignal | undefined, run: () => Promise<T>): Promise<T> {
+    if (!signal) return run();
+    signal.throwIfAborted();
+    const cancel = () => this.session.abortCompaction();
+    const unsubscribe = this.session.subscribe(event => {
+      if (event.type === "compaction_start" && signal?.aborted) cancel();
+    });
+    signal?.addEventListener("abort", cancel, { once: true });
+    try {
+      const result = await run();
+      signal?.throwIfAborted();
+      return result;
+    } finally {
+      signal?.removeEventListener("abort", cancel);
+      unsubscribe();
+    }
+  }
+
+  async compact(instructions?: string, signal?: AbortSignal): Promise<void> {
+    await maintenanceStep("compact", () => this.cancellableCompaction(signal, () => boundedMaintenance(() => this.compaction.compact({ instructions, compactNative: (text) => this.session.compact(text).then(() => {}) }), () => this.session.abortCompaction(), 300000, "compact")));
     await maintenanceStep("save", async () => { await this.checkpoint?.(); });
   }
 
-  async summarize(instructions: string): Promise<string> {
-    const result = await maintenanceStep("summary", () => boundedMaintenance(() => this.session.compact(instructions), () => this.session.abortCompaction()));
+  async summarize(instructions: string, signal?: AbortSignal): Promise<string> {
+    const result = await maintenanceStep("summary", () => this.cancellableCompaction(signal, () => boundedMaintenance(() => this.session.compact(instructions), () => this.session.abortCompaction())));
     await maintenanceStep("save", async () => { await this.checkpoint?.(); });
     return result.summary;
   }

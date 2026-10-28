@@ -17,6 +17,7 @@ import { approvalPreview } from "./approval-preview.js";
 import { ToolGuardError } from "./tool-guard-error.js";
 
 export { approvalPreview };
+const MAINTENANCE_YIELD = Symbol("maintenance yielded before prompt");
 
 export const NO_REPLY = "NO_REPLY";
 export const GOAL_DONE = "GOAL_DONE";
@@ -128,6 +129,7 @@ export interface HarnessOptions {
   beforeExecution?: (input: Inbound) => void;
   memory?: { recall(sessionKey: string, text: string): Promise<string>; capture(turn: import("./memory.js").MemoryTurn): Promise<void> };
   contextMaintenance?: {
+    interrupt?(key: string): boolean;
     guidance(key: string, session: RuntimeSession): Promise<string>;
     admissionStatus?(key: string): Promise<{ execution?: string }>;
     request?(key: string, request: { action: "handover"; preserve: string; resume: string }): Promise<void>;
@@ -206,6 +208,10 @@ export class Harness {
   private frozen = false;
   private restoredReleased = false;
   private readonly turnAbort = new Map<string, AbortController>();
+  private readonly maintenanceForeground = new WeakSet<Inbound>();
+  private readonly beforeMaintenance = new Set<string>();
+  private readonly yieldedMaintenance = new WeakSet<Inbound>();
+  private readonly preparedTurn = new WeakSet<Inbound>();
   private readonly activities = new Map<Inbound, { activity: TurnActivity; outcome: "completed" | "failed" | "cancelled" }>();
 
   constructor(readonly opts: HarnessOptions) {
@@ -840,6 +846,10 @@ export class Harness {
     // tool-bearing results or cancel independent dispatcher children. Preserve
     // current/hostEvent: answering a question does not promote data to authority.
     const foreground = input.source === "channel" || input.source === "api";
+    if (foreground && s.running && !s.prompting && this.opts.contextMaintenance?.interrupt?.(s.key)) {
+      this.maintenanceForeground.add(input);
+      if (s.current && this.beforeMaintenance.has(s.key)) this.yieldedMaintenance.add(s.current);
+    }
     const background = s.current && s.current.source !== "channel" && s.current.source !== "api";
     const yieldToOperator = foreground && !!background;
     // One API run = one prompt/result/terminal delivery, including its own turn
@@ -847,7 +857,7 @@ export class Harness {
     // interrupt another input into an API prompt and consume that input with the
     // API's reply. Queued API requests still receive foreground queue priority.
     const separateApiTurn = input.source === "api" || s.current?.source === "api";
-    if (s.running && !separateApiTurn && (yieldToOperator || (input.source !== "host" && s.current?.source !== "host"))) {
+    if (s.running && !separateApiTurn && !this.maintenanceForeground.has(input) && (yieldToOperator || (input.source !== "host" && s.current?.source !== "host"))) {
       if ((yieldToOperator || this.busyMode === "steer") && s.session && s.current) {
         const turn = s.current;
         // Durable before the runtime sees it: held in `handoff` (part of every inbox snapshot)
@@ -911,6 +921,7 @@ export class Harness {
       if (s.current.executionTurnId) await this.opts.executionStore?.stopTurn(s.current.executionTurnId, sessionKey);
     }
     this.turnAbort.get(sessionKey)?.abort();
+    this.opts.contextMaintenance?.interrupt?.(sessionKey);
     if (s.running) await s.session?.abort();
     await this.opts.conversationStopped?.(sessionKey);
     await this.onStateChange?.();
@@ -1198,6 +1209,16 @@ export class Harness {
             s.cancelling = undefined;
           }
         } catch (err) {
+          if (err === MAINTENANCE_YIELD) {
+            // No model turn/effect has started: retain the original ledger identity.
+            s.current = undefined;
+            s.prompted = undefined;
+            this.activities.get(input)?.activity.finish("cancelled");
+            this.activities.delete(input);
+            s.queue.push(input);
+            await this.onStateChange?.();
+            continue;
+          }
           s.outbox.splice(outboxStart);
           s.goal = goalBefore;
           // Turn did not finish (aborted on shutdown): keep it and what was steered into it, in order.
@@ -1331,7 +1352,7 @@ export class Harness {
         input.continuationExpiresAt = Math.min(input.continuationExpiresAt ?? Infinity, configuredDeadline);
       }
       checkExpiry();
-      await this.opts.beforeTurn?.(input);
+      if (!this.preparedTurn.delete(input)) await this.opts.beforeTurn?.(input);
       let session = await this.sessionFor(s.key);
       const rotate = async (handover: import("./context-maintenance.js").ContextRecord["handover"]) => {
         if (!handover) throw new Error("Missing handover");
@@ -1347,9 +1368,15 @@ export class Harness {
         return next;
       };
       let preTurnNotice: string | undefined;
-      if (s.cancelling !== input && !this.stopping) {
-        preTurnNotice = await this.opts.contextMaintenance?.beforeTurn?.(s.key, session, rotate, input.replyTo ?? s.replyTo ?? this.home, input.text);
+      if (s.cancelling !== input && !this.stopping && !this.maintenanceForeground.has(input)) {
+        this.beforeMaintenance.add(s.key);
+        try { preTurnNotice = await this.opts.contextMaintenance?.beforeTurn?.(s.key, session, rotate, input.replyTo ?? s.replyTo ?? this.home, input.text); }
+        finally { this.beforeMaintenance.delete(s.key); }
         await this.flushMaintenanceNotices();
+      }
+      if (this.yieldedMaintenance.delete(input) && s.cancelling !== input && !this.stopping) {
+        this.preparedTurn.add(input);
+        throw MAINTENANCE_YIELD;
       }
       const guidance = (await this.opts.contextMaintenance?.guidance(s.key, session) ?? "") + (await this.opts.memory?.recall(s.key, input.text) ?? "") + (await this.opts.reportContext?.(input) ?? "");
       const text = input.replyOptional
@@ -1369,7 +1396,7 @@ export class Harness {
           // consumed with the already computed (stale) reply.
           s.prompting = false;
           if (s.cancelling !== input && this.opts.afterTurn) reply = await this.opts.afterTurn(input, reply, session, promptOptions, abort.signal);
-          if (s.cancelling !== input && !this.stopping && this.opts.contextMaintenance) {
+          if (s.cancelling !== input && !this.stopping && this.opts.contextMaintenance && !this.maintenanceForeground.has(input)) {
             let maintenanceNotice: string | undefined = preTurnNotice;
             try {
               maintenanceNotice = (await this.opts.contextMaintenance.boundary(s.key, session, rotate, input.replyTo ?? s.replyTo ?? this.home)) ?? preTurnNotice;
@@ -1387,7 +1414,7 @@ export class Harness {
         }
       }
     } catch (err) {
-      if (this.halting) throw err;
+      if (this.halting || err === MAINTENANCE_YIELD) throw err;
       reply = `⚠️ ${err instanceof Error ? err.message : String(err)}`;
       outcome = "failed";
       if (s.cancelling !== input) this.log(`turn failed in ${s.key}: ${reply}`);

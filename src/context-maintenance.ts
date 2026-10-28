@@ -72,6 +72,24 @@ const preserve = "Preserve operator intent and corrections, decisions and reject
 export class ContextMaintenance {
   private readonly queues = new Map<string, Promise<unknown>>();
   private strategyChanging = false;
+  private readonly interruptible = new Map<string, AbortController>();
+  /** Interrupt only model maintenance; writes and rotation remain serialized. */
+  interrupt(key: string): boolean {
+    const controller = this.interruptible.get(key);
+    controller?.abort();
+    return !!controller;
+  }
+  private async modelStep<T>(key: string, run: (signal: AbortSignal) => Promise<T>): Promise<T> {
+    const controller = new AbortController();
+    this.interruptible.set(key, controller);
+    try {
+      const result = await run(controller.signal);
+      controller.signal.throwIfAborted();
+      return result;
+    } finally {
+      if (this.interruptible.get(key) === controller) this.interruptible.delete(key);
+    }
+  }
   /** Reserve all serialized maintenance operations, including direct embedded
    * callers. The composition must additionally reserve its owner's idle boundary
    * to exclude working turns and request projection. No durable state is migrated.
@@ -97,11 +115,12 @@ export class ContextMaintenance {
     // deadline once per failed attempt; arrivals/restarts must not extend it.
     state.recoveryRetry = { attempts, notBefore: this.now() + Math.min(1000 * 2 ** (attempts - 1), 60000) };
   }
-  private async prepareArchive(key: string, session: RuntimeSession, instructions: string): Promise<{ text: string; archiveId: string }> {
+  private async prepareArchive(key: string, session: RuntimeSession, instructions: string, interruptible = true): Promise<{ text: string; archiveId: string }> {
     if (!session.summarize || !session.archiveEntries) throw new Error("Runtime cannot archive handover");
     const entries = await maintenanceStep("archive", () => session.archiveEntries!()); // capture before native compaction
     const retrospective = await maintenanceStep("summary", async () => {
-      const text = await session.summarize!(`${instructions}\nWrite a backward-looking session retrospective: decisions with reasons, rejected alternatives, completed actions and evidence, unresolved uncertainties. Include a clearly labeled CURRENT STATE AND NEXT STEPS section. Preserve exact operator corrections. Do not include secrets.`);
+      const summarize = (signal?: AbortSignal) => session.summarize!(`${instructions}\nWrite a backward-looking session retrospective: decisions with reasons, rejected alternatives, completed actions and evidence, unresolved uncertainties. Include a clearly labeled CURRENT STATE AND NEXT STEPS section. Preserve exact operator corrections. Do not include secrets.`, signal);
+      const text = await (interruptible ? this.modelStep(key, summarize) : summarize());
       if (!text.trim() || text.length > 64000) throw new Error("Invalid retrospective");
       return text;
     });
@@ -301,7 +320,7 @@ export class ContextMaintenance {
         try {
         if (id === state.handover.from) {
           if (!session.summarize) throw new Error("Runtime cannot refresh handover");
-          const refreshed = await this.prepareArchive(key, session, `${preserve}\nRefresh intervening turns. Previous checkpoint: ${state.handover.text}`);
+          const refreshed = await this.prepareArchive(key, session, `${preserve}\nRefresh intervening turns. Previous checkpoint: ${state.handover.text}`, false);
           state.handover.text = refreshed.text;
           state.handover.archiveId = refreshed.archiveId;
           await this.save(key, state);
@@ -368,7 +387,7 @@ export class ContextMaintenance {
         const recent = (session.archiveEntries?.() ?? []).slice(-8).map(e => `${e.role}: ${e.text}`).join("\n").slice(-16000);
         let action: Awaited<ReturnType<BoundaryAssessment>> = "unknown";
         state.assessmentDiagnostic = undefined;
-        try { if (this.assess) action = await this.assess({ phase, incoming: incomingText.slice(0, 8000), recent, percent, pressureSinceCompaction: state.pressureSinceCompaction === true }); }
+        try { if (this.assess) action = await this.modelStep(key, signal => this.assess!({ signal, phase, incoming: incomingText.slice(0, 8000), recent, percent, pressureSinceCompaction: state.pressureSinceCompaction === true })); }
         catch (err) {
           const error = maintenanceError("assessment", err);
           state.assessmentDiagnostic = { stage: "assessment", code: error.code, phase, turn: state.turns };
@@ -414,7 +433,7 @@ export class ContextMaintenance {
           state.handover.phase = "switched";
           notice = "🔄 Neue Sitzung übernommen; Rückschau gespeichert.";
         } else {
-          await maintenanceStep("compact", () => session.compact(instructions));
+          await maintenanceStep("compact", () => this.modelStep(key, signal => session.compact(instructions, signal)));
           state.pressureSinceCompaction = true;
           notice = "♻️ Kontext kompaktiert.";
         }
@@ -424,7 +443,8 @@ export class ContextMaintenance {
         state.pending = undefined;
       } catch (err) {
         const error = maintenanceError(phase === "before" ? "summary" : "compact", err);
-        this.finishAdmission(state, "failed");
+        // A cancelled model operation defers rather than consumes admitted intent.
+        if (error.code !== "cancelled") this.finishAdmission(state, "failed");
         state.failure = { stage: error.stage, code: error.code, phase, turn: state.turns, action: phase === "before" ? "handover" : "compact" };
         state.lastError = error.message;
         notice = `⚠️ Kontextwartung nicht vollständig abgeschlossen; kein bestätigter Abschluss. Wiederherstellungsstand bleibt erhalten. Stufe: ${error.stage}; Code: ${error.code}.`;
