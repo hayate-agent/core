@@ -531,19 +531,23 @@ export class Harness {
       expiresAt: input.continuationExpiresAt, anchor: structuredClone(input.completionAnchor) };
   }
 
+  /** Resolve scope from the live parent, not a child's historical checkpoint.
+   * Operator clarification and continuation may replace task IDs or depth;
+   * result text and caller-supplied anchors never grant authority. */
   resultMandate(input: Inbound): import("./execution.js").Execution["dependency"] {
     if (input.source !== "host" || input.sessionKey.startsWith("dispatch:") || input.sessionKey.startsWith("subagent:")) return;
     const execution = this.opts.executionStore?.list(input.sessionKey).find(e => e.id === input.hostEvent?.executionId);
-    const mandate = execution?.dependency, session = this.sessions.get(input.sessionKey);
-    const task = session && this.tasks(session).find(task => task.id === mandate?.taskId);
-    if (!mandate || !task || execution?.status !== "completed" || execution.parentStopped ||
+    const session = this.sessions.get(input.sessionKey);
+    // A retained live task owns its worker even after an intervening question.
+    // Only a missing historical task falls back to the current parent mandate.
+    const task = session && (this.tasks(session).find(task => task.id === execution?.dependency?.taskId) ?? session.task);
+    if (!task || execution?.status !== "completed" || execution.parentStopped ||
         this.stoppingHostParents.has(input.sessionKey) || !this.opts.hostEventAllowed?.(input) ||
-        task.id !== mandate.taskId || task.original !== mandate.original || task.depth !== mandate.depth ||
-        !["active", "waiting"].includes(task.state) || !Number.isSafeInteger(mandate.depth) || mandate.depth < 0 || mandate.depth >= 20 ||
-        (mandate.expiresAt !== undefined && (!Number.isSafeInteger(mandate.expiresAt) || mandate.expiresAt <= this.now())) ||
+        !task.id || !task.original.trim() ||
+        !["active", "waiting"].includes(task.state) || !Number.isSafeInteger(task.depth) || task.depth < 0 || task.depth >= 20 ||
         (task.expiresAt !== undefined && (!Number.isSafeInteger(task.expiresAt) || task.expiresAt <= this.now())) ||
         (input.continuationExpiresAt !== undefined && (!Number.isSafeInteger(input.continuationExpiresAt) || input.continuationExpiresAt <= this.now()))) return;
-    return structuredClone(mandate);
+    return structuredClone({ taskId: task.id, original: task.original, depth: task.depth, expiresAt: task.expiresAt, anchor: task.anchor });
   }
 
   planContinuation(key: string, plan: NonNullable<Inbound["continuation"]>): void {
