@@ -1,4 +1,6 @@
 export interface BoundaryEvidence {
+  /** Advisory model cancellation only; never grants authority. */
+  signal?: AbortSignal;
   phase: "before" | "after";
   incoming: string;
   recent: string;

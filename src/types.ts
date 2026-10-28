@@ -129,9 +129,9 @@ export interface RuntimeSession {
   /** Inject into the running turn after the next tool call. */
   steer(text: string): Promise<void>;
   abort(): Promise<void>;
-  compact(instructions?: string): Promise<void>;
+  compact(instructions?: string, signal?: AbortSignal): Promise<void>;
   /** Tool-free native summary for handover (may compact the source session). */
-  summarize?(instructions: string): Promise<string>;
+  summarize?(instructions: string, signal?: AbortSignal): Promise<string>;
   archiveEntries?(): import("./session-archive.js").ArchiveEntry[];
   seedHandover?(text: string): Promise<void>;
   setModel(ref: string): Promise<void>;

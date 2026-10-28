@@ -13,7 +13,8 @@ export function diagnosedBoundaryAssessor(backend: AssessmentBackend, model: () 
   return async evidence => {
     let failure: MaintenanceError | undefined;
     const assess = create({ review: async (...args) => {
-      const signal = args[3];
+      const signal = evidence.signal && args[3] ? AbortSignal.any([evidence.signal, args[3]]) : evidence.signal ?? args[3];
+      args[3] = signal;
       const timedOut = () => { failure = new MaintenanceError("assessment", "timeout"); };
       signal?.addEventListener("abort", timedOut, { once: true });
       try { return await backend.review(...args); }
