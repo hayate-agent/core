@@ -18,6 +18,7 @@ import { ExtensionManager } from "./extension-manager.js";
 import { extensionManagerPlugin } from "./builtin-plugins/extension-manager-plugin.js";
 import { RunRegistry } from "./api/runs.js";
 import { API_CHANNEL, ApiChannel } from "./api/server.js";
+import { resolveApiKey } from "./api/credential.js";
 import { CompactionSelection, type CompactionStrategy } from "./compaction.js";
 import { compactionStrategyPlugin } from "./builtin-plugins/compaction-strategy-plugin.js";
 import { FilesystemSessionProvider, type SessionProvider } from "./sessions.js";
@@ -163,6 +164,8 @@ async function main(argv: string[]): Promise<void> {
   const sessionOwnership = await LocalSessions.open(config.home, config.cwd);
   await sessionOwnership.acquireHome();
   sessionOwners.add(sessionOwnership);
+  // Resolve after home ownership, before runtime/channel startup. Invalid storage fails closed.
+  const apiKey = await resolveApiKey(config.home);
   let tui: HarnessTuiChannel | undefined;
   const log = (text: string) => tui ? tui.note(text) : console.error(text);
   const approvals = { mode: "off" as "off" | "manual", tools: [] as string[] };
@@ -383,9 +386,8 @@ async function main(argv: string[]): Promise<void> {
     void dispatcher?.kick().catch(() => log("[dispatcher] scheduling failed"));
   }, 2000);
   gatewayTimer.unref();
-  // Hermes-compatible HTTP API (AgentOS hermes_gateway adapter); enabled by API_SERVER_KEY.
+  // Hermes-compatible HTTP API; enabled by explicit key or private loopback key file.
   const runs = new RunRegistry(path.join(config.home, "runs.json"));
-  const apiKey = process.env.API_SERVER_KEY?.trim();
   if (apiKey) {
     await runs.load();
     harness.addChannel(
