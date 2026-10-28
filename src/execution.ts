@@ -44,6 +44,8 @@ export interface ExecutionEvent {
   parent: string;
   type: "accepted" | "status" | "question" | "result";
   text: string;
+  /** State at event creation, not the potentially newer state at delivery. */
+  status?: ExecutionStatus;
 }
 export interface TurnSettlement {
   cronOutput?: string;
@@ -154,7 +156,7 @@ export class ExecutionStore {
     return next;
   }
   private event(draft: Ledger, task: Execution, type: ExecutionEvent["type"], text: string): void {
-    draft.events.push({ id: randomUUID(), executionId: task.id, parent: task.parent, type, text });
+    draft.events.push({ id: randomUUID(), executionId: task.id, parent: task.parent, type, text, status: task.status });
   }
   private find(draft: Ledger, id: string): Execution {
     const task = draft.executions.find(item => item.id === id);

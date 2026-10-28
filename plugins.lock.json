@@ -3,7 +3,7 @@
     "boundary-assessor.ts": "50673771d39126c132829704b5b2ab6172092e867245f8edca8c9b0eb71615cb",
     "completion-prompt.ts": "29ca66c495da1270d9c5bbb096bfa36e3629e49f5744b22dab0412baeb485dcd",
     "context-plugin.ts": "1da424038b5f5dd8e88999d86c4b26fecca5d21ca4170b83fdba9958eef787f0",
-    "continuation-plugin.ts": "6c06371c5b791dadc27b440ee37444313006e869874d2e8ac372542cd2f0504e",
+    "continuation-plugin.ts": "2883c2061160cb8969f018f55f5e6fb5feb86b5e4eb68e582be17ae956d75f3a",
     "cron-report-plugin.ts": "71bb9d6432985d25defb18d4ef45653342c2243f42e215b972b0eb586d24a260",
     "cron-report-processing.ts": "4e40d3f4c9801d87af1bdd8e2624a12f21e02ad49378a504abaea7a1bb49856f",
     "cron-reports.ts": "0bbf04e0c3ce1c8a499cdcc2e3bba1d27c88aacd71218f1b4027002591947991",
@@ -26,14 +26,14 @@
     "policy-manager-plugin.ts": "ef61d6f32c3fadd75f16bec3732763f15e0fa131a12a7af30240a0599a44ef44",
     "protected-content-plugin.ts": "1340a07212f5b30001478d1b761ef4e8c3c8e367fbfc36c02ccb80894b4fe9d0",
     "reloadable-tools-plugin.ts": "ae2680f7dd5f2bc1e95896599c349ec4fe61b5dc4f871f1896e6606f11b8e961",
-    "review-engine.ts": "e197d26a700ac8701b1f976fc200804d479f61e340d806217f89fc2e4264c9ca",
+    "review-engine.ts": "a632583ed355c270d33d4f0fcc256ec33a6ac7922fd59cd832e3f75435352232",
     "review-guard.ts": "f2d135b0fea32b1a092d3d377555eec0aa3165fe8304fa08c50c5aef5cca1e4d",
     "review-lifecycle.ts": "b58492dfc56c7a8fa119cd68d9627e5500eefa9bb34be71a1de6569eb6c958f1",
     "review-plugin.ts": "026856223984fb18723b587f3e99468321fca4df04c72074b00baee6f8f1d9e7",
     "review-policy.ts": "f98ece923d85bd55758bc201a00b1151d99962b800541900c16594365e65d2b7",
     "review-scope.ts": "b3339cbf59042ebbcfc6d131469086eefd008279718712cd67362d1993493ce5",
     "review-summary.ts": "097d9138cfb09ff69c49e282854a8c4e13462f40e8502e5d1bb68083db8649dd",
-    "review.ts": "9949609446c42b40f5c54b57442966f1827005572e1aa1577bb8c3e9bc75c00a",
+    "review.ts": "aac8236335145a6d28e7b1a79263cf7b94cb1b62b298dcdb1bb4896f8d71d0b1",
     "session-observer-plugin.ts": "53de3d2a70d69f6a37ed8abfedd44ec234486a31ddfd36ee63757bb69d2d8a38",
     "subagent-plugin.ts": "5b7ae55c28e50c48ce0a3671c400245ee0fd725ce7c5ad6866a8e63f0b65cd5e",
     "tool-result-projector.ts": "69658e2adef5d5327797762886199b87fd3bff94f20beab8a199280e0d517746",
@@ -43,9 +43,10 @@
     "completion-strategy-plugin.ts": "5f69464b4648d9b360020eac5b967e924549236eaff92f3c5e68f79826503b6f",
     "nightly-strategy-plugin.ts": "f2307c66003387167318055b7e49ce84e115ffd5d8e7d1a21ae8106318dbc0a8",
     "context-strategy-plugin.ts": "104c0e4a9b9619d361a8089b43724986366bc3665993c2146268e5f847698643",
-    "compaction-strategy-plugin.ts": "8dadb434b15443524827b302af9c98c22ce40e892e0c0c2bc60e558dae33c932"
+    "compaction-strategy-plugin.ts": "8dadb434b15443524827b302af9c98c22ce40e892e0c0c2bc60e558dae33c932",
+    "review-executor.ts": "f215d18047084aa626cdd3f46fa6cfbca3701810f6166ab88ac8f356a15fbe0a"
   },
   "repository": "https://git.vanillacore.net/harness/plugins",
-  "revision": "c8e2f9d20de6e8406ef1cf3bf984afe0d6499b64",
+  "revision": "56082f1bb0c03513b920a722b2e3cd2fdbfcd0cd",
   "schema": 1
 }

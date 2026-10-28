@@ -30,7 +30,12 @@ export interface Inbound {
   executionTurnId?: string;
   /** Durable, bounded continuation plan supplied during this turn. */
   continuation?: { state: "continue" | "waiting" | "blocked" | "completed"; next?: string; expiresAt?: number;
+    /** Positive designation of the ENTIRE reply, not just the wait. Absent means ordinary chat.
+     * The pinned continuation tool does not yet expose this core contract. */
+    replyKind?: "routine" | "substantive";
     wait?: { reason: string; retryAfterMs: number; deadline: number } };
+  /** Trusted timer checkpoint, captured before claiming a persisted wait. */
+  waitRecheck?: { reason: string; next: string };
   continuationDepth?: number;
   /** Host-issued recheck provenance; productive tools must acquire a work step first. */
   waitCheck?: { sequence: number; productive?: boolean };
@@ -175,6 +180,8 @@ export interface SendMeta {
    * Progress text is plain text, not channel-specific markup; unsupported adapters may ignore it.
    */
   presentation?: "progress";
+  /** Host-only stable routine-status identity, resolved before channel delivery. */
+  statusKey?: string;
   /** Logical identity: adapter resolves it idempotently to its native message reference. */
   progressId?: string;
   /** Message is an approval prompt; channels may resolve it via reactions (→ /approve|/deny <id>). */

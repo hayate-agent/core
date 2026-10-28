@@ -37,6 +37,7 @@ import { Subagents } from "./subagents.js";
 import { ExecutionStore } from "./execution.js";
 import { Dispatcher, stopDispatcherParent } from "./dispatcher.js";
 import { DispatcherRuntime } from "./dispatcher-runtime.js";
+import { attentionRequired } from "./notification-routing.js";
 import { dispatcherConfig } from "./dispatcher-config.js";
 import { dispatcherPlugin } from "./builtin-plugins/dispatcher-plugin.js";
 import { subagentPlugin } from "./builtin-plugins/subagent-plugin.js";
@@ -74,6 +75,10 @@ import { pruningPolicy } from "./tool-result-pruning.js";
 import { ContextMaintenance, contextPolicy } from "./context-maintenance.js";
 import { contextPlugin } from "./builtin-plugins/context-plugin.js";
 import { SettingsService, type SettingPath } from "./settings.js";
+import { handoverWorktreeReview } from "./review-worktree.js";
+import { ReviewWorkers } from "./review-execution.js";
+import { ReviewSubagents } from "./review-subagents.js";
+import { capabilityContext } from "./capability-context.js";
 import { runtimeReviewer } from "./runtime/reviewer.js";
 import { boundaryAssessor } from "./builtin-plugins/boundary-assessor.js";
 import { pruneToolResults } from "./builtin-plugins/tool-result-projector.js";
@@ -259,7 +264,7 @@ async function main(argv: string[]): Promise<void> {
       // Skill metadata is computed once per session and reused, so the leading prompt
       // prefix stays byte-stable across turns (prefix-cache friendly) and skill dirs are
       // not re-scanned every turn; invalidated whenever skills reload.
-      return skillContextCache ??= `Available skills (metadata only; read the named SKILL.md when relevant):\n${JSON.stringify(skills)}\n${reviewEngine.instructions}`;
+      return skillContextCache ??= `Available skills (metadata only; read the named SKILL.md when relevant):\n${JSON.stringify(skills)}`;
     },
     toolGuard: async (key, tool, input) => {
       subagents.guardTool(key, tool);
@@ -279,7 +284,15 @@ async function main(argv: string[]): Promise<void> {
     approvals,
     requestApproval: (key, tool, input) => harness.requestApproval(key, tool, input),
   });
+  const reviewWorkers = new ReviewWorkers(runtime, new ExecutionStore(path.join(config.home, "review-executions.json")), dispatchPolicy.capacity);
+  const reviewSubagents = new ReviewSubagents(runtime, path.join(config.home, "review-subagents"));
   const reviewEngine = reviewModule ? await createPolicyEngine(reviewModule, { home: config.home, cwd: config.cwd, config: reviewSettings,
+    reviewExecution: {
+      dispatcherEnabled: () => dispatchPolicy.enabled,
+      dispatcherWorker: request => reviewWorkers.review(request),
+      handoverWorktree: request => handoverWorktreeReview(runtime, request),
+      subagent: request => reviewSubagents.review(request),
+    },
     backend: runtimeReviewer(runtime), notify: async (sessionKey, message, origin) => {
       log(`[review] ${message}`);
       harness.post({ sessionKey, text: "", source: "channel", replyTo: origin ?? harness.home }, `⚠️ Operator escalation: ${message}`);
@@ -306,6 +319,17 @@ async function main(argv: string[]): Promise<void> {
       subagents.beforeTurn(input.sessionKey);
       dispatchRuntime?.beforeTurn(input.sessionKey);
     },
+    capabilityContext: input => capabilityContext({
+      revision: settings.revision, sessionKey: input.sessionKey,
+      selectedTools: (() => {
+        const workflow = workflowTools(config.tools, config.memory.enabled, false);
+        const tools = workflow?.length ? [...new Set([...workflow, ...(reviewModule?.modelTools ?? [])])] : workflow;
+        return dispatchPolicy.enabled && tools?.length ? [...new Set([...tools, "plugin_dispatch"])] : tools;
+      })(),
+      registeredTools: composeToolCatalog(plugins.tools, initialReloadableTools, reloadableTools?.tools ?? new Map()).map(tool => tool.name),
+      dispatcherEnabled: dispatchPolicy.enabled, dispatcherReady: dispatcher?.ready === true,
+      reviewInstructions: reviewEngine.instructions,
+    }),
     beforeTurn: async (input) => {
       subagents.beforeTurn(input.sessionKey);
       dispatchRuntime?.beforeTurn(input.sessionKey);
@@ -500,9 +524,15 @@ async function main(argv: string[]): Promise<void> {
         const task = executions.list(event.parent).find(item => item.id === event.executionId);
         if (!task || task.parentStopped) return;
         if ((event.type === "question" || event.type === "status") && !event.parent.startsWith("cron-followup:")) {
-          await harness.deliver(parent?.replyTo ?? harness.home,
-            `Dispatcher ${event.executionId}: ${event.text}${event.type === "question" ? `\n/dispatch answer ${event.executionId} ${task.question?.id} <Antwort>` : ""}`,
-            { deliveryId: `dispatch-event:${event.id}` });
+          const to = parent?.replyTo ?? harness.home;
+          const text = `Dispatcher ${event.executionId}: ${event.text}${event.type === "question" ? `\n/dispatch answer ${event.executionId} ${task.question?.id} <Antwort>` : ""}`;
+          // Questions and recovery blockers require attention. Routine lifecycle
+          // belongs to one update row, never a succession of final answers.
+          if (attentionRequired(event, task.status)) {
+            await harness.deliver(to, text, { deliveryId: `dispatch-event:${event.id}` });
+          } else {
+            await harness.deliver(to, text, { deliveryId: `dispatch-event:${event.id}`, statusKey: `dispatch:${event.executionId}` });
+          }
         }
         return;
       }
@@ -564,6 +594,8 @@ async function main(argv: string[]): Promise<void> {
     // Like Hermes restart_drain_timeout: stop input, finish in-flight work for up to
     // drainSeconds, abort the rest, then persist state (user's /pause flag untouched).
     scheduler.stop();
+    await reviewWorkers.stop();
+    await reviewSubagents.stop();
     clearInterval(policyTimer);
     clearInterval(cronReportTimer);
     await plugins.reportProcessing.stop();

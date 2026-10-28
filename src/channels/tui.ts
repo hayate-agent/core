@@ -36,6 +36,8 @@ export class HarnessTuiChannel implements Channel {
   private readonly transcript = new ConversationTranscript();
   private readonly conversationScroll = new ScrollView(this.transcript, { follow: "end", primary: true });
   private readonly activity = new Text();
+  private routineStatus = "";
+  readonly editableProgress = true;
   private readonly panelText = new Text();
   private readonly editor;
   private readonly layout;
@@ -254,6 +256,7 @@ export class HarnessTuiChannel implements Channel {
   note(text: string, kind: "info" | "success" | "error" = "info"): void { this.append(text, kind); }
 
   private resetActivity(): void {
+    this.routineStatus = "";
     this.partial = "";
     this.working = false;
     this.startedAt = 0;
@@ -316,7 +319,7 @@ export class HarnessTuiChannel implements Channel {
     this.header.setText(`VanillaCore Agent Harness · ${this.opts.agent}\n${this.opts.status()}${this.opts.sessions?.current ? `\nSession: ${this.opts.sessions.current.id} · ${this.opts.sessions.current.title} · ${this.opts.sessions.workspace}` : ""}`);
     // Stream into the scrollable conversation, leaving the status area compact.
     this.transcript.setEntries([...this.lines, ...(this.partial ? [{ kind: "assistant" as const, text: this.partial }] : [])], this.color);
-    if (!this.dialog) this.activity.setText(tint(this.activityLabel(), this.outcome === "failed" || this.failedTools ? "31" : this.working || this.opts.workState?.().running || this.outcome === "cancelled" ? "33" : this.startedAt ? "32" : "2", this.color));
+    if (!this.dialog) this.activity.setText(tint(this.routineStatus || this.activityLabel(), this.outcome === "failed" || this.failedTools ? "31" : this.working || this.opts.workState?.().running || this.outcome === "cancelled" ? "33" : this.startedAt ? "32" : "2", this.color));
     this.tui.requestRender();
   }
 
@@ -341,6 +344,12 @@ export class HarnessTuiChannel implements Channel {
       this.note(`Output for another session (${_to.target}); not added to this conversation.`);
       return;
     }
+    if (meta?.presentation === "progress") {
+      this.routineStatus = text;
+      this.render();
+      return;
+    }
+    this.routineStatus = "";
     this.partial = "";
     this.outcome = meta?.outcome;
     this.append(text, meta?.outcome === "failed" ? "error" : meta?.outcome === "cancelled" ? "cancelled" : "assistant");

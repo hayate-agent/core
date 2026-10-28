@@ -1,3 +1,4 @@
+import { testReviewExecution } from "./review-test-executor.js";
 import assert from "node:assert/strict";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -25,7 +26,7 @@ test("admin extension preserves history, persists and grants exactly two candida
   const backend = { async review() { calls++; return JSON.stringify({ findings: [
     { id: "existing-p1", severity: "P1", file: "a.ts", line: 1, title: "Existing blocker", evidence: "Concrete evidence" },
   ] }); } };
-  const create = () => new ReviewService(path.join(root, "home"), config, backend, async () => {});
+  const create = () => new ReviewService(path.join(root, "home"), config, backend, async () => {}, testReviewExecution(backend));
   let service = create();
   const exhausted = await service.run(cwd, "work");
   assert.equal(exhausted.status, "escalated");

@@ -66,6 +66,49 @@ An explicit `/review run` still reviews documentation if requested. `mandatory`
 selects which lifecycle gates apply; `shellGuard` independently opts into shell
 interception and defaults to false. No remote branch protection is installed.
 
+## Dedicated execution routing
+
+The bundled review plugin requires a dedicated execution capability from the host.
+It never uses the working agent's general assessment backend as a fallback:
+
+1. Dispatcher enabled: a dedicated read-only review worker.
+2. Dispatcher disabled: a dedicated read-only review subagent.
+3. Primary execution unavailable/failed: an explicit fresh-session review handover
+   with a detached local candidate worktree. Cancellation never starts a fallback.
+
+The host uses a separate Dispatcher execution transport for review, not the ordinary
+working-tool strategy or its capacity queue. This avoids a waiting parent consuming
+all worker slots and triggering review recursion. `review-executions.json` is an
+execution ledger, not a new review budget. Existing review rounds, findings and
+approval fingerprints remain owned by the plugin. Cancelled primary execution is
+drained before a fallback starts; a provider ignoring cancellation may therefore
+hold the safety fence rather than permit overlapping reviews.
+
+Review children use ephemeral runtime sessions with tools/extensions/project context
+disabled. Dedicated subagent records in `review-subagents/` retain parent, fingerprint,
+model choice, outcome and result. On startup, stale running children are marked
+interrupted, never automatically replayed. Interrupted dispatcher review executions
+are cancelled before scheduler recovery. A new attempt must still pass the original
+review ledger budget. Worker/subagent/fallback time limits request cancellation
+rather than pretending to forcibly terminate an unresponsive provider.
+
+The worktree snapshot contains tracked changes and bounded regular untracked files;
+unsafe/nonregular paths fail closed. It is supplied in an explicit handover together
+with the immutable review prompt. The tool-free runtime is **not rebound to that
+filesystem cwd** and cannot browse it: the actual review input is the captured diff.
+This is not a general working-agent worktree or a claim of sandboxed filesystem
+execution. Final candidate revalidation still belongs to the review service.
+
+Host capability instructions are generated per working turn, independently of
+optional skill metadata. Configured, ready, registered, exposed and session-allowed
+are separate facts; none is proof of provider authentication or extra authority.
+
+For local plugin development, use
+`node scripts/test-local-review-plugins.mjs <plugin-source> [test-files...]`.
+It creates a temporary hash lock for the normal materializer and does not change
+`plugins.lock.json`. Ordinary npm scripts still use the production pin. Local
+materialization and a successful build do not activate a deployed installation.
+
 ## Changeset and scope
 
 The Harness captures a base before the working turn. An explicit `baseRef` uses
