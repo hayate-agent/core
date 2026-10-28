@@ -10,7 +10,17 @@ authorized task:
 The deadline is an absolute UTC millisecond timestamp, greater than the next check
 and at most seven days ahead. Intervals range from one minute to 24 hours. The
 original task's earlier deadline always wins. A later wait cannot extend the
-inherited deadline. The existing 20-follow-up cap includes wait rechecks.
+inherited deadline. The 20-follow-up cap counts productive work, not host-issued status-only rechecks.
+Each scheduler claim persists a monotonic `waitChecks` sequence and an inbox
+`waitCheck` marker. IDs use that sequence, not work depth. The runtime tool guard
+exempts only `plugin_dispatch` with action `status` and the continuation checkpoint
+tool. All other tools (including shell, web, read and arbitrary plugin tools)
+acquire and persist one productive step **before** execution in a recheck turn.
+A failed save denies execution. Repeated tools in that turn charge only once;
+returning `waiting` cannot refund the step. At depth 20 status checks may continue,
+but productive tools are denied and `continue` becomes a blocked checkpoint.
+A status-only turn requesting `continue` queues the ordinary next productive step.
+Model prose and tool names claiming to be read-only are not evidence of purity.
 
 The host persists the condition description, safe next step, due time and deadline
 with the ordinary turn checkpoint. On the first idle scheduler tick after due time,
@@ -23,9 +33,14 @@ explicitly register another bounded wait. Original mandate and deadline accompan
 the recheck. Existing replay reconciliation, tool guards and approval rules apply.
 
 Pause, stop, queued operator work, active turns/delivery, externally managed worker
-sessions and unavailable persistence suppress wakeups. Expired or exhausted waits
-become blocked and post a visible operator-review notice without starting a model
-turn. Stop revokes the task. New accepted operator work retains the existing task
+sessions and unavailable persistence suppress wakeups. Expired deadlines and malformed checkpoints become blocked without starting a
+model turn. `termination` distinguishes `deadline_expired`,
+`productive_budget_exhausted` and `malformed_checkpoint`; next step and dependency
+remain inspectable (the last claimed dependency is retained as `lastWait`). Routine
+termination is logged as lifecycle activity, not posted as a generic operator-review
+alarm. This patch deliberately adds no competing notification integration; a future
+notification adapter can consume these reasons and request a concrete human decision
+only where one actually exists. Stop revokes the task. New accepted operator work retains the existing task
 supersession behavior. API runs and the nightly controller cannot register these
 waits; they retain their own lifecycle contracts.
 

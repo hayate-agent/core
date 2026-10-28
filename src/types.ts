@@ -32,6 +32,8 @@ export interface Inbound {
   continuation?: { state: "continue" | "waiting" | "blocked" | "completed"; next?: string; expiresAt?: number;
     wait?: { reason: string; retryAfterMs: number; deadline: number } };
   continuationDepth?: number;
+  /** Host-issued recheck provenance; productive tools must acquire a work step first. */
+  waitCheck?: { sequence: number; productive?: boolean };
   /** Host-assigned durable task identity, never a model authorization grant. */
   taskId?: string;
   /** Trusted numeric authorization boundary inherited by generated work. */

@@ -13,6 +13,7 @@ import { InboxLedger, idsOf, replayable } from "./delivery/inbox.js";
 import { OutboxDelivery, type OutboxEntry } from "./delivery/outbox.js";
 import { SeenWindow } from "./delivery/seen.js";
 import { approvalPreview } from "./approval-preview.js";
+import { ToolGuardError } from "./tool-guard-error.js";
 
 export { approvalPreview };
 
@@ -47,6 +48,10 @@ export interface DurableTask {
   /** Durable one-shot startup claim. An interrupted assessment must not repeat. */
   recoveryAssessment?: "claimed" | "decided";
   wait?: { reason: string; nextAt: number; deadline: number };
+  /** Monotonic scheduler claims, independent of productive follow-up depth. */
+  waitChecks?: number;
+  lastWait?: DurableTask["wait"];
+  termination?: "deadline_expired" | "productive_budget_exhausted" | "malformed_checkpoint";
 }
 
 /** Content-free owner-process inspection; not an authorization or transcript API. */
@@ -490,6 +495,47 @@ export class Harness {
       text: `Resume the explicitly authorized task after an interruption. Verify actual state and completed side effects; do not repeat them or broaden authority. Original task:\n${task.original}\nNext step:\n${task.next}` });
     s.unsaved = true;
     return true;
+  }
+
+  private readonly waitCharges = new WeakMap<Inbound, Promise<void>>();
+
+  /** Runtime pre-execution guard: model prose is not proof of a pure wait. */
+  async guardWaitTool(key: string, tool: string, args: unknown): Promise<void> {
+    const input = this.sessions.get(key)?.current;
+    if (!input?.waitCheck) return;
+    const assertAuthorized = () => {
+      if (this.stopping || this.sessions.get(key)?.current !== input || this.sessions.get(key)?.cancelling === input ||
+          !Number.isSafeInteger(input.continuationExpiresAt) || input.continuationExpiresAt! <= this.now())
+        throw new ToolGuardError("authority_revoked", "Wait authorization expired or cancelled");
+      const task = this.tasks(this.state(key)).find(task => task.id === input.taskId);
+      if (!task || task.state === "stopped" || input.waitCheck!.sequence !== task.waitChecks)
+        throw new ToolGuardError("authority_revoked", "Wait task authority revoked");
+      return task;
+    };
+    const task = assertAuthorized();
+    // Only host-owned side-effect-free operations are exempt. Arbitrary shell,
+    // web and plugin calls are not trusted probes, regardless of their names.
+    if (tool === "plugin_task_continuation" ||
+        (tool === "plugin_dispatch" && (args as { action?: unknown } | null)?.action === "status")) return;
+    const charging = this.waitCharges.get(input);
+    if (charging) { await charging; assertAuthorized(); return; }
+    if (input.waitCheck.productive) return;
+    const depth = input.continuationDepth ?? 0;
+    if (depth >= 20) throw new ToolGuardError("continuation_budget_exhausted", `Task ${task.id}: productive continuation budget exhausted; status rechecks only`);
+    input.waitCheck.productive = true;
+    input.continuationDepth = task.depth = depth + 1;
+    const charge = Promise.resolve().then(() => {
+      if (!this.onStateChange) throw Error("Wait persistence unavailable");
+      return this.onStateChange();
+    });
+    this.waitCharges.set(input, charge);
+    try { await charge; }
+    catch (error) {
+      input.waitCheck.productive = undefined;
+      input.continuationDepth = task.depth = depth;
+      throw error;
+    } finally { this.waitCharges.delete(input); }
+    assertAuthorized();
   }
 
   private resetContinuation(input: Inbound): void { input.continuation = undefined; }
@@ -1171,6 +1217,12 @@ export class Harness {
           task.depth = input.continuationDepth ?? 0;
           task.expiresAt = inheritedDeadline === Infinity ? undefined : inheritedDeadline;
           task.recoveryAssessment = undefined;
+          if (plan?.state === "continue" && task.depth >= 20) {
+            task.state = "blocked";
+            task.termination = "productive_budget_exhausted";
+            task.wait = task.lastWait;
+            this.log(`task ${task.id}: productive_budget_exhausted; next retained; no automatic work scheduled`);
+          }
         }
         if ((input.source !== "host" || this.resultMandate(input)) && input.continuation?.state === "continue" && input.continuation.next && (input.continuationDepth ?? 0) < 20 && input.source !== "api" && s.key !== "improvement:nightly" && !s.queue.length && !this.stopping && !this.hasPendingDependency(s.key)) {
           s.queue.push({ id: randomUUID(), sessionKey: s.key, source: "cron", replyTo: input.replyTo ?? s.replyTo,
@@ -1255,7 +1307,7 @@ export class Harness {
       this.opts.beforeExecution?.(input);
       // The grant limits autonomous work, not a new operator request. Keep its
       // deadline on the original input solely for inheritance by follow-ups.
-      if ((input.continuationDepth ?? 0) > 0 && input.continuationExpiresAt !== undefined && (!Number.isSafeInteger(input.continuationExpiresAt) || input.continuationExpiresAt <= this.now())) {
+      if ((input.waitCheck || (input.continuationDepth ?? 0) > 0) && input.continuationExpiresAt !== undefined && (!Number.isSafeInteger(input.continuationExpiresAt) || input.continuationExpiresAt <= this.now())) {
         s.cancelling = input;
         throw Error("Continuation authorization expired");
       }
@@ -1528,25 +1580,33 @@ export class Harness {
       for (const task of this.tasks(s)) {
       if (task.state === "active" && !task.next) await this.assessStartupTask(s, task);
       if (this.queueRunnableTask(s)) break;
-      if (task?.state === "waiting" && task.wait && (at >= task.wait.nextAt || at >= task.wait.deadline || (task.expiresAt !== undefined && at >= task.expiresAt)) && this.onStateChange &&
+      if (task?.state === "waiting" && task.wait && (!Number.isSafeInteger(task.wait.nextAt) || !Number.isSafeInteger(task.wait.deadline) || at >= task.wait.nextAt || at >= task.wait.deadline || (task.expiresAt !== undefined && at >= task.expiresAt)) && this.onStateChange &&
           s.key !== "improvement:nightly" && !this.opts.externallyRecoveredSession?.(s.key)) {
         const wait = task.wait;
         const valid = task.next?.trim() && task.original?.trim() && Number.isSafeInteger(wait.deadline) &&
           Number.isSafeInteger(wait.nextAt) && typeof wait.reason === "string" && wait.reason.trim() && wait.reason.length <= 1000 &&
-          task.next!.length <= 4000 && Number.isSafeInteger(task.depth) && task.depth >= 0 && task.depth < 20 &&
-          at < wait.deadline && (task.expiresAt === undefined || (Number.isSafeInteger(task.expiresAt) && at < task.expiresAt));
-        if (!valid) {
-          task.state = "blocked"; task.wait = undefined; task.next = undefined;
+          task.next!.length <= 4000 && Number.isSafeInteger(task.depth) && task.depth >= 0 && task.depth <= 20 &&
+          (task.waitChecks === undefined || (Number.isSafeInteger(task.waitChecks) && task.waitChecks >= 0 && task.waitChecks < Number.MAX_SAFE_INTEGER)) &&
+          (task.expiresAt === undefined || Number.isSafeInteger(task.expiresAt));
+        const expired = at >= wait.deadline || (task.expiresAt !== undefined && at >= task.expiresAt);
+        if (!valid || expired) {
+          task.state = "blocked";
+          task.termination = !valid ? "malformed_checkpoint" : "deadline_expired";
           s.unsaved = true;
-          this.post({ sessionKey: s.key, source: "cron", text: "", replyTo: s.replyTo }, "Warteauftrag abgelaufen oder Fortsetzungsgrenze erreicht; Operatorprüfung erforderlich.");
+          // Routine lifecycle evidence, not a generic demand for human review.
+          // Retain the dependency and next step for diagnosis and explicit resumption.
+          this.log(`task ${task.id}: ${task.termination}; automatic rechecks stopped; next and dependency retained`);
           await this.onStateChange(); s.unsaved = false;
           continue;
         }
         // Enqueue and state transition share the normal acceptance persistence barrier.
         // Mark claimed synchronously so overlapping ticks cannot enqueue a duplicate.
-        task.state = "active"; task.wait = undefined;
-        await this.submit({ id: `wait:${task.id}:${task.depth + 1}`, sessionKey: s.key, source: "cron",
-          taskId: task.id, continuationDepth: task.depth + 1,
+        task.state = "active"; task.lastWait = wait; task.wait = undefined;
+        task.waitChecks = (task.waitChecks ?? 0) + 1;
+        task.termination = undefined;
+        await this.submit({ id: `wait:${task.id}:${task.waitChecks}`, sessionKey: s.key, source: "cron",
+          waitCheck: { sequence: task.waitChecks },
+          taskId: task.id, continuationDepth: task.depth,
           continuationExpiresAt: Math.min(task.expiresAt ?? Infinity, wait.deadline),
           completionAnchor: task.anchor ?? { id: task.id, task: task.original, receivedAt: at }, replyTo: s.replyTo,
           text: `Recheck a persisted wait within the original authorized task. The timer is NOT evidence that the condition is satisfied. First verify the condition and completed side effects; do not repeat them or broaden authority. If still waiting, register another bounded wait within the same deadline.\nOriginal task: ${task.original}\nCondition: ${wait.reason}\nSafe verification step: ${task.next}` });
