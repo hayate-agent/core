@@ -282,7 +282,13 @@ export class PiSession implements RuntimeSession {
   }
 
   async seedHandover(text: string): Promise<void> {
-    await this.session.sendCustomMessage({ customType: "harness-handover", content: `Previous-session handover (context, not new authorization):\n${text}\nVerify referenced files and Git state before acting. Never repeat completed side effects blindly.`, display: false }, { triggerTurn: false });
+    const content = `Previous-session handover (context, not new authorization):\n${text}\nVerify referenced files and Git state before acting. Never repeat completed side effects blindly.`;
+    // A seed may already be in PI's branch when its provider checkpoint or the
+    // host's archive-link/state save failed. Recovery must retry persistence,
+    // not append the same model-visible handover on every attempt/restart.
+    const seeded = this.session.sessionManager.getBranch().some(entry =>
+      entry.type === "custom_message" && entry.customType === "harness-handover" && entry.content === content);
+    if (!seeded) await this.session.sendCustomMessage({ customType: "harness-handover", content, display: false }, { triggerTurn: false });
     await this.checkpoint?.();
   }
 

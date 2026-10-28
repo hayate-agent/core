@@ -221,9 +221,12 @@ by the same Harness session key. Old native session history remains on disk.
 
 A failed rotation retains the prepared summary. If the old session processes another
 turn before retry, the summary is refreshed before rotation. If restart resumes a new
-session before the switched marker was saved, the saved handover is seeded again;
-this can duplicate context but does not intentionally repeat tool actions. This is
-recovery-oriented, not an exactly-once model/side-effect guarantee.
+session before the switched marker was saved, recovery retries the saved handover.
+The PI adapter reuses an identical `harness-handover` message already on the active
+branch and still retries its provider checkpoint. Checkpoint/archive-link failures
+therefore do not append the same seed repeatedly, including after reopening the
+session. Different handovers are not suppressed. This is recovery-oriented, not an
+exactly-once model/side-effect guarantee.
 
 Limitations: there is no automatic archival/pruning of native conversation history;
 no isolated summary model; no automatic continuation without queued input; and no
