@@ -58,6 +58,8 @@ export interface ContextRecord {
   admission?: { id: string; digest: string; version: number; execution: "pending" | "applied" | "failed" | "superseded" | "cancelled" };
   handover?: { phase: "prepared" | "switched"; from: string; to?: string; text: string; archiveId?: string };
   failure?: { stage: MaintenanceStage; code: MaintenanceCode; phase: "before" | "after"; turn: number; action: "compact" | "handover" };
+  /** Recovery cannot use turn cooldown: fail-closed foreground does not advance turns. */
+  recoveryRetry?: { attempts: number; notBefore: number };
   assessmentDiagnostic?: { stage: "assessment"; code: MaintenanceCode; phase: "before" | "after"; turn: number };
   lastError?: string;
   completionNotice?: string;
@@ -80,7 +82,21 @@ export class ContextMaintenance {
     try { await change(); } finally { this.strategyChanging = false; }
   }
   readonly archives: SessionArchives;
-  constructor(private readonly home: string, private readonly policy: () => ContextPolicy, private readonly assess?: BoundaryAssessment) { this.archives = new SessionArchives(home); }
+  constructor(private readonly home: string, private readonly policy: () => ContextPolicy, private readonly assess?: BoundaryAssessment, private readonly now: () => number = Date.now) { this.archives = new SessionArchives(home); }
+  private checkRecoveryRetry(state: ContextRecord): void {
+    if (state.recoveryRetry && this.now() < state.recoveryRetry.notBefore) {
+      // Retain and surface the genuine failure; never authorize a working prompt
+      // against an incompletely seeded session while waiting for recovery.
+      throw new MaintenanceError(state.failure?.stage ?? "seed", state.failure?.code ?? "failed");
+    }
+  }
+  private recordRecoveryFailure(state: ContextRecord): void {
+    const attempts = Math.min((state.recoveryRetry?.attempts ?? 0) + 1, 7);
+    // Retry pacing, NOT an operation timeout: 1s exponential to a 60s cap.
+    // Turn-based cooldown would deadlock fail-closed recovery. Persist an absolute
+    // deadline once per failed attempt; arrivals/restarts must not extend it.
+    state.recoveryRetry = { attempts, notBefore: this.now() + Math.min(1000 * 2 ** (attempts - 1), 60000) };
+  }
   private async prepareArchive(key: string, session: RuntimeSession, instructions: string): Promise<{ text: string; archiveId: string }> {
     if (!session.summarize || !session.archiveEntries) throw new Error("Runtime cannot archive handover");
     const entries = await maintenanceStep("archive", () => session.archiveEntries!()); // capture before native compaction
@@ -209,6 +225,7 @@ export class ContextMaintenance {
       const state = await this.load(key);
       const id = session.status().sessionId;
       if (state.handover?.phase === "prepared" && id !== state.handover.from) {
+        this.checkRecoveryRetry(state);
         try {
           if (!session.seedHandover) throw new MaintenanceError("seed", "failed");
           await maintenanceStep("seed", () => session.seedHandover!(state.handover!.text));
@@ -219,6 +236,7 @@ export class ContextMaintenance {
           state.pending = undefined;
           state.failure = undefined;
           state.lastError = undefined;
+          state.recoveryRetry = undefined;
           state.pressureSinceCompaction = false;
           state.completionNotice = state.handover.archiveId
             ? "🔄 Neue Sitzung übernommen; Rückschau gespeichert."
@@ -229,6 +247,7 @@ export class ContextMaintenance {
           await this.save(key, state);
         } catch (err) {
           const error = maintenanceError("seed", err);
+          this.recordRecoveryFailure(state);
           this.finishAdmission(state, "failed");
           state.failure = { stage: error.stage, code: error.code, phase: "before", turn: state.turns, action: "handover" };
           state.lastError = error.message;
@@ -242,6 +261,7 @@ export class ContextMaintenance {
           state.pending = undefined;
         }
         state.handover = undefined;
+        state.recoveryRetry = undefined;
         state.pressureSinceCompaction = false;
         state.lastCompact = undefined;
         state.lastHandover = undefined;
@@ -277,6 +297,7 @@ export class ContextMaintenance {
       }
       // Recover prepared transitions before considering a new maintenance action.
       if (state.handover?.phase === "prepared" && phase === "before") {
+        this.checkRecoveryRetry(state);
         try {
         if (id === state.handover.from) {
           if (!session.summarize) throw new Error("Runtime cannot refresh handover");
@@ -298,6 +319,7 @@ export class ContextMaintenance {
         state.pending = undefined;
         state.failure = undefined;
         state.lastError = undefined;
+        state.recoveryRetry = undefined;
         state.pressureSinceCompaction = false;
         const notice = state.handover.archiveId
           ? "🔄 Neue Sitzung übernommen; Rückschau gespeichert."
@@ -307,6 +329,7 @@ export class ContextMaintenance {
         return state.noticeTarget ? undefined : notice;
         } catch (err) {
           const error = maintenanceError("summary", err);
+          this.recordRecoveryFailure(state);
           this.finishAdmission(state, "failed");
           state.failure = { stage: error.stage, code: error.code, phase, turn: state.turns, action: "handover" };
           state.lastError = error.message;
