@@ -1,3 +1,4 @@
+import { testReviewExecution } from "./review-test-executor.js";
 import assert from "node:assert/strict";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -28,7 +29,7 @@ async function setup(t: TestContext, maxTurns = 3) {
   let invoke: (() => Promise<void>) | undefined;
   const backend = { async review(prompt: string) { prompts.push(prompt); await invoke?.(); return replies.shift() ?? '{"findings":[]}'; } };
   const config = reviewConfig({ maxTurns });
-  const service = new ReviewService(home, config, backend, async (_key, text) => { escalations.push(text); });
+  const service = new ReviewService(home, config, backend, async (_key, text) => { escalations.push(text); }, testReviewExecution(backend));
   await service.prepare(cwd);
   await writeFile(path.join(cwd, "a.ts"), "changed\n");
   return { cwd, home, service, config, backend, replies, prompts, escalations, onReview: (fn: () => Promise<void>) => { invoke = fn; } };
@@ -79,7 +80,7 @@ test("P1 needs evidence-based assessment; three rounds persist and escalate with
   assert.equal(state.rounds.length, 3);
   assert.equal(escalations.length, 1);
   assert.match(prompts[1], /Test proves/);
-  const restarted = new ReviewService(home, config, backend, async () => {});
+  const restarted = new ReviewService(home, config, backend, async () => {}, testReviewExecution(backend));
   assert.equal((await restarted.run(cwd, "different-session")).rounds.length, 3);
   await assert.rejects(restarted.assertAllowed(cwd, "publish"), /gate blocks/);
 });
@@ -143,7 +144,7 @@ test("existing escalation leaves repeated chat replies untouched without prompts
   saved.history = Array.from({ length: 227 }, () => ({ rounds: [{ fingerprint: "OLD-HISTORY-MARKER", assessment: [], error: "x".repeat(2000) }] }));
   await writeFile(service.evidencePath(saved.root), JSON.stringify(saved));
   let notifications = 0;
-  const restored = new ReviewService(home, config, backend, async () => { notifications++; });
+  const restored = new ReviewService(home, config, backend, async () => { notifications++; }, testReviewExecution(backend));
   const before = JSON.stringify(await restored.status(cwd));
   for (const reply of ["done", "Warum?", "Eine normale Antwort"]) {
     assert.equal(await finishWithReview(restored, cwd, { sessionKey: "work", source: "channel", text: "chat" }, reply, {
@@ -291,9 +292,9 @@ test("documentation-only edits skip automatic review, risky configuration does n
 test("escalation retains original channel and thread across restart", async (t) => {
   const { cwd, home, config, backend, replies } = await setup(t, 1);
   const origin = { channel: "matrix", target: "original-room", thread: "original-thread" };
-  await new ReviewService(home, config, backend, async () => {}).prepare(cwd, origin, "original-session");
+  await new ReviewService(home, config, backend, async () => {}, testReviewExecution(backend)).prepare(cwd, origin, "original-session");
   let actual: unknown;
-  const restarted = new ReviewService(home, config, backend, async (session, message, address) => { actual = { session, address }; });
+  const restarted = new ReviewService(home, config, backend, async (session, message, address) => { actual = { session, address }; }, testReviewExecution(backend));
   await restarted.prepare(cwd, { channel: "matrix", target: "other-room" }, "other-session");
   replies.push(JSON.stringify({ findings: [finding] }));
   await restarted.run(cwd, "other-session");
@@ -302,6 +303,6 @@ test("escalation retains original channel and thread across restart", async (t) 
 
 test("disabled gate does not block", async (t) => {
   const { cwd, home, backend } = await setup(t);
-  const service = new ReviewService(home, reviewConfig({ enabled: false }), backend, async () => {});
+  const service = new ReviewService(home, reviewConfig({ enabled: false }), backend, async () => {}, testReviewExecution(backend));
   await service.assertAllowed(cwd, "merge");
 });

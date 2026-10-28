@@ -3,7 +3,11 @@ import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const lock = JSON.parse(await readFile(path.join(root, 'plugins.lock.json'), 'utf8'));
+// Explicit local development lock is allowed only together with local sources.
+// Production builds continue to use the checked-in immutable revision/hash lock.
+const localLock = process.argv[3];
+if (localLock && !process.argv[2]) throw Error('Local plugin lock requires local sources');
+const lock = JSON.parse(await readFile(localLock ? path.resolve(localLock) : path.join(root, 'plugins.lock.json'), 'utf8'));
 if (lock.schema !== 1 || !/^[a-f0-9]{40}$/.test(lock.revision) || lock.repository !== 'https://git.vanillacore.net/harness/plugins') throw Error('Invalid plugin lock');
 const output = path.join(root, 'src/builtin-plugins');
 const files = [];

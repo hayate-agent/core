@@ -14,6 +14,8 @@ export interface PersistedSession {
   task?: import("./harness.js").DurableTask;
   tasks?: import("./harness.js").DurableTask[];
   completionRecent?: NonNullable<Inbound["completionContext"]>["recent"];
+  /** Last successfully displayed routine status; persisted to deduplicate retries/restarts. */
+  statusDelivered?: Record<string, string>;
   replyTo?: Address;
   heartbeat?: Recurring;
   heartbeatDisabled?: boolean;

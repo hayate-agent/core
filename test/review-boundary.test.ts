@@ -1,3 +1,4 @@
+import { testReviewExecution } from "./review-test-executor.js";
 import assert from "node:assert/strict";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -24,7 +25,7 @@ async function fixture(t: TestContext) {
   let calls = 0;
   const backend = { async review() { calls++; return '{"findings":[]}'; } };
   const config = reviewConfig({ baseRef: "origin/accepted" });
-  const service = new ReviewService(home, config, backend, async () => {});
+  const service = new ReviewService(home, config, backend, async () => {}, testReviewExecution(backend));
   await service.prepare(cwd);
   await writeFile(path.join(cwd, "a.ts"), "reviewed\n");
   await service.run(cwd, "task");
@@ -41,7 +42,7 @@ test("passed task starts at accepted upstream boundary without reviewing oversiz
   await git(f.cwd, ["commit", "-m", "upstream history"]);
   await git(f.cwd, ["push", "origin", "HEAD:refs/heads/accepted"]);
   const head = (await git(f.cwd, ["rev-parse", "HEAD"])).trim();
-  const restarted = new ReviewService(f.home, f.config, f.backend, async () => {});
+  const restarted = new ReviewService(f.home, f.config, f.backend, async () => {}, testReviewExecution(f.backend));
   await restarted.prepare(f.cwd);
   assert.equal(await finishWithReview(restarted, f.cwd, { sessionKey: "chat", source: "channel", text: "hello" }, "hello", {} as never, {}), "hello");
   assert.equal(f.calls(), 1);
@@ -84,7 +85,7 @@ test("pending and escalated tasks never rotate their base at upstream movement",
 test("pending task cannot rotate even when current work becomes upstream", async (t) => {
   const f = await fixture(t);
   await writeFile(path.join(f.cwd, "a.ts"), "unreviewed\n");
-  const rejecting = new ReviewService(f.home, f.config, { async review() { return '{"findings":[{"id":"defect","severity":"P1","file":"a.ts","line":1,"title":"Defect","evidence":"Concrete failure"}]}'; } }, async () => {});
+  const rejecting = new ReviewService(f.home, f.config, { async review() { return '{"findings":[{"id":"defect","severity":"P1","file":"a.ts","line":1,"title":"Defect","evidence":"Concrete failure"}]}'; } }, async () => {}, testReviewExecution({ async review() { return '{"findings":[{"id":"defect","severity":"P1","file":"a.ts","line":1,"title":"Defect","evidence":"Concrete failure"}]}'; } }));
   assert.equal((await rejecting.run(f.cwd, "task")).status, "pending");
   await git(f.cwd, ["add", "."]);
   await git(f.cwd, ["commit", "-m", "unreviewed task"]);
@@ -108,7 +109,7 @@ test("committed changes after prepare stay gated even if upstream later moves", 
 test("local target cannot turn unreviewed commits into a baseline", async (t) => {
   const f = await fixture(t);
   await git(f.cwd, ["branch", "accepted"]);
-  const local = new ReviewService(f.home, reviewConfig({ baseRef: "accepted" }), f.backend, async () => {});
+  const local = new ReviewService(f.home, reviewConfig({ baseRef: "accepted" }), f.backend, async () => {}, testReviewExecution(f.backend));
   await local.prepare(f.cwd);
   assert.equal((await local.status(f.cwd)).base, f.approved.base);
 });

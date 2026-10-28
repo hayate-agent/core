@@ -49,6 +49,7 @@ export class Dispatcher {
     if (!Number.isSafeInteger(capacity) || capacity < 1) throw Error("Invalid dispatcher capacity");
     if (!strategy.name.trim() || !Number.isSafeInteger(strategy.version) || strategy.version < 1) throw Error("Invalid dispatcher strategy");
   }
+  get ready(): boolean { return this.recovered && !this.stopped; }
   async start(): Promise<void> {
     if (this.initialized) throw Error("Dispatcher already started");
     this.initialized = true;
@@ -160,6 +161,11 @@ export class Dispatcher {
     await this.store.control(id, action);
     if (action !== "resume") this.active.get(id)?.abort.abort();
     await this.kick();
+  }
+  /** Host fence: durable cancellation alone does not mean execution has drained. */
+  async waitForExecution(id: string): Promise<void> {
+    await this.scheduling;
+    await this.active.get(id)?.done;
   }
   flushEvents(): Promise<void> {
     if (this.delivering) return this.delivering;

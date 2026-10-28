@@ -1,3 +1,4 @@
+import { testReviewExecution } from "./review-test-executor.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, mkdir, writeFile, readFile, rm } from "node:fs/promises";
@@ -25,7 +26,7 @@ test("extracted engine reopens existing version1 ledger without resetting findin
   await mkdir(path.dirname(file)); const bytes = JSON.stringify(ledger); await writeFile(file, bytes);
   let calls = 0;
   const backend = { async review() { calls++; throw Error("must not run"); } };
-  const service = new ReviewService(home, reviewConfig({ maxTurns: 1 }), backend, async () => {});
+  const service = new ReviewService(home, reviewConfig({ maxTurns: 1 }), backend, async () => {}, testReviewExecution(backend));
   assert.deepEqual(await service.status(cwd), ledger);
   assert.equal(await readFile(file, "utf8"), bytes);
   assert.equal((await service.run(cwd, "other-task")).status, "escalated");

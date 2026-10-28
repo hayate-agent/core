@@ -8,6 +8,7 @@ import type { Address, Inbound } from "./types.js";
 /** Trusted startup composition: one selection supplies both hooks and operator/model APIs. */
 export interface PolicyEngineContext {
   home: string; cwd: string; config: unknown; backend: AssessmentBackend;
+  reviewExecution?: import("./review-execution.js").DedicatedReviewExecution;
   notify(sessionKey: string, message: string, origin?: Address): Promise<void>;
   origin(input: Inbound): Address | undefined;
 }

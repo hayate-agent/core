@@ -326,3 +326,21 @@ test("local TUI isolates sessions, blocks busy switches, restores visible histor
     assert.equal(inputs.length, 3, "session UI commands never become model prompts");
   } finally { await ui.stop(); await rm(home, { recursive: true, force: true }); }
 });
+
+
+test("routine status replaces the footer without adding conversation messages", async () => {
+  const term = terminal();
+  const ui = new HarnessTuiChannel({ agent: "test", status: () => "running", quit: () => {}, terminal: term.t });
+  const to = { channel: "console", target: "local" };
+  try {
+    await ui.start(async () => {});
+    await ui.send(to, "worker started", { presentation: "progress", progressId: "worker" });
+    await ui.send(to, "worker recovering", { presentation: "progress", progressId: "worker" });
+    assert.equal((ui as any).lines.length, 0);
+    await new Promise(r => setTimeout(r, 30));
+    assert.match((ui as any).tui.getScreenLines().join("\n"), /worker recovering/);
+    await ui.send(to, "actual result");
+    assert.equal((ui as any).lines.length, 1);
+    assert.equal((ui as any).routineStatus, "");
+  } finally { await ui.stop(); }
+});

@@ -9,6 +9,8 @@ export interface OutboxEntry {
   text: string;
   outcome?: TurnOutcome;
   progressId?: string;
+  /** Routine status uses a stable update row, not a final reply. */
+  statusKey?: string;
 }
 
 export interface OutboxDeps {
@@ -62,7 +64,7 @@ export class OutboxDelivery {
       if (this.blocked.has(entry)) return false;
       try {
         entry.id ??= randomUUID();
-        await this.deps.deliver(entry.to, entry.text, { deliveryId: entry.id, ...(entry.progressId ? { progressId: entry.progressId } : {}), ...(entry.outcome ? { outcome: entry.outcome } : {}) });
+        await this.deps.deliver(entry.to, entry.text, { deliveryId: entry.id, ...(entry.statusKey ? { statusKey: entry.statusKey } : {}), ...(entry.progressId ? { progressId: entry.progressId } : {}), ...(entry.outcome ? { outcome: entry.outcome } : {}) });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         if (!(err instanceof PermanentDeliveryError) || !this.deps.park) {
