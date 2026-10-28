@@ -575,7 +575,8 @@ export class Harness {
   dependencyCheckpoint(key: string): import("./execution.js").Execution["dependency"] {
     const s = this.sessions.get(key), input = s?.current;
     const task = s && this.tasks(s).find(task => task.id === input?.taskId);
-    if (!input || !task || input.taskId !== task.id || ["stopped", "completed"].includes(task.state)) return;
+    if (!input || !task || input.taskId !== task.id || task.state === "stopped" ||
+        (task.state === "completed" && input.source !== "host")) return;
     if (input.source === "host" && !this.resultMandate(input)) return;
     return { taskId: task.id, original: task.original, depth: input.continuationDepth ?? 0,
       expiresAt: input.continuationExpiresAt, anchor: structuredClone(input.completionAnchor) };
@@ -588,13 +589,15 @@ export class Harness {
     if (input.source !== "host" || input.sessionKey.startsWith("dispatch:") || input.sessionKey.startsWith("subagent:")) return;
     const execution = this.opts.executionStore?.list(input.sessionKey).find(e => e.id === input.hostEvent?.executionId);
     const session = this.sessions.get(input.sessionKey);
-    // A retained live task owns its worker even after an intervening question.
+    // A retained task owns its worker even after an intervening question or
+    // completion checkpoint. Only explicit stop/expiry revoke that provenance;
+    // productive depth is a separate execution gate, not operator withdrawal.
     // Only a missing historical task falls back to the current parent mandate.
     const task = session && (this.tasks(session).find(task => task.id === execution?.dependency?.taskId) ?? session.task);
     if (!task || execution?.status !== "completed" || execution.parentStopped ||
         this.stoppingHostParents.has(input.sessionKey) || !this.opts.hostEventAllowed?.(input) ||
         !task.id || !task.original.trim() ||
-        !["active", "waiting"].includes(task.state) || !Number.isSafeInteger(task.depth) || task.depth < 0 || task.depth >= 20 ||
+        !["active", "waiting", "blocked", "completed"].includes(task.state) || !Number.isSafeInteger(task.depth) || task.depth < 0 || task.depth > 20 ||
         (task.expiresAt !== undefined && (!Number.isSafeInteger(task.expiresAt) || task.expiresAt <= this.now())) ||
         (input.continuationExpiresAt !== undefined && (!Number.isSafeInteger(input.continuationExpiresAt) || input.continuationExpiresAt <= this.now()))) return;
     return structuredClone({ taskId: task.id, original: task.original, depth: task.depth, expiresAt: task.expiresAt, anchor: task.anchor });
@@ -602,7 +605,12 @@ export class Harness {
 
   planContinuation(key: string, plan: NonNullable<Inbound["continuation"]>): void {
     const input = this.sessions.get(key)?.current;
-    if (input?.source === "host" && !this.resultMandate(input)) throw Error("No live parent mandate for result continuation");
+    if (input?.source === "host") {
+      const mandate = this.resultMandate(input);
+      if (!mandate) throw new ToolGuardError("authority_revoked", "No live parent mandate for result continuation");
+      if (plan.state === "continue" && mandate.depth >= 20)
+        throw new ToolGuardError("continuation_budget_exhausted", `Task ${mandate.taskId}: productive continuation budget exhausted; status rechecks only`);
+    }
     if (!input || !this.sessions.get(key)?.prompting) throw Error("Continuation requires an active working turn");
     if (!["continue", "waiting", "blocked", "completed"].includes(plan.state) || (plan.state === "continue" && (!plan.next?.trim() || plan.next.length > 4000))) throw Error("Invalid continuation plan");
     if (plan.replyKind !== undefined && !["routine", "substantive"].includes(plan.replyKind)) throw Error("Invalid continuation reply kind");
