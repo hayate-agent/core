@@ -1,0 +1,28 @@
+{
+  "sourceSha256": "e0bec13909a29f23b0b600914d424e7afa6d1dc68c72e125433889de669bbfef",
+  "night": "2026-10-28",
+  "turns": 54,
+  "experiments": [
+    {
+      "hypothesis": "Begrenzte zustandsbasierte Wartebedingungen machen den TUI-Sitzungstest gegenüber verzögerten Dateizugriffen robust, ohne seine funktionalen Assertions abzuschwächen.",
+      "baseline": "Auf ef854bf mit künstlich um 80 ms verzögerter Sitzungserstellung: gezielter TUI-Test 0/1 bestanden; die feste Wartezeit von 40 ms führte zum Sitzungswechsel-Fehler.",
+      "candidate": "Isolierter Worktree /local/work/snape-tui-state-wait: Der Test wartet auf beobachtbare Zustände mit einer festen Obergrenze von 3000 ms statt pauschal 40 ms.",
+      "evidence": "node --import tsx --test --test-name-pattern='local TUI isolates' test/tui.test.ts: mit derselben Verzögerung 1/1 bestanden. Verzögerungsinjektion anschließend entfernt; TUI-Regressionen 11/11 und Typecheck erfolgreich. Artefakte: /local/agent/development-evidence/night-2026-10-28/tui-state-wait/result.md. Gesamtsuite nicht ausgeführt; frühere TUI-Fehler damit nicht abschließend erklärt. Evaluator nicht verfügbar, zielbezogenes Review ausstehend. Keine Übernahme oder Aktivierung.",
+      "outcome": "improved"
+    },
+    {
+      "hypothesis": "Eine indexbasierte Schleife statt Array.map in der Request-Kanonisierung reduziert die mediane Hash-Laufzeit bei identischen Hashes um mindestens fünf Prozent.",
+      "baseline": "Exakter ef854bf-Code: Median 79,650 beziehungsweise 78,827 ms für jeweils 3000 Hash-Berechnungen auf arrayreichen Testdaten.",
+      "candidate": "Im isolierten Worktree /local/work/snape-hash-array-loop wurde Array.map durch eine vorab reservierte Ergebnisliste mit indexbasierter Schleife ersetzt.",
+      "evidence": "node --import tsx test/hash-array-bench.ts: Kandidatenmedian 80,770 beziehungsweise 79,064 ms, damit lokal 1,41 % beziehungsweise 0,30 % langsamer; jeweils 1005 Hashes identisch. Akzeptanzgrenze verfehlt, Änderung zurückgenommen. Run-Tests vor/nach Rücknahme 9/9, Kandidaten-Typecheck erfolgreich. Artefakte: /local/agent/development-evidence/night-2026-10-28/hash-array-loop/result.md. Keine CPU-Isolation; Evaluator nicht verfügbar. Keine Übernahme oder Aktivierung.",
+      "outcome": "rejected"
+    },
+    {
+      "hypothesis": "Eine Prüfung gespeicherter actual.model-Metadaten verhindert ungültige Routingwerte und spätere split-TypeErrors in Run-Statusansichten.",
+      "baseline": "Auf ef854bf: 12 gezielte Tests, 4 bestanden, 8 fehlgeschlagen; fehlerhafte actual-Strukturen und nicht als String gespeicherte Modellwerte wurden akzeptiert.",
+      "candidate": "Isolierter Worktree /local/work/snape-run-actual-model: load validiert vorhandene actual-Objekte und optionale Modellwerte vor Generationsänderung und Indexierung.",
+      "evidence": "node --import tsx --test test/run-actual-model.test.ts: 12/12 bestanden; Run-Regressionen 21/21, Typecheck und Build erfolgreich. npm test jedoch nur 514/515; isolierter TUI-Nachtest 10/11, Ursache nicht geklärt. Artefakte: /local/agent/development-evidence/night-2026-10-28/actual-model/result.md. Evaluator nicht verfügbar, zielbezogenes Review ausstehend. Keine Veröffentlichung, Übernahme oder Aktivierung.",
+      "outcome": "inconclusive"
+    }
+  ]
+}
