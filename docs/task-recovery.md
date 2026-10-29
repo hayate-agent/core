@@ -27,9 +27,16 @@ snapshots. A repeated restart must not manufacture additional parallel steps.
 The existing crash replay cap, approval and execution-boundary checks still apply.
 
 Recovery does not invent a next step. Successful turns with no explicit or
-semantic continuation decision remain active for one durable independent assessment
-against the original mandate. An uncertain or unavailable decision does not authorize
-execution. Explicit waiting, blocked, completed and stopped decisions remain distinct;
+semantic continuation decision remain active for bounded durable independent assessment
+against the original mandate. An uncertain result or transient provider failure does
+not revoke authority and does not authorize execution. The host persists each attempt
+before inference, with a 60-second earliest retry time, and permits at most three
+attempts across restarts. An interrupted claim consumes an attempt. Exhaustion produces
+one durable visible escalation and blocks the task; it never resets productive or
+review budgets. Legacy interrupted claims without retry metadata remain fail-closed,
+and historical blocked tasks are not migrated. Authority and dependencies are checked
+before and after asynchronous persistence/inference; concurrent recovery is fenced.
+Explicit waiting, blocked, completed and stopped decisions remain distinct;
 missing a continuation tool call is not an instruction to wait.
 
 At queue-empty prompt boundaries and scheduler ticks, a concrete retained step is

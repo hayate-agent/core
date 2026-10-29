@@ -50,8 +50,10 @@ export interface DurableTask {
   /** Persisted host admission; inference dedup is not an execution permit. */
   recoveryAdmission?: { id: string; depth: number; next: string; original: string; expiresAt?: number };
   recoveryAttentionId?: string;
-  /** Durable one-shot startup claim. An interrupted assessment must not repeat. */
+  /** Persist before inference; legacy claims without retry metadata remain fail-closed. */
   recoveryAssessment?: "claimed" | "decided";
+  /** Bounded assessment budget, independent of productive/review budgets. */
+  recoveryRetry?: { attempts: number; nextAt: number };
   wait?: { reason: string; nextAt: number; deadline: number };
   /** Monotonic scheduler claims, independent of productive follow-up depth. */
   waitChecks?: number;
@@ -1116,12 +1118,17 @@ export class Harness {
     // Ordinary foreground turns without a configured classifier are not a
     // recovery boundary. Startup/idle reconciliation still surfaces retained work.
     if (betweenTurns && !this.opts.completionCheck && !task.recoveryAssessment) return;
-    if (task.recoveryAssessment || !this.opts.completionCheck) {
-      this.recoveryAttention(s, task, "Recovery has no durable authorized next step (assessment interrupted, unavailable or inconclusive).");
+    const retry = task.recoveryRetry;
+    if (!this.opts.completionCheck || (task.recoveryAssessment && !retry) ||
+        (retry && (!Number.isSafeInteger(retry.attempts) || retry.attempts < 1 || retry.attempts >= 3 ||
+          !Number.isSafeInteger(retry.nextAt)))) {
+      this.recoveryAttention(s, task, "Recovery assessment unavailable or bounded attempts exhausted; operator reconciliation required.");
       await this.outbox.barrier();
       return;
     }
-    // Claim before inference; a crash cannot replay inference. Startup escalates the claim.
+    if (retry && this.now() < retry.nextAt) return;
+    // Charge and save before inference. A crash consumes this attempt, not authority.
+    task.recoveryRetry = { attempts: (retry?.attempts ?? 0) + 1, nextAt: this.now() + 60000 };
     task.recoveryAssessment = "claimed";
     const claimedAuthority = JSON.stringify(task);
     await this.onStateChange?.();
@@ -1136,7 +1143,7 @@ export class Harness {
     let plan: Inbound["continuation"];
     input.completionContext = this.completionEvidence(s);
     try { plan = await this.opts.completionCheck(input, evidence, new AbortController().signal); }
-    catch { this.log("startup completion assessment failed; operator reconciliation required"); }
+    catch { this.log("retained task assessment failed; bounded retry retained"); }
     if (!unchanged()) return;
     task.recoveryAssessment = "decided";
     if (plan?.state === "continue" && typeof plan.next === "string" && plan.next.trim() && plan.next.length <= 4000 &&
@@ -1147,7 +1154,9 @@ export class Harness {
       if (plan.expiresAt !== undefined) task.expiresAt = plan.expiresAt;
       task.recoveryAdmission = { id: `task:${task.id}:${task.depth + 1}`, depth: task.depth + 1,
         next: task.next, original: task.original, expiresAt: task.expiresAt };
-    } else this.recoveryAttention(s, task, "Recovery could not establish an authorized next step; operator reconciliation required.");
+    } else if (task.recoveryRetry.attempts >= 3) {
+      this.recoveryAttention(s, task, "Recovery assessment exhausted three attempts without an authorized next step; operator reconciliation required.");
+    }
     await this.outbox.barrier();
   }
 
@@ -1343,6 +1352,7 @@ export class Harness {
           task.depth = input.continuationDepth ?? 0;
           task.expiresAt = inheritedDeadline === Infinity ? undefined : inheritedDeadline;
           task.recoveryAssessment = undefined;
+          task.recoveryRetry = undefined;
           if ((plan?.state === "continue" || plan?.state === "blocked") && task.depth >= 20) {
             task.next ??= retainedNext;
             task.state = "blocked";
