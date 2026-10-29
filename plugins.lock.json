@@ -13,7 +13,7 @@
     "gateway-manager-plugin.ts": "520465902c186b429fde132b2a4120b0ff6bd8e68439c6ed35c1049e852a316a",
     "gateway-plugin.ts": "f75c78e301e972ac8b668de6522721cc5574d8c38876b02096a06b4a908c8434",
     "improvement-plugin.ts": "97e965b6f71567d823549d8a3b2a6888a2ed1f86eda76c2bc29c565b82431ca5",
-    "improvement-report.ts": "fa9bd1b1f18ba276539981c2c9e2c6c5c5f0c9764b2890cde818a72154ad5679",
+    "improvement-report.ts": "2e206939ef70e86df87059a5ab5584b203dec1decf289e437642e163d630b273",
     "loop-plugin.ts": "ab7e0ea59919503cd4d9c36b01eb08f7687c00ef88679de2dcc33067b56ae6cd",
     "matrix-channel.ts": "cb518647a90b7acd19f5047225bba2f5cc92008ab4b0fca9a27a2f87968293e8",
     "matrix-gateway.ts": "cab666ab5d2675d9b459102f119598b4444dcbbdecb3a5d16d473a676a131be3",
@@ -47,6 +47,6 @@
     "review-executor.ts": "f215d18047084aa626cdd3f46fa6cfbca3701810f6166ab88ac8f356a15fbe0a"
   },
   "repository": "https://git.vanillacore.net/harness/plugins",
-  "revision": "56082f1bb0c03513b920a722b2e3cd2fdbfcd0cd",
+  "revision": "1600a618e6284c3274ceb95f5d92ba28cd08b8aa",
   "schema": 1
 }

@@ -34,7 +34,7 @@ test('no report destination preserves results locally and allows the next night 
  assert.equal(report.delivery,'local-only');assert.equal(harness.outboxEntries().length,0);
 });
 
-test('remote report uses full receipts, survives restart and archives before outbox publication',async(t)=>{
+test('remote human report survives restart and archives full receipts before outbox publication',async(t)=>{
  const home=await mkdtemp(path.join(os.tmpdir(),'improvement-remote-'));
  let now=Date.parse('2026-10-24T23:00:00Z');
  const receipt={hypothesis:'complete experiment',baseline:'failed',candidate:'passed',evidence:'test command',outcome:'improved'};
@@ -55,7 +55,8 @@ test('remote report uses full receipts, survives restart and archives before out
  assert.equal(harness.outboxEntries().length,0,'archive failure must not publish a report');
  await rm(reports);await controller.tick(false);await harness.drained();
  const report=channel.texts().find(s=>s.startsWith('Nachtbericht'))!;
- assert.ok(report);assert.deepEqual(experimentReceipts(report),[receipt]);
+ assert.ok(report);assert.deepEqual(experimentReceipts(report),[]);
+ assert.match(report,/Vorher: failed/);assert.match(report,/Ausprobiert \/ nachher: passed/);
  assert.doesNotMatch(report,/unfinished|ppppp/);
  const artifact=JSON.parse(await readFile(path.join(reports,'2026-10-24.json'),'utf8'));
  assert.deepEqual(artifact.experiments,[receipt]);
