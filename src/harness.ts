@@ -509,7 +509,7 @@ export class Harness {
     const admission = task.recoveryAdmission;
     if (admission && (admission.depth !== task.depth + 1 || admission.next !== task.next ||
         admission.original !== task.original || admission.expiresAt !== task.expiresAt)) {
-      this.recoveryAttention(s, task, "Persisted recovery admission no longer matches retained authority.");
+      this.recoveryAttention(s, task, "mismatched");
       s.unsaved = true;
       return false;
     }
@@ -1081,7 +1081,7 @@ export class Harness {
       const admission = task.recoveryAdmission;
       if (admission && (admission.depth !== task.depth + 1 || admission.next !== task.next ||
           admission.original !== task.original || admission.expiresAt !== task.expiresAt)) {
-        this.recoveryAttention(s, task, "Persisted recovery admission no longer matches retained authority.");
+        this.recoveryAttention(s, task, "mismatched");
         await this.outbox.barrier();
         continue;
       }
@@ -1122,7 +1122,8 @@ export class Harness {
     if (!this.opts.completionCheck || (task.recoveryAssessment && !retry) ||
         (retry && (!Number.isSafeInteger(retry.attempts) || retry.attempts < 1 || retry.attempts >= 3 ||
           !Number.isSafeInteger(retry.nextAt)))) {
-      this.recoveryAttention(s, task, "Recovery assessment unavailable or bounded attempts exhausted; operator reconciliation required.");
+      this.recoveryAttention(s, task, !this.opts.completionCheck ? "unavailable" :
+        retry ? "exhausted" : task.recoveryAssessment === "claimed" ? "interrupted" : "inconclusive");
       await this.outbox.barrier();
       return;
     }
@@ -1142,8 +1143,9 @@ export class Harness {
       executions: this.opts.executionStore?.list(s.key).slice(-20).map(e => ({ id: e.id, status: e.status, parentStopped: e.parentStopped })) ?? [] });
     let plan: Inbound["continuation"];
     input.completionContext = this.completionEvidence(s);
+    let assessmentFailed = false;
     try { plan = await this.opts.completionCheck(input, evidence, new AbortController().signal); }
-    catch { this.log("retained task assessment failed; bounded retry retained"); }
+    catch { assessmentFailed = true; this.log("retained task assessment failed; bounded retry retained"); }
     if (!unchanged()) return;
     task.recoveryAssessment = "decided";
     if (plan?.state === "continue" && typeof plan.next === "string" && plan.next.trim() && plan.next.length <= 4000 &&
@@ -1155,18 +1157,36 @@ export class Harness {
       task.recoveryAdmission = { id: `task:${task.id}:${task.depth + 1}`, depth: task.depth + 1,
         next: task.next, original: task.original, expiresAt: task.expiresAt };
     } else if (task.recoveryRetry.attempts >= 3) {
-      this.recoveryAttention(s, task, "Recovery assessment exhausted three attempts without an authorized next step; operator reconciliation required.");
+      this.recoveryAttention(s, task, assessmentFailed ? "failed" : "exhausted");
     }
     await this.outbox.barrier();
   }
 
-  private recoveryAttention(s: SessionState, task: DurableTask, reason: string): void {
+  private recoveryAttention(s: SessionState, task: DurableTask,
+    reason: "interrupted" | "unavailable" | "inconclusive" | "failed" | "mismatched" | "exhausted"): void {
+    const reasons = {
+      exhausted: "Das begrenzte Recovery-Bewertungsbudget ist ausgeschöpft oder sein gespeicherter Zustand ist ungültig; ein geprüfter nächster Schritt liegt nicht vor.",
+      interrupted: "Die gespeicherte Recovery-Bewertung wurde begonnen, aber ihr Ergebnis nicht dauerhaft gesichert (unterbrochen).",
+      unavailable: "Eine Completion-Bewertung ist nicht konfiguriert; ein nächster Schritt ist nicht dauerhaft festgelegt.",
+      inconclusive: "Die Recovery-Bewertung hat kein verwertbares Ergebnis für einen sicheren nächsten Schritt geliefert.",
+      failed: "Der Aufruf der Recovery-Bewertung ist fehlgeschlagen; ein Ergebnis liegt nicht vor. Die technische Ursache ist hier nicht verifiziert.",
+      mismatched: "Die gespeicherte Recovery-Freigabe passt nicht mehr zum gespeicherten Auftrag oder nächsten Schritt.",
+    };
     task.state = "blocked";
     if (task.recoveryAttentionId) return;
     const id = task.recoveryAttentionId = `task-recovery:${s.key}:${task.id}`;
     const to = s.replyTo ?? this.home;
     if (to) {
-      const entry = { ...this.outbox.create(s.key, to, `⚠️ ${reason}\nTask: ${task.original}`), id };
+      const text = `⚠️ Recovery angehalten: ${reasons[reason]}\nAuftrag: ${task.original}\n` +
+        `Verifizierter Stand: Auftrag und Fortsetzungstiefe ${task.depth} sind gespeichert. ` +
+        `Ein dazu passender, ausführbarer nächster Schritt ist nicht gesichert; der Abschluss ist nicht bestätigt. ` +
+        `Es wird keine automatische Fortsetzung gestartet.\n` +
+        `Entscheidung nötig: Soll dieser Auftrag fortgesetzt werden oder ist keine weitere Arbeit gewünscht? ` +
+        `Bitte antworte mit dem konkreten nächsten Schritt innerhalb dieses Auftrags ` +
+        `(zuerst vorhandene Ergebnisse prüfen, keine Wirkungen blind wiederholen), ` +
+        `oder bestätige ausdrücklich, dass keine weitere Arbeit gewünscht ist. ` +
+        `Ohne diese Klärung bleibt der Auftrag blockiert.`;
+      const entry = { ...this.outbox.create(s.key, to, text), id };
       s.outbox.push(entry);
     }
     // Retry a failed save through the normal pump barrier, including a notice
@@ -1576,6 +1596,13 @@ export class Harness {
         if ((input.source !== "host" || this.resultMandate(input)) && assessmentEligible() && !this.paused && !this.stopping && !s.queue.length && !assessmentAbort.signal.aborted && s.cancelling !== input &&
             plan?.state === "continue" && typeof plan.next === "string" && plan.next.trim() && plan.next.length <= 4000 &&
             checkpoint?.state !== "continue" && !checkpoint?.wait) input.continuation = plan;
+        // A positive completion verdict for this actual reply is distinct from
+        // missing/failed assessment. Never overwrite an explicit checkpoint or
+        // infer completion during startup, where no retained reply is supplied.
+        else if (plan?.state === "completed" && !checkpoint && reply && reply !== NO_REPLY &&
+            assessmentEligible() && !this.paused && !this.stopping && !s.queue.length &&
+            !assessmentAbort.signal.aborted && s.cancelling !== input && input.source !== "host")
+          input.continuation = { state: "completed" };
       } catch { this.log("completion assessment failed; no automatic follow-up"); }
     }
     if (s.cancelling === input) {

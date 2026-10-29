@@ -35,7 +35,7 @@ test("explicit completed is independently assessed without erasing its checkpoin
   {state:"continue", next:"Run original task tests", expiresAt:2000});
   assert.ok(prompt.includes(auth.task));
   assert.equal(planned.continuation, checkpoint);
-  assert.equal(await assessCompletion(backend('{"state":"completed"}'), planned, "All done", auth, signal(), undefined, () => 1000), undefined);
+  assert.deepEqual(await assessCompletion(backend('{"state":"completed"}'), planned, "All done", auth, signal(), undefined, () => 1000), { state: "completed" });
   assert.equal(await assessCompletion({review:async()=>{
     planned.continuation={state:"waiting"};return '{"state":"continue","next":"test"}';
   }}, planned, "reply", auth, signal(), undefined, () => 1000), undefined);
