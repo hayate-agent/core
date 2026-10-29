@@ -59,7 +59,7 @@ test("startup fences states, expiry, depth, absent mandate and accepted children
     if (fence === "cancelled-parent") await h.stopConversation("mem:room1");
     try {
       await h.recoverTasks(); await h.recoverTasks(); h.releaseRestored(); await h.drained();
-      assert.equal(checks, child ? 1 : 0, fence); assert.equal(runtime.sessions.size, 0, fence);
+      assert.equal(checks, 0, fence); assert.equal(runtime.sessions.size, 0, fence);
     } finally { await h.stop(1000); }
   }
 });

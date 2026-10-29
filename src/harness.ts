@@ -47,6 +47,9 @@ export interface DurableTask {
   depth: number;
   expiresAt?: number;
   anchor?: Inbound["completionAnchor"];
+  /** Persisted host admission; inference dedup is not an execution permit. */
+  recoveryAdmission?: { id: string; depth: number; next: string; original: string; expiresAt?: number };
+  recoveryAttentionId?: string;
   /** Durable one-shot startup claim. An interrupted assessment must not repeat. */
   recoveryAssessment?: "claimed" | "decided";
   wait?: { reason: string; nextAt: number; deadline: number };
@@ -501,7 +504,14 @@ export class Harness {
       Number.isSafeInteger(task.depth) && task.depth >= 0 && task.depth < 20 &&
       (task.expiresAt === undefined || (Number.isSafeInteger(task.expiresAt) && task.expiresAt > this.now())));
     if (!task) return false;
-    s.queue.push({ id: `task:${task.id}:${task.depth + 1}`, source: "cron", sessionKey: s.key,
+    const admission = task.recoveryAdmission;
+    if (admission && (admission.depth !== task.depth + 1 || admission.next !== task.next ||
+        admission.original !== task.original || admission.expiresAt !== task.expiresAt)) {
+      this.recoveryAttention(s, task, "Persisted recovery admission no longer matches retained authority.");
+      s.unsaved = true;
+      return false;
+    }
+    s.queue.push({ id: admission?.id ?? `task:${task.id}:${task.depth + 1}`, source: "cron", sessionKey: s.key,
       taskId: task.id, continuationDepth: task.depth + 1, continuationExpiresAt: task.expiresAt,
       completionAnchor: task.anchor, replyTo: s.replyTo,
       text: `Resume the explicitly authorized task after an interruption. Verify actual state and completed side effects; do not repeat them or broaden authority. Original task:\n${task.original}\nNext step:\n${task.next}` });
@@ -1066,7 +1076,14 @@ export class Harness {
       if (!this.tasks(s).includes(task) || (assessed && this.paused) || this.stopping || task.state !== "active" || !task.next?.trim() || !Number.isSafeInteger(task.depth) || task.depth < 0 || task.depth >= 20 ||
           (task.expiresAt !== undefined && (!Number.isSafeInteger(task.expiresAt) || task.expiresAt <= this.now())) ||
           s.current || s.queue.length || s.key === "improvement:nightly" || this.hasPendingDependency(s.key, task.id)) continue;
-      const input: Inbound = { id: `task:${task.id}:${task.depth + 1}`, source: "heartbeat", sessionKey: s.key,
+      const admission = task.recoveryAdmission;
+      if (admission && (admission.depth !== task.depth + 1 || admission.next !== task.next ||
+          admission.original !== task.original || admission.expiresAt !== task.expiresAt)) {
+        this.recoveryAttention(s, task, "Persisted recovery admission no longer matches retained authority.");
+        await this.outbox.barrier();
+        continue;
+      }
+      const input: Inbound = { id: admission?.id ?? `task:${task.id}:${task.depth + 1}`, source: "heartbeat", sessionKey: s.key,
         text: `Resume the authorized task after restart. Verify completed side effects before acting. Original task:\n${task.original}\nNext step:\n${task.next}`,
         replyTo: s.replyTo, taskId: task.id, continuationDepth: task.depth + 1, continuationExpiresAt: task.expiresAt, completionAnchor: task.anchor };
       await this.submit(input, true);
@@ -1077,7 +1094,16 @@ export class Harness {
     }
   }
 
+  private readonly recoveringTasks = new Set<DurableTask>();
+
   private async assessStartupTask(s: SessionState, task: DurableTask, betweenTurns = false): Promise<void> {
+    if (this.recoveringTasks.has(task)) return;
+    this.recoveringTasks.add(task);
+    try { await this.assessRetainedTask(s, task, betweenTurns); }
+    finally { this.recoveringTasks.delete(task); }
+  }
+
+  private async assessRetainedTask(s: SessionState, task: DurableTask, betweenTurns: boolean): Promise<void> {
     const eligible = () => this.tasks(s).includes(task) && task.state === "active" && !task.next?.trim() &&
       !!task.id && !!task.original.trim() && task.original.length <= 8000 &&
       (!task.anchor || task.anchor.task === task.original) &&
@@ -1085,11 +1111,23 @@ export class Harness {
       (task.expiresAt === undefined || (Number.isSafeInteger(task.expiresAt) && task.expiresAt > this.now())) &&
       !s.current && !s.queue.length && (!s.running || betweenTurns) && !this.paused && !this.stopping &&
       s.key !== "improvement:nightly" && !this.stoppingHostParents.has(s.key);
-    if (!this.onStateChange || !this.opts.completionCheck || task.recoveryAssessment || !eligible()) return;
-    // Claim before inference; a crash or failed persistence can never replay inference.
+    if (!this.onStateChange || !eligible() || this.opts.externallyRecoveredSession?.(s.key) ||
+        this.hasPendingDependency(s.key, task.id)) return;
+    // Ordinary foreground turns without a configured classifier are not a
+    // recovery boundary. Startup/idle reconciliation still surfaces retained work.
+    if (betweenTurns && !this.opts.completionCheck && !task.recoveryAssessment) return;
+    if (task.recoveryAssessment || !this.opts.completionCheck) {
+      this.recoveryAttention(s, task, "Recovery has no durable authorized next step (assessment interrupted, unavailable or inconclusive).");
+      await this.outbox.barrier();
+      return;
+    }
+    // Claim before inference; a crash cannot replay inference. Startup escalates the claim.
     task.recoveryAssessment = "claimed";
+    const claimedAuthority = JSON.stringify(task);
     await this.onStateChange?.();
-    if (!eligible()) return;
+    const unchanged = () => eligible() && JSON.stringify(task) === claimedAuthority &&
+      !this.hasPendingDependency(s.key, task.id);
+    if (!unchanged()) return;
     const input: Inbound = { source: "heartbeat", sessionKey: s.key, text: task.original,
       taskId: task.id, continuationDepth: task.depth, continuationExpiresAt: task.expiresAt,
       completionAnchor: task.anchor ?? { id: task.id, task: task.original, receivedAt: this.now() } };
@@ -1099,7 +1137,7 @@ export class Harness {
     input.completionContext = this.completionEvidence(s);
     try { plan = await this.opts.completionCheck(input, evidence, new AbortController().signal); }
     catch { this.log("startup completion assessment failed; operator reconciliation required"); }
-    if (!eligible()) return;
+    if (!unchanged()) return;
     task.recoveryAssessment = "decided";
     if (plan?.state === "continue" && typeof plan.next === "string" && plan.next.trim() && plan.next.length <= 4000 &&
         (plan.expiresAt === undefined || (Number.isSafeInteger(plan.expiresAt) && plan.expiresAt > this.now() &&
@@ -1107,8 +1145,25 @@ export class Harness {
       task.next = `First reconcile the actual task state and completed side effects; do not blindly replay external effects. Then: ${plan.next.trim()}`;
       task.anchor = input.completionAnchor;
       if (plan.expiresAt !== undefined) task.expiresAt = plan.expiresAt;
-    } else task.state = "blocked";
-    await this.onStateChange?.();
+      task.recoveryAdmission = { id: `task:${task.id}:${task.depth + 1}`, depth: task.depth + 1,
+        next: task.next, original: task.original, expiresAt: task.expiresAt };
+    } else this.recoveryAttention(s, task, "Recovery could not establish an authorized next step; operator reconciliation required.");
+    await this.outbox.barrier();
+  }
+
+  private recoveryAttention(s: SessionState, task: DurableTask, reason: string): void {
+    task.state = "blocked";
+    if (task.recoveryAttentionId) return;
+    const id = task.recoveryAttentionId = `task-recovery:${s.key}:${task.id}`;
+    const to = s.replyTo ?? this.home;
+    if (to) {
+      const entry = { ...this.outbox.create(s.key, to, `⚠️ ${reason}\nTask: ${task.original}`), id };
+      s.outbox.push(entry);
+    }
+    // Retry a failed save through the normal pump barrier, including a notice
+    // created during tick when no input is queued.
+    s.unsaved = true;
+    this.log(`task ${task.id}: ${reason}`);
   }
 
   releaseRestored(): void {
@@ -1278,6 +1333,7 @@ export class Harness {
         const inheritedDeadline = Math.min(input.continuationExpiresAt ?? Infinity, input.continuation?.expiresAt ?? Infinity);
         const task = this.tasks(s).find(task => task.id === input.taskId);
         if (task && task.state !== "stopped") {
+          task.recoveryAdmission = undefined;
           const plan = input.continuation;
           const retainedNext = task.next;
           task.state = plan?.state === "continue" ? "active" : plan?.state ?? "active";
@@ -1375,6 +1431,21 @@ export class Harness {
       if (input.source === "host" && (this.stoppingHostParents.has(s.key) || !this.opts.hostEventAllowed?.(input) || (input.taskId !== undefined && !this.resultMandate(input)))) {
         s.cancelling = input;
         throw Error("Host event authority revoked");
+      }
+      const task = this.tasks(s).find(task => task.id === input.taskId);
+      if (input.taskId && input.id === `task:${input.taskId}:${input.continuationDepth}` &&
+          (!task || task.state !== "active" || task.depth + 1 !== input.continuationDepth)) {
+        s.cancelling = input;
+        throw Error("Retained task authority revoked");
+      }
+      if (task?.recoveryAdmission && (input.continuationDepth ?? 0) > 0) {
+        const admission = task.recoveryAdmission;
+        if (task.state !== "active" || admission.id !== input.id || admission.depth !== task.depth + 1 ||
+            admission.next !== task.next || admission.original !== task.original || admission.expiresAt !== task.expiresAt ||
+            this.hasPendingDependency(s.key, task.id)) {
+          s.cancelling = input;
+          throw Error("Recovery admission authority revoked");
+        }
       }
       this.opts.beforeExecution?.(input);
       // The grant limits autonomous work, not a new operator request. Keep its
@@ -1713,7 +1784,7 @@ export class Harness {
         continue;
       }
       }
-      if (s.queue.length) { void this.pump(s); continue; }
+      if (s.queue.length || s.outbox.length || s.unsaved) { void this.pump(s); continue; }
       if (s.loop && !s.loop.paused && at >= s.loop.nextAt) {
         s.loop.nextAt = at + s.loop.everyMs;
         if (s.loop.remaining !== undefined && --s.loop.remaining <= 0) {
