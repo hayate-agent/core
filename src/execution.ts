@@ -55,7 +55,18 @@ export interface TurnSettlement {
   consumed: string[];
 }
 export interface DurableTurn { id: string; sessionKey: string; state: "running" | "settled"; stopped?: boolean; settlement?: TurnSettlement }
-interface Ledger { version: 1; executions: Execution[]; events: ExecutionEvent[]; turns?: DurableTurn[] }
+export type WaitAuthorityDenialReason = "ownership" | "cancelled" | "deadline" | "missing-task" | "stopped-task" | "sequence";
+export interface WaitAuthorityDenialReceipt {
+  reason: WaitAuthorityDenialReason;
+  taskId?: string;
+  waitSequence: number;
+  taskWaitSequence?: number;
+  turnId?: string;
+  at: number;
+}
+const waitDenialReasons = ["ownership", "cancelled", "deadline", "missing-task", "stopped-task", "sequence"] as const;
+interface Ledger { version: 1; executions: Execution[]; events: ExecutionEvent[]; turns?: DurableTurn[];
+  waitAuthorityDenials?: WaitAuthorityDenialReceipt[] }
 
 /** One host owns this ledger under the Harness home lock. Mutations become visible
  * only after atomic durable replacement; task transitions and outgoing events share
@@ -90,6 +101,13 @@ export class ExecutionStore {
       if ((await stat(this.file)).size > 32 * 1024 * 1024) throw Error("Execution ledger size limit exceeded");
       const data = JSON.parse(await readFile(this.file, "utf8")) as Ledger;
       if (data.version !== 1 || !Array.isArray(data.executions) || !Array.isArray(data.events)) throw Error("Unsupported execution ledger");
+      if (data.waitAuthorityDenials !== undefined && (!Array.isArray(data.waitAuthorityDenials) ||
+          data.waitAuthorityDenials.length > 100 || data.waitAuthorityDenials.some(r =>
+            !r || !waitDenialReasons.includes(r.reason) || !Number.isSafeInteger(r.at) ||
+            !Number.isSafeInteger(r.waitSequence) || (r.taskWaitSequence !== undefined && !Number.isSafeInteger(r.taskWaitSequence)) ||
+            [r.taskId, r.turnId].some(id => id !== undefined && (typeof id !== "string" || id.length > 128)) ||
+            Object.keys(r).some(key => !["reason", "taskId", "waitSequence", "taskWaitSequence", "turnId", "at"].includes(key)))))
+        throw Error("Invalid wait authority denial receipt");
       const ids = new Set<string>();
       for (const item of data.executions) {
         if (!item || typeof item.id !== "string" || ids.has(item.id) || typeof item.parent !== "string" ||
@@ -253,6 +271,21 @@ export class ExecutionStore {
     return structuredClone(this.data.executions.filter(item => parent === undefined || item.parent === parent));
   }
   events(): ExecutionEvent[] { return structuredClone(this.data.events); }
+
+  waitAuthorityDenials(): WaitAuthorityDenialReceipt[] { return structuredClone(this.data.waitAuthorityDenials ?? []); }
+
+  /** Host-only diagnostic ring; never an outgoing event or authority input. */
+  recordWaitAuthorityDenial(receipt: WaitAuthorityDenialReceipt): Promise<void> {
+    // Explicit projection prevents extra properties (arguments, text, errors) entering the ledger.
+    const safe: WaitAuthorityDenialReceipt = {
+      reason: receipt.reason, at: receipt.at, waitSequence: receipt.waitSequence,
+      taskWaitSequence: receipt.taskWaitSequence,
+      taskId: receipt.taskId?.slice(0, 128), turnId: receipt.turnId?.slice(0, 128),
+    };
+    return this.mutate(draft => {
+      draft.waitAuthorityDenials = [...(draft.waitAuthorityDenials ?? []), safe].slice(-100);
+    });
+  }
   submit(parent: string, requestId: string, input: string, strategy: string, strategyVersion = 1, dependency?: Execution["dependency"]): Promise<Execution> {
     return this.mutate(async draft => {
       if (![parent, requestId, input, strategy].every(value => typeof value === "string" && value.trim()) || input.length > 64000 ||

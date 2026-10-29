@@ -55,3 +55,37 @@ Core, or create an unrestricted recurring job. `reason` is evidence to inspect,
 not an executable expression. Timer latency includes the normal scheduler tick
 and idle time. Artifact/status claims are not independently verified by scheduling.
 A source build or merge does not activate a running deployment.
+
+## Diagnosing authority denials
+
+When an execution store is configured, the actual wait tool guard writes a
+host-owned `waitAuthorityDenials` ring in the existing execution ledger
+(`executions.json`). Inspect it locally, or use the host-only
+`ExecutionStore.waitAuthorityDenials()` accessor. These are not outgoing execution
+events, are not injected into model context and confer no authority. The newest
+100 receipts are retained globally (oldest evicted; no separate time expiry).
+Existing ledgers without this optional field remain readable.
+
+Each receipt contains only `reason`, host `taskId`, `waitSequence`, optional
+`taskWaitSequence`, optional durable `turnId`, and `at` (UTC epoch milliseconds).
+IDs are capped at 128 characters. No session routing address, tool name/arguments,
+transcript, condition prose, exception text or task contents are recorded.
+Reasons follow the original short-circuit guard precedence:
+
+- `cancelled`: Harness stopping (checked first), or the turn is being cancelled;
+- `ownership`: this input no longer owns the current turn (before turn cancellation);
+- `deadline`: inherited deadline missing/invalid or reached;
+- `missing-task`: host task identity cannot be found;
+- `stopped-task`: the matching task was explicitly stopped;
+- `sequence`: the claimed recheck sequence no longer matches the task.
+
+Checks run before exemptions (including status and checkpoint tools), and again
+after the productive charge persistence barrier. Valid-path charge ordering and
+budget accounting are unchanged. A diagnostic persistence failure still denies
+the tool, emitting only a fixed host log message; no raw exception is forwarded.
+Without an execution store the same denial applies, but no receipt is retained.
+Model-facing denial remains the sanitized `authority_revoked` response.
+
+This is prospective instrumentation, not a repair or retrospective diagnosis of
+the historical PR72 denial: its exact failed predicate was not recoverable from
+retained evidence, and the preserved ordinary chronology fixture passes unchanged.

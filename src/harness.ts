@@ -514,21 +514,34 @@ export class Harness {
     const input = this.sessions.get(key)?.current;
     if (!input?.waitCheck) return;
     const assertAuthorized = () => {
-      if (this.stopping || this.sessions.get(key)?.current !== input || this.sessions.get(key)?.cancelling === input ||
-          !Number.isSafeInteger(input.continuationExpiresAt) || input.continuationExpiresAt! <= this.now())
-        throw new ToolGuardError("authority_revoked", "Wait authorization expired or cancelled");
+      const at = this.now();
       const task = this.tasks(this.state(key)).find(task => task.id === input.taskId);
-      if (!task || task.state === "stopped" || input.waitCheck!.sequence !== task.waitChecks)
-        throw new ToolGuardError("authority_revoked", "Wait task authority revoked");
+      // Preserve short-circuit precedence; stopping and turn cancellation both revoke authority.
+      const reason: import("./execution.js").WaitAuthorityDenialReason | undefined =
+        this.stopping ? "cancelled" : this.sessions.get(key)?.current !== input ? "ownership" :
+        this.sessions.get(key)?.cancelling === input ? "cancelled" :
+        !Number.isSafeInteger(input.continuationExpiresAt) || input.continuationExpiresAt! <= at ? "deadline" :
+        !task ? "missing-task" : task.state === "stopped" ? "stopped-task" :
+        input.waitCheck!.sequence !== task.waitChecks ? "sequence" : undefined;
+      if (reason) return (async (): Promise<never> => {
+        try {
+          await this.opts.executionStore?.recordWaitAuthorityDenial({ reason, at, taskId: input.taskId,
+            waitSequence: input.waitCheck!.sequence, taskWaitSequence: task?.waitChecks, turnId: input.executionTurnId });
+        } catch { this.log("wait authority denial receipt persistence failed"); }
+        throw new ToolGuardError("authority_revoked",
+          ["ownership", "cancelled", "deadline"].includes(reason) ? "Wait authorization expired or cancelled" : "Wait task authority revoked");
+      })();
       return task;
     };
-    const task = assertAuthorized();
+    const authority = assertAuthorized();
+    // No async yield on the authorized path before claiming the charge barrier.
+    const task = authority instanceof Promise ? await authority : authority!;
     // Only host-owned side-effect-free operations are exempt. Arbitrary shell,
     // web and plugin calls are not trusted probes, regardless of their names.
     if (tool === "plugin_task_continuation" ||
         (tool === "plugin_dispatch" && (args as { action?: unknown } | null)?.action === "status")) return;
     const charging = this.waitCharges.get(input);
-    if (charging) { await charging; assertAuthorized(); return; }
+    if (charging) { await charging; await assertAuthorized(); return; }
     if (input.waitCheck.productive) return;
     const depth = input.continuationDepth ?? 0;
     if (depth >= 20) throw new ToolGuardError("continuation_budget_exhausted", `Task ${task.id}: productive continuation budget exhausted; status rechecks only`);
@@ -545,7 +558,7 @@ export class Harness {
       input.continuationDepth = task.depth = depth;
       throw error;
     } finally { this.waitCharges.delete(input); }
-    assertAuthorized();
+    await assertAuthorized();
   }
 
   private resetContinuation(input: Inbound): void { input.continuation = undefined; }
