@@ -31,8 +31,9 @@ for (const mode of ["inconclusive", "failed"] as const) {
       await h.submit(msg("Implement and test the update")); await h.drained();
       assert.equal(h.state("mem:room1").task?.state, "active");
       await h.recoverTasks(); h.releaseRestored(); await h.drained();
-      assert.equal(h.state("mem:room1").task?.state, "blocked");
-      assert.ok(h.state("mem:room1").task?.recoveryAttentionId);
+      assert.equal(h.state("mem:room1").task?.state, "active");
+      assert.equal(h.state("mem:room1").task?.recoveryRetry?.attempts, 1);
+      assert.equal(h.state("mem:room1").task?.recoveryAttentionId, undefined);
     } finally { await h.stop(0); }
   });
 }
