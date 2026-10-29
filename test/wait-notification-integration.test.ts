@@ -47,8 +47,9 @@ for (const depth of [19, 20]) {
     try {
       await h.tick(); await h.drained();
       assert.ok(checked);
-      assert.equal(channel.sent.length, 1);
-      assert.equal(channel.sent[0].meta?.presentation, 'progress');
+      assert.equal(channel.sent.length, depth === 20 ? 2 : 1);
+      if (depth === 20) assert.match(channel.sent[0].text, /Aktionsbudget erschöpft/);
+      assert.equal(channel.sent.at(-1)!.meta?.presentation, 'progress');
       const task = h.snapshotSessions()[0].task!;
       assert.equal(task.depth, 20);
       assert.equal(task.waitChecks, 1);

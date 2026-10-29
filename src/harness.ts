@@ -54,6 +54,8 @@ export interface DurableTask {
   waitChecks?: number;
   lastWait?: DurableTask["wait"];
   termination?: "deadline_expired" | "productive_budget_exhausted" | "malformed_checkpoint";
+  /** Stable durable outbox notice; never renews the task's authority or budget. */
+  budgetAttentionId?: string;
 }
 
 /** Content-free owner-process inspection; not an authorization or transcript API. */
@@ -507,6 +509,19 @@ export class Harness {
     return true;
   }
 
+  private budgetAttention(s: SessionState, task: DurableTask): void {
+    if (task.budgetAttentionId || task.depth < 20 || task.state === "stopped" || task.state === "completed" ||
+        (task.expiresAt !== undefined && task.expiresAt <= this.now())) return;
+    const to = s.replyTo ?? this.home;
+    if (!to) return;
+    const id = `task-budget:${s.key}:${task.id}`;
+    task.budgetAttentionId = id;
+    s.outbox.push({ id, sessionKey: s.key, to,
+      text: `Aufgabe ${task.id}: Aktionsbudget erschöpft; offene Arbeit wird nicht automatisch fortgesetzt. Statusabfragen laufender Abhängigkeiten bleiben bis zur bestehenden Frist möglich. Für weitere Arbeit ist ein neuer ausdrücklicher Operatorauftrag erforderlich.` });
+    // The marker and notice share the same persistence barrier, including retries.
+    s.unsaved = true;
+  }
+
   private readonly waitCharges = new WeakMap<Inbound, Promise<void>>();
 
   /** Runtime pre-execution guard: model prose is not proof of a pure wait. */
@@ -544,7 +559,10 @@ export class Harness {
     if (charging) { await charging; await assertAuthorized(); return; }
     if (input.waitCheck.productive) return;
     const depth = input.continuationDepth ?? 0;
-    if (depth >= 20) throw new ToolGuardError("continuation_budget_exhausted", `Task ${task.id}: productive continuation budget exhausted; status rechecks only`);
+    if (depth >= 20) {
+      this.budgetAttention(this.state(key), task);
+      throw new ToolGuardError("continuation_budget_exhausted", `Task ${task.id}: productive continuation budget exhausted; status rechecks only`);
+    }
     input.waitCheck.productive = true;
     input.continuationDepth = task.depth = depth + 1;
     const charge = Promise.resolve().then(() => {
@@ -638,7 +656,7 @@ export class Harness {
         !Number.isSafeInteger(plan.wait.retryAfterMs) || plan.wait.retryAfterMs < 60000 || plan.wait.retryAfterMs > 86400000 ||
         !Number.isSafeInteger(plan.wait.deadline) || plan.wait.deadline <= this.now() + plan.wait.retryAfterMs ||
         plan.wait.deadline > this.now() + 7 * 86400000)) throw Error("Invalid bounded wait plan");
-    input.continuation = { state: plan.state, ...(plan.replyKind ? { replyKind: plan.replyKind } : {}), ...((plan.state === "continue" || plan.wait) ? { next: plan.next } : {}),
+    input.continuation = { state: plan.state, ...(plan.replyKind ? { replyKind: plan.replyKind } : {}), ...((plan.state === "continue" || plan.state === "blocked" || plan.wait) ? { next: plan.next } : {}),
       ...(plan.wait ? { wait: structuredClone(plan.wait) } : {}) };
   }
 
@@ -1232,7 +1250,11 @@ export class Harness {
             await this.onStateChange?.();
             continue;
           }
-          s.outbox.splice(outboxStart);
+          // Host attention is not a speculative model reply. Keep it (and its
+          // durable marker) when an interrupted model turn is rolled back.
+          const attention = s.outbox.slice(outboxStart).filter(entry =>
+            this.tasks(s).some(task => task.budgetAttentionId === entry.id));
+          s.outbox.splice(outboxStart, s.outbox.length - outboxStart, ...attention);
           s.goal = goalBefore;
           // Turn did not finish (aborted on shutdown): keep it and what was steered into it, in order.
           s.current = undefined;
@@ -1257,19 +1279,22 @@ export class Harness {
         const task = this.tasks(s).find(task => task.id === input.taskId);
         if (task && task.state !== "stopped") {
           const plan = input.continuation;
+          const retainedNext = task.next;
           task.state = plan?.state === "continue" ? "active" : plan?.state ?? "active";
-          task.next = plan?.state === "continue" || plan?.wait ? plan.next : undefined;
+          task.next = plan?.state === "continue" || plan?.state === "blocked" || plan?.wait ? plan.next : undefined;
           task.wait = plan?.state === "waiting" && plan.wait ? { reason: plan.wait.reason,
             nextAt: this.now() + plan.wait.retryAfterMs, deadline: Math.min(plan.wait.deadline, inheritedDeadline) } : undefined;
           task.depth = input.continuationDepth ?? 0;
           task.expiresAt = inheritedDeadline === Infinity ? undefined : inheritedDeadline;
           task.recoveryAssessment = undefined;
-          if (plan?.state === "continue" && task.depth >= 20) {
+          if ((plan?.state === "continue" || plan?.state === "blocked") && task.depth >= 20) {
+            task.next ??= retainedNext;
             task.state = "blocked";
             task.termination = "productive_budget_exhausted";
             task.wait = task.lastWait;
             this.log(`task ${task.id}: productive_budget_exhausted; next retained; no automatic work scheduled`);
           }
+          if (task.depth >= 20 && task.state === "blocked") this.budgetAttention(s, task);
         }
         if ((input.source !== "host" || this.resultMandate(input)) && input.continuation?.state === "continue" && input.continuation.next && (input.continuationDepth ?? 0) < 20 && input.source !== "api" && s.key !== "improvement:nightly" && !s.queue.length && !this.stopping && !this.hasPendingDependency(s.key)) {
           s.queue.push({ id: randomUUID(), sessionKey: s.key, source: "cron", replyTo: input.replyTo ?? s.replyTo,
@@ -1647,6 +1672,11 @@ export class Harness {
     for (const s of this.sessions.values()) {
       if (s.running || s.queue.length || s.outbox.length || s.unsaved) continue;
       for (const task of this.tasks(s)) {
+      // Reconcile pre-upgrade exhausted checkpoints without a model nudge.
+      if (task.state === "blocked" && task.depth >= 20 && !task.budgetAttentionId) {
+        this.budgetAttention(s, task);
+        if (s.unsaved) { void this.pump(s); break; }
+      }
       if (task.state === "active" && !task.next) await this.assessStartupTask(s, task);
       if (this.queueRunnableTask(s)) break;
       if (task?.state === "waiting" && task.wait && (!Number.isSafeInteger(task.wait.nextAt) || !Number.isSafeInteger(task.wait.deadline) || at >= task.wait.nextAt || at >= task.wait.deadline || (task.expiresAt !== undefined && at >= task.expiresAt)) && this.onStateChange &&
