@@ -7,9 +7,18 @@ import { ImprovementController, improvementPolicy, improvementWindow } from "./i
 import { Harness } from "../src/harness.js";
 import { FakeRuntime, MemoryChannel, ROOM } from "./fakes.js";
 
-test("improvement defaults off with 20 turns; overnight date and DST use local calendar", () => {
-  assert.equal(improvementPolicy().enabled, false);
-  assert.equal(improvementPolicy().maxTurns, 20);
+test("improvement defaults on with bounded opt-out; overnight date and DST use local calendar", () => {
+  const defaults = improvementPolicy();
+  assert.equal(defaults.enabled, true);
+  assert.equal(defaults.maxTurns, 20);
+  assert.equal(defaults.startHour, 23);
+  assert.equal(defaults.endHour, 5);
+  assert.equal(defaults.timezone, "UTC");
+  assert.equal(defaults.pullRequest, false);
+  assert.equal(defaults.merge, false);
+  assert.equal(defaults.evaluator, undefined);
+  assert.equal(defaults.reportTo, undefined);
+  assert.equal(improvementPolicy({ enabled: false }).enabled, false);
   assert.throws(() => improvementPolicy({ maxTurns: 0 }));
   assert.throws(() => improvementPolicy({ merge: true }));
   assert.throws(() => improvementPolicy({ timezone: "invalid" }));

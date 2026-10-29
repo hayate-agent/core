@@ -22,7 +22,7 @@ export interface ImprovementPolicy {
   evaluator?: { runner: string; sha256: string };
 }
 export function improvementPolicy(input: Partial<ImprovementPolicy> = {}): ImprovementPolicy {
-  const p = { enabled: false, startHour: 23, endHour: 5, maxTurns: 20, timezone: "UTC", pullRequest: false, merge: false, ...input };
+  const p = { enabled: true, startHour: 23, endHour: 5, maxTurns: 20, timezone: "UTC", pullRequest: false, merge: false, ...input };
   for (const key of ["enabled", "pullRequest", "merge"] as const) if (typeof p[key] !== "boolean") throw Error(`Invalid improvement.${key}`);
   if (p.evaluator && (!path.isAbsolute(p.evaluator.runner) || !/^[a-f0-9]{64}$/.test(p.evaluator.sha256))) throw Error("Invalid improvement evaluator");
   if (p.merge && !p.pullRequest) throw Error("Improvement merge requires pullRequest");
