@@ -81,8 +81,17 @@ turns on repeated status checks. Blockers must be reported honestly; receipts mu
 never be fabricated to satisfy the guard. The normal time/turn budget still
 bounds work.
 
-The optional controller is disabled by default. It reads `<home>/improvement.yaml`
-on each scheduler check, without needing a configuration reload:
+The controller policy is enabled by default, including when `<home>/improvement.yaml`
+is missing or omits `enabled`. An explicit `enabled: false` opts out and is preserved.
+Defaults remain 23:00–05:00 in the Harness timezone (UTC without an override),
+20 turns, `pullRequest: false`, `merge: false`, no evaluator and no report destination.
+Default enablement grants no new project access, publication or merge permission;
+independent evaluation and review protections are unchanged. A configured nightly
+strategy is still required. Reports use an explicit `reportTo`, then the Harness
+home address, otherwise local-only storage; no channel broadcast is inferred.
+The controller reads the policy on each scheduler check, without needing a
+configuration reload. The following is an explicitly expanded operator policy,
+not the product defaults:
 
 ```yaml
 enabled: true
