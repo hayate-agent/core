@@ -177,3 +177,82 @@ test('openAdmin alone is insufficient and failed resume cannot release execution
   await f.h.recoverTasks();
   assert.equal(f.runtime.sessions.size, 0);
 });
+
+
+test('active unclassified legacy depth20 permits atomic authenticated reset-and-resume', async () => {
+  const f = fixture({ state: 'active', termination: undefined, explicitBlocked: undefined });
+  const token = f.token();
+  await f.h.commandHandler!(msg(`/task-budget reset-resume ${key} a ${token} legacy1`, 'owner'));
+  assert.equal(f.task().depth, 0);
+  assert.equal(f.task().state, 'active');
+  assert.equal(f.task().original, 'authorized task');
+  assert.equal(f.task().expiresAt, 1000000);
+  assert.equal(f.task().waitChecks, 17);
+  assert.equal(f.task().budgetReceipts?.[0].before.state, 'active');
+  assert.equal(f.task().budgetReceipts?.[0].before.termination, undefined);
+  const epoch = f.task().budgetEpoch;
+  await f.h.commandHandler!(msg(`/task-budget reset-resume ${key} a ${token} legacy1`, 'owner'));
+  assert.equal(f.task().budgetEpoch, epoch);
+  assert.equal(f.task().budgetReceipts?.length, 1);
+});
+
+test('legacy blocked checkpoints remain ambiguous even with exhaustion prose', async () => {
+  for (const explicitBlocked of [undefined, false, true]) {
+    const f = fixture({ termination: undefined, explicitBlocked, next: 'Aktionsbudget erschöpft' });
+    const before = f.task();
+    await f.h.commandHandler!(msg(`/task-budget reset-resume ${key} a ${f.token()} negative`, 'owner'));
+    assert.deepEqual(f.task(), before);
+  }
+});
+
+test('host budget notice explains scope, pending work, reason and authenticated command', async () => {
+  const f = fixture({ state: 'active', termination: undefined, explicitBlocked: undefined });
+  await f.h.tick(); await f.h.drained();
+  const text = f.ch.sent.map(s => s.text).join('\n');
+  assert.match(text, /authorized task/);
+  assert.match(text, /verify effects first/);
+  assert.match(text, /20/);
+  assert.ok(text.includes(`/task-budget inspect ${key} a`));
+  assert.match(text, /reset-resume/);
+  assert.match(text, /authentifiziert/);
+});
+
+
+test('combined reset preserves guards, permissions and rollback at the atomic save', async () => {
+  for (const patch of [
+    { state: 'stopped' }, { state: 'completed' }, { expiresAt: 999 },
+    { explicitBlocked: true }, { depth: 19 }, { depth: 21 },
+    { termination: 'malformed_checkpoint' }, { recoveryAssessment: 'claimed' },
+    { lastWait: { reason: 'dependency', nextAt: 900, deadline: 999 } },
+  ] as Partial<DurableTask>[]) {
+    const f = fixture({ state: 'active', termination: undefined, explicitBlocked: undefined, ...patch });
+    const before = f.task();
+    await assert.rejects(f.h.controlTaskBudget(key, 'a', 'reset-resume', f.token(), 'guard', 'owner'));
+    assert.deepEqual(f.task(), before);
+  }
+  for (const source of ['api', 'host', 'timer', 'continuation'] as const) {
+    const f = fixture({ state: 'active', termination: undefined, explicitBlocked: undefined });
+    await f.h.commandHandler!({ ...msg(`/task-budget reset-resume ${key} a ${f.token()} denied`, 'owner'), source });
+    assert.equal(f.task().depth, 20);
+  }
+  const f = fixture({ state: 'active', termination: undefined, explicitBlocked: undefined });
+  const before = f.task();
+  f.h.onStateChange = async () => { throw Error('save failed'); };
+  await assert.rejects(f.h.controlTaskBudget(key, 'a', 'reset-resume', f.token(), 'rollback', 'owner'), /save failed/);
+  assert.deepEqual(f.task(), before);
+  assert.equal(f.runtime.sessions.size, 0);
+});
+
+test('combined authenticated ingress commits once then normal recovery admits work', async () => {
+  const f = fixture({ state: 'active', termination: undefined, explicitBlocked: undefined,
+    lastWait: { reason: 'dependency', nextAt: 1500, deadline: 2000 } });
+  const token = f.token();
+  await f.h.accept({ ...msg(`/task-budget reset-resume ${key} a ${token} ingress`, 'owner'), id: 'combined-ingress' });
+  await f.h.drained();
+  assert.equal(f.task().budgetReceipts?.length, 1);
+  assert.equal(f.task().budgetReceipts?.[0].action, 'reset-resume');
+  assert.equal(f.task().budgetReceipts?.[0].before.depth, 20);
+  assert.equal(f.task().expiresAt, 2000);
+  assert.equal(f.task().depth, 1);
+  assert.equal(f.runtime.sessions.size, 1);
+});

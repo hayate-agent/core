@@ -128,21 +128,21 @@ function recurringCommand(kind: "heartbeat" | "loop"): Command["run"] {
 export const COMMANDS: Command[] = [
   {
     name: "task-budget", admin: true,
-    help: "inspect|reset|resume <session-key> <task-id> [<token> <request-id>] (authenticated operator only)",
+    help: "inspect|reset|resume|reset-resume <session-key> <task-id> [<token> <request-id>] (authenticated operator only)",
     run: async (args, input, ctx) => {
       // Unlike legacy openAdmin mode, this control requires an identified operator.
       // Host/API/model inputs and sender-less remote messages never establish authority.
       if (input.source !== "channel" || !(input.replyTo?.channel === "console" ||
           !!input.sender && ctx.admins.includes(input.sender))) return "⛔ authenticated operator channel required";
       const [action, key, id, token, request, extra] = args.trim().split(/\s+/);
-      if (!key || !id || extra || !["inspect", "reset", "resume"].includes(action) ||
+      if (!key || !id || extra || !["inspect", "reset", "resume", "reset-resume"].includes(action) ||
           (action === "inspect" ? !!token : !token || !request))
-        return "usage: /task-budget inspect <session-key> <task-id> OR /task-budget reset|resume <session-key> <task-id> <token> <unique-request-id>";
+        return "usage: /task-budget inspect <session-key> <task-id> OR /task-budget reset|resume|reset-resume <session-key> <task-id> <token> <unique-request-id>";
       if (action === "inspect") {
         const status = ctx.harness.taskBudgetStatus(key, id);
         return JSON.stringify({ session: key, ...status });
       }
-      return ctx.harness.controlTaskBudget(key, id, action as "reset" | "resume", token, request,
+      return ctx.harness.controlTaskBudget(key, id, action as "reset" | "resume" | "reset-resume", token, request,
         input.replyTo?.channel === "console" ? "console:local" : `${input.replyTo?.channel}:${input.sender}`, input);
     },
   },

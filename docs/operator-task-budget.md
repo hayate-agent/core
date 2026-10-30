@@ -22,8 +22,24 @@ stale-state token. Obtain session keys through `/status` or `/sessions`; task ID
 are the host-assigned retained checkpoint IDs (also available in persisted session
 state). Never guess an ID from an external integration target.
 
-`reset` accepts only a host-classified productive-budget exhaustion (20 steps) or
-recovery-assessment exhaustion (3 attempts). It clears only exhausted counters:
+For a single explicit authorization to reset **and** resume, use instead:
+
+```text
+/task-budget inspect <session-key> <task-id>
+/task-budget reset-resume <session-key> <task-id> <inspect-token> <unique-request-id>
+```
+
+`reset-resume` uses the same eligibility, authentication, stale-state, audit,
+deduplication and atomic-save boundary as `reset`, but commits the active state
+in that transaction. Normal recovery/scheduler admission runs only after the save.
+A save failure cannot leave a half-reset or running task.
+
+`reset` and `reset-resume` accept a host-classified productive-budget exhaustion
+(20 steps), recovery-assessment exhaustion (3 attempts), or the narrow legacy
+checkpoint shape: **active**, depth **exactly 20**, with no `termination`,
+`explicitBlocked`, `recoveryAssessment` or `recoveryRetry` field. This supports
+pre-classification active exhausted checkpoints without classifying their history.
+Other active shapes fail closed. It clears only exhausted counters:
 productive `depth` and/or recovery retry/assessment markers. It leaves the task
 **blocked**, records `operator_budget_reset`, and executes nothing. An arbitrary
 agent/operator `blocked` decision is not resettable, even at depth 20. Legacy
@@ -38,7 +54,7 @@ assessment must establish one. It cannot resurrect stopped/completed/expired
 work, bypass pause, or extend a wait deadline. Commands require an idle host
 boundary: if another turn, intake, delivery or control is active, retry later.
 
-Both actions persist the checkpoint and receipt in the existing atomic state-file
+All mutating actions persist the checkpoint and receipt in the existing atomic state-file
 transaction before subsequent execution. Save failure restores the previous
 in-memory checkpoint and reports failure. Concurrent controls fail closed; a
 changed task invalidates the token. Identical `(task, request-id, action, token,
@@ -55,6 +71,18 @@ it is an identity sequence, not a resettable budget. Only exhausted-budget
 attention markers are cleared for the new epoch; old notification entries and
 receipt evidence remain. Future exhaustion may emit one new epoch-scoped notice.
 No global budgets, original authority, external credentials or deadlines change.
+
+The host exhaustion notice includes a short original scope, pending next step
+(or an explicit unknown), why work paused, and the exact session/task-specific
+`inspect` and `reset-resume` command sequence. Legacy active exhausted tasks also
+receive that once-only durable notice. Already persisted/delivered old notices are
+not rewritten or resent by an upgrade.
+
+Natural-language requests to the chat model are **not** authenticated command
+ingress. The model cannot execute these commands by printing them, forge sender
+metadata, or reset its own budget. An operator must submit the command through
+the authenticated channel or local console; this patch adds no natural-language
+intent-to-command bridge. The inspection token and request ID remain explicit.
 
 See [task recovery](task-recovery.md), [bounded waits](task-waits.md),
 [budget attention](budget-attention.md) and [operations](operations.md).

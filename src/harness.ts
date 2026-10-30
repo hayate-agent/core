@@ -64,7 +64,7 @@ export interface DurableTask {
   /** Queue namespace after reset; accepted IDs are never erased. */
   budgetEpoch?: string;
   explicitBlocked?: boolean;
-  budgetReceipts?: Array<{ request: string; action: "reset" | "resume"; actor: string; at: number;
+  budgetReceipts?: Array<{ request: string; action: "reset" | "resume" | "reset-resume"; actor: string; at: number;
     expected: string; before: { depth: number; recoveryRetry?: DurableTask["recoveryRetry"];
       recoveryAssessment?: DurableTask["recoveryAssessment"]; recoveryAttentionId?: string;
       budgetAttentionId?: string; termination?: string; state: DurableTask["state"] } }>;
@@ -512,7 +512,7 @@ export class Harness {
 
   private budgetChanging = false;
 
-  async controlTaskBudget(key: string, id: string, action: "reset" | "resume", expected: string, request: string, actor: string, command?: Inbound): Promise<string> {
+  async controlTaskBudget(key: string, id: string, action: "reset" | "resume" | "reset-resume", expected: string, request: string, actor: string, command?: Inbound): Promise<string> {
     if (!/^[a-zA-Z0-9_-]{1,64}$/.test(request) || !actor || actor.length > 256) throw Error("Invalid request ID or actor");
     let result = "";
     if (this.budgetChanging) throw Error("Change requires an idle turn boundary");
@@ -536,8 +536,12 @@ export class Harness {
           (task.expiresAt !== undefined && (!Number.isSafeInteger(task.expiresAt) || task.expiresAt <= this.now())) ||
           ([task.wait, task.lastWait].some(wait => wait && (!Number.isSafeInteger(wait.deadline) || wait.deadline <= this.now()))))
         throw Error("Task unavailable, expired, paused or busy");
-      if (action === "reset") {
-        if (!(task.state === "blocked" && !task.explicitBlocked && (task.termination === "productive_budget_exhausted" && task.explicitBlocked === false && task.depth >= 20 ||
+      if (action !== "resume") {
+        // Depth or prose cannot explain an unclassified blocked decision.
+        const legacyActive = task.state === "active" && task.depth === 20 &&
+          task.termination === undefined && task.explicitBlocked === undefined &&
+          task.recoveryAssessment === undefined && task.recoveryRetry === undefined;
+        if (!(legacyActive || task.state === "blocked" && !task.explicitBlocked && (task.termination === "productive_budget_exhausted" && task.explicitBlocked === false && task.depth >= 20 ||
             task.termination === "recovery_assessment_failed" && (task.recoveryRetry?.attempts ?? 0) >= 3)))
           throw Error("Task is not host budget-blocked");
       } else if (task.state !== "blocked" || task.termination !== "operator_budget_reset" || !task.budgetReceipts?.some(r => r.action === "reset")) {
@@ -548,14 +552,16 @@ export class Harness {
         before: { state: task.state, depth: task.depth, recoveryRetry: structuredClone(task.recoveryRetry),
           recoveryAssessment: task.recoveryAssessment, recoveryAttentionId: task.recoveryAttentionId,
           budgetAttentionId: task.budgetAttentionId, termination: task.termination } };
-      if (action === "reset") {
+      if (action !== "resume") {
         if (task.depth >= 20) { task.depth = 0; task.budgetAttentionId = undefined; }
         if ((task.recoveryRetry?.attempts ?? 0) >= 3) {
           task.recoveryRetry = undefined; task.recoveryAssessment = undefined; task.recoveryAttentionId = undefined;
         }
         task.budgetEpoch = randomUUID();
         task.termination = "operator_budget_reset";
-      } else {
+        task.state = "blocked";
+      }
+      if (action !== "reset") {
         task.state = "active";
         // Preserve the tighter wait deadline even when resuming a productive next step.
         for (const wait of [task.wait, task.lastWait]) if (wait)
@@ -608,8 +614,9 @@ export class Harness {
     if (!to) return;
     const id = `task-budget:${s.key}:${task.id}${task.budgetEpoch ? `:${task.budgetEpoch}` : ""}`;
     task.budgetAttentionId = id;
+    const short = (text: string) => text.replace(/\s+/g, " ").trim().slice(0, 240);
     s.outbox.push({ id, sessionKey: s.key, to,
-      text: `Aufgabe ${task.id}: Aktionsbudget erschöpft; offene Arbeit wird nicht automatisch fortgesetzt. Statusabfragen laufender Abhängigkeiten bleiben bis zur bestehenden Frist möglich. Für weitere Arbeit ist ein neuer ausdrücklicher Operatorauftrag erforderlich.` });
+      text: `Aufgabe: ${short(task.original)}\nOffen: ${task.next ? short(task.next) : "Kein sicherer nächster Schritt gespeichert; erneute Prüfung erforderlich."}\nAktionsbudget erschöpft: 20 Fortsetzungsschritte verbraucht. Weitere Arbeit pausiert; Statusabfragen laufender Abhängigkeiten bleiben bis zur bestehenden Frist möglich.\nAls authentifizierter Administrator oder in der lokalen Konsole ausführen:\n/task-budget inspect ${s.key} ${task.id}\nDanach mit dem zurückgegebenen Token und einer neuen eindeutigen Request-ID:\n/task-budget reset-resume ${s.key} ${task.id} <inspect-token> <unique-request-id>\nDas setzt ausschließlich ein zulässiges erschöpftes Budget zurück und erlaubt die Fortsetzung desselben Auftrags. Unklassifizierte blockierte Aufgaben bleiben gesperrt. Der Chat-Assistent kann diesen Befehl nicht selbst authentifiziert ausführen.` });
     // The marker and notice share the same persistence barrier, including retries.
     s.unsaved = true;
   }
@@ -1870,7 +1877,7 @@ export class Harness {
       if (s.running || s.queue.length || s.outbox.length || s.unsaved) continue;
       for (const task of this.tasks(s)) {
       // Reconcile pre-upgrade exhausted checkpoints without a model nudge.
-      if (task.state === "blocked" && task.depth >= 20 && !task.budgetAttentionId) {
+      if ((task.state === "blocked" || task.state === "active") && task.depth >= 20 && !task.budgetAttentionId) {
         this.budgetAttention(s, task);
         if (s.unsaved) { void this.pump(s); break; }
       }
