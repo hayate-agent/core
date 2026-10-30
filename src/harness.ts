@@ -51,6 +51,8 @@ export interface DurableTask {
   repetition?: RepetitionBudget;
   expiresAt?: number;
   anchor?: Inbound["completionAnchor"];
+  /** Settled answer for this task, never a neighbouring conversation turn. */
+  lastReply?: string;
   /** Persisted host admission; inference dedup is not an execution permit. */
   recoveryAdmission?: { id: string; depth: number; next: string; original: string; expiresAt?: number };
   recoveryAttentionId?: string;
@@ -758,6 +760,8 @@ export class Harness {
 
   private resetContinuation(input: Inbound): void { input.continuation = undefined; }
 
+  private readonly settledReplies = new WeakMap<Inbound, string>();
+
   private rememberCompletion(s: SessionState, role: "user" | "assistant", text: string): void {
     s.completionRecent = [...(s.completionRecent ?? []), { role, text: text.slice(0, 2000) }].slice(-8);
   }
@@ -1316,7 +1320,8 @@ export class Harness {
     const input: Inbound = { source: "heartbeat", sessionKey: s.key, text: task.original,
       taskId: task.id, continuationDepth: task.depth, continuationExpiresAt: task.expiresAt,
       completionAnchor: task.anchor ?? { id: task.id, task: task.original, receivedAt: this.now() } };
-    const evidence = JSON.stringify({ startup: true, reply: "No retained turn result. Completion is unknown. Assess the original mandate; any next step must first reconcile actual effects, never blindly replay work.",
+    const retainedReply = typeof task.lastReply === "string" && !!task.lastReply.trim() && task.lastReply.length <= 8000 && task.lastReply !== NO_REPLY;
+    const evidence = JSON.stringify({ startup: true, reply: retainedReply ? task.lastReply : "No retained turn result. Completion is unknown. Assess the original mandate; any next step must first reconcile actual effects, never blindly replay work.",
       executions: this.opts.executionStore?.list(s.key).slice(-20).map(e => ({ id: e.id, status: e.status, parentStopped: e.parentStopped })) ?? [] });
     let plan: Inbound["continuation"];
     input.completionContext = this.completionEvidence(s);
@@ -1333,6 +1338,13 @@ export class Harness {
       if (plan.expiresAt !== undefined) task.expiresAt = plan.expiresAt;
       task.recoveryAdmission = { id: this.taskQueueId(task, task.depth + 1), depth: task.depth + 1,
         next: task.next, original: task.original, expiresAt: task.expiresAt };
+    } else if (plan?.state === "completed" && retainedReply) {
+      // Unknown/legacy tasks cannot be closed without a task-bound result.
+      task.state = "completed";
+      task.recoveryRetry = undefined;
+    } else if (plan?.state === "waiting" || plan?.state === "blocked") {
+      task.state = plan.state; // No timer or executable next step is granted.
+      task.recoveryRetry = undefined;
     } else if (task.recoveryRetry.attempts >= 3) {
       this.recoveryAttention(s, task, assessmentFailed ? "failed" : "exhausted");
     }
@@ -1553,6 +1565,11 @@ export class Harness {
           task.recoveryAdmission = undefined;
           const plan = input.continuation;
           const retainedNext = task.next;
+          // Only this settled turn's deliverable answer is completion evidence.
+          // Missing/oversized output clears older substep evidence.
+          const answer = this.settledReplies.get(input);
+          this.settledReplies.delete(input);
+          task.lastReply = answer && answer.length <= 8000 ? answer : undefined;
           task.state = plan?.state === "continue" ? "active" : plan?.state ?? "active";
           task.next = plan?.state === "continue" || plan?.state === "blocked" || plan?.wait ? plan.next : undefined;
           task.wait = plan?.state === "waiting" && plan.wait ? { reason: plan.wait.reason,
@@ -1785,13 +1802,12 @@ export class Harness {
         if ((input.source !== "host" || this.resultMandate(input)) && assessmentEligible() && !this.paused && !this.stopping && !s.queue.length && !assessmentAbort.signal.aborted && s.cancelling !== input &&
             plan?.state === "continue" && typeof plan.next === "string" && plan.next.trim() && plan.next.length <= 4000 &&
             checkpoint?.state !== "continue" && !checkpoint?.wait) input.continuation = plan;
-        // A positive completion verdict for this actual reply is distinct from
-        // missing/failed assessment. Never overwrite an explicit checkpoint or
-        // infer completion during startup, where no retained reply is supplied.
-        else if (plan?.state === "completed" && !checkpoint && reply && reply !== NO_REPLY &&
+        // Non-executable decisions are not failed assessments. Never overwrite
+        // explicit checkpoints or infer completion from a missing answer.
+        else if (plan && ["completed", "waiting", "blocked"].includes(plan.state) && !checkpoint && reply && reply !== NO_REPLY &&
             assessmentEligible() && !this.paused && !this.stopping && !s.queue.length &&
             !assessmentAbort.signal.aborted && s.cancelling !== input && input.source !== "host")
-          input.continuation = { state: "completed" };
+          input.continuation = { state: plan.state };
       } catch { this.log("completion assessment failed; no automatic follow-up"); }
     }
     if (s.cancelling === input) {
@@ -1846,6 +1862,10 @@ export class Harness {
         reply += `\n\n⏸️ Goal paused after ${s.goal.turns} turns. /goal resume to continue.`;
       }
     }
+    if (finalStatus === "completed" && reply && reply !== NO_REPLY && reply.length <= 8000 &&
+        !s.steered?.some(item => item.source === "channel" || item.source === "api"))
+      this.settledReplies.set(input, reply);
+    else this.settledReplies.delete(input);
     // Archive before creating any deliverable outbox entry. A storage failure holds
     // the input rather than delivering an unrecorded report.
     if (input.cronReport && reply && reply !== NO_REPLY && finalStatus !== "cancelled") input.cronReport.completedOutput = reply;
