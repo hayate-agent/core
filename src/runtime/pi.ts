@@ -1,6 +1,7 @@
 /**
  * PI runtime adapter. The only module that imports the PI SDK.
  */
+import type { AdaptiveSkills } from "../adaptive-skills.js";
 import { toolGuardDenialReason } from "../tool-guard-error.js";
 import { MaintenanceError, maintenanceStep, type MaintenanceStage } from "../context-maintenance.js";
 import type { PruningPolicy, ToolResultProjector } from "../tool-result-pruning.js";
@@ -13,6 +14,7 @@ import path from "node:path";
 import {
   type AgentSession,
   type AgentSessionEvent,
+  type ExtensionAPI,
   createAgentSession,
   createMcpExtension,
   createCodemodeExtension,
@@ -32,6 +34,21 @@ type Thinking = (typeof THINKING)[number];
 /** Approval hook; resolve true to allow. Called only when the approval mode is "manual". */
 export type ApprovalRequest = (sessionKey: string, tool: string, input: unknown) => Promise<boolean>;
 
+export function installAdaptiveSkillHooks(pi: ExtensionAPI, adaptive: AdaptiveSkills, sessionKey: string): void {
+  pi.on("agent_end", () => { adaptive.end(sessionKey); });
+  pi.on("tool_call", async event => {
+    if (event.toolName === "plugin_skill_learn") return;
+    // SDK tool_call has no context-injection result. A bounded block carries reference
+    // data before execution; a retry still traverses ordinary approvals and guards.
+    const reference = await adaptive.match(sessionKey, `${event.toolName} ${JSON.stringify(event.input).slice(0, 2048)}`);
+    if (reference) return { block: true, reason: `Relevant skill reference loaded before action. Consider it then retry if still authorized.${reference}` };
+  });
+  pi.on("tool_result", event => {
+    const receipt = adaptive.observe(sessionKey, event.toolCallId, event.toolName, event.isError);
+    if (receipt) return { content: [...event.content, { type: "text" as const, text: receipt }] };
+  });
+}
+
 export interface PiRuntimeOptions {
   cwd: string;
   /** Per-agent session store, one subdirectory per session key. */
@@ -50,6 +67,7 @@ export interface PiRuntimeOptions {
   legacySessionProvider?: SessionProvider;
   mcp?: { enabled: boolean };
   skillPaths: string[];
+  adaptiveSkills?: AdaptiveSkills;
   /** Models that accept reasoning_effort "none" for thinking "off" turns (env list is merged at the call site). */
   reasoningEffortNoneModels?: () => readonly string[];
   /** Fresh validated skill context before each turn, without reloading extensions. */
@@ -502,15 +520,23 @@ export class PiRuntime implements AgentRuntime {
         {
           name: "vanillacore-harness-turn",
           factory: (pi) => {
+            const adaptive = !options.ephemeral ? this.opts.adaptiveSkills : undefined;
+            if (adaptive) installAdaptiveSkillHooks(pi, adaptive, sessionKey);
             // Sent as this request's leading system prompt, not recorded in the transcript:
             // the instructions apply to this one run only.
             pi.on("context", (event) => {
               const policy = this.opts.pruning?.();
               return policy && this.opts.projectToolResults ? { messages: this.opts.projectToolResults(event.messages, policy) } : undefined;
             });
-            pi.on("before_agent_start", (event) => {
+            pi.on("before_agent_start", async (event) => {
+              let reference = "";
+              if (adaptive) {
+                adaptive.begin(sessionKey);
+                reference = await adaptive.match(sessionKey, "prompt" in event ? event.prompt : "");
+              }
               const extra = [skillContext, slot.instructions ? `<run_instructions>\n${slot.instructions}\n</run_instructions>` : ""].filter(Boolean).join("\n\n");
-              return extra ? { systemPrompt: `${event.systemPrompt}\n\n${extra}` } : undefined;
+              return { ...(extra ? { systemPrompt: `${event.systemPrompt}\n\n${extra}` } : {}),
+                ...(reference ? { message: { customType: "harness-skill-reference", content: reference, display: false } } : {}) };
             });
           },
         },

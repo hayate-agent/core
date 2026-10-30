@@ -79,6 +79,8 @@ export interface HarnessConfig {
     paths: string[];
     /** Skill-metadata injection mode: 'auto' (inject once per session, cached), 'lazy' (none; discover via plugin_skill_search), 'off' (none). */
     context?: "auto" | "lazy" | "off";
+    /** Installation-only opt-in. Never enabled by model-writable local settings. */
+    adaptive?: boolean;
   };
   cron: {
     /** Hermes-compatible jobs.yaml; optional. */
