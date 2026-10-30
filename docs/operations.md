@@ -1,5 +1,9 @@
 # Operations
 
+For an explicit, exact-task continuation/recovery budget reset, use the
+[authenticated `/task-budget` control](operator-task-budget.md). Reset and resume
+are separate durable operator actions; neither resets review budgets.
+
 ## Tool approvals and YOLO
 
 `/yolo on|off|status` controls the Harness's manual tool approvals, not a PI

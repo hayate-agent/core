@@ -5,7 +5,7 @@
  * "alive" between messages.
  */
 import { gatewaySettings, type GatewayConfig } from "./gateway-settings.js";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { TurnActivity } from "./activity.js";
 import { deliverTaskStatus, routineWait, taskStatusId } from "./notification-routing.js";
 import type { PersistedSession } from "./state.js";
@@ -58,9 +58,16 @@ export interface DurableTask {
   /** Monotonic scheduler claims, independent of productive follow-up depth. */
   waitChecks?: number;
   lastWait?: DurableTask["wait"];
-  termination?: "deadline_expired" | "productive_budget_exhausted" | "malformed_checkpoint";
+  termination?: "deadline_expired" | "productive_budget_exhausted" | "malformed_checkpoint" | "recovery_assessment_failed" | "operator_budget_reset";
   /** Stable durable outbox notice; never renews the task's authority or budget. */
   budgetAttentionId?: string;
+  /** Queue namespace after reset; accepted IDs are never erased. */
+  budgetEpoch?: string;
+  explicitBlocked?: boolean;
+  budgetReceipts?: Array<{ request: string; action: "reset" | "resume"; actor: string; at: number;
+    expected: string; before: { depth: number; recoveryRetry?: DurableTask["recoveryRetry"];
+      recoveryAssessment?: DurableTask["recoveryAssessment"]; recoveryAttentionId?: string;
+      budgetAttentionId?: string; termination?: string; state: DurableTask["state"] } }>;
 }
 
 /** Content-free owner-process inspection; not an authorization or transcript API. */
@@ -248,8 +255,8 @@ export class Harness {
   private gatewayChanging = false;
   private activeDeliveries = 0;
   /** Reserve the same instance-wide boundary used for transport replacement. */
-  async atIdleBoundary(change: () => Promise<void>): Promise<void> {
-    if (this.gatewayChanging || this.activeDeliveries || this.stopping || this.inbox.accepting.size ||
+  async atIdleBoundary(change: () => Promise<void>, command?: Inbound): Promise<void> {
+    if (this.gatewayChanging || this.activeDeliveries || this.stopping || [...this.inbox.accepting].some(i => i !== command) ||
         [...this.sessions.values()].some(s => s.running)) throw Error("Change requires an idle turn boundary");
     this.gatewayChanging = true;
     try { await change(); }
@@ -491,6 +498,79 @@ export class Harness {
     return tasks;
   }
 
+  private taskQueueId(task: DurableTask, depth: number): string {
+    return `task:${task.id}:${task.budgetEpoch ? `${task.budgetEpoch}:` : ""}${depth}`;
+  }
+
+  /** Host control only: deliberately not a model tool or plugin capability. */
+  taskBudgetStatus(key: string, id: string): { token: string; task: DurableTask } {
+    const s = this.sessions.get(key);
+    const task = s && this.tasks(s).find(t => t.id === id);
+    if (!task) throw Error("Exact retained task not found");
+    return { token: createHash("sha256").update(JSON.stringify(task)).digest("hex"), task: structuredClone(task) };
+  }
+
+  private budgetChanging = false;
+
+  async controlTaskBudget(key: string, id: string, action: "reset" | "resume", expected: string, request: string, actor: string, command?: Inbound): Promise<string> {
+    if (!/^[a-zA-Z0-9_-]{1,64}$/.test(request) || !actor || actor.length > 256) throw Error("Invalid request ID or actor");
+    let result = "";
+    if (this.budgetChanging) throw Error("Change requires an idle turn boundary");
+    this.budgetChanging = true;
+    try { await this.atIdleBoundary(async () => {
+      if (!this.onStateChange) throw Error("Durable persistence required");
+      const status = this.taskBudgetStatus(key, id);
+      const s = this.sessions.get(key)!;
+      const task = this.tasks(s).find(t => t.id === id)!;
+      const prior = task.budgetReceipts?.find(r => r.request === request);
+      if (prior) {
+        if (prior.action !== action || prior.expected !== expected || prior.actor !== actor) throw Error("Request ID conflict");
+        result = `Already committed: ${action} ${id} request=${request}`;
+        return;
+      }
+      if (status.token !== expected) throw Error("Stale task token; inspect again");
+      if (this.paused || this.stoppingHostParents.has(key) || this.opts.externallyRecoveredSession?.(key) || key === "improvement:nightly" ||
+          s.current || s.queue.length || this.recoveringTasks.has(task) || task.recoveryAdmission ||
+          !["active", "waiting", "blocked"].includes(task.state) ||
+          !Number.isSafeInteger(task.depth) || task.depth < 0 ||
+          (task.expiresAt !== undefined && (!Number.isSafeInteger(task.expiresAt) || task.expiresAt <= this.now())) ||
+          ([task.wait, task.lastWait].some(wait => wait && (!Number.isSafeInteger(wait.deadline) || wait.deadline <= this.now()))))
+        throw Error("Task unavailable, expired, paused or busy");
+      if (action === "reset") {
+        if (!(task.state === "blocked" && !task.explicitBlocked && (task.termination === "productive_budget_exhausted" && task.depth >= 20 ||
+            task.termination === "recovery_assessment_failed" && (task.recoveryRetry?.attempts ?? 0) >= 3)))
+          throw Error("Task is not host budget-blocked");
+      } else if (task.state !== "blocked" || task.termination !== "operator_budget_reset" || !task.budgetReceipts?.some(r => r.action === "reset")) {
+        throw Error("Explicit resume requires a committed budget reset");
+      }
+      const before = structuredClone(task);
+      const receipt: NonNullable<DurableTask["budgetReceipts"]>[number] = { request, action, actor, at: this.now(), expected,
+        before: { state: task.state, depth: task.depth, recoveryRetry: structuredClone(task.recoveryRetry),
+          recoveryAssessment: task.recoveryAssessment, recoveryAttentionId: task.recoveryAttentionId,
+          budgetAttentionId: task.budgetAttentionId, termination: task.termination } };
+      if (action === "reset") {
+        if (task.depth >= 20) { task.depth = 0; task.budgetAttentionId = undefined; }
+        if ((task.recoveryRetry?.attempts ?? 0) >= 3) {
+          task.recoveryRetry = undefined; task.recoveryAssessment = undefined; task.recoveryAttentionId = undefined;
+        }
+        task.budgetEpoch = randomUUID();
+        task.termination = "operator_budget_reset";
+      } else {
+        task.state = "active";
+        // Preserve the tighter wait deadline even when resuming a productive next step.
+        for (const wait of [task.wait, task.lastWait]) if (wait)
+          task.expiresAt = Math.min(task.expiresAt ?? Infinity, wait.deadline);
+        task.termination = undefined;
+      }
+      task.budgetReceipts = [...(task.budgetReceipts ?? []), receipt].slice(-16);
+      try { await this.onStateChange(); }
+      catch (error) { for (const k of Object.keys(task)) delete (task as unknown as Record<string, unknown>)[k]; Object.assign(task, before); throw error; }
+      result = `Committed: ${action} ${id} request=${request}; token=${this.taskBudgetStatus(key, id).token}`;
+    }, command); }
+    finally { this.budgetChanging = false; }
+    return result;
+  }
+
   private hasPendingDependency(key: string, taskId?: string): boolean {
     const store = this.opts.executionStore;
     return !!store?.list(key).some(e => !["completed", "cancelled"].includes(e.status) &&
@@ -513,7 +593,7 @@ export class Harness {
       s.unsaved = true;
       return false;
     }
-    s.queue.push({ id: admission?.id ?? `task:${task.id}:${task.depth + 1}`, source: "cron", sessionKey: s.key,
+    s.queue.push({ id: admission?.id ?? this.taskQueueId(task, task.depth + 1), source: "cron", sessionKey: s.key,
       taskId: task.id, continuationDepth: task.depth + 1, continuationExpiresAt: task.expiresAt,
       completionAnchor: task.anchor, replyTo: s.replyTo,
       text: `Resume the explicitly authorized task after an interruption. Verify actual state and completed side effects; do not repeat them or broaden authority. Original task:\n${task.original}\nNext step:\n${task.next}` });
@@ -526,7 +606,7 @@ export class Harness {
         (task.expiresAt !== undefined && task.expiresAt <= this.now())) return;
     const to = s.replyTo ?? this.home;
     if (!to) return;
-    const id = `task-budget:${s.key}:${task.id}`;
+    const id = `task-budget:${s.key}:${task.id}${task.budgetEpoch ? `:${task.budgetEpoch}` : ""}`;
     task.budgetAttentionId = id;
     s.outbox.push({ id, sessionKey: s.key, to,
       text: `Aufgabe ${task.id}: Aktionsbudget erschöpft; offene Arbeit wird nicht automatisch fortgesetzt. Statusabfragen laufender Abhängigkeiten bleiben bis zur bestehenden Frist möglich. Für weitere Arbeit ist ein neuer ausdrücklicher Operatorauftrag erforderlich.` });
@@ -754,6 +834,7 @@ export class Harness {
   }
 
   async resetSession(key: string): Promise<void> {
+    if (this.budgetChanging) throw Error("Host control in progress; retry reset");
     const s = this.state(key);
     if (s.running) {
       this.turnAbort.get(s.key)?.abort();
@@ -864,6 +945,7 @@ export class Harness {
    * direct callers get the same persist-before-run guarantee via enqueue().
    */
   async submit(input: Inbound, deferPump = false): Promise<void> {
+    if (this.budgetChanging) throw Error("Host control in progress; retry input");
     const s = this.state(input.sessionKey);
     if (input.source === "channel") {
       input.completionAnchor = { id: randomUUID(), task: input.text, receivedAt: this.now() };
@@ -953,6 +1035,7 @@ export class Harness {
    * away; a running one is aborted and finishes as cancelled. False if it is not pending.
    */
   async stopConversation(sessionKey: string): Promise<number> {
+    if (this.budgetChanging) throw Error("Host control in progress; retry stop");
     this.stoppingHostParents.add(sessionKey);
     const s = this.state(sessionKey);
     const dropped = s.queue.length;
@@ -973,6 +1056,7 @@ export class Harness {
   }
 
   async cancel(sessionKey: string, id: string): Promise<"queued" | "running" | false> {
+    if (this.budgetChanging) throw Error("Host control in progress; retry cancel");
     const s = this.sessions.get(sessionKey);
     if (!s) return false;
     if (s.current?.id === id && s.running) {
@@ -1070,6 +1154,7 @@ export class Harness {
 
   /** Reconstruct checkpointed work, or assess a retained mandate once. No polling. */
   async recoverTasks(): Promise<void> {
+    if (this.gatewayChanging) return;
     for (const s of this.sessions.values()) {
       if (this.opts.externallyRecoveredSession?.(s.key)) continue;
       for (const task of this.tasks(s)) {
@@ -1085,7 +1170,7 @@ export class Harness {
         await this.outbox.barrier();
         continue;
       }
-      const input: Inbound = { id: admission?.id ?? `task:${task.id}:${task.depth + 1}`, source: "heartbeat", sessionKey: s.key,
+      const input: Inbound = { id: admission?.id ?? this.taskQueueId(task, task.depth + 1), source: "heartbeat", sessionKey: s.key,
         text: `Resume the authorized task after restart. Verify completed side effects before acting. Original task:\n${task.original}\nNext step:\n${task.next}`,
         replyTo: s.replyTo, taskId: task.id, continuationDepth: task.depth + 1, continuationExpiresAt: task.expiresAt, completionAnchor: task.anchor };
       await this.submit(input, true);
@@ -1154,7 +1239,7 @@ export class Harness {
       task.next = `First reconcile the actual task state and completed side effects; do not blindly replay external effects. Then: ${plan.next.trim()}`;
       task.anchor = input.completionAnchor;
       if (plan.expiresAt !== undefined) task.expiresAt = plan.expiresAt;
-      task.recoveryAdmission = { id: `task:${task.id}:${task.depth + 1}`, depth: task.depth + 1,
+      task.recoveryAdmission = { id: this.taskQueueId(task, task.depth + 1), depth: task.depth + 1,
         next: task.next, original: task.original, expiresAt: task.expiresAt };
     } else if (task.recoveryRetry.attempts >= 3) {
       this.recoveryAttention(s, task, assessmentFailed ? "failed" : "exhausted");
@@ -1173,8 +1258,10 @@ export class Harness {
       mismatched: "Die gespeicherte Recovery-Freigabe passt nicht mehr zum gespeicherten Auftrag oder nächsten Schritt.",
     };
     task.state = "blocked";
+    if ((reason === "failed" || reason === "exhausted" || reason === "interrupted") && (task.recoveryRetry?.attempts ?? 0) >= 3)
+      task.termination = "recovery_assessment_failed";
     if (task.recoveryAttentionId) return;
-    const id = task.recoveryAttentionId = `task-recovery:${s.key}:${task.id}`;
+    const id = task.recoveryAttentionId = `task-recovery:${s.key}:${task.id}${task.budgetEpoch ? `:${task.budgetEpoch}` : ""}`;
     const to = s.replyTo ?? this.home;
     if (to) {
       const text = `⚠️ Recovery angehalten: ${reasons[reason]}\nAuftrag: ${task.original}\n` +
@@ -1373,6 +1460,7 @@ export class Harness {
           task.expiresAt = inheritedDeadline === Infinity ? undefined : inheritedDeadline;
           task.recoveryAssessment = undefined;
           task.recoveryRetry = undefined;
+          task.explicitBlocked = plan?.state === "blocked";
           if ((plan?.state === "continue" || plan?.state === "blocked") && task.depth >= 20) {
             task.next ??= retainedNext;
             task.state = "blocked";
@@ -1463,7 +1551,7 @@ export class Harness {
         throw Error("Host event authority revoked");
       }
       const task = this.tasks(s).find(task => task.id === input.taskId);
-      if (input.taskId && input.id === `task:${input.taskId}:${input.continuationDepth}` &&
+      if (input.taskId && input.id && input.id === (task ? this.taskQueueId(task, input.continuationDepth ?? 0) : `task:${input.taskId}:${input.continuationDepth}`) &&
           (!task || task.state !== "active" || task.depth + 1 !== input.continuationDepth)) {
         s.cancelling = input;
         throw Error("Retained task authority revoked");
@@ -1764,6 +1852,7 @@ export class Harness {
   }
 
   async tick(at = this.now()): Promise<void> {
+    if (this.gatewayChanging) return;
     await this.flushMaintenanceNotices();
     // Retry loop for undelivered replies / unsaved completions (homeserver or disk back),
     // independent of new input; the tick interval (default 15s) is the backoff. Also while paused.
