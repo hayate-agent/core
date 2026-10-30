@@ -17,6 +17,8 @@ import { SeenWindow } from "./delivery/seen.js";
 import { approvalPreview } from "./approval-preview.js";
 import { ToolGuardError } from "./tool-guard-error.js";
 
+import { accountRepetition, repetitions, type RepetitionBudget } from "./repetition-budget.js";
+
 export { approvalPreview };
 const MAINTENANCE_YIELD = Symbol("maintenance yielded before prompt");
 
@@ -46,6 +48,7 @@ export interface DurableTask {
   state: "active" | "waiting" | "blocked" | "completed" | "stopped";
   next?: string;
   depth: number;
+  repetition?: RepetitionBudget;
   expiresAt?: number;
   anchor?: Inbound["completionAnchor"];
   /** Persisted host admission; inference dedup is not an execution permit. */
@@ -66,7 +69,7 @@ export interface DurableTask {
   budgetEpoch?: string;
   explicitBlocked?: boolean;
   budgetReceipts?: Array<{ request: string; action: "reset" | "resume" | "reset-resume"; actor: string; at: number;
-    expected: string; before: { depth: number; recoveryRetry?: DurableTask["recoveryRetry"];
+    expected: string; before: { depth: number; repetition?: RepetitionBudget; recoveryRetry?: DurableTask["recoveryRetry"];
       recoveryAssessment?: DurableTask["recoveryAssessment"]; recoveryAttentionId?: string;
       budgetAttentionId?: string; termination?: string; state: DurableTask["state"] } }>;
 }
@@ -129,6 +132,8 @@ export interface PendingApproval {
 export interface HarnessOptions {
   activity?: import("./activity.js").ActivityPolicy;
   runtime: AgentRuntime;
+  /** Trusted host snapshot; absent/failed evidence consumes repetition allowance. */
+  progressEvidence?: () => Promise<string | undefined>;
   executionStore?: import("./execution.js").ExecutionStore;
   tickMs: number;
   busyMode: BusyMode;
@@ -606,7 +611,7 @@ export class Harness {
         const legacyActive = task.state === "active" && task.depth === 20 &&
           task.termination === undefined && task.explicitBlocked === undefined &&
           task.recoveryAssessment === undefined && task.recoveryRetry === undefined;
-        if (!(legacyActive || task.state === "blocked" && !task.explicitBlocked && (task.termination === "productive_budget_exhausted" && task.explicitBlocked === false && task.depth >= 20 ||
+        if (!(legacyActive || task.state === "blocked" && !task.explicitBlocked && (task.termination === "productive_budget_exhausted" && task.explicitBlocked === false && repetitions(task) >= 20 ||
             task.termination === "recovery_assessment_failed" && (task.recoveryRetry?.attempts ?? 0) >= 3)))
           throw Error("Task is not host budget-blocked");
       } else if (task.state !== "blocked" || task.termination !== "operator_budget_reset" || !task.budgetReceipts?.some(r => r.action === "reset")) {
@@ -614,11 +619,14 @@ export class Harness {
       }
       const before = structuredClone(task);
       const receipt: NonNullable<DurableTask["budgetReceipts"]>[number] = { request, action, actor, at: this.now(), expected,
-        before: { state: task.state, depth: task.depth, recoveryRetry: structuredClone(task.recoveryRetry),
+        before: { state: task.state, depth: task.depth, repetition: structuredClone(task.repetition), recoveryRetry: structuredClone(task.recoveryRetry),
           recoveryAssessment: task.recoveryAssessment, recoveryAttentionId: task.recoveryAttentionId,
           budgetAttentionId: task.budgetAttentionId, termination: task.termination } };
       if (action !== "resume") {
-        if (task.depth >= 20) { task.depth = 0; task.budgetAttentionId = undefined; }
+        if (repetitions(task) >= 20) {
+          task.repetition = { version: 1, repetitions: 0, attempts: task.repetition?.attempts ?? 0, evidence: task.repetition?.evidence ?? [] };
+          task.budgetAttentionId = undefined;
+        }
         if ((task.recoveryRetry?.attempts ?? 0) >= 3) {
           task.recoveryRetry = undefined; task.recoveryAssessment = undefined; task.recoveryAttentionId = undefined;
         }
@@ -654,7 +662,7 @@ export class Harness {
         s.key === "improvement:nightly" || this.stoppingHostParents.has(s.key) ||
         this.opts.externallyRecoveredSession?.(s.key)) return false;
     const task = this.tasks(s).find(task => task.state === "active" && task.next?.trim() && !this.hasPendingDependency(s.key, task.id) &&
-      Number.isSafeInteger(task.depth) && task.depth >= 0 && task.depth < 20 &&
+      Number.isSafeInteger(task.depth) && task.depth >= 0 && repetitions(task) < 20 &&
       (task.expiresAt === undefined || (Number.isSafeInteger(task.expiresAt) && task.expiresAt > this.now())));
     if (!task) return false;
     const admission = task.recoveryAdmission;
@@ -673,7 +681,7 @@ export class Harness {
   }
 
   private budgetAttention(s: SessionState, task: DurableTask): void {
-    if (task.budgetAttentionId || task.depth < 20 || task.state === "stopped" || task.state === "completed" ||
+    if (task.budgetAttentionId || repetitions(task) < 20 || task.state === "stopped" || task.state === "completed" ||
         (task.expiresAt !== undefined && task.expiresAt <= this.now())) return;
     const to = s.replyTo ?? this.home;
     if (!to) return;
@@ -681,12 +689,14 @@ export class Harness {
     task.budgetAttentionId = id;
     const short = (text: string) => text.replace(/\s+/g, " ").trim().slice(0, 240);
     s.outbox.push({ id, sessionKey: s.key, to,
-      text: `Aufgabe: ${short(task.original)}\nOffen: ${task.next ? short(task.next) : "Kein sicherer nächster Schritt gespeichert; erneute Prüfung erforderlich."}\nAktionsbudget erschöpft: 20 Fortsetzungsschritte verbraucht. Weitere Arbeit pausiert; Statusabfragen laufender Abhängigkeiten bleiben bis zur bestehenden Frist möglich.\nAls authentifizierter Administrator einfach schreiben: „Setze das Budget zurück für Aufgabe ${task.id} und fahre fort“. Ohne Aufgaben-ID wird nur eine eindeutig erschöpfte Aufgabe gewählt; andernfalls fragt der Host nach. Der Host bestätigt die Ausführung erst nach dauerhafter Speicherung. Optional bleibt die technische Diagnose verfügbar: /task-budget inspect ${s.key} ${task.id}` });
+      text: `Aufgabe: ${short(task.original)}\nOffen: ${task.next ? short(task.next) : "Kein sicherer nächster Schritt gespeichert; erneute Prüfung erforderlich."}\nAktionsbudget erschöpft: 20 Wiederholungen ohne neue Host-Evidenz verbraucht. Weitere Arbeit pausiert; Statusabfragen laufender Abhängigkeiten bleiben bis zur bestehenden Frist möglich.\nAls authentifizierter Administrator einfach schreiben: „Setze das Budget zurück für Aufgabe ${task.id} und fahre fort“. Ohne Aufgaben-ID wird nur eine eindeutig erschöpfte Aufgabe gewählt; andernfalls fragt der Host nach. Der Host bestätigt die Ausführung erst nach dauerhafter Speicherung. Optional bleibt die technische Diagnose verfügbar: /task-budget inspect ${s.key} ${task.id}` });
     // The marker and notice share the same persistence barrier, including retries.
     s.unsaved = true;
   }
 
   private readonly waitCharges = new WeakMap<Inbound, Promise<void>>();
+  private evidenceEpoch = 0;
+  private evidenceReaders = 0;
 
   /** Runtime pre-execution guard: model prose is not proof of a pure wait. */
   async guardWaitTool(key: string, tool: string, args: unknown): Promise<void> {
@@ -723,11 +733,13 @@ export class Harness {
     if (charging) { await charging; await assertAuthorized(); return; }
     if (input.waitCheck.productive) return;
     const depth = input.continuationDepth ?? 0;
-    if (depth >= 20) {
+    if (repetitions(task) >= 20) {
       this.budgetAttention(this.state(key), task);
       throw new ToolGuardError("continuation_budget_exhausted", `Task ${task.id}: productive continuation budget exhausted; status rechecks only`);
     }
     input.waitCheck.productive = true;
+    const repetitionBefore = structuredClone(task.repetition);
+    accountRepetition(task); // durable charge before permitting a wait-turn effect
     input.continuationDepth = task.depth = depth + 1;
     const charge = Promise.resolve().then(() => {
       if (!this.onStateChange) throw Error("Wait persistence unavailable");
@@ -737,6 +749,7 @@ export class Harness {
     try { await charge; }
     catch (error) {
       input.waitCheck.productive = undefined;
+      task.repetition = repetitionBefore;
       input.continuationDepth = task.depth = depth;
       throw error;
     } finally { this.waitCharges.delete(input); }
@@ -798,7 +811,7 @@ export class Harness {
     if (!task || execution?.status !== "completed" || execution.parentStopped ||
         this.stoppingHostParents.has(input.sessionKey) || !this.opts.hostEventAllowed?.(input) ||
         !task.id || !task.original.trim() ||
-        !["active", "waiting", "blocked", "completed"].includes(task.state) || !Number.isSafeInteger(task.depth) || task.depth < 0 || task.depth > 20 ||
+        !["active", "waiting", "blocked", "completed"].includes(task.state) || !Number.isSafeInteger(task.depth) || task.depth < 0 || !Number.isSafeInteger(repetitions(task)) ||
         (task.expiresAt !== undefined && (!Number.isSafeInteger(task.expiresAt) || task.expiresAt <= this.now())) ||
         (input.continuationExpiresAt !== undefined && (!Number.isSafeInteger(input.continuationExpiresAt) || input.continuationExpiresAt <= this.now()))) return;
     return structuredClone({ taskId: task.id, original: task.original, depth: task.depth, expiresAt: task.expiresAt, anchor: task.anchor });
@@ -809,7 +822,7 @@ export class Harness {
     if (input?.source === "host") {
       const mandate = this.resultMandate(input);
       if (!mandate) throw new ToolGuardError("authority_revoked", "No live parent mandate for result continuation");
-      if (plan.state === "continue" && mandate.depth >= 20)
+      if (plan.state === "continue" && repetitions(this.tasks(this.state(key)).find(t => t.id === mandate.taskId)!) >= 20)
         throw new ToolGuardError("continuation_budget_exhausted", `Task ${mandate.taskId}: productive continuation budget exhausted; status rechecks only`);
     }
     if (!input || !this.sessions.get(key)?.prompting) throw Error("Continuation requires an active working turn");
@@ -1239,7 +1252,7 @@ export class Harness {
       for (const task of this.tasks(s)) {
       const assessed = !task.next?.trim();
       if (assessed) await this.assessStartupTask(s, task);
-      if (!this.tasks(s).includes(task) || (assessed && this.paused) || this.stopping || task.state !== "active" || !task.next?.trim() || !Number.isSafeInteger(task.depth) || task.depth < 0 || task.depth >= 20 ||
+      if (!this.tasks(s).includes(task) || (assessed && this.paused) || this.stopping || task.state !== "active" || !task.next?.trim() || !Number.isSafeInteger(task.depth) || task.depth < 0 || repetitions(task) >= 20 ||
           (task.expiresAt !== undefined && (!Number.isSafeInteger(task.expiresAt) || task.expiresAt <= this.now())) ||
           s.current || s.queue.length || s.key === "improvement:nightly" || this.hasPendingDependency(s.key, task.id)) continue;
       const admission = task.recoveryAdmission;
@@ -1273,7 +1286,7 @@ export class Harness {
     const eligible = () => this.tasks(s).includes(task) && task.state === "active" && !task.next?.trim() &&
       !!task.id && !!task.original.trim() && task.original.length <= 8000 &&
       (!task.anchor || task.anchor.task === task.original) &&
-      Number.isSafeInteger(task.depth) && task.depth >= 0 && task.depth < 20 &&
+      Number.isSafeInteger(task.depth) && task.depth >= 0 && repetitions(task) < 20 &&
       (task.expiresAt === undefined || (Number.isSafeInteger(task.expiresAt) && task.expiresAt > this.now())) &&
       !s.current && !s.queue.length && (!s.running || betweenTurns) && !this.paused && !this.stopping &&
       s.key !== "improvement:nightly" && !this.stoppingHostParents.has(s.key);
@@ -1447,6 +1460,9 @@ export class Harness {
         }
         const outboxStart = s.outbox.length;
         const goalBefore = s.goal ? structuredClone(s.goal) : undefined;
+        const evidenceEpoch = ++this.evidenceEpoch;
+        const evidenceExclusive = this.evidenceReaders++ === 0;
+        const evidenceBefore = input.waitCheck ? undefined : await this.opts.progressEvidence?.().catch(() => undefined);
         try {
           const ledger = this.opts.executionStore;
           const durableTurn = input.executionTurnId ? ledger?.turn(input.executionTurnId, s.key) : undefined;
@@ -1454,6 +1470,8 @@ export class Harness {
           if (settled) {
             s.outbox.push(...structuredClone(settled.outbox));
             input.continuation = structuredClone(settled.continuation);
+            const settledTask = this.tasks(s).find(t => t.id === input.taskId);
+            if (settledTask && settled.repetition) settledTask.repetition = structuredClone(settled.repetition);
             if (input.cronReport) input.cronReport.completedOutput = settled.cronOutput;
             s.goal = structuredClone(settled.goal);
             if (durableTurn?.stopped) for (const task of this.tasks(s)) if (task.id === input.taskId) task.state = "stopped";
@@ -1466,8 +1484,12 @@ export class Harness {
             }
             if (ledger && input.executionTurnId) await ledger.beginTurn(input.executionTurnId, s.key);
             await this.runTurn(s, input);
+            const task = this.tasks(s).find(t => t.id === input.taskId);
+            const evidenceAfter = await this.opts.progressEvidence?.().catch(() => undefined);
+            if (task && !input.waitCheck && task.state !== "stopped" && s.cancelling !== input)
+              accountRepetition(task, evidenceExclusive && this.evidenceEpoch === evidenceEpoch ? evidenceBefore : undefined, evidenceAfter);
             if (ledger && input.executionTurnId) await ledger.settleTurn(input.executionTurnId, s.key, {
-              cronOutput: input.cronReport?.completedOutput,
+              cronOutput: input.cronReport?.completedOutput, repetition: structuredClone(task?.repetition),
               outbox: s.outbox.slice(outboxStart), continuation: input.continuation, goal: s.goal,
               consumed: (s.steered ?? []).map(item => item.executionTurnId).filter((id): id is string => !!id),
             });
@@ -1517,7 +1539,7 @@ export class Harness {
           this.activities.delete(input);
           this.log(`turn retained in inbox for retry: ${err instanceof Error ? err.message : err}`);
           break;
-        }
+        } finally { this.evidenceReaders--; }
         // Finished: never re-run. Input (and steered follow-ups) leave the inbox, the reply
         // is in the outbox; the next loop iteration saves that transition before sending.
         s.current = undefined;
@@ -1540,16 +1562,16 @@ export class Harness {
           task.recoveryAssessment = undefined;
           task.recoveryRetry = undefined;
           task.explicitBlocked = plan?.state === "blocked";
-          if ((plan?.state === "continue" || plan?.state === "blocked") && task.depth >= 20) {
+          if ((plan?.state === "continue" || plan?.state === "blocked") && repetitions(task) >= 20) {
             task.next ??= retainedNext;
             task.state = "blocked";
             task.termination = "productive_budget_exhausted";
             task.wait = task.lastWait;
             this.log(`task ${task.id}: productive_budget_exhausted; next retained; no automatic work scheduled`);
           }
-          if (task.depth >= 20 && task.state === "blocked") this.budgetAttention(s, task);
+          if (repetitions(task) >= 20 && task.state === "blocked") this.budgetAttention(s, task);
         }
-        if ((input.source !== "host" || this.resultMandate(input)) && input.continuation?.state === "continue" && input.continuation.next && (input.continuationDepth ?? 0) < 20 && input.source !== "api" && s.key !== "improvement:nightly" && !s.queue.length && !this.stopping && !this.hasPendingDependency(s.key)) {
+        if ((input.source !== "host" || this.resultMandate(input)) && input.continuation?.state === "continue" && input.continuation.next && (!task || repetitions(task) < 20) && input.source !== "api" && s.key !== "improvement:nightly" && !s.queue.length && !this.stopping && !this.hasPendingDependency(s.key)) {
           s.queue.push({ id: randomUUID(), sessionKey: s.key, source: "cron", replyTo: input.replyTo ?? s.replyTo,
             text: `Continue the explicitly authorized task with this recorded next step. Recheck blockers and authorization; do not repeat completed side effects.\n${input.continuation.next}`,
             taskId: input.taskId,
@@ -1684,7 +1706,7 @@ export class Harness {
         this.preparedTurn.add(input);
         throw MAINTENANCE_YIELD;
       }
-      const guidance = (await this.opts.contextMaintenance?.guidance(s.key, session) ?? "") + (await this.opts.memory?.recall(s.key, input.text) ?? "") + (await this.opts.reportContext?.(input) ?? "");
+      const guidance = "\nTask continuation allowance: 20 consecutive productive attempts without fresh host evidence, not 20 total turns. Queue depth is separate. Model claims or changed wording do not grant progress credit. Original mandate and deadline remain binding.\n" + (await this.opts.contextMaintenance?.guidance(s.key, session) ?? "") + (await this.opts.memory?.recall(s.key, input.text) ?? "") + (await this.opts.reportContext?.(input) ?? "");
       const text = input.replyOptional
         ? `${input.text}\n\n(Not addressed to you directly. Reply only if you have something useful to add; otherwise reply exactly ${NO_REPLY}.)`
         : input.text;
@@ -1757,7 +1779,7 @@ export class Harness {
       (input.continuationExpiresAt === undefined || (Number.isSafeInteger(input.continuationExpiresAt) && input.continuationExpiresAt > this.now()));
     if (finalStatus !== "completed") input.continuation = undefined;
     else if ((input.source !== "host" || this.resultMandate(input)) && assessmentEligible() && this.opts.completionCheck && !this.paused && !this.stopping && !s.queue.length &&
-        input.source !== "api" && s.key !== "improvement:nightly" && (input.continuationDepth ?? 0) < 20 && !assessmentAbort.signal.aborted) {
+        input.source !== "api" && s.key !== "improvement:nightly" && (!input.taskId || repetitions(this.tasks(s).find(t => t.id === input.taskId) ?? { depth: 20 }) < 20) && !assessmentAbort.signal.aborted) {
       try {
         const plan = await this.opts.completionCheck(structuredClone(input), reply, assessmentAbort.signal);
         if ((input.source !== "host" || this.resultMandate(input)) && assessmentEligible() && !this.paused && !this.stopping && !s.queue.length && !assessmentAbort.signal.aborted && s.cancelling !== input &&
@@ -1950,7 +1972,7 @@ export class Harness {
       if (s.running || s.queue.length || s.outbox.length || s.unsaved) continue;
       for (const task of this.tasks(s)) {
       // Reconcile pre-upgrade exhausted checkpoints without a model nudge.
-      if ((task.state === "blocked" || task.state === "active") && task.depth >= 20 && !task.budgetAttentionId) {
+      if ((task.state === "blocked" || task.state === "active") && repetitions(task) >= 20 && !task.budgetAttentionId) {
         this.budgetAttention(s, task);
         if (s.unsaved) { void this.pump(s); break; }
       }
@@ -1961,7 +1983,7 @@ export class Harness {
         const wait = task.wait;
         const valid = task.next?.trim() && task.original?.trim() && Number.isSafeInteger(wait.deadline) &&
           Number.isSafeInteger(wait.nextAt) && typeof wait.reason === "string" && wait.reason.trim() && wait.reason.length <= 1000 &&
-          task.next!.length <= 4000 && Number.isSafeInteger(task.depth) && task.depth >= 0 && task.depth <= 20 &&
+          task.next!.length <= 4000 && Number.isSafeInteger(task.depth) && task.depth >= 0 && task.depth < Number.MAX_SAFE_INTEGER &&
           (task.waitChecks === undefined || (Number.isSafeInteger(task.waitChecks) && task.waitChecks >= 0 && task.waitChecks < Number.MAX_SAFE_INTEGER)) &&
           (task.expiresAt === undefined || Number.isSafeInteger(task.expiresAt));
         const expired = at >= wait.deadline || (task.expiresAt !== undefined && at >= task.expiresAt);

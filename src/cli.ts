@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { workingTreeEvidence } from "./repetition-budget.js";
 import { ToolGuardError } from "./tool-guard-error.js";
 import { improvementPlugin } from "./builtin-plugins/improvement-plugin.js";
 import { gatewayManagerPlugin } from "./builtin-plugins/gateway-manager-plugin.js";
@@ -311,6 +312,7 @@ async function main(argv: string[]): Promise<void> {
 
   harness = new Harness({
     runtime,
+    progressEvidence: () => workingTreeEvidence(config.cwd),
     executionStore: executions,
     contextMaintenance: maintenance,
     memory: plugins.memoryOrchestration,

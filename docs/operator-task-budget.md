@@ -35,12 +35,13 @@ in that transaction. Normal recovery/scheduler admission runs only after the sav
 A save failure cannot leave a half-reset or running task.
 
 `reset` and `reset-resume` accept a host-classified productive-budget exhaustion
-(20 steps), recovery-assessment exhaustion (3 attempts), or the narrow legacy
+(20 consecutive attempts without new host evidence; see [repetition accounting](repetition-budget.md)), recovery-assessment exhaustion (3 attempts), or the narrow legacy
 checkpoint shape: **active**, depth **exactly 20**, with no `termination`,
 `explicitBlocked`, `recoveryAssessment` or `recoveryRetry` field. This supports
 pre-classification active exhausted checkpoints without classifying their history.
 Other active shapes fail closed. It clears only exhausted counters:
-productive `depth` and/or recovery retry/assessment markers. It leaves the task
+the versioned repetition run and/or recovery retry/assessment markers.
+Queue `depth`, total attempts and seen evidence are preserved. It leaves the task
 **blocked**, records `operator_budget_reset`, and executes nothing. An arbitrary
 agent/operator `blocked` decision is not resettable, even at depth 20. Legacy
 unclassified blocked checkpoints fail closed; no text interpretation promotes

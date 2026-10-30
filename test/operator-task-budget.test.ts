@@ -39,7 +39,8 @@ test('authenticated ingress reset and separate resume, exact scope, serialized r
   f.h.restoreSeen(['old-effect', 'task:a:1']);
   await f.h.accept({ ...msg(`/task-budget reset ${key} a ${token} req1`, 'owner'), id: 'operator1' });
   await f.h.drained();
-  assert.equal(f.task().depth, 0);
+  assert.equal(f.task().depth, 20);
+  assert.equal(f.task().repetition?.repetitions, 0);
   assert.equal(f.task().state, 'blocked');
   assert.equal(f.task().waitChecks, 17);
   assert.equal(f.task().expiresAt, 1000000);
@@ -61,7 +62,7 @@ test('authenticated ingress reset and separate resume, exact scope, serialized r
   let admitted = '';
   third.h.onStateChange = async () => { admitted ||= third.h.pendingInputs()[0]?.id ?? ''; };
   await third.h.recoverTasks(); third.h.releaseRestored(); await third.h.drained();
-  assert.match(admitted, /^task:a:.+:1$/);
+  assert.match(admitted, /^task:a:.+:21$/);
   assert.ok(third.runtime.sessions.size > 0);
 });
 
@@ -75,7 +76,8 @@ test('remote nonadmin, senderless open-admin and model/API/host invocation canno
   }
   const f = fixture();
   await f.h.commandHandler!({ ...msg(`/task-budget reset ${key} a ${f.token()} local`), replyTo: { channel: 'console', target: 'local' } });
-  assert.equal(f.task().depth, 0);
+  assert.equal(f.task().depth, 20);
+  assert.equal(f.task().repetition?.repetitions, 0);
 });
 
 test('persistence failure rolls back, concurrent stale requests do not renew twice', async () => {
@@ -184,7 +186,8 @@ test('active unclassified legacy depth20 permits atomic authenticated reset-and-
   const f = fixture({ state: 'active', termination: undefined, explicitBlocked: undefined });
   const token = f.token();
   await f.h.commandHandler!(msg(`/task-budget reset-resume ${key} a ${token} legacy1`, 'owner'));
-  assert.equal(f.task().depth, 0);
+  assert.equal(f.task().depth, 20);
+  assert.equal(f.task().repetition?.repetitions, 0);
   assert.equal(f.task().state, 'active');
   assert.equal(f.task().original, 'authorized task');
   assert.equal(f.task().expiresAt, 1000000);
@@ -254,7 +257,7 @@ test('combined authenticated ingress commits once then normal recovery admits wo
   assert.equal(f.task().budgetReceipts?.[0].action, 'reset-resume');
   assert.equal(f.task().budgetReceipts?.[0].before.depth, 20);
   assert.equal(f.task().expiresAt, 2000);
-  assert.equal(f.task().depth, 1);
+  assert.equal(f.task().depth, 21);
   assert.equal(f.runtime.sessions.size, 1);
 });
 
@@ -264,7 +267,8 @@ test('natural authenticated ingress persists grant before reset and deduplicates
   f.h.onStateChange = async () => { snapshots.push(structuredClone(f.h.snapshotSessions())); };
   const input = { ...msg('Reset the budget and continue', 'owner'), id: 'natural-one' };
   await f.h.accept(input);
-  assert.equal(f.task().depth, 0);
+  assert.equal(f.task().depth, 20);
+  assert.equal(f.task().repetition?.stagnant, 0);
   assert.equal(f.task().state, 'active');
   assert.equal(f.task().budgetReceipts?.length, 1);
   assert.equal(snapshots[0][0].operatorBudgetGrants.length, 1);
@@ -301,7 +305,8 @@ test('German explicit target, ambiguity and stale pending grants', async () => {
   await new Promise(r => setImmediate(r));
   assert.match(f.ch.sent.at(-1)?.text ?? '', /Which task/);
   await f.h.accept({ ...msg('Setze das Budget zurück für Aufgabe a und fahre fort', 'owner'), id: 'explicit' });
-  assert.equal(f.task().depth, 0);
+  assert.equal(f.task().depth, 20);
+  assert.equal(f.task().repetition?.stagnant, 0);
 });
 
 test('pending grant survives restart, checks permissions, and never revives expired tasks', async () => {
@@ -314,7 +319,8 @@ test('pending grant survives restart, checks permissions, and never revives expi
     const next = fixture(); next.h.restoreSessions(saved);
     if (revoke) next.h.operatorBudgetActorAllowed = () => false;
     await next.h.tick();
-    assert.equal(next.task().depth, revoke ? 20 : 0);
+    assert.equal(next.task().depth, 20);
+    if (!revoke) assert.equal(next.task().repetition?.stagnant, 0);
     const receipts = next.task().budgetReceipts?.length;
     await next.h.tick();
     assert.equal(next.task().budgetReceipts?.length, receipts);

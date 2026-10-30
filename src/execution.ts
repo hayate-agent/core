@@ -48,6 +48,7 @@ export interface ExecutionEvent {
   status?: ExecutionStatus;
 }
 export interface TurnSettlement {
+  repetition?: import("./repetition-budget.js").RepetitionBudget;
   cronOutput?: string;
   outbox: import("./delivery/outbox.js").OutboxEntry[];
   continuation?: import("./types.js").Inbound["continuation"];

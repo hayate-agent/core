@@ -1,6 +1,7 @@
 # Exhausted productive budget: durable operator attention
 
-The twenty-step productive budget is unchanged. Shell reads are not authenticated
+The ceiling is twenty consecutive unevidenced productive attempts, not twenty
+turns or queue depth; see [repetition accounting](repetition-budget.md). Shell reads are not authenticated
 status operations: a shell-based wait spends one productive step per recheck.
 Only dispatcher status and continuation checkpoints have the existing exemption.
 
@@ -10,7 +11,7 @@ The notice and marker are saved together before delivery. Repeated denials and
 restart do not create additional notices. Delivery retries use the same id; actual
 transport exactly-once delivery still depends on channel idempotency.
 
-A blocked checkpoint now preserves its supplied next step. At depth twenty it
+A blocked checkpoint now preserves its supplied next step. At repetition exhaustion it
 records productive-budget termination without renewing authority or scheduling
 work. Idle ticks reconcile legacy blocked exhausted tasks into the same notice,
 not another model prompt. Stopped/completed/expired tasks are excluded.
