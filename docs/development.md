@@ -4,6 +4,29 @@ This guide ships with the installed package and image. It describes this version
 not a promise that every planned interface is already implemented. `/harness`
 locates it. PI is a replaceable runtime adapter, not the product's identity.
 
+## Default working rule: vertical slices and KISS
+
+The default CLI supplies **ALWAYS vertical slices. ALWAYS KISS.** through
+`capabilityContext` on every working turn, including dispatcher and managed
+subagent workers. It is independent of persona files, memory, skill discovery,
+tool selection and dispatcher enablement. Core owns this shared instruction path;
+`harness/plugins` owns the dispatcher tool adapter, which has no instruction hook.
+
+Build the smallest simple end-to-end slice from the concrete request to a verified
+result before expanding horizontally. Include persistence, restart, continuation
+and activation when relevant and authorized. Avoid speculative abstractions,
+additional state machines and approval loops; justify added complexity with the
+request and evidence. Tests, merge and image builds are intermediate evidence,
+not proof of live completion. Safety, authorization and required review remain
+unchanged. This is a model instruction, not mechanical correctness enforcement.
+
+Activation requires shipping the rebuilt Core package/image through the authorized
+rollout and restarting the process; source edits and local builds do not alter a
+running deployment. The new process supplies the rule at the next working turn,
+including resumed sessions. No persona rewrite, plugin pin or state migration is
+needed. Embedders constructing `Harness` directly must supply the instruction
+context themselves, as with the other CLI capability instructions.
+
 ## Choose the smallest customization boundary
 
 | Need | Existing surface |

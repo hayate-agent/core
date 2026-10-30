@@ -1,4 +1,4 @@
-/** Content-free host facts, not a model-derived capability guess or authorization. */
+/** Default working instructions and host facts, not new authorization. */
 export function capabilityContext(input: {
   revision: number;
   sessionKey: string;
@@ -14,7 +14,7 @@ export function capabilityContext(input: {
     exposed: registered.has(name) && (input.selectedTools === undefined || input.selectedTools.includes(name)) });
   const dispatch = tool("plugin_dispatch");
   const subagent = tool("plugin_subagent");
-  return [input.reviewInstructions, `Effective Harness capabilities (host facts; not new authority or proof of provider authentication): ${JSON.stringify({
+  return ["ALWAYS vertical slices. ALWAYS KISS. Build the smallest simple end-to-end slice from the concrete request to a verified result, including persistence, restart, continuation and activation when relevant, before horizontal expansion. No speculative abstractions, additional state machines or approval loops; add complexity only when justified by the request and evidence. Tests, merge and image builds are intermediate evidence, not live completion. Preserve safety, authorization and required review; never perform an unauthorized activation. This is an instruction, not mechanical correctness enforcement.", input.reviewInstructions, `Effective Harness capabilities (host facts; not new authority or proof of provider authentication): ${JSON.stringify({
     revision: input.revision,
     dispatcher: { configured: input.dispatcherEnabled, ready: input.dispatcherReady, ...dispatch,
       sessionAllowed: !child && input.dispatcherEnabled && input.dispatcherReady && dispatch.exposed },
