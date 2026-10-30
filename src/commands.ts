@@ -68,6 +68,8 @@ async function globalSetting(key: import("./model-settings.js").ModelSetting, va
   return `global ${key}: ${ctx.modelSettings.get()[key] ?? "runtime default"} [${ctx.modelSettings.source?.(key) ?? "defaults"}]${value ? " (applies on next turn; active turns unchanged)" : ""}`;
 }
 
+import { naturalBudgetReset } from "./natural-budget-reset.js";
+
 const BUSY_MODES: BusyMode[] = ["queue", "steer", "interrupt"];
 
 /** Command replies go through the durable outbox: delivery retries never re-run the command. */
@@ -605,7 +607,25 @@ export function parseCommand(text: string): { name: string; args: string } | und
 
 /** Install the command layer on a harness. Unknown /words fall through to the agent. */
 export function installCommands(ctx: CommandContext): void {
+  ctx.harness.operatorBudgetActorAllowed = actor => actor === "console:local" ||
+    ctx.admins.includes(actor.slice(actor.indexOf(":") + 1));
   ctx.harness.commandHandler = async (input) => {
+    const reset = naturalBudgetReset(input.text);
+    if (reset) {
+      // No openAdmin fallback: only an actual channel accept with identified admin provenance.
+      if (!ctx.harness.isAcceptingChannelInput(input) || !(input.replyTo?.channel === "console" ||
+          !!input.sender && ctx.admins.includes(input.sender))) {
+        reply(ctx, input, "Budget reset failed because an authenticated operator channel is required.");
+        return true;
+      }
+      try {
+        reply(ctx, input, await ctx.harness.requestNaturalBudgetReset(input,
+          input.replyTo?.channel === "console" ? "console:local" : `${input.replyTo?.channel}:${input.sender}`, reset.taskId));
+      } catch (error) {
+        reply(ctx, input, `Budget reset failed because ${error instanceof Error ? error.message : String(error)}`);
+      }
+      return true;
+    }
     const parsed = parseCommand(input.text);
     if (!parsed) return false;
     const cmd = BY_NAME.get(parsed.name);

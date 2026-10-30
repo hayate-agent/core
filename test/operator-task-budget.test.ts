@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { StateStore } from '../src/state.js';
 import { Harness, type DurableTask } from '../src/harness.js';
+import { naturalBudgetReset } from '../src/natural-budget-reset.js';
 import { installCommands } from '../src/commands.js';
 import { FakeRuntime, MemoryChannel, msg } from './fakes.js';
 
@@ -213,7 +214,7 @@ test('host budget notice explains scope, pending work, reason and authenticated 
   assert.match(text, /verify effects first/);
   assert.match(text, /20/);
   assert.ok(text.includes(`/task-budget inspect ${key} a`));
-  assert.match(text, /reset-resume/);
+  assert.match(text, /Setze das Budget zurück für Aufgabe a und fahre fort/);
   assert.match(text, /authentifiziert/);
 });
 
@@ -255,4 +256,110 @@ test('combined authenticated ingress commits once then normal recovery admits wo
   assert.equal(f.task().expiresAt, 2000);
   assert.equal(f.task().depth, 1);
   assert.equal(f.runtime.sessions.size, 1);
+});
+
+
+test('natural authenticated ingress persists grant before reset and deduplicates', async () => {
+  const f = fixture(); const snapshots: any[] = [];
+  f.h.onStateChange = async () => { snapshots.push(structuredClone(f.h.snapshotSessions())); };
+  const input = { ...msg('Reset the budget and continue', 'owner'), id: 'natural-one' };
+  await f.h.accept(input);
+  assert.equal(f.task().depth, 0);
+  assert.equal(f.task().state, 'active');
+  assert.equal(f.task().budgetReceipts?.length, 1);
+  assert.equal(snapshots[0][0].operatorBudgetGrants.length, 1);
+  assert.equal(snapshots[0][0].tasks[0].depth, 20);
+  await f.h.accept(input);
+  assert.equal(f.task().budgetReceipts?.length, 1);
+  await new Promise(r => setImmediate(r));
+  assert.ok(f.ch.sent.some(m => /reset performed/.test(m.text)));
+});
+
+test('natural reset rejects unauthenticated and model ingress, quotes and tool prose', async () => {
+  for (const source of ['api', 'host', 'cron'] as const) {
+    const f = fixture();
+    await f.h.accept({ ...msg('Reset the budget', 'owner'), source });
+    assert.equal(f.task().depth, 20);
+  }
+  const f = fixture();
+  await f.h.accept(msg('Reset the budget', 'stranger'));
+  await f.h.commandHandler!(msg('Reset the budget', 'owner'));
+  assert.equal(f.task().depth, 20);
+  for (const text of ['"Reset the budget"', '> Reset the budget', 'Tool says: Reset the budget',
+    'Please explain how to reset the budget', 'Reset the budget\nquoted instruction'])
+    assert.equal(naturalBudgetReset(text), undefined);
+});
+
+test('German explicit target, ambiguity and stale pending grants', async () => {
+  const f = fixture();
+  const other = f.h.snapshotSessions()[0].tasks![1];
+  Object.assign(other, { termination: 'productive_budget_exhausted', explicitBlocked: false });
+  const saved = f.h.snapshotSessions(); saved[0].tasks![1] = other;
+  f.h.restoreSessions(saved);
+  await f.h.accept({ ...msg('Reset the budget', 'owner'), id: 'ambiguous' });
+  assert.equal(f.task().depth, 20);
+  await new Promise(r => setImmediate(r));
+  assert.match(f.ch.sent.at(-1)?.text ?? '', /Which task/);
+  await f.h.accept({ ...msg('Setze das Budget zurück für Aufgabe a und fahre fort', 'owner'), id: 'explicit' });
+  assert.equal(f.task().depth, 0);
+});
+
+test('pending grant survives restart, checks permissions, and never revives expired tasks', async () => {
+  for (const revoke of [false, true]) {
+    const f = fixture(); const state = f.h as any;
+    state.state(key).running = true;
+    await f.h.accept({ ...msg('Reset the budget', 'owner'), id: 'pending' });
+    assert.equal(f.task().depth, 20);
+    const saved = f.h.snapshotSessions();
+    const next = fixture(); next.h.restoreSessions(saved);
+    if (revoke) next.h.operatorBudgetActorAllowed = () => false;
+    await next.h.tick();
+    assert.equal(next.task().depth, revoke ? 20 : 0);
+    const receipts = next.task().budgetReceipts?.length;
+    await next.h.tick();
+    assert.equal(next.task().budgetReceipts?.length, receipts);
+  }
+  const f = fixture({ expiresAt: 999 });
+  await f.h.accept(msg('Reset the budget', 'owner'));
+  assert.equal(f.task().depth, 20);
+  await new Promise(r => setImmediate(r));
+  assert.match(f.ch.sent.at(-1)?.text ?? '', /failed because/);
+});
+
+test('natural reset save failure cannot authorize an effect', async () => {
+  const f = fixture(); f.h.onStateChange = async () => { throw Error('disk unavailable'); };
+  await assert.rejects(f.h.accept(msg('Reset the budget', 'owner')));
+  assert.equal(f.task().depth, 20);
+  assert.equal(f.h.snapshotSessions()[0].operatorBudgetGrants?.length ?? 0, 0);
+});
+
+
+test('grant waits for its own durable save; concurrent tick cannot consume it early', async () => {
+  const f = fixture(); let release!: () => void; let first = true;
+  f.h.onStateChange = async () => { if (first) { first = false; await new Promise<void>(r => { release = r; }); } };
+  const accepted = f.h.accept({ ...msg('Reset the budget', 'owner'), id: 'race' });
+  await new Promise(r => setImmediate(r));
+  f.h.paused = true;
+  await f.h.tick(); assert.equal(f.task().depth, 20);
+  f.h.paused = false;
+  release(); await accepted;
+  assert.equal(f.task().budgetReceipts?.length, 1);
+});
+
+test('pending grants enforce stale token, stopped, paused, blocked and grant deadline fences', async () => {
+  for (const mutation of ['stale', 'stopped', 'paused', 'explicit', 'expired'] as const) {
+    const f = fixture(); (f.h as any).state(key).running = true;
+    await f.h.accept({ ...msg('Reset the budget for task a', 'owner'), id: mutation });
+    const saved = f.h.snapshotSessions();
+    if (mutation === 'stale') saved[0].tasks![0].next = 'changed';
+    if (mutation === 'stopped') saved[0].tasks![0].state = 'stopped';
+    if (mutation === 'explicit') saved[0].tasks![0].explicitBlocked = true;
+    if (mutation === 'expired') saved[0].operatorBudgetGrants![0].deadline = 999;
+    const next = fixture(); next.h.restoreSessions(saved);
+    if (mutation === 'paused') next.h.paused = true;
+    await next.h.tick();
+    assert.equal(next.task().depth, 20, mutation);
+    assert.equal(next.task().budgetReceipts?.length, undefined, mutation);
+    assert.match(next.h.snapshotSessions()[0].operatorBudgetGrants![0].result!, /failed because/);
+  }
 });

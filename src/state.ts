@@ -11,6 +11,7 @@ import type { Address, BusyMode, Inbound } from "./types.js";
 
 export interface PersistedSession {
   key: string;
+  operatorBudgetGrants?: import("./natural-budget-reset.js").OperatorBudgetGrant[];
   task?: import("./harness.js").DurableTask;
   tasks?: import("./harness.js").DurableTask[];
   completionRecent?: NonNullable<Inbound["completionContext"]>["recent"];

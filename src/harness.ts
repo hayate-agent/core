@@ -6,6 +6,7 @@
  */
 import { gatewaySettings, type GatewayConfig } from "./gateway-settings.js";
 import { createHash, randomUUID } from "node:crypto";
+import { naturalBudgetReset, type OperatorBudgetGrant } from "./natural-budget-reset.js";
 import { TurnActivity } from "./activity.js";
 import { deliverTaskStatus, routineWait, taskStatusId } from "./notification-routing.js";
 import type { PersistedSession } from "./state.js";
@@ -86,6 +87,7 @@ export interface SessionState {
   tasks?: DurableTask[];
   completionRecent?: NonNullable<Inbound["completionContext"]>["recent"];
   statusDelivered?: Record<string, string>;
+  operatorBudgetGrants?: OperatorBudgetGrant[];
   session?: RuntimeSession;
   opening?: Promise<RuntimeSession>;
   queue: Inbound[];
@@ -510,6 +512,69 @@ export class Harness {
     return { token: createHash("sha256").update(JSON.stringify(task)).digest("hex"), task: structuredClone(task) };
   }
 
+  /** Host command ingress only; deliberately not exposed as a model tool. */
+  async requestNaturalBudgetReset(input: Inbound, actor: string, taskId?: string): Promise<string> {
+    if (!this.isAcceptingChannelInput(input) || !this.operatorBudgetActorAllowed?.(actor)) throw Error("Authenticated operator ingress required");
+    if (!this.onStateChange) throw Error("Durable persistence required");
+    const s = this.state(input.sessionKey);
+    if (!input.id) throw Error("Authenticated message ID required");
+    const request = createHash("sha256").update(JSON.stringify([input.sessionKey, input.id, actor])).digest("hex");
+    const prior = s.operatorBudgetGrants?.find(g => g.request === request);
+    if (prior) return prior.result ?? "Budget reset scheduled for the next idle boundary.";
+    const candidates = this.tasks(s).filter(t => taskId ? t.id === taskId :
+      t.state === "blocked" && t.termination === "productive_budget_exhausted" && t.explicitBlocked === false);
+    if (candidates.length !== 1) return "Which task should I reset? Please give its task ID.";
+    const task = candidates[0];
+    const grant: OperatorBudgetGrant = { request, taskId: task.id, expected: this.taskBudgetStatus(s.key, task.id).token,
+      actor, issuedAt: this.now(), deadline: this.now() + 5 * 60_000,
+      reply: { sessionKey: input.sessionKey, replyTo: input.replyTo } };
+    (s.operatorBudgetGrants ??= []).push(grant);
+    this.unsavedBudgetGrants.add(grant);
+    try { await this.onStateChange(); }
+    catch (error) { s.operatorBudgetGrants = s.operatorBudgetGrants!.filter(g => g !== grant); throw error; }
+    finally { this.unsavedBudgetGrants.delete(grant); }
+    await this.processOperatorBudgetGrants(input);
+    if (grant.result) grant.notified = true;
+    return grant.result ?? "Budget reset scheduled for the next idle boundary.";
+  }
+
+  operatorBudgetActorAllowed?: (actor: string) => boolean;
+  private unsavedBudgetGrants = new Set<OperatorBudgetGrant>();
+  private processingBudgetGrants = false;
+  private async processOperatorBudgetGrants(command?: Inbound): Promise<void> {
+    if (this.processingBudgetGrants || this.gatewayChanging || this.stopping || this.activeDeliveries ||
+        [...this.sessions.values()].some(s => s.running) || [...this.inbox.accepting].some(i => i !== command)) return;
+    this.processingBudgetGrants = true;
+    try {
+      for (const s of this.sessions.values()) for (const grant of s.operatorBudgetGrants ?? []) {
+        if (this.unsavedBudgetGrants.has(grant)) continue;
+        if (grant.result) {
+          if (!grant.notified) {
+            grant.notified = true;
+            this.post({ ...grant.reply, text: "", source: "host", id: `budget-result:${grant.request}` }, grant.result);
+          }
+          continue;
+        }
+        const success = `Budget reset performed: ${grant.taskId}; continuation authorized within existing limits.`;
+        try {
+          if (!this.operatorBudgetActorAllowed?.(grant.actor)) throw Error("Operator permission revoked");
+          if (this.now() >= grant.deadline) throw Error("Operator grant expired");
+          // Consumed grant and reset receipt share the same durable atomic snapshot.
+          grant.result = success;
+          await this.controlTaskBudget(s.key, grant.taskId, "reset-resume", grant.expected, grant.request, grant.actor, command);
+        } catch (error) {
+          grant.result = `Budget reset failed because ${error instanceof Error ? error.message : String(error)}`;
+          try { await this.onStateChange!(); }
+          catch (saveError) { grant.result = undefined; throw saveError; }
+        }
+        if (!command) {
+          grant.notified = true;
+          this.post({ ...grant.reply, text: "", source: "host", id: `budget-result:${grant.request}` }, grant.result!);
+        }
+      }
+    } finally { this.processingBudgetGrants = false; }
+  }
+
   private budgetChanging = false;
 
   async controlTaskBudget(key: string, id: string, action: "reset" | "resume" | "reset-resume", expected: string, request: string, actor: string, command?: Inbound): Promise<string> {
@@ -616,7 +681,7 @@ export class Harness {
     task.budgetAttentionId = id;
     const short = (text: string) => text.replace(/\s+/g, " ").trim().slice(0, 240);
     s.outbox.push({ id, sessionKey: s.key, to,
-      text: `Aufgabe: ${short(task.original)}\nOffen: ${task.next ? short(task.next) : "Kein sicherer nächster Schritt gespeichert; erneute Prüfung erforderlich."}\nAktionsbudget erschöpft: 20 Fortsetzungsschritte verbraucht. Weitere Arbeit pausiert; Statusabfragen laufender Abhängigkeiten bleiben bis zur bestehenden Frist möglich.\nAls authentifizierter Administrator oder in der lokalen Konsole ausführen:\n/task-budget inspect ${s.key} ${task.id}\nDanach mit dem zurückgegebenen Token und einer neuen eindeutigen Request-ID:\n/task-budget reset-resume ${s.key} ${task.id} <inspect-token> <unique-request-id>\nDas setzt ausschließlich ein zulässiges erschöpftes Budget zurück und erlaubt die Fortsetzung desselben Auftrags. Unklassifizierte blockierte Aufgaben bleiben gesperrt. Der Chat-Assistent kann diesen Befehl nicht selbst authentifiziert ausführen.` });
+      text: `Aufgabe: ${short(task.original)}\nOffen: ${task.next ? short(task.next) : "Kein sicherer nächster Schritt gespeichert; erneute Prüfung erforderlich."}\nAktionsbudget erschöpft: 20 Fortsetzungsschritte verbraucht. Weitere Arbeit pausiert; Statusabfragen laufender Abhängigkeiten bleiben bis zur bestehenden Frist möglich.\nAls authentifizierter Administrator einfach schreiben: „Setze das Budget zurück für Aufgabe ${task.id} und fahre fort“. Ohne Aufgaben-ID wird nur eine eindeutig erschöpfte Aufgabe gewählt; andernfalls fragt der Host nach. Der Host bestätigt die Ausführung erst nach dauerhafter Speicherung. Optional bleibt die technische Diagnose verfügbar: /task-budget inspect ${s.key} ${task.id}` });
     // The marker and notice share the same persistence barrier, including retries.
     s.unsaved = true;
   }
@@ -862,8 +927,15 @@ export class Harness {
     for (const channel of this.channels.values()) channel.configureGateway?.(gatewaySettings(config, channel.name));
   }
 
+  isAcceptingChannelInput(input: Inbound): boolean {
+    return input.source === "channel" && this.inbox.accepting.has(input);
+  }
+
   async accept(input: Inbound): Promise<void> {
     if (this.stopping || this.gatewayChanging) throw new Error("shutting down or gateway transition; retry input");
+    // Local terminal lines have no upstream delivery ID; assign one at the trusted ingress.
+    if (input.source === "channel" && input.replyTo?.channel === "console" && !input.id && naturalBudgetReset(input.text))
+      input = { ...input, id: `console-budget:${randomUUID()}` };
     // Drop what was already accepted before (redelivery after a cursor rewind or crash).
     // Acknowledge a duplicate only once the state is durable (an earlier save may have failed).
     const duplicate = async () => void (await this.onStateChange?.());
@@ -961,7 +1033,7 @@ export class Harness {
     if (input.replyTo && input.source !== "api" && input.source !== "host") s.replyTo = input.replyTo;
     s.lastActivity = this.now();
     // Slash commands are a chat feature; API run input is always a turn (never privileged).
-    if (input.source !== "api" && input.source !== "host" && input.text.trimStart().startsWith("/") && this.commandHandler) {
+    if (input.source !== "api" && input.source !== "host" && (input.text.trimStart().startsWith("/") || !!naturalBudgetReset(input.text)) && this.commandHandler) {
       this.inbox.runningCommands.add(input);
       let handled: boolean;
       try {
@@ -1860,6 +1932,7 @@ export class Harness {
 
   async tick(at = this.now()): Promise<void> {
     if (this.gatewayChanging) return;
+    await this.processOperatorBudgetGrants();
     await this.flushMaintenanceNotices();
     // Retry loop for undelivered replies / unsaved completions (homeserver or disk back),
     // independent of new input; the tick interval (default 15s) is the backoff. Also while paused.
@@ -1952,7 +2025,7 @@ export class Harness {
     const out: PersistedSession[] = [];
     for (const s of this.sessions.values()) {
       if (!this.tasks(s).length && !s.heartbeat && !s.heartbeatDisabled && !s.loop && !s.goal && !s.replyTo) continue;
-      out.push({ key: s.key, task: s.task ? structuredClone(s.task) : undefined, tasks: structuredClone(this.tasks(s)), completionRecent: structuredClone(s.completionRecent), statusDelivered: structuredClone(s.statusDelivered), replyTo: s.replyTo, heartbeat: s.heartbeat, heartbeatDisabled: s.heartbeatDisabled, loop: s.loop, goal: s.goal });
+      out.push({ operatorBudgetGrants: structuredClone(s.operatorBudgetGrants), key: s.key, task: s.task ? structuredClone(s.task) : undefined, tasks: structuredClone(this.tasks(s)), completionRecent: structuredClone(s.completionRecent), statusDelivered: structuredClone(s.statusDelivered), replyTo: s.replyTo, heartbeat: s.heartbeat, heartbeatDisabled: s.heartbeatDisabled, loop: s.loop, goal: s.goal });
     }
     return out;
   }
@@ -1960,6 +2033,7 @@ export class Harness {
   restoreSessions(list: PersistedSession[]): void {
     for (const p of list) {
       const s = this.state(p.key);
+      s.operatorBudgetGrants = structuredClone(p.operatorBudgetGrants);
       s.tasks = p.tasks ? structuredClone(p.tasks) : [];
       s.completionRecent = p.completionRecent?.slice(-8).map(m => ({ role: m.role, text: m.text.slice(0, 2000) }));
       s.task = p.task ? s.tasks.find(task => task.id === p.task!.id) ?? structuredClone(p.task) : undefined;
