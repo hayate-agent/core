@@ -6,7 +6,7 @@ import { FakeRuntime, MemoryChannel, msg } from "./fakes.js";
 const facts = { revision: 1, sessionKey: "mem:room1", selectedTools: undefined,
   registeredTools: ["plugin_dispatch", "plugin_subagent", "plugin_review"],
   dispatcherEnabled: true, dispatcherReady: true, reviewInstructions: "Dedicated review is mandatory" };
-const data = (text: string) => JSON.parse(text.slice(text.indexOf('{')));
+const data = (text: string) => JSON.parse(text.slice(text.indexOf('{')).split("\n")[0]);
 
 test("configured, ready, exposed and session-allowed are separate host facts", () => {
   assert.equal(data(capabilityContext(facts)).dispatcher.sessionAllowed, true);
@@ -23,8 +23,10 @@ test("mandatory instructions and fresh capability facts reach working turns with
     await h.submit(msg("first"));await h.drained();revision=2;
     await h.submit(msg("second"));await h.drained();
     const opts=runtime.sessions.get("mem:room1")!.options;
+    assert.match(opts[0].instructions!,/ALWAYS vertical slices\. ALWAYS KISS\./);
     assert.match(opts[0].instructions!,/Dedicated review is mandatory/);
     assert.equal(data(opts[0].instructions!).revision,1);
     assert.equal(data(opts[1].instructions!).revision,2);
+    assert.match(opts[1].instructions!,/ALWAYS vertical slices\. ALWAYS KISS\./);
   }finally{await h.stop(0);}
 });
