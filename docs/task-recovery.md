@@ -6,6 +6,19 @@ from ordinary inbox/continuation replay, even when dispatcher mode is disabled;
 ambiguous opaque worker effects must be reconciled through their ledger.
 
 The Harness stores the original accepted chat request separately from its inbox.
+A foreground chat turn is initially retained conservatively, not proof that an
+executable task exists. Independent completion assessment of its actual answer
+can close an informational exchange or acknowledgment without closing older
+unfinished mandates. This is semantic assessment, not a phrase blacklist.
+Settled answers up to 8000 characters are retained on their own task as `lastReply`;
+recovery may accept an independent completed verdict only with that task-bound
+answer. Missing, oversized, interrupted or unknown results never imply completion.
+A later turn clears older substep answer evidence; foreground steering does not
+supply completion evidence for the interrupted background mandate.
+Explicit assessor `waiting`/`blocked` decisions are retained without granting an
+automatic timer or executable next step. Existing explicit checkpoints take
+precedence over non-executable turn-end assessments.
+
 Its task checkpoint records the most recent continuation decision, concrete next
 step, chain depth and inherited numeric deadline. Generated follow-ups carry the
 same host-assigned task identity; unrelated scheduled work cannot update it.

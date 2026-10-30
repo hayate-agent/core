@@ -32,7 +32,7 @@ export async function assessCompletion(backend: ReviewBackend, input: Inbound, r
     const raw = await Promise.race([backend.review(prompt, model, "low", controller.signal), timeout]);
     if (signal.aborted || controller.signal.aborted || (authorization.expiresAt !== undefined && authorization.expiresAt <= now()) || input.continuation !== checkpoint || raw.length > 8000) return;
     const result = JSON.parse(raw);
-    if (result.state === "completed") return { state: "completed" };
+    if (["completed", "waiting", "blocked"].includes(result.state)) return { state: result.state };
     if (result.state !== "continue" || typeof result.next !== "string" || !result.next.trim() || result.next.length > 4000) return;
     return { state: "continue", next: result.next.trim(), ...(authorization.expiresAt !== undefined ? { expiresAt: authorization.expiresAt } : {}) };
   } catch { return undefined; }
