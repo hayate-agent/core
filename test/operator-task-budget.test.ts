@@ -268,7 +268,7 @@ test('natural authenticated ingress persists grant before reset and deduplicates
   const input = { ...msg('Reset the budget and continue', 'owner'), id: 'natural-one' };
   await f.h.accept(input);
   assert.equal(f.task().depth, 20);
-  assert.equal(f.task().repetition?.stagnant, 0);
+  assert.equal(f.task().repetition?.repetitions, 0);
   assert.equal(f.task().state, 'active');
   assert.equal(f.task().budgetReceipts?.length, 1);
   assert.equal(snapshots[0][0].operatorBudgetGrants.length, 1);
@@ -306,7 +306,7 @@ test('German explicit target, ambiguity and stale pending grants', async () => {
   assert.match(f.ch.sent.at(-1)?.text ?? '', /Which task/);
   await f.h.accept({ ...msg('Setze das Budget zurück für Aufgabe a und fahre fort', 'owner'), id: 'explicit' });
   assert.equal(f.task().depth, 20);
-  assert.equal(f.task().repetition?.stagnant, 0);
+  assert.equal(f.task().repetition?.repetitions, 0);
 });
 
 test('pending grant survives restart, checks permissions, and never revives expired tasks', async () => {
@@ -320,7 +320,7 @@ test('pending grant survives restart, checks permissions, and never revives expi
     if (revoke) next.h.operatorBudgetActorAllowed = () => false;
     await next.h.tick();
     assert.equal(next.task().depth, 20);
-    if (!revoke) assert.equal(next.task().repetition?.stagnant, 0);
+    if (!revoke) assert.equal(next.task().repetition?.repetitions, 0);
     const receipts = next.task().budgetReceipts?.length;
     await next.h.tick();
     assert.equal(next.task().budgetReceipts?.length, receipts);

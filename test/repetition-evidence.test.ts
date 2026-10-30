@@ -4,10 +4,18 @@ import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
-import { workingTreeEvidence } from '../src/repetition-budget.js';
+import { accountRepetition, repetitions, workingTreeEvidence } from '../src/repetition-budget.js';
 import { ExecutionStore } from '../src/execution.js';
 import { Harness, type DurableTask } from '../src/harness.js';
 import { FakeRuntime, MemoryChannel, msg } from './fakes.js';
+
+test('two unseen snapshots cannot overflow the durable evidence cap', () => {
+  const task: DurableTask = { id: 'cap', original: 'work', state: 'active', depth: 300,
+    repetition: { version: 1, repetitions: 0, attempts: 300, evidence: Array.from({ length: 255 }, (_, i) => String(i)) } };
+  accountRepetition(task, 'new-before', 'new-after');
+  assert.equal(task.repetition!.evidence.length, 256);
+  assert.equal(repetitions(task), 1);
+});
 
 test('host Git evidence ignores arguments, untracked files and metadata, detects tracked bytes and cycles', async () => {
   const cwd = await mkdtemp(path.join(os.tmpdir(), 'repetition-'));

@@ -23,7 +23,10 @@ export function accountRepetition(task: { depth: number; repetition?: Repetition
   const prior = repetitions(task);
   if (prior >= 20) return; // malformed or exhausted persisted state cannot self-reopen
   const budget = task.repetition ??= { version: 1, repetitions: task.depth, attempts: 0, evidence: [] };
-  const novel = !!before && !!after && before !== after && !budget.evidence.includes(after) && budget.evidence.length < 256;
+  const needed = (before && !budget.evidence.includes(before) ? 1 : 0) +
+    (after && after !== before && !budget.evidence.includes(after) ? 1 : 0);
+  const novel = !!before && !!after && before !== after && !budget.evidence.includes(after) &&
+    budget.evidence.length + needed <= 256;
   if (before && !budget.evidence.includes(before) && budget.evidence.length < 256) budget.evidence.push(before);
   if (novel) budget.evidence.push(after!);
   budget.attempts++;
