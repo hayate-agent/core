@@ -537,7 +537,7 @@ export class Harness {
           ([task.wait, task.lastWait].some(wait => wait && (!Number.isSafeInteger(wait.deadline) || wait.deadline <= this.now()))))
         throw Error("Task unavailable, expired, paused or busy");
       if (action === "reset") {
-        if (!(task.state === "blocked" && !task.explicitBlocked && (task.termination === "productive_budget_exhausted" && task.depth >= 20 ||
+        if (!(task.state === "blocked" && !task.explicitBlocked && (task.termination === "productive_budget_exhausted" && task.explicitBlocked === false && task.depth >= 20 ||
             task.termination === "recovery_assessment_failed" && (task.recoveryRetry?.attempts ?? 0) >= 3)))
           throw Error("Task is not host budget-blocked");
       } else if (task.state !== "blocked" || task.termination !== "operator_budget_reset" || !task.budgetReceipts?.some(r => r.action === "reset")) {

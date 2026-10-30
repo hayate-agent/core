@@ -16,7 +16,7 @@ function fixture(patch: Partial<DurableTask> = {}) {
   h.onStateChange = async () => {};
   h.restoreSessions([{ key, replyTo: { channel: 'mem', target: 'room1' }, tasks: [
     { id: 'a', original: 'authorized task', state: 'blocked', depth: 20, next: 'verify effects first',
-      termination: 'productive_budget_exhausted', expiresAt: 1000000, waitChecks: 17, ...patch },
+      termination: 'productive_budget_exhausted', explicitBlocked: false, expiresAt: 1000000, waitChecks: 17, ...patch },
     { id: 'other', original: 'unrelated', state: 'blocked', depth: 20 },
   ] }]);
   installCommands({ harness: h, admins: ['owner'], openAdmin: false, approvals: { mode: 'off', tools: [] },
@@ -96,7 +96,7 @@ test('persistence failure rolls back, concurrent stale requests do not renew twi
 test('no resurrection of stopped/completed/expired/explicit blocked or paused tasks', async () => {
   for (const patch of [
     { state: 'stopped' }, { state: 'completed' }, { expiresAt: 999 },
-    { termination: undefined }, { explicitBlocked: true }, { termination: 'deadline_expired' }, { termination: 'malformed_checkpoint' },
+    { termination: undefined }, { explicitBlocked: true }, { explicitBlocked: undefined }, { termination: 'deadline_expired' }, { termination: 'malformed_checkpoint' },
   ] as Partial<DurableTask>[]) {
     const f = fixture(patch);
     await assert.rejects(f.h.controlTaskBudget(key, 'a', 'reset', f.token(), 'r', 'owner'));
