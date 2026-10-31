@@ -178,6 +178,11 @@ export class ImprovementController {
     await this.save();
   }
   async tick(cronStart = true): Promise<void> {
+    if (this.harness.stopping || this.harness.updateFenced) return;
+    return this.harness.withForegroundWork(() => this.tickForeground(cronStart));
+  }
+
+  private async tickForeground(cronStart: boolean): Promise<void> {
     if (this.checking || this.strategyChanging) return;
     this.checking = true;
     try {

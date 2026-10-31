@@ -11,6 +11,48 @@ import { FakeRuntime } from "./fakes.js";
 // Built at runtime so no token-shaped literal sits in the source.
 const KEY = ["test", "api", "key"].join("-");
 
+test("update admission is authenticated, exclusive, validated and fences runs without records", async () => {
+  const { base, call, close, runs } = await setup();
+  try {
+    for (const method of ["GET", "POST", "DELETE"]) {
+      assert.equal((await fetch(`${base}/v1/update-admission`, { method })).status, 401);
+    }
+    assert.equal((await call("POST", "/v1/update-admission", { ttl_ms: 0 })).status, 400);
+    const admitted = await call("POST", "/v1/update-admission", { ttl_ms: 1000 });
+    assert.equal(admitted.status, 201);
+    const lease = await admitted.json() as { lease_id: string; expires_at: number; status: string };
+    assert.equal(lease.status, "admitted");
+    assert.equal((await call("GET", "/v1/update-admission")).status, 200);
+    assert.equal((await call("POST", "/v1/update-admission")).status, 409);
+    const denied = await call("POST", "/v1/runs", { input: "retry me" }, { "Idempotency-Key": "fenced" });
+    assert.equal(denied.status, 503);
+    assert.equal(runs.byIdempotencyKey("fenced"), undefined);
+    assert.equal((await call("DELETE", "/v1/update-admission", { lease_id: "wrong" })).status, 409);
+    assert.equal((await call("DELETE", "/v1/update-admission", { lease_id: lease.lease_id })).status, 200);
+    assert.equal((await call("POST", "/v1/runs", { input: "retry me" }, { "Idempotency-Key": "fenced" })).status, 202);
+  } finally { await close(); }
+});
+
+test("API model lookup reserves admission before a run record exists", async () => {
+  const { api, call, close } = await setup();
+  let release!: () => void;
+  let entered!: () => void;
+  const ready = new Promise<void>(resolve => { entered = resolve; });
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  (api as unknown as { opts: { models: () => Promise<string[]> } }).opts.models = async () => {
+    entered(); await gate; return ["gw/model-a"];
+  };
+  const submitting = call("POST", "/v1/runs", { input: "work", model: "gw/model-a" });
+  try {
+    await ready;
+    const denied = await call("POST", "/v1/update-admission");
+    assert.equal(denied.status, 409);
+    assert.equal((await denied.json() as { status: string }).status, "busy");
+    release();
+    assert.equal((await submitting).status, 202);
+  } finally { release(); await submitting; await close(); }
+});
+
 async function setup(answer?: (t: string, k: string) => string, extra: { maxSseBufferBytes?: number } = {}) {
   const runtime = new FakeRuntime(answer);
   const harness = new Harness({ runtime, tickMs: 60_000, busyMode: "queue", log: () => {} });
@@ -22,6 +64,7 @@ async function setup(answer?: (t: string, k: string) => string, extra: { maxSseB
     port: 0,
     agent: "tom",
     runs,
+    updateAdmission: harness,
     cancel: (k, id) => harness.cancel(k, id),
     models: async () => ["gw/model-a", "gw/model-b"],
     defaultModel: () => "gw/model-a",

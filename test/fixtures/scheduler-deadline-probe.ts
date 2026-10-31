@@ -11,7 +11,7 @@ let settled=false,failure:any;let pending:Promise<void>|undefined;
 try{
  const file=path.join(dir,'synthetic');const ready=path.join(dir,'ready'),term=path.join(dir,'term');
  await writeFile(file,`#!${process.execPath}\nconst fs=require('node:fs');process.on('SIGTERM',()=>fs.writeFileSync(${JSON.stringify(term)},'received'));fs.writeFileSync(${JSON.stringify(ready)},String(process.pid));setInterval(()=>{},1000);\n`);await chmod(file,0o700);
- const harness={paused:false,enqueue:()=>{throw Error('unexpected enqueue');},deliver:()=>{throw Error('unexpected delivery');}};
+ const harness={paused:false,withForegroundWork:async<T>(work:()=>Promise<T>)=>work(),enqueue:()=>{throw Error('unexpected enqueue');},deliver:()=>{throw Error('unexpected delivery');}};
  const scheduler=new Scheduler(harness as any,{scriptsDir:dir,timezone:'UTC',log:()=>{}});
  pending=scheduler.runJob({name:'synthetic',schedule:'* * * * *',script:'synthetic',no_agent:true}).then(()=>{settled=true;},err=>{settled=true;failure=err;});
  let readyPid:number|undefined;

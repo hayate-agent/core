@@ -11,6 +11,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { AddressInfo } from "node:net";
 import type { Address, Channel, DedupPins, Inbound, SendMeta, TurnEvent } from "../types.js";
 import { requestHash, type RunEvent, type RunRegistry, TERMINAL } from "./runs.js";
+import type { Harness } from "../harness.js";
 
 export const API_CHANNEL = "api";
 
@@ -43,6 +44,7 @@ export interface ApiServerOptions {
   /** Unsent SSE bytes per connection before a slow client is dropped. */
   maxSseBufferBytes?: number;
   log?: (msg: string) => void;
+  updateAdmission?: Pick<Harness, "acquireUpdateAdmission" | "updateAdmissionStatus" | "releaseUpdateAdmission" | "withForegroundWork">;
 }
 
 class HttpError extends Error {
@@ -117,6 +119,24 @@ export class ApiChannel implements Channel {
     const p = url.pathname.replace(/\/+$/, "") || "/";
     if (req.method === "GET" && (p === "/health" || p === "/v1/health")) return this.json(res, 200, { status: "ok", platform: "vanillacore-harness" });
     if (!this.authorized(req)) throw new HttpError(401, "Invalid API key", "invalid_api_key");
+    if (p === "/v1/update-admission") {
+      const owner = this.opts.updateAdmission;
+      if (!owner) throw new HttpError(503, "Update admission unavailable", "update_admission_unavailable");
+      if (req.method === "GET") return this.json(res, 200, owner.updateAdmissionStatus());
+      if (req.method === "POST") {
+        const body = await readJson(req);
+        const ttl = body.ttl_ms ?? 60000;
+        if (typeof ttl !== "number" || !Number.isSafeInteger(ttl) || ttl < 1000 || ttl > 300000)
+          throw new HttpError(400, "ttl_ms must be an integer from 1000 to 300000", "invalid_request");
+        const result = owner.acquireUpdateAdmission(ttl);
+        return this.json(res, result.status === "admitted" ? 201 : result.status === "unavailable" ? 503 : 409, result);
+      }
+      if (req.method === "DELETE") {
+        const body = await readJson(req);
+        if (typeof body.lease_id !== "string" || !body.lease_id) throw new HttpError(400, "lease_id required", "invalid_request");
+        return this.json(res, owner.releaseUpdateAdmission(body.lease_id) ? 200 : 409, owner.updateAdmissionStatus());
+      }
+    }
     if (req.method === "GET" && p === "/v1/capabilities") return this.json(res, 200, this.capabilities());
     if (req.method === "GET" && p === "/v1/models") return this.json(res, 200, await this.modelList());
     if (req.method === "POST" && p === "/v1/runs") return this.createRun(req, res);
@@ -144,6 +164,7 @@ export class ApiChannel implements Channel {
       agent: this.opts.agent,
       features: {
         run_submission: true,
+        update_admission: !!this.opts.updateAdmission,
         run_status: true,
         run_events_sse: true,
         run_stop: true,
@@ -153,6 +174,7 @@ export class ApiChannel implements Channel {
       },
       endpoints: {
         runs: "/v1/runs",
+        update_admission: "/v1/update-admission",
         run_status: "/v1/runs/{run_id}",
         run_events: "/v1/runs/{run_id}/events",
         run_stop: "/v1/runs/{run_id}/stop",
@@ -190,7 +212,15 @@ export class ApiChannel implements Channel {
   // ------------------------------------------------------------------ runs
 
   private async createRun(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    return this.createRunWithBody(req, res, await readJson(req));
+    const body = await readJson(req);
+    if (this.opts.updateAdmission) {
+      try { return await this.opts.updateAdmission.withForegroundWork(() => this.createRunWithBody(req, res, body)); }
+      catch (err) {
+        if (err instanceof HttpError) throw err;
+        throw new HttpError(503, "Run not accepted; retry after update admission", "run_not_accepted");
+      }
+    }
+    return this.createRunWithBody(req, res, body);
   }
 
   private async createRunWithBody(req: IncomingMessage, res: ServerResponse, body: Record<string, unknown>): Promise<void> {

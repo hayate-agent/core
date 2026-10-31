@@ -128,11 +128,15 @@ export interface PluginAPI {
 
 export interface PluginModule {
   apiVersion: 1;
+  /** Foreground work uses host ingress/tools; remaining resources use onStop cleanup. */
+  updateAdmission?: "foreground-owned";
   activate(api: PluginAPI): Promise<void> | void;
 }
 
 /** Trusted, explicitly configured local ESM modules. This is not a code sandbox. */
 export class PluginHost {
+  private readonly unsupportedUpdateOwners = new Set<string>();
+  updateBlockers(): string[] { return [...this.unsupportedUpdateOwners].map(owner => `unsupported update owner: ${owner}`); }
   readonly policies: PolicyRegistry;
   constructor(requiredPolicies: readonly string[] = []) { this.policies = new PolicyRegistry(requiredPolicies); }
   readonly commands = new Map<string, PluginCommand>();
@@ -169,6 +173,7 @@ export class PluginHost {
         const location = typeof source === "string" ? path.resolve(context.home, source) : "bundled core plugin";
         const module = typeof source === "string" ? (await import(pathToFileURL(location).href)).default as PluginModule : source;
         if (!module || module.apiVersion !== 1 || typeof module.activate !== "function") throw new Error(`Invalid plugin API: ${location}`);
+        if (typeof source === "string" && module.updateAdmission !== "foreground-owned") this.unsupportedUpdateOwners.add(`plugin ${this.unsupportedUpdateOwners.size + 1}`);
         let registering = true;
         try {
           await module.activate(Object.freeze({

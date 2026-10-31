@@ -155,7 +155,11 @@ export class Scheduler {
   }
 
   async runJob(job: CronJob): Promise<void> {
-    if (this.harness.paused) return;
+    if (this.harness.paused || this.harness.stopping || this.harness.updateFenced) return;
+    return this.harness.withForegroundWork(() => this.runJobForeground(job));
+  }
+
+  private async runJobForeground(job: CronJob): Promise<void> {
     let scriptOut = "";
     if (job.script) {
       const scriptsDir = this.opts.scriptsDir ?? path.join(this.baseDir(), "scripts");

@@ -37,6 +37,7 @@ export class Dispatcher {
   private stopped = false;
   private initialized = false;
   private recovered = false;
+  private submitting = 0;
   constructor(
     readonly store: ExecutionStore,
     private readonly strategy: DispatcherStrategy,
@@ -45,11 +46,18 @@ export class Dispatcher {
     private readonly report: (error: unknown) => void,
     private readonly checkpoint?: (parent: string) => Execution["dependency"],
     private readonly recoveryPolicy?: ExecutionRecoveryPolicy,
+    private readonly admissionFenced: () => boolean = () => false,
   ) {
     if (!Number.isSafeInteger(capacity) || capacity < 1) throw Error("Invalid dispatcher capacity");
     if (!strategy.name.trim() || !Number.isSafeInteger(strategy.version) || strategy.version < 1) throw Error("Invalid dispatcher strategy");
   }
   get ready(): boolean { return this.recovered && !this.stopped; }
+  /** Includes durable runnable tasks and claim/delivery windows, not just worker slots. */
+  updateBlockers(): string[] {
+    return this.submitting || this.active.size || this.scheduling || this.delivering ||
+      this.store.events().length || this.store.list().some(task => task.status === "ready" || task.status === "running")
+      ? ["dispatcher work"] : [];
+  }
   async start(): Promise<void> {
     if (this.initialized) throw Error("Dispatcher already started");
     this.initialized = true;
@@ -59,16 +67,22 @@ export class Dispatcher {
   }
   /** Host-only scheduled submission; never expose mandate as a model tool argument. */
   async submitScheduled(parent: string, requestId: string, input: string, mandate: NonNullable<Execution["dependency"]>): Promise<Execution> {
-    if (!this.recovered || this.stopped) throw Error("Dispatcher unavailable");
-    const task = await this.store.submit(parent, requestId, input, this.strategy.name, this.strategy.version, mandate);
-    await this.kick();
-    return task;
+    if (!this.recovered || this.stopped || this.admissionFenced()) throw Error("Dispatcher unavailable");
+    this.submitting++;
+    try {
+      const task = await this.store.submit(parent, requestId, input, this.strategy.name, this.strategy.version, mandate);
+      await this.kick();
+      return task;
+    } finally { this.submitting--; }
   }
   async submit(parent: string, requestId: string, input: string): Promise<Execution> {
-    if (!this.recovered || this.stopped) throw Error("Dispatcher unavailable");
-    const task = await this.store.submit(parent, requestId, input, this.strategy.name, this.strategy.version, this.checkpoint?.(parent));
-    await this.kick();
-    return task;
+    if (!this.recovered || this.stopped || this.admissionFenced()) throw Error("Dispatcher unavailable");
+    this.submitting++;
+    try {
+      const task = await this.store.submit(parent, requestId, input, this.strategy.name, this.strategy.version, this.checkpoint?.(parent));
+      await this.kick();
+      return task;
+    } finally { this.submitting--; }
   }
   async cancelParent(parent: string): Promise<void> {
     // Revoke durably before signalling workers; an in-flight result delivery
@@ -79,7 +93,7 @@ export class Dispatcher {
   }
   /** Also called by host retry ticks; no model calls are used to poll task status. */
   kick(): Promise<void> {
-    if (this.stopped || !this.recovered) return Promise.resolve();
+    if (this.stopped || !this.recovered || this.admissionFenced()) return Promise.resolve();
     this.scheduleRequested = true;
     if (this.scheduling) return this.scheduling;
     this.scheduling = (async () => {

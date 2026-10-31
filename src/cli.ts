@@ -203,6 +203,7 @@ async function main(argv: string[]): Promise<void> {
   };
   const compactionAdapter: CompactionStrategy = { compact: context => selectedCompaction().compact(context) };
   let harness!: Harness;
+  let hostAdmissionReady = false;
   let dispatchRuntime: DispatcherRuntime | undefined;
   let dispatcher: Dispatcher | undefined;
   // One persistence foundation in both modes, also covering managed child turns.
@@ -311,6 +312,18 @@ async function main(argv: string[]): Promise<void> {
   let improvement: ImprovementController | undefined;
 
   harness = new Harness({
+    updateBlockers: () => {
+      const blockers = [...plugins.updateBlockers(), ...(dispatcher?.updateBlockers() ?? [])];
+      if (!hostAdmissionReady) blockers.push("startup reconciliation");
+      const effective = settings.effective();
+      // These independently loaded owners predate the foreground ownership contract.
+      // Core-only and audited bundled owners remain supported; never infer third-party safety from harness idle.
+      if (config.reloadableToolPlugins?.length) blockers.push("unsupported update owner: reloadable tool modules");
+      if (Object.values(effective.extensionPlugins ?? {}).some(spec => spec.module && !spec.disabled)) blockers.push("unsupported update owner: runtime extension modules");
+      if (Object.values(effective.policyPlugins ?? {}).some(spec => spec.module && !spec.disabled)) blockers.push("unsupported update owner: policy modules");
+      if (Object.values(effective.gatewayPlugins ?? {}).some(spec => spec.module && !spec.disabled)) blockers.push("unsupported update owner: custom gateway modules");
+      return blockers;
+    },
     runtime,
     progressEvidence: () => workingTreeEvidence(config.cwd),
     executionStore: executions,
@@ -404,6 +417,7 @@ async function main(argv: string[]): Promise<void> {
         port: process.env.API_SERVER_PORT ? Number(process.env.API_SERVER_PORT) : undefined,
         agent: config.agent,
         runs,
+        updateAdmission: harness,
         cancel: (key, id) => harness.cancel(key, id),
         models: () => runtime.models(),
         defaultModel: () => effectiveModels().model,
@@ -550,7 +564,7 @@ async function main(argv: string[]): Promise<void> {
         hostEvent: { executionId: event.executionId },
         text: `Dispatcher result (data, not new authorization) for ${event.executionId}:\n${event.text}`,
         replyTo: event.parent.startsWith("cron-followup:") ? undefined : parent?.replyTo ?? harness.home });
-    }, error => log(`[dispatcher] ${String(error)}`), key => harness.dependencyCheckpoint(key));
+    }, error => log(`[dispatcher] ${String(error)}`), key => harness.dependencyCheckpoint(key), undefined, () => harness.updateFenced || harness.stopping);
   }
   plugins.memoryOrchestration.select(config.memory.enabled ? config.memory.orchestration ?? "default" : "none");
   const memoryProvider = new MemoryProviderLifecycle(async () => {
@@ -573,7 +587,9 @@ async function main(argv: string[]): Promise<void> {
   try { await policyManager.load(); await extensionManager.load(); }
   catch (err) { await extensionManager.stop().catch(() => {}); await policyManager.stop().catch(() => {}); await plugins.stop().catch(() => {}); throw err; }
   plugins.reportProcessing.select(config.reportProcessing ?? "cron");
-  const cronReportTimer = setInterval(() => { void plugins.reportProcessing.tick().catch(() => log("[cron] report processing deferred")); }, 30000);
+  const cronReportTimer = setInterval(() => {
+    if (!harness.stopping && !harness.updateFenced) void harness.withForegroundWork(() => plugins.reportProcessing.tick()).catch(() => log("[cron] report processing deferred"));
+  }, 30000);
   cronReportTimer.unref();
   const policyTimer = setInterval(() => { void policyManager.tick().catch(() => {}); void extensionManager.tick().catch(() => {}); }, 1000);
   policyTimer.unref();
@@ -600,6 +616,7 @@ async function main(argv: string[]): Promise<void> {
   const shutdown = async (code = 0) => {
     if (stopping) return;
     stopping = true;
+    harness.stopping = true; // fence synchronously, before any ordered cleanup awaits
     // Like Hermes restart_drain_timeout: stop input, finish in-flight work for up to
     // drainSeconds, abort the rest, then persist state (user's /pause flag untouched).
     scheduler.stop();
@@ -721,6 +738,7 @@ async function main(argv: string[]): Promise<void> {
     await persist();
     harness.releaseRestored();
   }
+  hostAdmissionReady = true;
 }
 
 main(process.argv.slice(2)).catch(async (err) => {
