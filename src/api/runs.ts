@@ -192,6 +192,13 @@ export class RunRegistry {
     if (event.type === "text") this.emit(r, "message.delta", { delta: event.delta });
     else if (event.type === "tool") this.emit(r, event.phase === "start" ? "tool.started" : "tool.completed", { tool: event.name, ...(event.error ? { error: true } : {}) });
     else {
+      // Validate the complete update before mutating counters, routing metadata or events.
+      const previous = r.usage;
+      const deltas = [event.input, event.output, event.cacheRead, event.cacheWrite];
+      const totals = [previous?.input_tokens ?? 0, previous?.output_tokens ?? 0, previous?.cache_read_tokens ?? 0, previous?.cache_write_tokens ?? 0];
+      if (deltas.some((delta, i) => !Number.isSafeInteger(delta) || delta < 0 || !Number.isSafeInteger(totals[i] + delta))) return;
+      if (!Number.isFinite(event.costUsd) || event.costUsd < 0
+        || !Number.isFinite((r.cost_usd ?? 0) + event.costUsd)) return;
       const u = (r.usage ??= { input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0 });
       u.input_tokens += event.input;
       u.output_tokens += event.output;
