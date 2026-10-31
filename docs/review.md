@@ -86,7 +86,10 @@ The host uses a separate Dispatcher execution transport for review, not the ordi
 working-tool strategy or its capacity queue. Review submissions may carry the full
 changeset prompt: task inputs are validated up to 1 MiB at submission (dispatcher.md
 "Submission and control"), which covers the 512 KiB changeset limit after JSON
-escaping. This avoids a waiting parent consuming
+escaping. The dedicated review worker deadline is 30 minutes (1800000 ms): local
+flash providers show multi-minute latency variance for large review prompts, and
+shorter deadlines cancelled real rounds mid-computation; the deadline stays
+fail-closed for hung workers. This avoids a waiting parent consuming
 all worker slots and triggering review recursion. `review-executions.json` is an
 execution ledger, not a new review budget. Existing review rounds, findings and
 approval fingerprints remain owned by the plugin. Cancelled primary execution is

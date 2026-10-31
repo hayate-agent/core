@@ -72,7 +72,11 @@ export class ReviewWorkers {
     await this.start();
     if (request.signal?.aborted || this.closed) throw Error("Review cancelled");
     const { signal, ...data } = request;
-    const deadline = Date.now() + 120000;
+    // Local flash providers show multi-minute latency variance (observed 70s to
+    // 600s+ for the same ~38 KiB review prompt); a 120s deadline cancelled real
+    // rounds while the model was still computing. 30 minutes stays fail-closed
+    // for hung workers while absorbing that variance.
+    const deadline = Date.now() + 1800000;
     const task = await this.dispatcher.submit(request.sessionKey, `review:${randomUUID()}`, JSON.stringify(data));
     try {
       for (;;) {
