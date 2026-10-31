@@ -19,7 +19,7 @@ const rules = [
 ];
 const models = rules.map(rule => rule.model);
 
-test("read-only base, writable overlay, atomic runtime reload and restart", async t => {
+test("read-only base, writable overlay, tolerant runtime reload and restart", async t => {
   assert.notEqual(process.getuid?.(), 0, "fixture must run without root");
   // /etc is root-owned and non-writable; deliberately absent harness.yaml exercises defaults.
   await assert.rejects(access("/etc", 2));
@@ -111,9 +111,9 @@ test("read-only base, writable overlay, atomic runtime reload and restart", asyn
     { ...overlay, review: { model: "p/new" } },
   ]) {
     await writeFile(file, stringify(bad));
-    await assert.rejects(settings.reload());
-    if ("unknown" in bad || "approvals" in bad) await assert.rejects(new SettingsService(file, {}).load());
-    assert.deepEqual(settings.effective(), valid, "no partial apply");
+    await settings.reload();
+    if ("unknown" in bad || "approvals" in bad) await new SettingsService(file, {}).load();
+    assert.deepEqual(settings.effective(), valid, "invalid or nonlive field retains its previous value");
   }
   inflight = async () => {
     const snapshot = agent.model;

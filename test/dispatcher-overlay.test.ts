@@ -14,7 +14,8 @@ test("local dispatcher overlay activates and preserves inherited fields", async 
  await settings.load();
  assert.deepEqual(settings.effective().dispatcher,{enabled:true,concurrentRequests:true,strategy:"direct",capacity:2,retentionDays:14});
  await writeFile(file,"dispatcher:\n  enabled: true\n");
- await assert.rejects(new SettingsService(file,{}).load(),/concurrentRequests/);
+ const unsafe = new SettingsService(file,{}); await unsafe.load(); assert.equal(unsafe.effective().dispatcher?.enabled,false);
  await writeFile(file,"dispatcher:\n  enabled: false\n  unexpected: true\n");
- await assert.rejects(new SettingsService(file,{}).load(),/Invalid dispatcher overlay/);
+ const mixed = new SettingsService(file,{}); await mixed.load(); assert.equal(mixed.effective().dispatcher?.enabled,false);
+ assert.ok(mixed.diagnostics.length);
 });
