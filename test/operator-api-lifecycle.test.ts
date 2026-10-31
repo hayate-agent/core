@@ -91,7 +91,7 @@ for (const busyMode of ["queue", "steer", "interrupt"] as const) {
         assert.equal(run.output, `echo: ${input.text}`);
         const index = session.prompts.indexOf(input.text);
         assert.ok(session.options[index].instructions!.startsWith(`instructions:${input.text}\n`));
-        assert.match(session.options[index].instructions!, /20 consecutive productive attempts without fresh host evidence/);
+        assert.match(session.options[index].instructions!, /20 consecutive stalled or unevidenced attempts/);
       }
       assert.deepEqual(harness.pendingInputs(), []);
       const restored = new RunRegistry(path.join(home, "runs.json"));

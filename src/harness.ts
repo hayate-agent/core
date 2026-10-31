@@ -1571,7 +1571,8 @@ export class Harness {
             const task = this.tasks(s).find(t => t.id === input.taskId);
             const evidenceAfter = await this.opts.progressEvidence?.().catch(() => undefined);
             if (task && !input.waitCheck && task.state !== "stopped" && s.cancelling !== input)
-              accountRepetition(task, evidenceExclusive && this.evidenceEpoch === evidenceEpoch ? evidenceBefore : undefined, evidenceAfter);
+              accountRepetition(task, evidenceExclusive && this.evidenceEpoch === evidenceEpoch ? evidenceBefore : undefined, evidenceAfter, this.assessedProgress.get(input));
+            this.assessedProgress.delete(input);
             if (ledger && input.executionTurnId) await ledger.settleTurn(input.executionTurnId, s.key, {
               cronOutput: input.cronReport?.completedOutput, repetition: structuredClone(task?.repetition),
               outbox: s.outbox.slice(outboxStart), continuation: input.continuation, goal: s.goal,
@@ -1704,7 +1705,10 @@ export class Harness {
     if (this.isDrained()) for (const r of [...this.idle]) (this.idle.delete(r), r());
   }
 
+  private readonly assessedProgress = new WeakMap<Inbound, { fingerprint: string; advanced: boolean }>();
+
   private async runTurn(s: SessionState, input: Inbound): Promise<void> {
+    this.assessedProgress.delete(input);
     let reply: string;
     let outcome: TurnOutcome | undefined;
     const to = input.replyTo ?? (input.source === "cron" ? undefined : s.replyTo);
@@ -1718,10 +1722,20 @@ export class Harness {
     let telemetryEvents = 0;
     let telemetryTools = 0;
     let memoryTools = 0;
+    const progressTools: Array<{ name: string; error: boolean; result?: string }> = [];
+    let progressBytes = 0;
     await typingCh?.typing?.(to!, true).catch(() => undefined);
     const onEvent = (event: TurnEvent) => {
           activity.event(event);
-          if (event.type === "tool" && event.phase === "end") memoryTools++;
+          if (event.type === "tool" && event.phase === "end") {
+            memoryTools++;
+            if (progressTools.length < 20 && progressBytes < 12000) {
+              let result: string | undefined;
+              try { result = event.detail?.slice(0, Math.min(1000, 12000 - progressBytes)); } catch { /* absent evidence */ }
+              progressBytes += result?.length ?? 0;
+              progressTools.push({ name: event.name.slice(0, 100), error: !!event.error, ...(result ? { result } : {}) });
+            }
+          }
           if (!typingCh?.turnEvent || (input.waitRecheck && event.type === "text")) return;
           // Only lifecycle-aware gateways need ordering; preserve live TUI/API streaming.
           if (typingCh.turnStatus) {
@@ -1807,7 +1821,7 @@ export class Harness {
         this.preparedTurn.add(input);
         throw MAINTENANCE_YIELD;
       }
-      const guidance = "\nTask continuation allowance: 20 consecutive productive attempts without fresh host evidence, not 20 total turns. Queue depth is separate. Model claims or changed wording do not grant progress credit. Original mandate and deadline remain binding.\n" + (await this.opts.contextMaintenance?.guidance(s.key, session) ?? "") + (await this.opts.memory?.recall(s.key, input.text) ?? "") + (await this.opts.reportContext?.(input) ?? "");
+      const guidance = "\nTask continuation allowance: 20 consecutive stalled or unevidenced attempts, not 20 total turns. Distinct independently assessed verification, research and analysis count as progress without tracked-file edits. Checker calls and nudges themselves are not failures. Queue depth is separate. Working-model claims or changed wording do not grant progress credit. Original mandate and deadline remain binding.\n" + (await this.opts.contextMaintenance?.guidance(s.key, session) ?? "") + (await this.opts.memory?.recall(s.key, input.text) ?? "") + (await this.opts.reportContext?.(input) ?? "");
       const text = input.replyOptional
         ? `${input.text}\n\n(Not addressed to you directly. Reply only if you have something useful to add; otherwise reply exactly ${NO_REPLY}.)`
         : input.text;
@@ -1874,7 +1888,7 @@ export class Harness {
     // Self-reported completion or blockage is evidence, not final authority.
     // Recheck against the original mandate; retain explicit continuation plans.
     if (reply && reply !== NO_REPLY && outcome !== "cancelled") this.rememberCompletion(s, "assistant", reply);
-    input.completionContext = this.completionEvidence(s);
+    input.completionContext = { ...this.completionEvidence(s), tools: progressTools };
     const checkpoint = input.continuation;
     const assessmentEligible = () => input.continuation === checkpoint &&
       (input.continuationExpiresAt === undefined || (Number.isSafeInteger(input.continuationExpiresAt) && input.continuationExpiresAt > this.now()));
@@ -1883,6 +1897,9 @@ export class Harness {
         input.source !== "api" && s.key !== "improvement:nightly" && repetitions(this.tasks(s).find(t => t.id === input.taskId) ?? { depth: input.taskId ? 20 : input.continuationDepth ?? 0 }) < 20 && !assessmentAbort.signal.aborted) {
       try {
         const plan = await this.opts.completionCheck(structuredClone(input), reply, assessmentAbort.signal);
+        if (assessmentEligible() && !this.paused && !this.stopping && !s.queue.length &&
+            !assessmentAbort.signal.aborted && s.cancelling !== input && plan?.progress)
+          this.assessedProgress.set(input, structuredClone(plan.progress));
         if ((input.source !== "host" || this.resultMandate(input)) && assessmentEligible() && !this.paused && !this.stopping && !s.queue.length && !assessmentAbort.signal.aborted && s.cancelling !== input &&
             plan?.state === "continue" && typeof plan.next === "string" && plan.next.trim() && plan.next.length <= 4000 &&
             checkpoint?.state !== "continue") input.continuation = plan;

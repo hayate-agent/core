@@ -32,6 +32,8 @@ export interface Inbound {
   continuation?: { state: "continue" | "waiting" | "blocked" | "completed"; next?: string; expiresAt?: number;
     /** Advisory preparation; host executes existing maintenance before authorized work. */
     contextPreparation?: "compact" | "handover";
+    /** Independent assessor's stable substantive milestone, not working-model authority. */
+    progress?: { fingerprint: string; advanced: boolean };
     /** Positive designation of the ENTIRE reply, not just the wait. Absent means ordinary chat.
      * The pinned continuation tool does not yet expose this core contract. */
     replyKind?: "routine" | "substantive";
@@ -51,6 +53,8 @@ export interface Inbound {
   completionAnchor?: { id: string; task: string; receivedAt: number };
   /** Host-owned bounded evidence for independent completion assessment; never an authority grant. */
   completionContext?: {
+    /** Bounded untrusted tool observations for the independent assessor, never grants. */
+    tools?: Array<{ name: string; error: boolean; result?: string }>;
     recent: Array<{ role: "user" | "assistant"; text: string }>;
     tasks: Array<{ id: string; original: string; state: string; next?: string; wait?: { reason: string; deadline: number } }>;
   };
