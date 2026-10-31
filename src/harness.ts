@@ -1889,16 +1889,17 @@ export class Harness {
         // Scheduled next steps remain intact. A model-authored timed wait is
         // advisory: an independent safe continuation can replace it; a waiting
         // verdict retains the timer. Execution still checks real dependencies.
-        // Non-executable decisions can correct a self-reported completion too.
-        else if ((input.source !== "host" || this.resultMandate(input)) && plan && ["completed", "waiting", "blocked"].includes(plan.state) && (!checkpoint || checkpoint.state === "completed") && reply && reply !== NO_REPLY &&
+        // Independent terminal decisions can correct model-authored blockage or
+        // completion too; keep scheduled continuations and bounded waits intact.
+        else if ((input.source !== "host" || this.resultMandate(input)) && plan && ["completed", "waiting", "blocked"].includes(plan.state) && (!checkpoint || checkpoint.state === "completed" || checkpoint.state === "blocked") && reply && reply !== NO_REPLY &&
             assessmentEligible() && !this.paused && !this.stopping && !s.queue.length &&
             !assessmentAbort.signal.aborted && s.cancelling !== input)
           input.continuation = { state: plan.state };
       } catch { this.log("completion assessment failed; no automatic follow-up"); }
       // An inconclusive assessment (including no final answer) is not independent
-      // completion evidence. Retain the task for the existing bounded recovery
+      // completion or blockage evidence. Retain the task for the existing bounded recovery
       // assessor, never authorize work from a classifier failure or replay this turn.
-      if (checkpoint?.state === "completed" && assessmentEligible() && !this.paused && !this.stopping && !s.queue.length &&
+      if ((checkpoint?.state === "completed" || checkpoint?.state === "blocked") && assessmentEligible() && !this.paused && !this.stopping && !s.queue.length &&
           !assessmentAbort.signal.aborted && s.cancelling !== input)
         input.continuation = undefined;
     }
