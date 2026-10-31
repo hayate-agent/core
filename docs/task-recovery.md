@@ -14,7 +14,12 @@ Settled answers up to 8000 characters are retained on their own task as `lastRep
 recovery may accept an independent completed verdict only with that task-bound
 answer. Missing, oversized, interrupted or unknown results never imply completion.
 A later turn clears older substep answer evidence; foreground steering does not
-supply completion evidence for the interrupted background mandate.
+supply completion evidence for the interrupted background mandate. Chat inputs
+successfully steered into another turn are independently retained before the
+asynchronous steering boundary, rather than disappearing with the consumed inbox.
+Their mandate is assessed separately; the other turn's reply is not their
+`lastReply`. This retention is not permission to code from a question or an
+acknowledgment, nor permission to replay unknown effects.
 Explicit assessor `waiting`/`blocked` decisions are retained without granting an
 automatic timer or executable next step. Existing explicit checkpoints take
 precedence over non-executable turn-end assessments.
