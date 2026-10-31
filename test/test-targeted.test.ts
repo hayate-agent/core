@@ -84,7 +84,8 @@ test('runner actually executes selected tests, propagates failures, and stops on
     'test/fail.test.ts': 'import test from "node:test"; test("fail", () => { throw Error("causal failure"); });',
   });
   symlinkSync(path.resolve('node_modules'), path.join(root, 'node_modules'), 'dir');
-  const env = { ...process.env };
+  // The spec reporter drops exitCode/signal for failed test processes; keep them in assertion output.
+  const env = { ...process.env, NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ''} --test-reporter=tap` };
   delete env.NODE_TEST_CONTEXT; // Exercise a genuine CLI invocation outside the parent test runner.
   const run = (file: string) => spawnSync(process.execPath, ['--input-type=module', '-e',
     `import { main } from ${JSON.stringify(new URL('../scripts/test-targeted.mjs', import.meta.url).href)}; process.exitCode = main([${JSON.stringify(file)}], ${JSON.stringify(root)});`,
