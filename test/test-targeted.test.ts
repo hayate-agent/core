@@ -89,12 +89,14 @@ test('runner actually executes selected tests, propagates failures, and stops on
   const run = (file: string) => spawnSync(process.execPath, ['--input-type=module', '-e',
     `import { main } from ${JSON.stringify(new URL('../scripts/test-targeted.mjs', import.meta.url).href)}; process.exitCode = main([${JSON.stringify(file)}], ${JSON.stringify(root)});`,
   ], { env, encoding: 'utf8' });
-  assert.equal(run('test/pass.test.ts').status, 0);
+  const passed = run('test/pass.test.ts');
+  assert.equal(passed.status, 0, passed.stdout + passed.stderr);
   const failed = run('test/fail.test.ts');
   assert.equal(failed.status, 1, failed.stdout + failed.stderr);
   assert.match(failed.stdout + failed.stderr, /causal failure/);
   writeFileSync(path.join(root, 'scripts/materialize-plugins.mjs'), 'process.exitCode = 23;');
-  assert.equal(run('test/pass.test.ts').status, 23);
+  const prerequisiteFailed = run('test/pass.test.ts');
+  assert.equal(prerequisiteFailed.status, 23, prerequisiteFailed.stdout + prerequisiteFailed.stderr);
 });
 
 test('CLI list is executable without materialization, rejects bad options and supports concrete test paths', () => {
