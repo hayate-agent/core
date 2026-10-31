@@ -21,7 +21,11 @@ async function until(check: () => boolean): Promise<void> {
 
 test("submission during a claim starts in spare capacity without external ticks", async t => {
   const home = await mkdtemp(path.join(os.tmpdir(), "dispatcher-"));
-  t.after(() => rm(home, { recursive: true, force: true }));
+  let stop = async () => {};
+  t.after(async () => {
+    await stop();
+    await rm(home, { recursive: true, force: true });
+  });
   const entered = gate();
   const release = gate();
   class HeldStore extends ExecutionStore {
@@ -50,7 +54,7 @@ test("submission during a claim starts in spare capacity without external ticks"
       return "stopped";
     },
   }, 3, async () => {}, error => errors.push(error));
-  t.after(async () => { release.resolve(); await dispatcher.stop(); });
+  stop = async () => { release.resolve(); await dispatcher.stop(); };
   const starting = dispatcher.start();
   await entered.promise;
   const submitted = dispatcher.submit("p", "c", "work c");
@@ -66,7 +70,11 @@ test("submission during a claim starts in spare capacity without external ticks"
 for (const action of ["pause", "cancel"] as const) {
   test(`${action} during an earlier claim does not abort scheduling other tasks`, async t => {
     const home = await mkdtemp(path.join(os.tmpdir(), "dispatcher-"));
-    t.after(() => rm(home, { recursive: true, force: true }));
+    let stop = async () => {};
+    t.after(async () => {
+      await stop();
+      await rm(home, { recursive: true, force: true });
+    });
     const entered = gate();
     const release = gate();
     class HeldStore extends ExecutionStore {
@@ -96,7 +104,7 @@ for (const action of ["pause", "cancel"] as const) {
         return "stopped";
       },
     }, 3, async () => {}, error => errors.push(error));
-    t.after(async () => { release.resolve(); await dispatcher.stop(); });
+    stop = async () => { release.resolve(); await dispatcher.stop(); };
     const starting = dispatcher.start();
     await entered.promise;
     const controlling = dispatcher.control("p", controlled.id, action);
@@ -113,7 +121,11 @@ for (const action of ["pause", "cancel"] as const) {
 
 test("ticks before and during recovery never schedule work", async t => {
   const home = await mkdtemp(path.join(os.tmpdir(), "dispatcher-"));
-  t.after(() => rm(home, { recursive: true, force: true }));
+  let stop = async () => {};
+  t.after(async () => {
+    await stop();
+    await rm(home, { recursive: true, force: true });
+  });
   const entered = gate(); const release = gate();
   class RecoveringStore extends ExecutionStore {
     override async recover(...args: Parameters<ExecutionStore["recover"]>) {
@@ -125,9 +137,13 @@ test("ticks before and during recovery never schedule work", async t => {
   let calls = 0;
   const dispatcher = new Dispatcher(store, { name: "direct", version: 1, replaySafe: false,
     execute: async () => { calls++; return "answer"; } }, 1, async () => {}, () => {});
-  t.after(async () => { release.resolve(); await dispatcher.stop(); });
+  let starting: Promise<void> | undefined;
+  stop = async () => {
+    release.resolve();
+    try { await starting; } finally { await dispatcher.stop(); }
+  };
   await dispatcher.kick(); assert.equal(calls, 0);
-  const starting = dispatcher.start(); await entered.promise;
+  starting = dispatcher.start(); await entered.promise;
   await dispatcher.kick(); assert.equal(store.list()[0]!.status, "ready");
   await assert.rejects(dispatcher.submit("p", "early", "work"), /unavailable/);
   release.resolve(); await starting;
@@ -137,7 +153,11 @@ test("ticks before and during recovery never schedule work", async t => {
 
 test("claim storage failures are not swallowed as contention", async t => {
   const home = await mkdtemp(path.join(os.tmpdir(), "dispatcher-"));
-  t.after(() => rm(home, { recursive: true, force: true }));
+  let stop = async () => {};
+  t.after(async () => {
+    await stop();
+    await rm(home, { recursive: true, force: true });
+  });
   class BrokenStore extends ExecutionStore {
     override async claim(..._args: Parameters<ExecutionStore["claim"]>): Promise<never> { throw Error("disk unavailable"); }
   }
@@ -147,13 +167,18 @@ test("claim storage failures are not swallowed as contention", async t => {
   const dispatcher = new Dispatcher(store, {
     name: "direct", version: 1, replaySafe: false, execute: async () => "unexpected",
   }, 1, async () => {}, () => {});
+  stop = () => dispatcher.stop();
   await assert.rejects(dispatcher.start(), /disk unavailable/);
   await dispatcher.stop();
 });
 
 test("completion during held delivery drains without an external tick", async t => {
   const home = await mkdtemp(path.join(os.tmpdir(), "dispatcher-"));
-  t.after(() => rm(home, { recursive: true, force: true }));
+  let stop = async () => {};
+  t.after(async () => {
+    await stop();
+    await rm(home, { recursive: true, force: true });
+  });
   const store = new ExecutionStore(path.join(home, "ledger.json"));
   await store.load();
   await store.submit("parent", "request", "work", "direct");
@@ -168,7 +193,7 @@ test("completion during held delivery drains without an external tick", async t 
     if (event.type === "accepted") { entered.resolve(); await release.promise; }
     delivered.push(event.type);
   }, error => errors.push(error));
-  t.after(async () => { release.resolve(); await dispatcher.stop(); });
+  stop = async () => { release.resolve(); await dispatcher.stop(); };
   await dispatcher.start();
   await entered.promise;
   await until(() => store.list()[0]!.status === "completed");
@@ -181,12 +206,17 @@ test("completion during held delivery drains without an external tick", async t 
 
 test("failed delivery retains the same event for explicit retry without spinning", async t => {
   const home = await mkdtemp(path.join(os.tmpdir(), "dispatcher-"));
-  t.after(() => rm(home, { recursive: true, force: true }));
+  let stop = async () => {};
+  t.after(async () => {
+    await stop();
+    await rm(home, { recursive: true, force: true });
+  });
   const store = new ExecutionStore(path.join(home, "ledger.json"));
   await store.load();
   const dispatcher = new Dispatcher(store, {
     name: "direct", version: 1, replaySafe: false, execute: async () => "unused",
   }, 1, async () => { attempts++; if (fail) throw Error("offline"); }, () => {});
+  stop = () => dispatcher.stop();
   let attempts = 0;
   let fail = true;
   await store.submit("p", "r", "work", "direct");
