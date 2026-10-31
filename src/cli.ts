@@ -218,6 +218,7 @@ async function main(argv: string[]): Promise<void> {
   const settings = new SettingsService(path.join(config.home, "settings.local.yaml"), {
     model: config.model, thinking: config.thinking,
     dispatcher: config.dispatcher,
+    reasoningEffortNoneModels: config.reasoningEffortNoneModels,
     gateways: config.gateways,
     memory: config.memory,
     skills: config.skills,
@@ -226,6 +227,15 @@ async function main(argv: string[]): Promise<void> {
     review: { model: config.review?.model, thinking: config.review?.thinking ?? "medium" },
   }, message => log(`[settings] ${message}`));
   await settings.load();
+  let reloadError: string | undefined;
+  const reloadRuntimeSettings = async () => {
+    try { await settings.reload(); reloadError = undefined; }
+    catch (error) {
+      const message = `Runtime settings rejected; retaining last valid configuration: ${String(error)}`;
+      if (message !== reloadError) log(`[settings] ${message}`);
+      reloadError = message;
+    }
+  };
   const completion = await completionStrategyHolder(config.home, config.completionStrategy,
     { apiVersion: 1, prompt: completionPrompt }, settings.snapshot().completionStrategy);
   const dispatchPolicy = dispatcherConfig(settings.effective().dispatcher);
@@ -252,7 +262,8 @@ async function main(argv: string[]): Promise<void> {
     sessionsDir: path.join(config.home, "sessions"),
     model: config.model,
     thinking: config.thinking,
-    reasoningEffortNoneModels: () => [...config.reasoningEffortNoneModels ?? [],
+    beforeRequest: reloadRuntimeSettings,
+    reasoningEffortNoneModels: () => [...settings.effective().reasoningEffortNoneModels ?? [],
       ...(process.env.HARNESS_REASONING_EFFORT_NONE_MODELS ?? "").split(",").map(value => value.trim()).filter(Boolean)],
     pruning: () => pruningPolicy(settings.effective().toolResultPruning),
     projectToolResults: (messages, policy) => (strategies.current ?? disabledContextStrategies).project(messages, policy),
@@ -535,7 +546,10 @@ async function main(argv: string[]): Promise<void> {
     maintain: () => harness.maintainIdle(values["--maintenance-session"]!),
   }), path.resolve(values["--maintenance-directory"]))] : []), ...(values["--observe-directory"] ? [sessionObserverPlugin(Object.freeze({ observeSession: (key: string) => harness.observeSession(key) }), path.resolve(values["--observe-directory"]), values["--observe-session"]!)] : []), memoryOrchestrationPlugin(plugins.memoryOrchestration, settings, harness, config.memory.enabled), completionStrategyPlugin(completion, settings, harness), contextStrategyPlugin(strategies, settings, harness, maintenance), compactionStrategyPlugin(selectedCompaction, settings, harness, maintenance), nightlyStrategyPlugin(nightly, settings, improvement), reportPlugin, dispatcherPlugin(() => dispatcher), subagentPlugin(subagents,async()=>{await persist();}), ...(reloadableTools ? [reloadableToolsPlugin(reloadableTools)] : []), wasmToolsPlugin(config.home, config.wasmTools ?? []), continuationPlugin(harness), loopPlugin(harness), improvementPlugin(improvement!), protectedContentPlugin(protectedContent), gatewayManagerPlugin(gatewayManager, settings), policyManagerPlugin(policyManager, settings), extensionManagerPlugin(extensionManager, settings), gatewayPlugin(settings, harness), contextPlugin(maintenance, settings), ...(config.memory.enabled ? [memoryPlugin(memory)] : []), skillSearchPlugin(skillCatalog), ...(adaptiveSkills ? [adaptiveSkills.plugin()] : []), ...reviewEngine.plugins]);
   if (dispatchPolicy.enabled) {
-    dispatchRuntime = new DispatcherRuntime(harness, executions, dispatchPolicy.rules);
+    dispatchRuntime = new DispatcherRuntime(harness, executions, async () => {
+      await reloadRuntimeSettings();
+      return settings.effective().dispatcher?.rules;
+    });
     harness.addChannel(dispatchRuntime.channel);
     const strategy = dispatchPolicy.strategy === "direct" ? dispatchRuntime.strategy : plugins.dispatchers.get(dispatchPolicy.strategy);
     if (!strategy) throw Error("Configured dispatcher strategy unavailable");

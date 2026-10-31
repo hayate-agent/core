@@ -13,8 +13,10 @@ callbacks/turns may continue. Requests through this coordinator are serialized;
 other component-specific commands retain their own concurrency semantics.
 
 Core always reports rollout-required (not a claim a newer version exists).
-General plugin, MCP and settings reload is unsupported here. Use supported
-component-specific commands or deployment. Status does not compare versions or
+General plugin, MCP and settings reload is unsupported by `/update`. The narrow
+`settings.local.yaml` live routing/request compatibility reload runs automatically
+at future call boundaries; see [Configuration](configuration.md#live-routing-and-request-compatibility-overlay).
+Use supported component-specific commands or deployment for other settings. Status does not compare versions or
 prove remote freshness. Protected hashes are integrity checks, not a sandbox or
 filesystem write protection.
 
