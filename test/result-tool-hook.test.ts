@@ -67,7 +67,12 @@ try {
  const derived=store.list('main').find(e=>e.requestId==='derived');assert.equal(derived.dependency.taskId,task.id);assert.equal(derived.dependency.original,task.original);
  harness.sessions.get('main').current={source:'host',sessionKey:'main',hostEvent:{executionId:child.id},text:child.result};
  assert.notEqual((await emit('plugin_dispatch',{}))?.block,true); // Completion is not withdrawal.
- task.depth=20;
+ // Queue depth alone cannot revoke a host-evidenced productive allowance.
+ task.depth=40;task.repetition={version:1,repetitions:0,attempts:40,evidence:[]};
+ assert.notEqual((await emit('plugin_dispatch',{action:'submit'}))?.block,true);
+ assert.notEqual((await emit('plugin_task_continuation',{state:'continue',next:'More'}))?.block,true);
+ // The hook and Harness must both reject exhausted repetitions, even at low depth.
+ task.depth=0;task.repetition.repetitions=20;
  for(const name of ['plugin_dispatch','plugin_task_continuation']) {
    const args=name==='plugin_dispatch'?{action:'submit'}:{state:'continue',next:'More'};
    if(name==='plugin_dispatch')assert.match((await emit(name,args)).reason,/budget/i);
@@ -75,7 +80,7 @@ try {
  }
  assert.notEqual((await emit('plugin_dispatch',{action:'status'}))?.block,true);
  assert.notEqual((await emit('plugin_task_continuation',{state:'blocked'}))?.block,true);
- task.depth=0;
+ task.depth=0;task.repetition.repetitions=0;
  task.expiresAt=Date.now()-1;assert.equal((await emit('plugin_dispatch',{}))?.block,true);delete task.expiresAt;
  task.state='stopped';assert.equal((await emit('plugin_dispatch',{}))?.block,true);task.state='completed';
  assert.throws(()=>bridge.guardTool('dispatch:'+child.id+':stale-token','plugin_dispatch'),/no longer authorized/);

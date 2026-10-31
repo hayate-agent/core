@@ -28,7 +28,7 @@ test("explicit cron report archives before delivery, survives archive failure wi
   const scheduler = new Scheduler(h, { timezone: "UTC" });
   try {
     await scheduler.runJob({ name: "report", schedule: "0 * * * *", prompt: "Inspect service", audience: "user", deliver: "mem:room1" });
-    await new Promise(r => setTimeout(r, 40));
+    await h.waitForSessionIdle("cron:report");
     assert.equal(runtime.sessions.get("cron:report")!.prompts.length, 1);
     assert.equal(channel.sent.length, 0);
     offline = false; await h.tick(); await h.drained();

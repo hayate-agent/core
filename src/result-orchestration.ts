@@ -1,5 +1,6 @@
 import type { Harness } from "./harness.js";
 import { ToolGuardError } from "./tool-guard-error.js";
+import { repetitions } from "./repetition-budget.js";
 
 const orchestration = new Set(["plugin_dispatch", "plugin_subagent", "plugin_loop", "plugin_task_continuation", "plugin_improvement_evaluate"]);
 
@@ -14,7 +15,9 @@ export function guardResultOrchestration(harness: Harness, key: string, tool: st
   // Reporting a blocker/completion or inspecting existing work is still valid at
   // the limit. Do not misreport exhausted productive budget as revoked authority.
   const plan = args as { action?: unknown; state?: unknown } | null;
-  if (mandate.depth >= 20 &&
+  const session = harness.sessions.get(key)!;
+  const task = session.tasks?.find(task => task.id === mandate.taskId) ?? session.task;
+  if ((!task || repetitions(task) >= 20) &&
       !(tool === "plugin_task_continuation" && plan?.state !== "continue") &&
       !(tool === "plugin_dispatch" && plan?.action === "status"))
     throw new ToolGuardError("continuation_budget_exhausted", `Task ${mandate.taskId}: productive continuation budget exhausted; status rechecks only`);

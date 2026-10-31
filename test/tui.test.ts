@@ -308,7 +308,9 @@ test("local TUI isolates sessions, blocks busy switches, restores visible histor
     term.type("/new blocked\r"); await settle();
     assert.equal(sessions.current?.id, first.id);
     idle = true;
-    term.type("/new Second\r"); await settle();
+    term.type("/new Second\r");
+    const deadline = Date.now() + 5000;
+    while (sessions.current?.id === first.id && Date.now() < deadline) await settle();
     const second = sessions.current!;
     assert.notEqual(second.id, first.id);
     term.type("two\r");
@@ -319,7 +321,9 @@ test("local TUI isolates sessions, blocks busy switches, restores visible histor
     term.type(`/resume ${first.id}\r`); await settle();
     assert.equal(sessions.current?.id, first.id);
     assert.match((ui as any).tui.getScreenLines().join("\n"), /visible previous history/);
-    term.type("/title Renamed\r"); await settle();
+    term.type("/title Renamed\r");
+    const titleDeadline = Date.now() + 5000;
+    while (sessions.current?.title !== "Renamed" && Date.now() < titleDeadline) await settle();
     assert.equal(sessions.current?.title, "Renamed");
     term.type("three\r");
     assert.equal(inputs[2]!.sessionKey, first.key);

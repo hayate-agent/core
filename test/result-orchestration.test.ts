@@ -80,6 +80,7 @@ test("deterministic revocation/expiry and worker checks do not classify result s
   task.state = "waiting"; task.expiresAt = 1; assert.equal(harness.resultMandate(input), undefined);
   assert.throws(() => guardResultOrchestration(harness, "main", "plugin_dispatch"), /live stored parent mandate/);
   task.expiresAt = undefined; task.depth = 20;
+  task.repetition = { version: 1, repetitions: 20, attempts: 20, evidence: [] };
   assert.equal(harness.resultMandate(input)?.depth, 20);
   assert.throws(() => guardResultOrchestration(harness, "main", "plugin_dispatch", { action: "submit" }), /budget exhausted/);
   assert.doesNotThrow(() => guardResultOrchestration(harness, "main", "plugin_dispatch", { action: "status" }));
