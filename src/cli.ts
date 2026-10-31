@@ -376,10 +376,10 @@ async function main(argv: string[]): Promise<void> {
     reportContext: input => plugins.reportProcessing.context(input),
     turnCommitted: async (input) => { await improvement?.committed(input); },
     continuationDeadline: input => config.completionCheck?.authorizations[input.sessionKey]?.expiresAt,
-    completionCheck: async (input, reply, signal) => {
+    completionCheck: async (input, reply, signal, diagnostic) => {
       const grant = config.completionCheck?.authorizations[input.sessionKey] ??
         (input.completionAnchor ? { task: input.completionAnchor.task } : undefined);
-      return assessCompletion(runtimeReviewer(runtime), input, reply, grant, signal, effectiveModels().reviewModel, Date.now, completion.current);
+      return assessCompletion(runtimeReviewer(runtime), input, reply, grant, signal, effectiveModels().reviewModel, Date.now, completion.current, diagnostic);
     },
     afterTurn: async (input, reply, session, options, signal) => {
       const result = await plugins.policies.finish(config.cwd, input, reply, session, options, signal);

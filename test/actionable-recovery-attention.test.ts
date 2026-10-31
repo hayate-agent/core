@@ -33,7 +33,7 @@ test("answered informational turn with independent completed verdict stays compl
   } finally { await h.stop(0); }
 });
 
-for (const mode of ["interrupted", "unavailable", "inconclusive", "failed", "mismatched"] as const) {
+for (const mode of ["interrupted", "unavailable", "inconclusive", "failed", "mismatched", "invalid", "exhausted", "technical", "parse", "technical-saved", "parse-saved"] as const) {
   test(`${mode}: actionable notice crosses disk/restart/delivery barriers once without raw diagnostics`, async () => {
     const home = await mkdtemp(path.join(os.tmpdir(), "actionable-recovery-"));
     const store = new StateStore(path.join(home, "state.json"));
@@ -44,24 +44,38 @@ for (const mode of ["interrupted", "unavailable", "inconclusive", "failed", "mis
     // third inconclusive/failed attempt, never on the first transient failure.
     if (mode === "inconclusive" || mode === "failed")
       task.recoveryRetry = { attempts: 2, nextAt: 0 };
+    if (mode === "invalid" || mode === "exhausted") task.recoveryRetry = { attempts: mode === "invalid" ? 0 : 3, nextAt: 0 };
+    if (mode === "technical" || mode === "parse") task.recoveryRetry = { attempts: 2, nextAt: 0 };
+    if (mode === "technical-saved" || mode === "parse-saved") {
+      task.recoveryAssessment = "decided";
+      task.recoveryRetry = { attempts: 3, nextAt: 0, diagnostic: mode === "technical-saved" ? "technical" : "invalid_response" };
+    }
     if (mode === "mismatched") {
       task.next = "Verify existing effects";
       task.recoveryAssessment = "decided";
       task.recoveryAdmission = { id: "task:retained:3", depth: 3, next: "different", original: task.original };
     }
     const runtime = new FakeRuntime();
-    const h = new Harness({ runtime, tickMs: 60000, ...(mode === "unavailable" ? {} : { completionCheck: async () => {
+    const h = new Harness({ runtime, tickMs: 60000, ...(mode === "unavailable" ? {} : { completionCheck: async (input, reply, signal, diagnostic) => {
+      assert.notEqual(mode, "invalid"); assert.notEqual(mode, "exhausted");
+      assert.notEqual(mode, "technical-saved"); assert.notEqual(mode, "parse-saved");
+      if (mode === "technical" || mode === "parse") return assessCompletion({ review: async () => {
+        if (mode === "technical") throw Error("PRIVATE_PROVIDER_TOKEN raw provider error");
+        return "PRIVATE_PROVIDER_TOKEN invalid JSON";
+      } }, input, reply, { task: input.completionAnchor!.task }, signal, undefined, undefined, undefined, diagnostic);
       if (mode === "failed") throw Error("PRIVATE_PROVIDER_TOKEN raw provider error");
       return undefined;
     } }) });
-    h.addChannel(channel); h.restoreSessions([{ key, task, replyTo: { channel: "mem", target: "room1" } }]);
+    h.addChannel(channel);
+    await store.save({ version: 1, paused: false, busyMode: "queue", sessions: [{ key, task, replyTo: { channel: "mem", target: "room1" } }] });
+    h.restoreSessions((await store.load())!.sessions);
     let offline = true;
     const save = () => store.save({ version: 1, paused: false, busyMode: "queue", sessions: h.snapshotSessions(), pending: h.pendingInputs(), outbox: h.outboxEntries() });
     h.onStateChange = async () => { if (offline) throw Error("disk unavailable"); await save(); };
     let next: Harness | undefined;
     try {
       // Persist the assessment claim first; fail the subsequent attention barrier.
-      if (mode === "inconclusive" || mode === "failed") {
+      if (["inconclusive", "failed", "technical", "parse"].includes(mode)) {
         h.onStateChange = async () => {
           if (h.state(key).task?.recoveryAssessment === "claimed") await save();
           else if (offline) throw Error("disk unavailable"); else await save();
@@ -74,14 +88,22 @@ for (const mode of ["interrupted", "unavailable", "inconclusive", "failed", "mis
       const notice = h.outboxEntries()[0]!;
       assert.match(notice.text, /Auftrag: Was ist mit Deinem Self-Improvement/);
       assert.match(notice.text, /Verifizierter Stand:/);
-      assert.match(notice.text, /Entscheidung nötig:/);
-      assert.match(notice.text, /konkreten nächsten Schritt/);
+      assert.match(notice.text, /Abschluss ist nicht unabhängig bestätigt/);
+      assert.doesNotMatch(notice.text, /Entscheidung nötig:|Bitte antworte|konkreten nächsten Schritt|Ohne diese Klärung/);
       assert.doesNotMatch(notice.text, /PRIVATE_PROVIDER_TOKEN|raw provider error|fehlende Berechtigung|operator reconciliation required/);
-      const reason = { interrupted: /unterbrochen/, unavailable: /nicht konfiguriert/, inconclusive: /Bewertungsbudget ist ausgeschöpft/, failed: /fehlgeschlagen/, mismatched: /passt nicht/ }[mode];
+      const reason = { interrupted: /unterbrochen/, unavailable: /nicht konfiguriert/, inconclusive: /drei Recovery-Bewertungsversuche/, failed: /fehlgeschlagen/, mismatched: /passt nicht/, invalid: /Retryzustand ist ungültig/, exhausted: /drei Recovery-Bewertungsversuche/, technical: /technisch fehlgeschlagen/, parse: /ungültige Antwort/, "technical-saved": /technisch fehlgeschlagen/, "parse-saved": /ungültige Antwort/ }[mode];
       assert.match(notice.text, reason);
+      if (mode === "invalid") assert.doesNotMatch(notice.text, /ausgeschöpft|drei Recovery-Bewertungsversuche/);
       offline = false; await save();
       const checkpoint = (await new StateStore(store.file).load())!;
       assert.equal(checkpoint.sessions[0]!.task!.state, "blocked");
+      const savedRetry = checkpoint.sessions[0]!.task!.recoveryRetry;
+      if (mode === "technical" || mode === "parse") {
+        assert.equal(savedRetry?.attempts, 3);
+        assert.equal(savedRetry?.diagnostic, mode === "technical" ? "technical" : "invalid_response");
+      }
+      assert.equal(checkpoint.sessions[0]!.task!.depth, 2);
+      assert.doesNotMatch(JSON.stringify(checkpoint), /PRIVATE_PROVIDER_TOKEN|raw provider error/);
       assert.equal(checkpoint.outbox![0]!.id, notice.id);
       next = new Harness({ runtime: new FakeRuntime(), tickMs: 60000 }); next.addChannel(channel);
       next.restoreSessions(checkpoint.sessions); next.restorePending(checkpoint.pending ?? []); next.restoreOutbox(checkpoint.outbox ?? []);
