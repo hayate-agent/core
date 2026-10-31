@@ -83,7 +83,10 @@ startup and through `settings.local.yaml` overlays, where `dispatcher.rules` and
 or request boundary.
 
 The host uses a separate Dispatcher execution transport for review, not the ordinary
-working-tool strategy or its capacity queue. This avoids a waiting parent consuming
+working-tool strategy or its capacity queue. Review submissions may carry the full
+changeset prompt: task inputs are validated up to 1 MiB at submission (dispatcher.md
+"Submission and control"), which covers the 512 KiB changeset limit after JSON
+escaping. This avoids a waiting parent consuming
 all worker slots and triggering review recursion. `review-executions.json` is an
 execution ledger, not a new review budget. Existing review rounds, findings and
 approval fingerprints remain owned by the plugin. Cancelled primary execution is
