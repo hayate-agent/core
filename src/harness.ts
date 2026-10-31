@@ -1709,7 +1709,7 @@ export class Harness {
     if (this.isDrained()) for (const r of [...this.idle]) (this.idle.delete(r), r());
   }
 
-  private readonly assessedProgress = new WeakMap<Inbound, { fingerprint: string; advanced: boolean }>();
+  private readonly assessedProgress = new WeakMap<Inbound, { fingerprint?: string; advanced?: boolean; normal?: boolean; receipt?: string }>();
 
   private async runTurn(s: SessionState, input: Inbound): Promise<void> {
     this.assessedProgress.delete(input);
@@ -1728,9 +1728,24 @@ export class Harness {
     let memoryTools = 0;
     const progressTools: Array<{ name: string; error: boolean; result?: string }> = [];
     let progressBytes = 0;
+    const workReceipts = createHash('sha256');
+    let workTools = 0;
+    let pendingWorkTools = 0;
+    let receiptsComplete = true;
+    let independentlyContinued = false;
     await typingCh?.typing?.(to!, true).catch(() => undefined);
     const onEvent = (event: TurnEvent) => {
           activity.event(event);
+          // Control-plane nudges are not work results; keep bounded assessor context below.
+          if (event.type === 'tool' && !['plugin_task_continuation', 'plugin_context_maintenance'].includes(event.name)) {
+            if (event.phase === 'start') pendingWorkTools++;
+            else {
+              pendingWorkTools = Math.max(0, pendingWorkTools - 1);
+              workTools++;
+              if (event.error || !event.detail) receiptsComplete = false;
+              else workReceipts.update(JSON.stringify([event.name, event.detail]));
+            }
+          }
           if (event.type === "tool" && event.phase === "end") {
             memoryTools++;
             if (progressTools.length < 20 && progressBytes < 12000) {
@@ -1905,8 +1920,11 @@ export class Harness {
             !assessmentAbort.signal.aborted && s.cancelling !== input && plan?.progress)
           this.assessedProgress.set(input, structuredClone(plan.progress));
         if ((input.source !== "host" || this.resultMandate(input)) && assessmentEligible() && !this.paused && !this.stopping && !s.queue.length && !assessmentAbort.signal.aborted && s.cancelling !== input &&
-            plan?.state === "continue" && typeof plan.next === "string" && plan.next.trim() && plan.next.length <= 4000 &&
-            checkpoint?.state !== "continue") input.continuation = plan;
+            plan?.state === "continue" && typeof plan.next === "string" && plan.next.trim() && plan.next.length <= 4000) {
+          // An explicit progress verdict keeps PR185's milestone/replay semantics.
+          independentlyContinued = !plan.progress;
+          if (checkpoint?.state !== "continue") input.continuation = plan;
+        }
         // Scheduled next steps remain intact. A model-authored timed wait is
         // advisory: an independent safe continuation can replace it; a waiting
         // verdict retains the timer. Execution still checks real dependencies.
@@ -1939,6 +1957,12 @@ export class Harness {
     }
     // Stop remains meaningful until final reply construction. Capture may already
     // have committed its earlier snapshot; do not repeat that side effect.
+    this.assessedProgress.set(input, {
+      ...this.assessedProgress.get(input),
+      normal: independentlyContinued && outcome === undefined && workTools === 0 && pendingWorkTools === 0,
+      ...(outcome === undefined && workTools > 0 && pendingWorkTools === 0 && receiptsComplete
+        ? { receipt: workReceipts.digest('hex') } : {}),
+    });
     const consumeLateCancellation = () => {
       if (s.cancelling !== input) return false;
       s.cancelling = undefined;
