@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { stripTypeScriptTypes } from 'node:module';
 import { Harness, type DurableTask } from '../src/harness.js';
 import { PluginHost } from '../src/plugins.js';
@@ -14,11 +14,11 @@ const fleet = (): DurableTask => ({ id: 'fleet', original: 'Verify authorized fl
 const clone = <T>(v: T): T => structuredClone(v);
 
 test('registered new adapter fails closed on actual old Core method; default remains compatible', async () => {
-  // Execute the unchanged base implementation, not a stub that assumes taskId support.
-  const source = execFileSync('git', ['show', 'HEAD:src/harness.ts'], { cwd: new URL('..', import.meta.url), encoding: 'utf8' });
-  const start = source.indexOf('  planContinuation(');
-  const method = source.slice(start, source.indexOf('\n  }', start) + 4);
-  assert.ok(start > 0);
+  // Verbatim old Core method, not a stub or a moving HEAD baseline.
+  // Core 5660b6fed7ca6e77e7fe06c6cbc0dbbb0bfb4c8a, src/harness.ts
+  // blob d19be9801e0ca1dcbe309625c91d95023681bd5d; no trailing newline added.
+  // This channel-turn fixture exercises the old checkpoint path without host-only helpers.
+  const method = readFileSync(new URL('./fixtures/plan-continuation-core-5660b6f.txt', import.meta.url), 'utf8');
   const oldPlan = new Function(`${stripTypeScriptTypes(`function ${method.trim()}`)}; return planContinuation;`)();
   const input = { id: 'fleet', source: 'channel', continuation: { state: 'blocked', next: 'Preserve checkpoint' } };
   const oldCore = { sessions: new Map([[key, { current: input, prompting: true }]]), planContinuation: oldPlan };
