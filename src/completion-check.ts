@@ -18,7 +18,7 @@ export async function assessCompletion(backend: ReviewBackend, input: Inbound, r
   if (!promptStrategy) return;
   const checkpoint = input.continuation;
   if (input.source === "api" || input.sessionKey === "improvement:nightly" ||
-      (input.continuationDepth ?? 0) >= 20 || signal.aborted || !authorization ||
+      signal.aborted || !authorization ||
       !authorization.task.trim() || authorization.task.length > 8000 ||
       (authorization.expiresAt !== undefined && (!Number.isSafeInteger(authorization.expiresAt) || authorization.expiresAt <= now()))) return;
   const controller = new AbortController();

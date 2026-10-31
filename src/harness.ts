@@ -1815,14 +1815,22 @@ export class Harness {
         const plan = await this.opts.completionCheck(structuredClone(input), reply, assessmentAbort.signal);
         if ((input.source !== "host" || this.resultMandate(input)) && assessmentEligible() && !this.paused && !this.stopping && !s.queue.length && !assessmentAbort.signal.aborted && s.cancelling !== input &&
             plan?.state === "continue" && typeof plan.next === "string" && plan.next.trim() && plan.next.length <= 4000 &&
-            checkpoint?.state !== "continue" && !checkpoint?.wait) input.continuation = plan;
-        // Non-executable decisions are not failed assessments. Never overwrite
-        // explicit checkpoints or infer completion from a missing answer.
-        else if (plan && ["completed", "waiting", "blocked"].includes(plan.state) && !checkpoint && reply && reply !== NO_REPLY &&
+            checkpoint?.state !== "continue") input.continuation = plan;
+        // Scheduled next steps remain intact. A model-authored timed wait is
+        // advisory: an independent safe continuation can replace it; a waiting
+        // verdict retains the timer. Execution still checks real dependencies.
+        // Non-executable decisions can correct a self-reported completion too.
+        else if ((input.source !== "host" || this.resultMandate(input)) && plan && ["completed", "waiting", "blocked"].includes(plan.state) && (!checkpoint || checkpoint.state === "completed") && reply && reply !== NO_REPLY &&
             assessmentEligible() && !this.paused && !this.stopping && !s.queue.length &&
-            !assessmentAbort.signal.aborted && s.cancelling !== input && input.source !== "host")
+            !assessmentAbort.signal.aborted && s.cancelling !== input)
           input.continuation = { state: plan.state };
       } catch { this.log("completion assessment failed; no automatic follow-up"); }
+      // An inconclusive assessment (including no final answer) is not independent
+      // completion evidence. Retain the task for the existing bounded recovery
+      // assessor, never authorize work from a classifier failure or replay this turn.
+      if (checkpoint?.state === "completed" && assessmentEligible() && !this.paused && !this.stopping && !s.queue.length &&
+          !assessmentAbort.signal.aborted && s.cancelling !== input)
+        input.continuation = undefined;
     }
     if (s.cancelling === input) {
       s.cancelling = undefined;

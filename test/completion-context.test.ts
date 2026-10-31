@@ -37,7 +37,8 @@ test("child wait and child dependency do not suppress independent parent assessm
   h = new Harness({ runtime, executionStore: store, tickMs: 60000, now: () => 1000,
     completionCheck: async input => {
       checks++;
-      return input.taskId === "parent" && input.source === "heartbeat" ? { state: "continue", next: "test unrelated architecture contract" } : undefined;
+      return input.taskId === "parent" ? input.source === "heartbeat"
+        ? { state: "continue", next: "test unrelated architecture contract" } : { state: "completed" } : undefined;
     } });
   h.addChannel(new MemoryChannel()); h.onStateChange = async () => {};
   h.restoreSessions([{ key: "mem:room1", tasks: [{ id: "parent", original: "Implement architecture contracts", state: "active", depth: 0,

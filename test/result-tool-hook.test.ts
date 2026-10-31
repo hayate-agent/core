@@ -20,7 +20,7 @@ import { DispatcherRuntime } from './src/dispatcher-runtime.ts';
 import { FakeRuntime } from './test/fakes.ts';
 const explicit=${explicit}, store=new ExecutionStore(process.env.TEST_DIR+'/ledger.json'); await store.load();
 const working=new FakeRuntime(); let assessments=0, reviewCalls=0;
-const harness=new Harness({runtime:working,executionStore:store,tickMs:60000,busyMode:'queue',hostEventAllowed:i=>bridge.resultAllowed(i.sessionKey,i.hostEvent.executionId),completionCheck:async i=>{if(i.source!=='host')return; assessments++;assert.equal(i.completionAnchor.task,'Implement tests. No deployment.');return {state:'continue',next:'Run regression'};}});
+const harness=new Harness({runtime:working,executionStore:store,tickMs:60000,busyMode:'queue',hostEventAllowed:i=>bridge.resultAllowed(i.sessionKey,i.hostEvent.executionId),completionCheck:async i=>{if(i.source!=='host')return i.continuation?.state==='completed'?{state:'completed'}:undefined; assessments++;assert.equal(i.completionAnchor.task,'Implement tests. No deployment.');return {state:'continue',next:'Run regression'};}});
 harness.onStateChange=async()=>{};
 const bridge=new DispatcherRuntime(harness,store);
 let finishChild; const childResult=new Promise(resolve=>{finishChild=resolve;});
