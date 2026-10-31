@@ -57,6 +57,29 @@ test("local settings cannot override infrastructure protected-content manifest",
   const home = await mkdtemp(path.join(os.tmpdir(), "protected-overlay-"));
   t.after(() => rm(home, { recursive: true, force: true }));
   const file = path.join(home, "settings.local.yaml");
-  await writeFile(file, "protectedContent:\n  files: []\n");
-  await assert.rejects(new SettingsService(file, {}).load(), /Unsupported local setting/);
+  const text = "infrastructure-controlled identity";
+  const manifest = { files: [{ path: "SOUL.md", sha256: createHash("sha256").update(text).digest("hex") }] };
+  await writeFile(path.join(home, "harness.yaml"), `protectedContent:\n  files:\n    - path: SOUL.md\n      sha256: ${manifest.files[0].sha256}\n`);
+  const config = await loadConfig(home);
+  const warnings: string[] = [];
+  const settings = new SettingsService(file, { reasoningEffortNoneModels: ["p/base"] }, message => warnings.push(message));
+  for (const [index, model] of ["p/startup", "p/reloaded"].entries()) {
+    // Removing the pins is forbidden; a valid live-editable sibling must still apply.
+    await writeFile(file, `protectedContent:\n  files: []\nreasoningEffortNoneModels: [${model}]\n`);
+    if (index === 0) await settings.load(); else await settings.reload();
+    assert.deepEqual(settings.effective().reasoningEffortNoneModels, [model]);
+    assert.equal(Object.hasOwn(settings.snapshot(), "protectedContent"), false);
+    assert.equal(Object.hasOwn(settings.effective(), "protectedContent"), false);
+    const effective = { ...config, ...settings.effective() };
+    assert.deepEqual(effective.protectedContent, manifest);
+    assert.deepEqual(config.protectedContent, manifest);
+    const policy = new ProtectedContent(home, effective.protectedContent);
+    await writeFile(path.join(home, "SOUL.md"), text); await policy.verify();
+    await writeFile(path.join(home, "SOUL.md"), "tampered");
+    await assert.rejects(policy.verify(), /integrity check failed/);
+    assert.equal(settings.diagnostics.length, 1);
+    assert.match(settings.diagnostics[0], /Ignored protectedContent/);
+    assert.ok(settings.diagnostics[0].length <= 240);
+  }
+  assert.equal(warnings.length, 2, "one bounded warning per startup/reload, not per pin");
 });
