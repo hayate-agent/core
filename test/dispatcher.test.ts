@@ -11,6 +11,31 @@ function gate() {
   const promise = new Promise<void>(done => { resolve = done; });
   return { promise, resolve };
 }
+
+test("update inventory covers a submission before durable claim and fences new producers", async t => {
+  const home = await mkdtemp(path.join(os.tmpdir(), "dispatcher-admission-"));
+  const entered = gate(), release = gate();
+  class HeldStore extends ExecutionStore {
+    override async submit(...args: Parameters<ExecutionStore["submit"]>) {
+      entered.resolve(); await release.promise; return super.submit(...args);
+    }
+  }
+  const store = new HeldStore(path.join(home, "ledger.json"));
+  await store.load();
+  let fenced = false;
+  const dispatcher = new Dispatcher(store, { name: "direct", version: 1, replaySafe: false, execute: async () => "done" },
+    1, async () => {}, () => {}, undefined, undefined, () => fenced);
+  t.after(async () => { release.resolve(); await dispatcher.stop(); await rm(home, { recursive: true, force: true }); });
+  await dispatcher.start();
+  const submitting = dispatcher.submit("parent", "request", "work");
+  await entered.promise;
+  assert.deepEqual(dispatcher.updateBlockers(), ["dispatcher work"]);
+  release.resolve(); await submitting;
+  await until(() => !dispatcher.updateBlockers().length);
+  fenced = true;
+  await assert.rejects(dispatcher.submit("parent", "later", "work"), /unavailable/);
+  assert.equal(store.list().length, 1);
+});
 async function until(check: () => boolean): Promise<void> {
   for (let i = 0; i < 500; i++) {
     if (check()) return;

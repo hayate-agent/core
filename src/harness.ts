@@ -178,6 +178,8 @@ export interface HarnessOptions {
   /** Trusted installation deadline, independent of model continuation plans. */
   continuationDeadline?: (input: Inbound) => number | undefined;
   now?: () => number;
+  /** Synchronous owner inventory; maintenance closed by ordered shutdown is not a blocker. */
+  updateBlockers?: () => string[];
   log?: (msg: string) => void;
   /** Durably records a reply that can never be delivered (before it leaves the outbox). */
   parkUndeliverable?: (entry: OutboxEntry, error: string) => Promise<void>;
@@ -185,8 +187,55 @@ export interface HarnessOptions {
 
 export type CommandHandler = (input: Inbound) => Promise<boolean>;
 
+export interface UpdateAdmissionStatus {
+  status: "idle" | "busy" | "admitted" | "leased" | "unavailable";
+  blockers: string[];
+  lease_id?: string;
+  expires_at?: number;
+}
+
 export class Harness {
   readonly sessions = new Map<string, SessionState>();
+  private updateLease?: { id: string; expires: number };
+  private foregroundWork = 0;
+
+  get updateFenced(): boolean {
+    const lease = this.updateLease;
+    if (lease && lease.expires <= this.now() && this.updateLease === lease) this.updateLease = undefined;
+    return !!this.updateLease;
+  }
+
+  /** Reserve before the first await, including producer scripts and direct callers. */
+  async withForegroundWork<T>(work: () => Promise<T>): Promise<T> {
+    if (this.stopping || this.updateFenced) throw Error("shutting down or update admission; retry input");
+    this.foregroundWork++;
+    try { return await work(); } finally { this.foregroundWork--; }
+  }
+
+  updateAdmissionStatus(): UpdateAdmissionStatus {
+    if (this.stopping) return { status: "unavailable", blockers: ["shutting down"] };
+    if (this.updateFenced) return { status: "leased", blockers: [], lease_id: this.updateLease!.id, expires_at: this.updateLease!.expires };
+    const blockers = [...(this.opts.updateBlockers?.() ?? [])];
+    if (!this.isDrained() || this.inbox.runningCommands.size || this.inbox.handoff.size || this.inbox.unsaved.size) blockers.push("turns, inbox or outbox");
+    if (this.approvals.size) blockers.push("approvals");
+    if (this.foregroundWork || this.activeDeliveries || this.gatewayChanging || this.budgetChanging) blockers.push("foreground work or host transition");
+    return { status: blockers.some(reason => reason.startsWith("unsupported update owner:")) ? "unavailable" : blockers.length ? "busy" : "idle", blockers };
+  }
+
+  /** No await between the complete idle assessment and fencing new producers. */
+  acquireUpdateAdmission(ttlMs: number): UpdateAdmissionStatus {
+    if (!Number.isSafeInteger(ttlMs) || ttlMs < 1000 || ttlMs > 300000) throw Error("ttl_ms must be an integer from 1000 to 300000");
+    const status = this.updateAdmissionStatus();
+    if (status.status !== "idle") return status;
+    this.updateLease = { id: randomUUID(), expires: this.now() + ttlMs };
+    return { status: "admitted", blockers: [], lease_id: this.updateLease.id, expires_at: this.updateLease.expires };
+  }
+
+  releaseUpdateAdmission(id: string): boolean {
+    if (!this.updateFenced || this.updateLease?.id !== id) return false;
+    this.updateLease = undefined;
+    return true;
+  }
 
   /** Does not create/open sessions; caller owns access control and transport scope. */
   observeSession(key: string): SessionObservation | undefined {
@@ -267,7 +316,7 @@ export class Harness {
   private activeDeliveries = 0;
   /** Reserve the same instance-wide boundary used for transport replacement. */
   async atIdleBoundary(change: () => Promise<void>, command?: Inbound): Promise<void> {
-    if (this.gatewayChanging || this.activeDeliveries || this.stopping || [...this.inbox.accepting].some(i => i !== command) ||
+    if (this.updateFenced || this.gatewayChanging || this.activeDeliveries || this.stopping || [...this.inbox.accepting].some(i => i !== command) ||
         [...this.sessions.values()].some(s => s.running)) throw Error("Change requires an idle turn boundary");
     this.gatewayChanging = true;
     try { await change(); }
@@ -280,7 +329,7 @@ export class Harness {
     }
   }
   async replaceGateway(name: string, candidate?: Channel): Promise<void> {
-    if (this.gatewayChanging || this.activeDeliveries || this.stopping) throw Error("Gateway replacement requires an idle turn boundary; retry after current work completes");
+    if (this.updateFenced || this.gatewayChanging || this.activeDeliveries || this.stopping) throw Error("Gateway replacement requires an idle turn boundary; retry after current work completes");
     if ([...this.sessions.values()].some((s) => s.running) || this.inbox.accepting.size) throw Error("Gateway replacement requires an idle turn boundary; retry after current work completes");
     if (candidate && candidate.name !== name) throw Error("Gateway channel name mismatch");
     const old = this.channels.get(name);
@@ -427,7 +476,7 @@ export class Harness {
    */
   async maintainIdle(key: string): Promise<"deferred" | "processed"> {
     const s = this.sessions.get(key), maintenance = this.opts.contextMaintenance;
-    if (!s?.session || !maintenance || this.paused || this.stopping || this.gatewayChanging || this.activeDeliveries ||
+    if (!s?.session || !maintenance || this.paused || this.stopping || this.updateFenced || this.gatewayChanging || this.activeDeliveries ||
         s.running || s.current || s.queue.length || s.unsaved || s.outbox.length) return "deferred";
     this.gatewayChanging = true;
     s.running = true;
@@ -951,7 +1000,7 @@ export class Harness {
   }
 
   async accept(input: Inbound): Promise<void> {
-    if (this.stopping || this.gatewayChanging) throw new Error("shutting down or gateway transition; retry input");
+    if (this.stopping || this.gatewayChanging || this.updateFenced) throw new Error("shutting down, update admission or gateway transition; retry input");
     // Local terminal lines have no upstream delivery ID; assign one at the trusted ingress.
     if (input.source === "channel" && input.replyTo?.channel === "console" && !input.id && naturalBudgetReset(input.text))
       input = { ...input, id: `console-budget:${randomUUID()}` };
@@ -1043,6 +1092,10 @@ export class Harness {
    * direct callers get the same persist-before-run guarantee via enqueue().
    */
   async submit(input: Inbound, deferPump = false): Promise<void> {
+    return this.withForegroundWork(() => this.submitForeground(input, deferPump));
+  }
+
+  private async submitForeground(input: Inbound, deferPump = false): Promise<void> {
     if (this.budgetChanging) throw Error("Host control in progress; retry input");
     const s = this.state(input.sessionKey);
     if (input.source === "channel") {
@@ -1204,6 +1257,7 @@ export class Harness {
    * (cron, API, …) only start once they are in the saved inbox; ticks are ephemeral.
    */
   enqueue(input: Inbound): void {
+    if (this.updateFenced) throw Error("update admission; retry input");
     const s = this.state(input.sessionKey);
     if (input.replyTo && input.source !== "api") s.replyTo ??= input.replyTo;
     s.queue.push(input);
@@ -2011,6 +2065,11 @@ export class Harness {
   }
 
   async tick(at = this.now()): Promise<void> {
+    if (this.stopping || this.updateFenced) return;
+    return this.withForegroundWork(() => this.tickForeground(at));
+  }
+
+  private async tickForeground(at: number): Promise<void> {
     if (this.gatewayChanging) return;
     await this.processOperatorBudgetGrants();
     await this.flushMaintenanceNotices();
