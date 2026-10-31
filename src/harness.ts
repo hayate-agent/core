@@ -1096,6 +1096,20 @@ export class Harness {
         if (s.current === turn && s.prompting && s.session) {
           // Still the same prompt running (not just outbox flushing): steer into it.
           (s.steered ??= []).push(input);
+          // Steering consumes inbox input with another turn's result, but does
+          // not consume its independent mandate. Retain before the async steer:
+          // turn settlement and stop may race it. A failed steer queues the same
+          // task identity; only independent assessment can grant further work.
+          if (input.source === "channel") {
+            this.rememberCompletion(s, "user", input.text);
+            input.taskId ??= input.id ?? randomUUID();
+            const tasks = this.tasks(s);
+            if (!tasks.some(task => task.id === input.taskId)) {
+              tasks.push({ id: input.taskId, original: input.text,
+                state: "active", depth: 0, anchor: structuredClone(input.completionAnchor) });
+              s.tasks = tasks;
+            }
+          }
           try {
             await s.session.steer(input.text);
             steered = true;
