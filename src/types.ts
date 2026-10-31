@@ -30,12 +30,16 @@ export interface Inbound {
   executionTurnId?: string;
   /** Durable, bounded continuation plan supplied during this turn. */
   continuation?: { state: "continue" | "waiting" | "blocked" | "completed"; next?: string; expiresAt?: number;
+    /** Advisory preparation; host executes existing maintenance before authorized work. */
+    contextPreparation?: "compact" | "handover";
     /** Positive designation of the ENTIRE reply, not just the wait. Absent means ordinary chat.
      * The pinned continuation tool does not yet expose this core contract. */
     replyKind?: "routine" | "substantive";
     wait?: { reason: string; retryAfterMs: number; deadline: number } };
   /** Trusted timer checkpoint, captured before claiming a persisted wait. */
   waitRecheck?: { reason: string; next: string };
+  /** Durable prerequisite on a checker-authorized queued continuation. */
+  contextPreparation?: "compact" | "handover";
   continuationDepth?: number;
   /** Host-issued recheck provenance; productive tools must acquire a work step first. */
   waitCheck?: { sequence: number; productive?: boolean };

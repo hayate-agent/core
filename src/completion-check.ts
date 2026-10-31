@@ -34,7 +34,8 @@ export async function assessCompletion(backend: ReviewBackend, input: Inbound, r
     const result = JSON.parse(raw);
     if (["completed", "waiting", "blocked"].includes(result.state)) return { state: result.state };
     if (result.state !== "continue" || typeof result.next !== "string" || !result.next.trim() || result.next.length > 4000) return;
-    return { state: "continue", next: result.next.trim(), ...(authorization.expiresAt !== undefined ? { expiresAt: authorization.expiresAt } : {}) };
+    if (result.contextPreparation !== undefined && !["compact", "handover"].includes(result.contextPreparation)) return;
+    return { state: "continue", next: result.next.trim(), ...(result.contextPreparation ? { contextPreparation: result.contextPreparation } : {}), ...(authorization.expiresAt !== undefined ? { expiresAt: authorization.expiresAt } : {}) };
   } catch { return undefined; }
   finally { clearTimeout(timer); signal.removeEventListener("abort", abort); }
 }

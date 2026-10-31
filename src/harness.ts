@@ -47,6 +47,7 @@ export interface DurableTask {
   original: string;
   state: "active" | "waiting" | "blocked" | "completed" | "stopped";
   next?: string;
+  contextPreparation?: "compact" | "handover";
   depth: number;
   repetition?: RepetitionBudget;
   expiresAt?: number;
@@ -154,6 +155,7 @@ export interface HarnessOptions {
   contextMaintenance?: {
     interrupt?(key: string): boolean;
     guidance(key: string, session: RuntimeSession): Promise<string>;
+    prepareContinuation?(key: string, session: RuntimeSession, rotate: (handover: import("./context-maintenance.js").ContextRecord["handover"]) => Promise<RuntimeSession>, action: "compact" | "handover", preserve: string, resume: string, target?: Address): Promise<void>;
     admissionStatus?(key: string): Promise<{ execution?: string }>;
     request?(key: string, request: { action: "handover"; preserve: string; resume: string }): Promise<void>;
     beforeTurn?(key: string, session: RuntimeSession, rotate: (handover: import("./context-maintenance.js").ContextRecord["handover"]) => Promise<RuntimeSession>, target?: Address, incomingText?: string): Promise<string | undefined>;
@@ -676,7 +678,7 @@ export class Harness {
     }
     s.queue.push({ id: admission?.id ?? this.taskQueueId(task, task.depth + 1), source: "cron", sessionKey: s.key,
       taskId: task.id, continuationDepth: task.depth + 1, continuationExpiresAt: task.expiresAt,
-      completionAnchor: task.anchor, replyTo: s.replyTo,
+      completionAnchor: task.anchor, replyTo: s.replyTo, contextPreparation: task.contextPreparation,
       text: `Resume the explicitly authorized task after an interruption. Verify actual state and completed side effects; do not repeat them or broaden authority. Original task:\n${task.original}\nNext step:\n${task.next}` });
     s.unsaved = true;
     return true;
@@ -1349,6 +1351,7 @@ export class Harness {
           (task.expiresAt === undefined || plan.expiresAt <= task.expiresAt)))) {
       task.next = `First reconcile the actual task state and completed side effects; do not blindly replay external effects. Then: ${plan.next.trim()}`;
       task.anchor = input.completionAnchor;
+      task.contextPreparation = plan.contextPreparation;
       if (plan.expiresAt !== undefined) task.expiresAt = plan.expiresAt;
       task.recoveryAdmission = { id: this.taskQueueId(task, task.depth + 1), depth: task.depth + 1,
         next: task.next, original: task.original, expiresAt: task.expiresAt };
@@ -1588,6 +1591,7 @@ export class Harness {
           task.next = plan?.state === "continue" || plan?.state === "blocked" || plan?.wait ? plan.next : undefined;
           task.wait = plan?.state === "waiting" && plan.wait ? { reason: plan.wait.reason,
             nextAt: this.now() + plan.wait.retryAfterMs, deadline: Math.min(plan.wait.deadline, inheritedDeadline) } : undefined;
+          task.contextPreparation = plan?.state === "continue" ? plan.contextPreparation : input.contextPreparation;
           task.depth = input.continuationDepth ?? 0;
           task.expiresAt = inheritedDeadline === Infinity ? undefined : inheritedDeadline;
           task.recoveryAssessment = undefined;
@@ -1606,6 +1610,7 @@ export class Harness {
           s.queue.push({ id: randomUUID(), sessionKey: s.key, source: "cron", replyTo: input.replyTo ?? s.replyTo,
             text: `Continue the explicitly authorized task with this recorded next step. Recheck blockers and authorization; do not repeat completed side effects.\n${input.continuation.next}`,
             taskId: input.taskId,
+            contextPreparation: input.continuation.contextPreparation,
             continuationDepth: (input.continuationDepth ?? 0) + 1,
             continuationExpiresAt: inheritedDeadline === Infinity ? undefined : inheritedDeadline,
             completionAnchor: input.completionAnchor ? structuredClone(input.completionAnchor) : undefined });
@@ -1726,6 +1731,16 @@ export class Harness {
         await old.dispose();
         return next;
       };
+      if (input.contextPreparation && s.cancelling !== input && !this.stopping) {
+        if (!this.opts.contextMaintenance?.prepareContinuation) throw Error("Required continuation context preparation unavailable");
+        this.beforeMaintenance.add(s.key);
+        try {
+          await this.opts.contextMaintenance.prepareContinuation(s.key, session, rotate, input.contextPreparation,
+            input.completionAnchor?.task ?? input.text, input.text, input.replyTo ?? s.replyTo ?? this.home);
+        } finally { this.beforeMaintenance.delete(s.key); }
+        input.contextPreparation = undefined;
+        checkExpiry();
+      }
       let preTurnNotice: string | undefined;
       if (s.cancelling !== input && !this.stopping && !this.maintenanceForeground.has(input)) {
         this.beforeMaintenance.add(s.key);
