@@ -59,7 +59,9 @@ dispatcher:
 ```
 
 Rules are validated on startup and through `settings.local.yaml` overlays (the
-`dispatcher` key accepts `rules` too). Rules apply only to dispatcher worker turns;
+`dispatcher` key accepts `rules` too). `dispatcher.rules` is one of the live-editable
+overlay keys: an overlay update applies at the next worker dispatch boundary without
+restart. Rules apply only to dispatcher worker turns;
 the parent agent keeps the session model. Reasoning levels above `off` require models
 that handle `reasoning_content` correctly; models listed in
 `HARNESS_REASONING_EFFORT_NONE_MODELS` or `reasoningEffortNoneModels` are exempt for
@@ -79,8 +81,10 @@ reasoningEffortNoneModels:
 
 For opted-in `openai-completions` models, a per-turn thinking `off` injects
 `samplingParamsByThinkingLevel.off.reasoning_effort = "none"` into the selected
-model and restores the original selection after the turn. Requires a restart or
-`/restart` after changing `harness.yaml`.
+model and restores the original selection after the turn. Changing `harness.yaml`
+requires a restart or `/restart`; a `settings.local.yaml` overlay with the same key
+(`reasoningEffortNoneModels`) is live-editable and applies at the next request
+boundary, merged with the config and environment lists.
 
 ## Skill catalog
 
