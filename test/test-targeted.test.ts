@@ -80,24 +80,37 @@ test('git discovery includes staged, unstaged, untracked, deleted and both renam
 test('runner actually executes selected tests, propagates failures, and stops on prerequisite failure', t => {
   const root = fixture(t, {
     'scripts/materialize-plugins.mjs': 'process.exitCode = 0;',
-    'test/pass.test.ts': 'import test from "node:test"; test("pass", () => {});',
+    'test/pass.test.ts': `import test from 'node:test';
+      import assert from 'node:assert/strict';
+      test('pass', () => {
+        assert.equal(process.env.UV_THREADPOOL_SIZE, '1');
+        assert.equal(process.env.GOMAXPROCS, '1');
+        assert.ok(process.execArgv.includes('--v8-pool-size=1'));
+        assert.ok(process.execArgv.includes('--test-concurrency=1'));
+      });`,
+    'test/other.test.ts': 'import test from "node:test"; test("other selected test", () => {});',
     'test/fail.test.ts': 'import test from "node:test"; test("fail", () => { throw Error("causal failure"); });',
   });
   symlinkSync(path.resolve('node_modules'), path.join(root, 'node_modules'), 'dir');
   // The spec reporter drops exitCode/signal for failed test processes; keep them in assertion output.
-  const env = { ...process.env, NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ''} --test-reporter=tap` };
+  const env = { ...process.env, UV_THREADPOOL_SIZE: '1', GOMAXPROCS: '1',
+    NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ''} --v8-pool-size=1 --test-reporter=tap` };
   delete env.NODE_TEST_CONTEXT; // Exercise a genuine CLI invocation outside the parent test runner.
-  const run = (file: string) => spawnSync(process.execPath, ['--input-type=module', '-e',
-    `import { main } from ${JSON.stringify(new URL('../scripts/test-targeted.mjs', import.meta.url).href)}; process.exitCode = main([${JSON.stringify(file)}], ${JSON.stringify(root)});`,
+  const run = (...files: string[]) => spawnSync(process.execPath, ['--input-type=module', '-e',
+    `import { main } from ${JSON.stringify(new URL('../scripts/test-targeted.mjs', import.meta.url).href)}; process.env.UV_THREADPOOL_SIZE = '8'; process.env.GOMAXPROCS = '8'; process.exitCode = main(${JSON.stringify(files)}, ${JSON.stringify(root)});`,
   ], { env, encoding: 'utf8' });
-  const passed = run('test/pass.test.ts');
+  const passed = run('test/pass.test.ts', 'test/other.test.ts');
   assert.equal(passed.status, 0, passed.stdout + passed.stderr);
+  assert.match(passed.stdout, /other selected test/);
+  assert.match(passed.stdout, /# pass 2/);
   const failed = run('test/fail.test.ts');
   assert.equal(failed.status, 1, failed.stdout + failed.stderr);
   assert.match(failed.stdout + failed.stderr, /causal failure/);
   writeFileSync(path.join(root, 'scripts/materialize-plugins.mjs'), 'process.exitCode = 23;');
+  writeFileSync(path.join(root, 'test/pass.test.ts'), 'throw Error("must not run after prerequisite failure");');
   const prerequisiteFailed = run('test/pass.test.ts');
   assert.equal(prerequisiteFailed.status, 23, prerequisiteFailed.stdout + prerequisiteFailed.stderr);
+  assert.doesNotMatch(prerequisiteFailed.stdout + prerequisiteFailed.stderr, /must not run after prerequisite failure/);
 });
 
 test('CLI list is executable without materialization, rejects bad options and supports concrete test paths', () => {
