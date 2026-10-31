@@ -1,8 +1,10 @@
 # Task repetition allowance (v1)
 
-The ceiling is **20 consecutive unevidenced productive attempts**, not 20 turns
-and not queue depth. A productive turn with fresh host evidence ends that stagnant
-run. `depth` remains the monotonic queue/dependency identity; it is never reset.
+The ceiling is **20 consecutive stalled or unevidenced attempts**, not 20 turns
+and not queue depth. Fresh tracked-tree evidence or a distinct substantive milestone
+from the independent completion assessor ends the stagnant run. Verification,
+research and analysis do not require file edits. Checker invocations and nudges
+are not themselves retries. `depth` remains the monotonic queue/dependency identity.
 The original mandate, expiry, admission, pause/stop, dependency and permission
 checks still apply. Review and recovery-assessment budgets remain independent.
 
@@ -19,9 +21,15 @@ boundary. The snapshot records tracked bytes, including deletions, not Git HEAD.
 
 This is conservative **evidence of distinct local work**, not proof that a change
 is useful or tests passed. Novel arbitrary tracked edits can qualify; determining
-semantic usefulness without a trusted domain evaluator is ambiguous. Non-code
-research, remote effects, untracked new files and unchanged successful tests do
-not currently qualify. Evidence history is capped at 256 hashes; when full no
+semantic usefulness without an evaluator is ambiguous. The existing independent
+completion assessor can additionally return optional `progress: {advanced,
+fingerprint}` naming a substantive milestone based on bounded tool observations
+and conversation evidence. Core accepts it only from the assessor, not the working
+model's continuation tool. Changed prose, turn IDs, unchanged polls and repeated
+fingerprints give no credit. Fingerprints are hashed into the existing persisted
+history and survive restart/operator resets; this is advisory semantic evidence,
+not proof of usefulness or an authorization grant. Missing/malformed/failed
+assessment remains conservative. Evidence history is capped at 256 hashes; when full no
 further automatic progress credit is granted. Deadlines are never renewed by
 progress. This deliberately does not provide unlimited autonomy for any domain.
 

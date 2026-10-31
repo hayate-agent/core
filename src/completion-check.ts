@@ -32,10 +32,13 @@ export async function assessCompletion(backend: ReviewBackend, input: Inbound, r
     const raw = await Promise.race([backend.review(prompt, model, "low", controller.signal), timeout]);
     if (signal.aborted || controller.signal.aborted || (authorization.expiresAt !== undefined && authorization.expiresAt <= now()) || input.continuation !== checkpoint || raw.length > 8000) return;
     const result = JSON.parse(raw);
-    if (["completed", "waiting", "blocked"].includes(result.state)) return { state: result.state };
+    const progress = result.progress && typeof result.progress.advanced === "boolean" &&
+      typeof result.progress.fingerprint === "string" && /^[a-zA-Z0-9][a-zA-Z0-9 ._:/-]{0,199}$/.test(result.progress.fingerprint)
+      ? { advanced: result.progress.advanced, fingerprint: result.progress.fingerprint } : undefined;
+    if (["completed", "waiting", "blocked"].includes(result.state)) return { state: result.state, ...(progress ? { progress } : {}) };
     if (result.state !== "continue" || typeof result.next !== "string" || !result.next.trim() || result.next.length > 4000) return;
     if (result.contextPreparation !== undefined && !["compact", "handover"].includes(result.contextPreparation)) return;
-    return { state: "continue", next: result.next.trim(), ...(result.contextPreparation ? { contextPreparation: result.contextPreparation } : {}), ...(authorization.expiresAt !== undefined ? { expiresAt: authorization.expiresAt } : {}) };
+    return { state: "continue", next: result.next.trim(), ...(progress ? { progress } : {}), ...(result.contextPreparation ? { contextPreparation: result.contextPreparation } : {}), ...(authorization.expiresAt !== undefined ? { expiresAt: authorization.expiresAt } : {}) };
   } catch { return undefined; }
   finally { clearTimeout(timer); signal.removeEventListener("abort", abort); }
 }

@@ -19,7 +19,8 @@ export function repetitions(task: { depth: number; repetition?: RepetitionBudget
       budget.evidence.length > 256 || budget.evidence.some(value => typeof value !== 'string')) return 20;
   return budget.repetitions;
 }
-export function accountRepetition(task: { depth: number; repetition?: RepetitionBudget }, before?: string, after?: string): void {
+export function accountRepetition(task: { depth: number; repetition?: RepetitionBudget }, before?: string, after?: string,
+  assessed?: { fingerprint: string; advanced: boolean }): void {
   const prior = repetitions(task);
   if (prior >= 20) return; // malformed or exhausted persisted state cannot self-reopen
   const budget = task.repetition ??= { version: 1, repetitions: task.depth, attempts: 0, evidence: [] };
@@ -27,10 +28,15 @@ export function accountRepetition(task: { depth: number; repetition?: Repetition
     (after && after !== before && !budget.evidence.includes(after) ? 1 : 0);
   const novel = !!before && !!after && before !== after && !budget.evidence.includes(after) &&
     budget.evidence.length + needed <= 256;
+  const milestone = assessed?.advanced && typeof assessed.fingerprint === 'string' &&
+    /^[a-zA-Z0-9][a-zA-Z0-9 ._:/-]{0,199}$/.test(assessed.fingerprint)
+    ? `assessment:${createHash('sha256').update(assessed.fingerprint).digest('hex')}` : undefined;
+  const semanticNovel = !!milestone && !budget.evidence.includes(milestone) && budget.evidence.length + needed < 256;
   if (before && !budget.evidence.includes(before) && budget.evidence.length < 256) budget.evidence.push(before);
   if (novel) budget.evidence.push(after!);
+  if (semanticNovel) budget.evidence.push(milestone!);
   budget.attempts++;
-  budget.repetitions = novel ? 0 : budget.repetitions + 1;
+  budget.repetitions = novel || semanticNovel ? 0 : budget.repetitions + 1;
 }
 
 /** Host reads tracked working-tree bytes, never tool arguments, prose or result text.

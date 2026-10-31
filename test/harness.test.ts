@@ -655,7 +655,7 @@ test("API run: turn options reach the runtime, events reach the channel, result 
   await harness.drained();
   const s = runtime.sessions.get("api:s1")!;
   assert.match(s.options[0].instructions!, /^be terse\n/);
-  assert.match(s.options[0].instructions!, /20 consecutive productive attempts without fresh host evidence/);
+  assert.match(s.options[0].instructions!, /20 consecutive stalled or unevidenced attempts/);
   assert.equal(s.options[0].model, "p/m");
   assert.equal(s.options[0].thinking, "high");
   assert.deepEqual(ch.events.map((e) => [e.to.target, e.event.type]), [["r1", "text"]]);
