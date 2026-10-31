@@ -29,7 +29,9 @@ export interface Inbound {
   /** Stable core ledger identity, independent of transport IDs and runtime sessions. */
   executionTurnId?: string;
   /** Durable, bounded continuation plan supplied during this turn. */
-  continuation?: { state: "continue" | "waiting" | "blocked" | "completed"; next?: string; expiresAt?: number;
+  continuation?: { /** Optional existing task in this session; never grants new authority. */
+    taskId?: string;
+    state: "continue" | "waiting" | "blocked" | "completed"; next?: string; expiresAt?: number;
     /** Advisory preparation; host executes existing maintenance before authorized work. */
     contextPreparation?: "compact" | "handover";
     /** Independent assessor's stable substantive milestone, not working-model authority. */
