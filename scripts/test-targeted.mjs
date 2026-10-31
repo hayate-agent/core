@@ -79,7 +79,13 @@ export function main(args, cwd = root) {
   const prepare = spawnSync(process.execPath, ['scripts/materialize-plugins.mjs'], { cwd, stdio: 'inherit' });
   if (prepare.error) throw prepare.error;
   if (prepare.status !== 0) return prepare.status ?? 1;
-  const run = spawnSync(process.execPath, ['--import', 'tsx', '--test', ...result.tests], { cwd, stdio: 'inherit' });
+  // A targeted invocation can itself run inside a full test gate. Do not multiply
+  // that gate's process/thread fan-out: tsx also starts an esbuild service.
+  // Keep every selected test and its process isolation, but execute files serially
+  // with small Node/libuv/esbuild pools (not larger host resource limits).
+  const run = spawnSync(process.execPath, ['--v8-pool-size=1', '--import', 'tsx', '--test', '--test-concurrency=1', ...result.tests], {
+    cwd, stdio: 'inherit', env: { ...process.env, UV_THREADPOOL_SIZE: '1', GOMAXPROCS: '1' },
+  });
   if (run.error) throw run.error;
   return run.status ?? 1;
 }
