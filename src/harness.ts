@@ -1588,7 +1588,7 @@ export class Harness {
           }
           if (repetitions(task) >= 20 && task.state === "blocked") this.budgetAttention(s, task);
         }
-        if ((input.source !== "host" || this.resultMandate(input)) && input.continuation?.state === "continue" && input.continuation.next && (!task || repetitions(task) < 20) && input.source !== "api" && s.key !== "improvement:nightly" && !s.queue.length && !this.stopping && !this.hasPendingDependency(s.key)) {
+        if ((input.source !== "host" || this.resultMandate(input)) && input.continuation?.state === "continue" && input.continuation.next && repetitions(task ?? { depth: input.continuationDepth ?? 0 }) < 20 && input.source !== "api" && s.key !== "improvement:nightly" && !s.queue.length && !this.stopping && !this.hasPendingDependency(s.key)) {
           s.queue.push({ id: randomUUID(), sessionKey: s.key, source: "cron", replyTo: input.replyTo ?? s.replyTo,
             text: `Continue the explicitly authorized task with this recorded next step. Recheck blockers and authorization; do not repeat completed side effects.\n${input.continuation.next}`,
             taskId: input.taskId,
@@ -1796,7 +1796,7 @@ export class Harness {
       (input.continuationExpiresAt === undefined || (Number.isSafeInteger(input.continuationExpiresAt) && input.continuationExpiresAt > this.now()));
     if (finalStatus !== "completed") input.continuation = undefined;
     else if ((input.source !== "host" || this.resultMandate(input)) && assessmentEligible() && this.opts.completionCheck && !this.paused && !this.stopping && !s.queue.length &&
-        input.source !== "api" && s.key !== "improvement:nightly" && (!input.taskId || repetitions(this.tasks(s).find(t => t.id === input.taskId) ?? { depth: 20 }) < 20) && !assessmentAbort.signal.aborted) {
+        input.source !== "api" && s.key !== "improvement:nightly" && repetitions(this.tasks(s).find(t => t.id === input.taskId) ?? { depth: input.taskId ? 20 : input.continuationDepth ?? 0 }) < 20 && !assessmentAbort.signal.aborted) {
       try {
         const plan = await this.opts.completionCheck(structuredClone(input), reply, assessmentAbort.signal);
         if ((input.source !== "host" || this.resultMandate(input)) && assessmentEligible() && !this.paused && !this.stopping && !s.queue.length && !assessmentAbort.signal.aborted && s.cancelling !== input &&

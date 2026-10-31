@@ -110,11 +110,11 @@ test("turn-end continuation checkpoints one bounded follow-up and does not insta
   const snapshots: any[] = [];
   harness.onStateChange = async () => { snapshots.push(structuredClone(harness.pendingInputs())); };
   await harness.submit(msg("authorized task")); await harness.drained();
-  assert.equal(calls, 21, "initial turn plus at most 20 follow-ups");
+  assert.equal(calls, 20, "20 attempts without fresh host evidence, including the initial turn");
   assert.ok(snapshots.some((s) => s.some((i: any) => i.continuationDepth === 1 && !i.started)));
   await harness.tick(); await harness.drained();
   assert.equal(harness.state("mem:room1").heartbeat, undefined);
-  assert.equal(calls, 21);
+  assert.equal(calls, 20);
   await harness.stop(1000);
 });
 
@@ -654,7 +654,8 @@ test("API run: turn options reach the runtime, events reach the channel, result 
   await harness.accept(apiRun("r1", "do it"));
   await harness.drained();
   const s = runtime.sessions.get("api:s1")!;
-  assert.equal(s.options[0].instructions, "be terse");
+  assert.match(s.options[0].instructions!, /^be terse\n/);
+  assert.match(s.options[0].instructions!, /20 consecutive productive attempts without fresh host evidence/);
   assert.equal(s.options[0].model, "p/m");
   assert.equal(s.options[0].thinking, "high");
   assert.deepEqual(ch.events.map((e) => [e.to.target, e.event.type]), [["r1", "text"]]);

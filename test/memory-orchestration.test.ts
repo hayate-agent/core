@@ -42,7 +42,8 @@ test("plugin selection drives actual Harness recall/capture; none suppresses bot
     host.memoryOrchestration.select("none");
     await harness.submit(msg("second task")); await harness.drained();
     assert.equal(custom.captured.length, 1); assert.equal(custom.recalled.length, 1);
-    assert.equal(runtime.sessions.get("mem:room1")!.options[1].instructions, undefined);
+    assert.doesNotMatch(runtime.sessions.get("mem:room1")!.options[1].instructions!, /Memory hint/);
+    assert.match(runtime.sessions.get("mem:room1")!.options[1].instructions!, /20 consecutive productive attempts without fresh host evidence/);
     await host.stop(); assert.equal(await host.memoryOrchestration.recall("chat", "text"), "");
   } finally { await harness.stop(1000); }
 });

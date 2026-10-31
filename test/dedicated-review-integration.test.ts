@@ -15,7 +15,7 @@ test("materialized review plugin enforces actual dedicated dispatcher execution 
   const runtime = new FakeRuntime(() => '{"findings":[]}');
   const workers = new ReviewWorkers(runtime,new ExecutionStore(path.join(home,"executions.json")));
   try {
-    await writeFile(path.join(home,".gitignore"),"executions.json\nreviews/\n");
+    await writeFile(path.join(home,".gitignore"),"executions.json\nexecutions.json.*.tmp\nreviews/\n");
     await git(home,["init"]);await git(home,["config","user.name","Test"]);await git(home,["config","user.email","test@example.invalid"]);
     await writeFile(path.join(home,"a.ts"),"before");await git(home,["add","a.ts"]);await git(home,["commit","-m","base"]);
     const backend = { review: async () => { throw Error("general main-context backend forbidden"); } };

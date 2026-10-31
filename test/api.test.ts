@@ -101,7 +101,9 @@ test("run: 202, SSE deltas and terminal event, status with output, session from 
     assert.equal(status.status, "completed");
     assert.equal(status.session_id, "paperclip:agent:tom");
     const session = runtime.sessions.get("api:paperclip:agent:tom")!;
-    assert.deepEqual(session.options[0], { ...session.options[0], instructions: "be terse", model: "gw/model-b", thinking: "xhigh" });
+    assert.match(session.options[0].instructions!, /^be terse\n/);
+    assert.match(session.options[0].instructions!, /20 consecutive productive attempts without fresh host evidence/);
+    assert.deepEqual(session.options[0], { ...session.options[0], model: "gw/model-b", thinking: "xhigh" });
   } finally {
     await close();
   }
