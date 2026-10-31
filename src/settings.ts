@@ -101,48 +101,100 @@ export class SettingsService {
   private writing: Promise<unknown> = Promise.resolve();
   revision = 0;
   constructor(readonly file: string, private readonly defaults: LocalSettings, private readonly warn: (message: string) => void = () => {}) {}
-  async load(): Promise<void> {
+  private diagnose(message: string): void {
+    // Never include values/parser excerpts: overlays can contain misplaced secrets.
+    if (this.diagnostics.length >= 20) return;
+    const bounded = message.slice(0, 240);
+    this.diagnostics.push(bounded);
+    this.warn(bounded);
+  }
+  private async readOverlay(live: boolean): Promise<void> {
+    this.diagnostics.length = 0;
+    let raw: unknown;
     try {
-      const data = parse(await readFile(this.file, "utf8"));
-      if (!data || typeof data !== "object" || Array.isArray(data)) throw Error("Invalid local settings overlay");
-      const supported = new Set(["reasoningEffortNoneModels", "dispatcher", "gateways", "gatewayPlugins", "policyPlugins", "extensionPlugins", "memory", "completionStrategy", "nightlyStrategy", "contextStrategy", "compactionStrategy", "model", "thinking", "review", "contextMaintenance", "toolResultPruning", "skills"]);
-      if (Object.keys(data).some(key => ["token", "apiKey", "secrets", "protectedContent", "admins", "approvers", "approvals"].includes(key))) throw Error("Unsupported local setting: infrastructure policy or credential field");
-      const active: Record<string, unknown> = Object.create(null);
-      const ignored: Record<string, unknown> = Object.create(null);
-      for (const [key, value] of Object.entries(data)) {
-        if (!supported.has(key)) throw Error(`Unsupported setting ${key}`);
-        active[key] = value;
+      raw = parse(await readFile(this.file, "utf8"));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") raw = {};
+      else { this.diagnose("Ignored unreadable or malformed local settings overlay; retaining previous settings (installation defaults at startup)."); return; }
+    }
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+      this.diagnose("Ignored non-object local settings overlay; retaining previous settings (installation defaults at startup).");
+      return;
+    }
+    const previous = this.snapshot() as Record<string, any>;
+    const result: Record<string, any> = Object.assign(Object.create(null), live ? structuredClone(previous) : {});
+    const check = (value: unknown) => validate(value, this.defaults.contextMaintenance, this.defaults.toolResultPruning, this.defaults.dispatcher);
+    const object = (v: unknown): v is Record<string, any> => !!v && typeof v === "object" && !Array.isArray(v);
+    const livePath = (parts: string[]) => parts[0] === "reasoningEffortNoneModels" || parts.join(".") === "dispatcher.rules";
+    const accept = (value: any, old: any, parts: string[], wrap: (v: any) => unknown): any => {
+      const label = parts.map(p => p.replace(/[^a-zA-Z0-9_-]/g, "?").slice(0, 48)).join(".");
+      if (live && !livePath(parts) && parts.join(".") !== "dispatcher") {
+        if (!isDeepStrictEqual(value, old)) this.diagnose(`Ignored ${label}: not live-editable; restart required.`);
+        return old;
       }
-      validate(active, this.defaults.contextMaintenance, this.defaults.toolResultPruning, this.defaults.dispatcher);
-      this.overlay = active;
-      this.ignored = ignored;
-      this.diagnostics.length = 0;
-      if (Object.keys(ignored).length) {
-        const message = `Ignored ${Object.keys(ignored).length} unsupported local settings field(s); preserved but NOT active. Installation-only options belong in harness.yaml.`;
-        this.diagnostics.push(message);
-        this.warn(message);
+      // A routing array is a coherent safety unit: removing a bad earlier rule
+      // could route its traffic to a later fallback. Never filter its constraints.
+      if (parts[0] === "reasoningEffortNoneModels" && Array.isArray(value) && value.length <= 20) {
+        value = value.filter(entry => {
+          try { validateReasoningEffortNoneModels([entry]); return true; }
+          catch { this.diagnose(`Ignored ${label} entry: invalid provider/model reference.`); return false; }
+        });
+        if (!value.length && (raw as Record<string, any>).reasoningEffortNoneModels.length) return old;
       }
-    } catch (err) { if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err; }
+      try {
+        if (!(live && parts.join(".") === "dispatcher")) { check(wrap(value)); return structuredClone(value); }
+      } catch { /* salvage independent fields below */ }
+      if (object(value) && ((parts.length === 1 && ["dispatcher", "review", "skills", "contextMaintenance", "toolResultPruning", "memory", "gateways", "gatewayPlugins", "policyPlugins", "extensionPlugins"].includes(parts[0])) ||
+          (parts[0] === "gateways" && parts[1] === "overrides" && parts.length <= 3))) {
+        const merged: Record<string, any> = Object.create(null);
+        // Missing fields restore inheritance, except non-live fields on reload.
+        for (const key of new Set([...Object.keys(old ?? {}), ...Object.keys(value)])) {
+          if (!Object.hasOwn(value, key) && live && !livePath([...parts, key])) merged[key] = old[key];
+        }
+        // Concurrency consent and enablement are one safety unit.
+        if (parts.join(".") === "dispatcher" && !live && Object.hasOwn(value, "enabled") && Object.hasOwn(value, "concurrentRequests")) {
+          const pair = { enabled: value.enabled, concurrentRequests: value.concurrentRequests };
+          try { check(wrap(pair)); Object.assign(merged, pair); } catch { /* individually validate below */ }
+        }
+        if (parts.join(".") === "contextMaintenance" && Object.hasOwn(value, "assessPercent") && Object.hasOwn(value, "compactPercent")) {
+          const pair = { assessPercent: value.assessPercent, compactPercent: value.compactPercent };
+          try { check(wrap(pair)); Object.assign(merged, pair); } catch { /* individually validate below */ }
+        }
+        if (parts.join(".") === "toolResultPruning" && Object.hasOwn(value, "minResultChars") && Object.hasOwn(value, "maxResultChars")) {
+          const pair = { minResultChars: value.minResultChars, maxResultChars: value.maxResultChars };
+          try { check(wrap(pair)); Object.assign(merged, pair); } catch { /* individually validate below */ }
+        }
+        for (const [key, field] of Object.entries(value).sort(([a], [b]) => Number(a === "enabled") - Number(b === "enabled"))) {
+          if (Object.hasOwn(merged, key) && isDeepStrictEqual(merged[key], field)) continue;
+          const selected = accept(field, old?.[key], [...parts, key], v => wrap({ ...merged, [key]: v }));
+          if (selected !== undefined) merged[key] = selected;
+        }
+        try { check(wrap(merged)); return merged; } catch { /* preserve safe previous unit */ }
+      }
+      this.diagnose(`Ignored ${label}: invalid or unsupported setting${parts.join(".") === "dispatcher.rules" ? "; whole routing array retained for safety" : ""}.`);
+      return old;
+    };
+    for (const key of new Set([...Object.keys(previous), ...Object.keys(raw)])) {
+      if (!Object.hasOwn(raw, key)) {
+        if (!live || livePath([key])) delete result[key];
+        else if (key === "dispatcher" && result.dispatcher) delete result.dispatcher.rules;
+        else this.diagnose(`Ignored removal of ${key.slice(0, 48)}: not live-editable; restart required.`);
+        continue;
+      }
+      const value = accept((raw as Record<string, unknown>)[key], previous[key], [key], v => ({ ...result, [key]: v }));
+      if (value !== undefined) result[key] = value;
+    }
+    check(result);
+    this.overlay = result;
+  }
+  async load(): Promise<void> {
+    await this.readOverlay(false);
   }
   snapshot(): LocalSettings { return structuredClone(this.overlay); }
   /** Only routing/request compatibility options can change at a live boundary. */
   reload(): Promise<void> {
     const next = this.writing.catch(() => {}).then(async () => {
-      let raw: unknown;
-      try { raw = parse(await readFile(this.file, "utf8")) ?? {}; }
-      catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; raw = {}; }
-      validate(raw, this.defaults.contextMaintenance, this.defaults.toolResultPruning, this.defaults.dispatcher);
-      const nonLive = (value: LocalSettings) => {
-        const copy = structuredClone(value);
-        delete copy.reasoningEffortNoneModels;
-        if (copy.dispatcher) {
-          delete copy.dispatcher.rules;
-          if (!Object.keys(copy.dispatcher).length) delete copy.dispatcher;
-        }
-        return { ...copy };
-      };
-      if (!isDeepStrictEqual(nonLive(raw), nonLive(this.overlay))) throw Error("Settings reload supports only dispatcher.rules and reasoningEffortNoneModels; other changes require restart");
-      this.overlay = structuredClone(raw);
+      await this.readOverlay(true);
     });
     this.writing = next;
     return next;

@@ -18,11 +18,12 @@ test("skills section is a supported overlay: active, validated, preserved throug
  assert.equal(parse(await readFile(file,'utf8')).skills.context,'lazy');
  const restarted=new SettingsService(file,{});await restarted.load();assert.equal(restarted.effective().thinking,'off');assert.equal(restarted.effective().skills.context,'lazy');
  await writeFile(file,'skills:\n  context: bogus\nmodel: local/test\n');
- await assert.rejects(new SettingsService(file,{}).load(),/Invalid skills\.context/);
+ const invalidSkills = new SettingsService(file,{}); await invalidSkills.load();
+ assert.equal(invalidSkills.effective().model,'local/test'); assert.equal(invalidSkills.effective().skills?.context,undefined);
  await writeFile(file,'skills: {}\ndispatcher:\n  enabled: true\n');
- await assert.rejects(new SettingsService(file,{}).load(),/concurrentRequests/);
+ const unsafe = new SettingsService(file,{}); await unsafe.load(); assert.equal(unsafe.effective().dispatcher?.enabled,false);
  await writeFile(file,'model: 42\nskills: {}\n');
- await assert.rejects(new SettingsService(file,{}).load());
+ const invalidModel = new SettingsService(file,{}); await invalidModel.load(); assert.equal(invalidModel.effective().model,undefined);
 });
 
 test("dispatcher rules pass through the settings overlay and validate", async () => {
@@ -41,6 +42,7 @@ test("dispatcher rules pass through the settings overlay and validate", async ()
       { match: {}, model: "p/small" },
     ]);
     await writeFile(file, "skills: {}\ndispatcher:\n  rules:\n    - match: {nonsense: 1}\n      model: p/big\n");
-    await assert.rejects(new SettingsService(file, {}).load(), /Invalid/);
+    const invalid = new SettingsService(file, {}); await invalid.load();
+    assert.equal(invalid.effective().dispatcher?.rules, undefined);
   } finally { await rm(dir, { recursive: true, force: true }); }
 });

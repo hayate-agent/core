@@ -26,7 +26,7 @@ test("local overlay persists only overrides; reset exposes changed installation 
   assert.deepEqual(restarted.snapshot(), {});
 });
 
-test("overlay rejects unknown settings, secrets and invalid values without changing state", async (t) => {
+test("overlay ignores invalid fields; programmatic writes still reject invalid values", async (t) => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "local-settings-"));
   t.after(() => rm(dir, { recursive: true, force: true }));
   const file = path.join(dir, "settings.local.yaml");
@@ -36,7 +36,11 @@ test("overlay rejects unknown settings, secrets and invalid values without chang
   assert.deepEqual(service.snapshot(), {});
   for (const content of ["token: secret", "review: []", "model: [broken", "review:\n  enabled: false"]) {
     await writeFile(file, content);
-    await assert.rejects(service.load());
+    await service.load();
+    assert.equal(service.effective().model, undefined);
+    assert.equal(service.effective().review?.model, undefined);
+    assert.equal(service.effective().review?.thinking, undefined);
+    assert.ok(service.diagnostics.length);
   }
   validateModelSetting("reviewModel", "homelab/gpt-6.1-sol");
 });

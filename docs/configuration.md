@@ -206,13 +206,25 @@ thinking are unchanged. This is a provider compatibility opt-in, not a claim
 that every endpoint supports `none`.
 
 Save the file atomically. A successful file save is not activation: the next
-worker/prompt boundary must validate it. Invalid YAML, unknown keys, invalid rules
-or simultaneous changes to non-live settings reject the **entire** candidate;
-the host logs the rejection and retains the last valid effective configuration.
-Correcting the file retries at the next boundary. Restart revalidates the durable
-file and fails startup on invalid content. An absent file is supported. Other
-settings retain their existing command/startup semantics; external edits to them
-are not hot-applied by this mechanism. In particular grants, tools, approvals,
+worker/prompt boundary must validate it. Startup and reload are tolerant: valid
+supported fields apply alongside invalid, unknown or forbidden fields. Ignored
+fields retain their previous valid value on reload and inherit the installation
+base at startup. Diagnostics are bounded (20 messages, 240 characters each), name
+fields but never include values or YAML excerpts. Non-live edits (including
+removals) are ignored individually until restart; legitimate startup fields still
+work. Malformed YAML or a non-object document retains the whole previous snapshot
+(base at startup), without an overlay-only startup failure. Correcting the durable
+file recovers at the next boundary. An absent file is supported.
+
+Routing arrays are deliberately validated as a whole: a rule's match/model/thinking
+is indivisible, and filtering a bad earlier rule could silently route its traffic
+to a later fallback. Any invalid rule or invalid ordering therefore retains the
+previous routing array (base at startup), without blocking other valid fields.
+Model opt-in entries are independent: valid entries retain their order, invalid
+entries are ignored; a nonempty all-invalid list retains the previous array.
+An explicit `[]` clears either array, and omission restores base inheritance.
+Other settings retain their existing command/startup semantics; external edits to
+them are not hot-applied by this mechanism. In particular grants, tools, approvals,
 authentication, trust pins and secrets cannot be changed through these live keys.
 The same mechanism works in containers and local installations under Harness home.
 
