@@ -35,6 +35,13 @@ type Thinking = (typeof THINKING)[number];
 export type ApprovalRequest = (sessionKey: string, tool: string, input: unknown) => Promise<boolean>;
 
 export function installAdaptiveSkillHooks(pi: ExtensionAPI, adaptive: AdaptiveSkills, sessionKey: string): void {
+  // Projection only: a single bounded host notice, not a skill reference or tool-call block.
+  // Rebuilt after PI restores system context; never append warnings to session history.
+  pi.on("context_with_system", (event) => {
+    const diagnostic = adaptive.diagnostics(sessionKey);
+    if (!diagnostic) return;
+    return { messages: [...event.messages, { role: "system" as const, content: diagnostic, timestamp: 0 }] };
+  });
   pi.on("agent_end", () => { adaptive.end(sessionKey); });
   pi.on("tool_call", async event => {
     if (event.toolName === "plugin_skill_learn") return;

@@ -19,6 +19,19 @@ configuration; no restart is needed between individual recipe revisions.
    catalog's names/descriptions, using case-insensitive keywords (as in
    `plugin_skill_search`). Read only relevant bodies. References are delivered
    through PI's supported `before_agent_start.message`, not its system prompt.
+   Catalog bodies larger than 8192 bytes are excluded from automatic loading,
+   not treated as unsafe references. A bounded host diagnostic reports actual bytes
+   and the limit (once per file, at most three notices per working run), without
+   copying the body into context or blocking the turn/action. PI projects these as
+   one host-owned system-context message before model requests, including after a
+   tool-time match; they are not skill references or persisted transcript entries.
+   No paths, folder labels or file contents are included. The model can report the
+   issue and suggest a short SKILL.md with separate reference files, or use metadata
+   discovery and explicit `read` with offset/limit for bounded sections under usual
+   tool policy. No automatic read, rewrite or split is performed; reading is not
+   execution. Unsafe aliases and non-files still fail closed. The fixed autoload
+   limit and the separate managed-recipe validation limits are unchanged; no new
+   configuration or local-settings override is introduced.
 2. Before a native/plugin action, match its name and bounded input. PI's
    `tool_call` result cannot inject context. A new relevant reference therefore
    blocks that attempt with the reference as data; the model can reconsider and
