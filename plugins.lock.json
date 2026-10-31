@@ -1,7 +1,7 @@
 {
   "files": {
     "boundary-assessor.ts": "50673771d39126c132829704b5b2ab6172092e867245f8edca8c9b0eb71615cb",
-    "completion-prompt.ts": "29ca66c495da1270d9c5bbb096bfa36e3629e49f5744b22dab0412baeb485dcd",
+    "completion-prompt.ts": "18f9bb79ca87be3d45330aa2bd21c5f871de6e9ba2cfd2cb89be0d49fc7e4a6a",
     "context-plugin.ts": "1da424038b5f5dd8e88999d86c4b26fecca5d21ca4170b83fdba9958eef787f0",
     "continuation-plugin.ts": "2883c2061160cb8969f018f55f5e6fb5feb86b5e4eb68e582be17ae956d75f3a",
     "cron-report-plugin.ts": "71bb9d6432985d25defb18d4ef45653342c2243f42e215b972b0eb586d24a260",
@@ -47,6 +47,6 @@
     "review-executor.ts": "f215d18047084aa626cdd3f46fa6cfbca3701810f6166ab88ac8f356a15fbe0a"
   },
   "repository": "https://git.vanillacore.net/harness/plugins",
-  "revision": "1600a618e6284c3274ceb95f5d92ba28cd08b8aa",
+  "revision": "9aa1be5629e7fe1778ae97a061bbc27e206354b2",
   "schema": 1
 }
