@@ -11,10 +11,10 @@ checks still apply. Review and recovery-assessment budgets remain independent.
 ## Minimal evidence boundary
 
 The CLI samples tracked Git working-tree bytes before/after the productive turn.
-No credit is granted for model claims, changed plans/tool arguments, tool output,
-call IDs, timestamps, untracked files, commit metadata, unchanged snapshots or
-previously observed snapshots. No tool-result observer or new model-facing field
-is involved. A snapshot failure or absent Git repository consumes allowance.
+Git credit excludes model claims, changed plans/tool arguments, call IDs,
+untracked files, commit metadata, unchanged or previously observed snapshots.
+A snapshot failure or absent Git repository does not prevent the independent
+continuation or tool-result accounting below.
 Overlapping turns in this Harness cannot claim each other's evidence: any overlap
 invalidates credit for both. External processes remain outside this attribution
 boundary. The snapshot records tracked bytes, including deletions, not Git HEAD.
@@ -32,6 +32,21 @@ not proof of usefulness or an authorization grant. Missing/malformed/failed
 assessment remains conservative. Evidence history is capped at 256 hashes; when full no
 further automatic progress credit is granted. Deadlines are never renewed by
 progress. This deliberately does not provide unlimited autonomy for any domain.
+
+A successful analysis/control-only turn independently assessed as `continue`
+without an explicit `progress` verdict does not consume the stall allowance or
+clear earlier stalls. Explicit progress verdicts retain the milestone/replay rules
+above. Working-model plans alone never qualify. No replacement turn ceiling is
+introduced; original authority and expiry remain binding.
+
+Successful complete runtime tool results additionally receive a turn-local hash
+of ordered `[tool name, result detail]` pairs. A fresh hash resets the stall run;
+identical, failed, missing or unfinished results do not. Continuation and context
+maintenance tools are control-plane nudges, not work receipts. Call IDs, arguments
+and model prose are excluded. Hashes share the existing 256-entry persisted history.
+Changing timestamps in result details can appear distinct; receipts establish
+observed results, not usefulness or permission for remote effects. Bounded assessor
+tool context remains unchanged. Pure polling should use the bounded wait path.
 
 The versioned task `repetition` record stores the current run, total attempts and
 seen hashes. Seen hashes survive operator reset. Queue identity `depth` and its

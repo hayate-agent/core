@@ -20,10 +20,14 @@ export function repetitions(task: { depth: number; repetition?: RepetitionBudget
   return budget.repetitions;
 }
 export function accountRepetition(task: { depth: number; repetition?: RepetitionBudget }, before?: string, after?: string,
-  assessed?: { fingerprint: string; advanced: boolean }): void {
+  assessed?: { fingerprint?: string; advanced?: boolean; normal?: boolean; receipt?: string }): void {
   const prior = repetitions(task);
   if (prior >= 20) return; // malformed or exhausted persisted state cannot self-reopen
   const budget = task.repetition ??= { version: 1, repetitions: task.depth, attempts: 0, evidence: [] };
+  budget.attempts++;
+  // Independent continuation is not itself a retry or a reset of earlier stalls.
+  if (assessed?.normal) return;
+  const receipt = assessed?.receipt ? `tool:${assessed.receipt}` : undefined;
   const needed = (before && !budget.evidence.includes(before) ? 1 : 0) +
     (after && after !== before && !budget.evidence.includes(after) ? 1 : 0);
   const novel = !!before && !!after && before !== after && !budget.evidence.includes(after) &&
@@ -35,8 +39,9 @@ export function accountRepetition(task: { depth: number; repetition?: Repetition
   if (before && !budget.evidence.includes(before) && budget.evidence.length < 256) budget.evidence.push(before);
   if (novel) budget.evidence.push(after!);
   if (semanticNovel) budget.evidence.push(milestone!);
-  budget.attempts++;
-  budget.repetitions = novel || semanticNovel ? 0 : budget.repetitions + 1;
+  const receiptNovel = !!receipt && !budget.evidence.includes(receipt) && budget.evidence.length < 256;
+  if (receiptNovel) budget.evidence.push(receipt!);
+  budget.repetitions = novel || semanticNovel || receiptNovel ? 0 : budget.repetitions + 1;
 }
 
 /** Host reads tracked working-tree bytes, never tool arguments, prose or result text.
