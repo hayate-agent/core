@@ -108,7 +108,14 @@ normal tool/review approval policies remain in force. Productive progress can
 therefore continue beyond twenty total turns. If an eligible assessment is
 inconclusive, a self-reported completed checkpoint is not sealed as completion:
 the active mandate is retained for the existing bounded recovery assessment
-(three durable attempts with its existing retry delay and attention escalation).
+(three consecutive failed/inconclusive durable attempts with its existing retry
+delay and attention escalation). Recovery reserves an attempt durably before
+inference so interruption cannot create uncounted retries. A usable decision,
+including a `continue` nudge, clears that failure sequence before its admission is
+persisted. Ordinary semantic assessments and working follow-ups do not charge
+this recovery-error budget. The separate host evidence/stagnation allowance
+above is not this retry counter, nor is it the independent code-review `maxTurns`
+gate; this distinction does not relax either gate.
 No executable next step is invented on failure. Empty/NO_REPLY output cannot
 independently confirm completion. Valid non-executable verdicts can correct a
 self-reported completion and close a task-bound dispatcher result without replay.

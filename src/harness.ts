@@ -59,7 +59,9 @@ export interface DurableTask {
   recoveryAttentionId?: string;
   /** Persist before inference; legacy claims without retry metadata remain fail-closed. */
   recoveryAssessment?: "claimed" | "decided";
-  /** Bounded assessment budget, independent of productive/review budgets. */
+  /** Independent of productive/review budgets: consecutive inconclusive/failed
+   * recovery assessments, including an in-flight
+   * crash reservation; cleared by a usable decision, never charged for normal turns. */
   recoveryRetry?: { attempts: number; nextAt: number };
   wait?: { reason: string; nextAt: number; deadline: number };
   /** Monotonic scheduler claims, independent of productive follow-up depth. */
@@ -1380,7 +1382,8 @@ export class Harness {
       return;
     }
     if (retry && this.now() < retry.nextAt) return;
-    // Charge and save before inference. A crash consumes this attempt, not authority.
+    // Reserve and save before inference. A crash consumes this attempt, not authority.
+    // A usable decision releases the reservation and ends this failure sequence.
     task.recoveryRetry = { attempts: (retry?.attempts ?? 0) + 1, nextAt: this.now() + 60000 };
     task.recoveryAssessment = "claimed";
     const claimedAuthority = JSON.stringify(task);
@@ -1406,6 +1409,7 @@ export class Harness {
           (task.expiresAt === undefined || plan.expiresAt <= task.expiresAt)))) {
       task.next = `First reconcile the actual task state and completed side effects; do not blindly replay external effects. Then: ${plan.next.trim()}`;
       task.anchor = input.completionAnchor;
+      task.recoveryRetry = undefined;
       task.contextPreparation = plan.contextPreparation;
       if (plan.expiresAt !== undefined) task.expiresAt = plan.expiresAt;
       task.recoveryAdmission = { id: this.taskQueueId(task, task.depth + 1), depth: task.depth + 1,
