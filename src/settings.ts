@@ -5,6 +5,7 @@ import { memoryConfig, type MemoryConfig } from "./memory.js";
 import { validateGatewayConfig, type GatewayConfig } from "./gateway-settings.js";
 import { mkdir, readFile } from "node:fs/promises";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { parse, stringify } from "yaml";
 import { writeFileDurable } from "./durable.js";
 import { pruningPolicy, type PruningPolicy } from "./tool-result-pruning.js";
@@ -14,6 +15,7 @@ import { validateModelSetting, type ModelSetting } from "./model-settings.js";
 /** Explicit runtime-writable allowlist; security policy and secrets are deliberately excluded. */
 export interface LocalSettings {
   dispatcher?: Partial<DispatcherConfig>;
+  reasoningEffortNoneModels?: string[];
   gateways?: GatewayConfig;
   gatewayPlugins?: GatewayOverlay;
   policyPlugins?: PolicyOverlay;
@@ -37,7 +39,9 @@ function validate(value: unknown, defaults: Partial<ContextPolicy> = {}, pruning
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid local settings overlay");
   const data = value as Record<string, unknown>;
   for (const [key, item] of Object.entries(data)) {
-    if (key === "compactionStrategy") {
+    if (key === "reasoningEffortNoneModels") {
+      validateReasoningEffortNoneModels(item);
+    } else if (key === "compactionStrategy") {
       if (typeof item !== "string" || !item.trim()) throw Error("Invalid compaction strategy selection");
     } else if (key === "completionStrategy" || key === "nightlyStrategy" || key === "contextStrategy") {
       if (item !== null && (typeof item !== "string" || !item.trim())) throw Error(`Invalid ${key === "nightlyStrategy" ? "nightly" : key === "contextStrategy" ? "context" : "completion"} strategy selection`);
@@ -83,6 +87,12 @@ function validate(value: unknown, defaults: Partial<ContextPolicy> = {}, pruning
   }
 }
 
+export function validateReasoningEffortNoneModels(value: unknown): asserts value is string[] {
+  if (!Array.isArray(value) || value.length > 20 || value.some(ref => typeof ref !== "string" || !ref || ref.length > 200 || !/^[^/\s]+\/[^\s]+$/.test(ref))) {
+    throw Error("reasoningEffortNoneModels must be an array of 'provider/model' refs");
+  }
+}
+
 /** One owner per Harness home; atomic serialized updates, published only after durable save. */
 export class SettingsService {
   private overlay: LocalSettings = {};
@@ -95,11 +105,14 @@ export class SettingsService {
     try {
       const data = parse(await readFile(this.file, "utf8"));
       if (!data || typeof data !== "object" || Array.isArray(data)) throw Error("Invalid local settings overlay");
-      const supported = new Set(["dispatcher", "gateways", "gatewayPlugins", "policyPlugins", "extensionPlugins", "memory", "completionStrategy", "nightlyStrategy", "contextStrategy", "compactionStrategy", "model", "thinking", "review", "contextMaintenance", "toolResultPruning", "skills"]);
+      const supported = new Set(["reasoningEffortNoneModels", "dispatcher", "gateways", "gatewayPlugins", "policyPlugins", "extensionPlugins", "memory", "completionStrategy", "nightlyStrategy", "contextStrategy", "compactionStrategy", "model", "thinking", "review", "contextMaintenance", "toolResultPruning", "skills"]);
       if (Object.keys(data).some(key => ["token", "apiKey", "secrets", "protectedContent", "admins", "approvers", "approvals"].includes(key))) throw Error("Unsupported local setting: infrastructure policy or credential field");
       const active: Record<string, unknown> = Object.create(null);
       const ignored: Record<string, unknown> = Object.create(null);
-      for (const [key, value] of Object.entries(data)) (supported.has(key) ? active : ignored)[key] = value;
+      for (const [key, value] of Object.entries(data)) {
+        if (!supported.has(key)) throw Error(`Unsupported setting ${key}`);
+        active[key] = value;
+      }
       validate(active, this.defaults.contextMaintenance, this.defaults.toolResultPruning, this.defaults.dispatcher);
       this.overlay = active;
       this.ignored = ignored;
@@ -112,6 +125,28 @@ export class SettingsService {
     } catch (err) { if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err; }
   }
   snapshot(): LocalSettings { return structuredClone(this.overlay); }
+  /** Only routing/request compatibility options can change at a live boundary. */
+  reload(): Promise<void> {
+    const next = this.writing.catch(() => {}).then(async () => {
+      let raw: unknown;
+      try { raw = parse(await readFile(this.file, "utf8")) ?? {}; }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; raw = {}; }
+      validate(raw, this.defaults.contextMaintenance, this.defaults.toolResultPruning, this.defaults.dispatcher);
+      const nonLive = (value: LocalSettings) => {
+        const copy = structuredClone(value);
+        delete copy.reasoningEffortNoneModels;
+        if (copy.dispatcher) {
+          delete copy.dispatcher.rules;
+          if (!Object.keys(copy.dispatcher).length) delete copy.dispatcher;
+        }
+        return { ...copy };
+      };
+      if (!isDeepStrictEqual(nonLive(raw), nonLive(this.overlay))) throw Error("Settings reload supports only dispatcher.rules and reasoningEffortNoneModels; other changes require restart");
+      this.overlay = structuredClone(raw);
+    });
+    this.writing = next;
+    return next;
+  }
   effective(): LocalSettings {
     const overrides: NonNullable<GatewayConfig["overrides"]> = {};
     for (const name of new Set([...Object.keys(this.defaults.gateways?.overrides ?? {}), ...Object.keys(this.overlay.gateways?.overrides ?? {})])) {

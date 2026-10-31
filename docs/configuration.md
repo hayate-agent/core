@@ -167,6 +167,53 @@ session selection, then per-run overrides (more specific wins). A new global cha
 reapplies working defaults on the next turn; later session selections remain local.
 The current writable allowlist covers model/reasoning and reviewer model/reasoning.
 Unknown keys, secrets, plugin paths and security policy are rejected, not merged.
+
+### Live routing and request compatibility overlay
+
+The existing `<home>/settings.local.yaml` is the writable surface above the
+installation's (possibly root-owned/read-only) `harness.yaml`. No base write,
+permission change or restart is needed for these two live keys:
+
+```yaml
+dispatcher:
+  rules:
+    - match: { minChars: 1200 }
+      model: homelab/glm-5.3-flash
+      thinking: off
+    - match: {}
+      model: homelab/deepseek-v4-flash
+      thinking: off
+reasoningEffortNoneModels:
+  - homelab/glm-5.3-flash
+  - homelab/deepseek-v4-flash
+```
+
+Rules and the model list replace their base arrays (not append); omitted keys
+inherit the base and `[]` explicitly clears an array. The legacy environment
+model opt-ins remain additive for compatibility; removing an overlay opt-in does
+not remove an environment opt-in. Model availability/credentials must already be
+configured. This list does not change authentication or enable dispatcher access.
+The installation must already grant/enable dispatch and concurrency.
+
+Before each future dispatcher worker the host reads and validates the complete
+file, then selects routing. Before each future PI prompt (including tool-free
+review requests) it does the same for request compatibility options. Inflight
+requests retain their captured model metadata; already queued worker turns keep
+the routing chosen when accepted. Explicit conversation model/thinking selections
+are not rewritten. Only `thinking: off` on listed `openai-completions` models
+injects `reasoning_effort: none`; other APIs, other models and explicit non-off
+thinking are unchanged. This is a provider compatibility opt-in, not a claim
+that every endpoint supports `none`.
+
+Save the file atomically. A successful file save is not activation: the next
+worker/prompt boundary must validate it. Invalid YAML, unknown keys, invalid rules
+or simultaneous changes to non-live settings reject the **entire** candidate;
+the host logs the rejection and retains the last valid effective configuration.
+Correcting the file retries at the next boundary. Restart revalidates the durable
+file and fails startup on invalid content. An absent file is supported. Other
+settings retain their existing command/startup semantics; external edits to them
+are not hot-applied by this mechanism. In particular grants, tools, approvals,
+authentication, trust pins and secrets cannot be changed through these live keys.
 The same mechanism works in containers and local installations under Harness home.
 
 Example local overlay:

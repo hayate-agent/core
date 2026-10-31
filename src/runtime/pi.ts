@@ -77,6 +77,8 @@ export interface PiRuntimeOptions {
   adaptiveSkills?: AdaptiveSkills;
   /** Models that accept reasoning_effort "none" for thinking "off" turns (env list is merged at the call site). */
   reasoningEffortNoneModels?: () => readonly string[];
+  /** Refresh validated configuration at a future prompt boundary. */
+  beforeRequest?: () => Promise<void>;
   /** Fresh validated skill context before each turn, without reloading extensions. */
   skillContext?: () => Promise<string>;
   toolGuard?: (sessionKey: string, tool: string, input: unknown) => Promise<void>;
@@ -650,6 +652,7 @@ export class PiRuntime implements AgentRuntime {
     let appliedToolFingerprint = boundToolFingerprint;
     let appliedMcpFingerprint = "";
     const wrapped = new PiSession(session, models, slot, checkpoint, record, this.opts.compaction?.(), async () => {
+      await this.opts.beforeRequest?.();
       const fingerprint = await mcpFingerprint();
       const tools = toolCatalogFingerprint();
       if (!options.ephemeral && (appliedResourceRevision !== this.resourceRevision || fingerprint !== appliedMcpFingerprint || tools !== appliedToolFingerprint)) {
