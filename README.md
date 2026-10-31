@@ -81,8 +81,15 @@ Set `MATRIX_ALLOWED_USERS` and the room/approval policy before connecting it to
 other people. A configured model provider is required to answer messages.
 
 The HTTP API is enabled with `API_SERVER_KEY`; supply secrets through your runtime
-environment, not source control. Use a supervisor or container deployment for an
-always-on service. `/restart` drains work and exits with status 75; the supervisor
+environment, not source control. For native HTTPS, set both
+`API_SERVER_TLS_KEY_FILE` and `API_SERVER_TLS_CERT_FILE` to mounted PEM files.
+A missing pair, unreadable files or invalid TLS material fails startup; there is
+no fallback to HTTP when TLS is configured. Without these settings the existing
+HTTP mode is preserved. Set `API_SERVER_HOST` explicitly and restrict network
+access; TLS does not replace the bearer key. Certificates are loaded at startup,
+so renewal requires a controlled restart. Clients must trust the issuing CA and
+verify the endpoint hostname; never disable certificate verification.
+Use a supervisor or container deployment for an always-on service. `/restart` drains work and exits with status 75; the supervisor
 is responsible for starting it again.
 
 See [configuration](docs/configuration.md) for settings and
