@@ -27,6 +27,48 @@ including resumed sessions. No persona rewrite, plugin pin or state migration is
 needed. Embedders constructing `Harness` directly must supply the instruction
 context themselves, as with the other CLI capability instructions.
 
+## Local targeted tests and integration checkpoints
+
+Use `npm ci --include=dev` in your own checkout (development tools are needed even
+when the shell has `NODE_ENV=production`). For each local vertical slice, run the
+relevant tests and `npm run typecheck`; a full suite is not required after every edit.
+
+```sh
+npm run test:targeted -- --list                  # explain selection, no execution/network
+npm run test:targeted                           # staged + unstaged + untracked vs HEAD
+npm run test:targeted -- --base origin/main      # candidate changes vs a chosen base
+npm run test:targeted -- src/capability-context.ts  # explicit repo-relative changed files
+npm run test:targeted -- test/test-targeted.test.ts # selector's own causal tests
+```
+
+The command prints the mode, reason and test files before running them. It follows
+literal relative imports transitively, including re-exports, type-only imports and
+literal dynamic imports; it is a local heuristic, not a complete runtime dependency
+model. Computed imports, subprocess/fixture protocols and implicit runtime coupling
+are not inferred. Include all changed files (the default does this), and add explicit
+regression tests for such contracts; do not treat an explicit subset as candidate-wide
+validation. Comments/string examples can conservatively over-select.
+
+Known shared/runtime contracts (`src/types.ts`, `src/config.ts`, `src/cli.ts`,
+`src/plugins.ts`, generated built-in plugins) select the **full** suite. Unknown,
+non-module, deleted, dependency/lock/config/documentation changes, or a changed
+module without reachable tests also select the **full** suite with an explicit
+reason. There is no silent fallback to zero tests. An actually clean tree reports
+`none`; Git errors fail closed. `--list` is safe for previewing costly fallbacks.
+Actual execution keeps the existing plugin-materialization prerequisite and test
+failure exit status. The normal `npm test` command and all existing gates stay intact.
+
+At regular branch integration/owner-review checkpoints and in required CI before
+merge/image promotion, run **`npm run typecheck` and `npm test`** for the complete
+candidate, plus the existing build/image checks. Targeted green tests are not a
+replacement for those checkpoints. Preserve full-suite CI; diagnose failures
+separately rather than skipping gates or claiming a full-suite pass from a subset.
+CI/image pipeline and schedule ownership is external to this source tree (there
+are no checked-in CI workflows here). This selector adds no image pipeline,
+schedule, or deployment configuration. Any periodic full-suite change belongs to
+the existing pipeline owner after checking its schedules, not to a duplicate local
+pipeline. A source edit does not activate a running Harness.
+
 ## Choose the smallest customization boundary
 
 | Need | Existing surface |

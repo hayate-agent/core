@@ -30,6 +30,7 @@
     "prepare": "npm run build",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node --import tsx --test test/*.test.ts",
+    "test:targeted": "node scripts/test-targeted.mjs",
     "start": "node --import tsx src/cli.ts run"
   },
   "dependencies": {
