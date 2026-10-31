@@ -18,7 +18,11 @@ and activation when relevant and authorized. Avoid speculative abstractions,
 additional state machines and approval loops; justify added complexity with the
 request and evidence. Tests, merge and image builds are intermediate evidence,
 not proof of live completion. Safety, authorization and required review remain
-unchanged. This is a model instruction, not mechanical correctness enforcement.
+unchanged. Always make small focused changes and small PRs: one purpose per PR,
+independently deployable increments and explicit real dependencies. Do not batch
+unrelated fixes, hold ready fixes for unrelated work, or ship unusable horizontal
+fragments. This shared default preserves required CI and grants no automatic
+rollout permission. This is a model instruction, not mechanical correctness enforcement.
 
 Activation requires shipping the rebuilt Core package/image through the authorized
 rollout and restarting the process; source edits and local builds do not alter a

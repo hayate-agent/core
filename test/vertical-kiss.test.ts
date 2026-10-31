@@ -16,6 +16,7 @@ const context = (sessionKey: string) => capabilityContext({ revision: 0, session
   reviewInstructions: "Required review remains mandatory" });
 const check = (text: string) => {
   assert.match(text, /ALWAYS vertical slices\. ALWAYS KISS\./);
+  assert.match(text, /ALWAYS small focused changes and small PRs: one purpose per PR, independently deployable increments, explicit real dependencies, no batching unrelated fixes or holding ready fixes for unrelated work, and no unusable horizontal fragments; preserve required CI and never treat this rule as automatic rollout permission\./);
   assert.match(text, /persistence, restart, continuation and activation when relevant/);
   assert.match(text, /No speculative abstractions, additional state machines or approval loops/);
   assert.match(text, /Tests, merge and image builds are intermediate evidence, not live completion/);
@@ -48,6 +49,7 @@ test("real PI before_agent_start hook puts rule in system prompt, not user trans
             const event = await session.extensionRunner.emitBeforeAgentStart(
               {messageType:'user',prompt:text}, {cwd:process.cwd(),tools:[]});
             assert.match(event.systemPromptOptions.forceSystemPrompt, /<run_instructions>[\\s\\S]*ALWAYS vertical slices\\. ALWAYS KISS\\./);
+            assert.match(event.systemPromptOptions.forceSystemPrompt, /ALWAYS small focused changes and small PRs: one purpose per PR, independently deployable increments, explicit real dependencies, no batching unrelated fixes or holding ready fixes for unrelated work, and no unusable horizontal fragments; preserve required CI and never treat this rule as automatic rollout permission\./);
             assert.equal(session.messages.length,0);
           };
           await wrapped.prompt('concrete request',{instructions:capabilityContext({revision:0,sessionKey:key,
