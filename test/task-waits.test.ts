@@ -78,20 +78,33 @@ test("failed wait checkpoint holds queued recheck and retries without duplicatio
   } finally { await f.h.stop(0); }
 });
 
-test("working turn registers bounded wait, rejects unsafe intervals and keeps plain waiting explicit", async () => {
-  let h: Harness; let assessed = 0;
+for (const verdict of ["continue", "waiting"] as const)
+test(`working turn registers bounded wait and rejects unsafe intervals; semantic ${verdict}`, async () => {
+  let h: Harness; let assessed = 0; let turns = 0;
   const runtime = new FakeRuntime(() => {
+    if (++turns > 1) return "feature delivered";
     assert.throws(() => h.planContinuation("mem:room1", { state: "waiting", next: "check", wait: { reason: "release", retryAfterMs: 1, deadline: 301000 } }));
     h.planContinuation("mem:room1", { state: "waiting", next: "check exact release source", wait: { reason: "new image", retryAfterMs: 60000, deadline: 301000 } });
     return "waiting with wakeup";
   });
   h = new Harness({ runtime, tickMs: 60000, now: () => 1000,
-    completionCheck: async () => { assessed++; return { state: "continue", next: "must not override wait" }; } }); h.addChannel(new MemoryChannel()); h.onStateChange = async () => {};
+    completionCheck: async () => {
+      assessed++;
+      return turns === 1 ? { state: verdict, next: "check available release evidence now" } : { state: "completed" };
+    } }); h.addChannel(new MemoryChannel()); h.onStateChange = async () => {};
   try {
     await h.submit(msg("deliver feature")); await h.drained();
     const task = h.snapshotSessions()[0].task!;
-    assert.equal(assessed, 1, "saved timer must not suppress independent assessment");
-    assert.equal(task.state, "waiting"); assert.equal(task.next, "check exact release source");
-    assert.deepEqual(task.wait, { reason: "new image", nextAt: 61000, deadline: 301000 });
+    assert.equal(task.original, "deliver feature");
+    assert.equal(assessed, verdict === "continue" ? 2 : 1, "saved timer must not suppress independent assessment");
+    assert.equal(turns, verdict === "continue" ? 2 : 1);
+    if (verdict === "continue") {
+      assert.equal(task.state, "completed");
+      assert.equal(task.wait, undefined, "semantic continuation removes stale WAIT metadata");
+      assert.match(runtime.sessions.get("mem:room1")!.prompts[1], /check available release evidence now/);
+    } else {
+      assert.equal(task.state, "waiting"); assert.equal(task.next, "check exact release source");
+      assert.deepEqual(task.wait, { reason: "new image", nextAt: 61000, deadline: 301000 });
+    }
   } finally { await h.stop(0); }
 });

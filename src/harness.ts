@@ -1284,7 +1284,8 @@ export class Harness {
       }
       const input: Inbound = { id: admission?.id ?? this.taskQueueId(task, task.depth + 1), source: "heartbeat", sessionKey: s.key,
         text: `Resume the authorized task after restart. Verify completed side effects before acting. Original task:\n${task.original}\nNext step:\n${task.next}`,
-        replyTo: s.replyTo, taskId: task.id, continuationDepth: task.depth + 1, continuationExpiresAt: task.expiresAt, completionAnchor: task.anchor };
+        replyTo: s.replyTo, taskId: task.id, continuationDepth: task.depth + 1, continuationExpiresAt: task.expiresAt,
+        completionAnchor: task.anchor, contextPreparation: task.contextPreparation };
       await this.submit(input, true);
       this.inbox.restored.add(input);
       try { await this.onStateChange?.(); }

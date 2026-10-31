@@ -9,6 +9,80 @@ import { assessCompletion } from "./completion-default.js";
 import { FakeRuntime, MemoryChannel, msg } from "./fakes.js";
 
 const mandate = "Implement the approved update and verify regressions. No deployment.";
+
+for (const preparation of ["compact", "handover"] as const)
+for (const failure of [false, true]) {
+  test(`startup prepares ${preparation} before recovered work; failure=${failure}`, async () => {
+    const home = await mkdtemp(path.join(os.tmpdir(), "startup-context-"));
+    const events: string[] = [];
+    const persisted: Array<{ sessions: ReturnType<Harness["snapshotSessions"]>; pending: ReturnType<Harness["pendingInputs"]> }> = [];
+    const runtime = new FakeRuntime(text => {
+      events.push("work");
+      assert.match(text, /No deployment/);
+      assert.match(text, /First reconcile/);
+      return "Remaining regressions verified without deployment";
+    });
+    const open = runtime.open.bind(runtime);
+    runtime.open = async (key, options) => {
+      const session = await open(key, options);
+      const status = session.status.bind(session);
+      session.status = () => ({ ...status(), sessionId: options?.fresh ? "new" : "old" });
+      session.compact = async instructions => {
+        events.push("compact"); assert.match(instructions!, /No deployment/);
+        if (failure) throw Error("compaction failed");
+      };
+      session.summarize = async instructions => {
+        events.push("summary"); assert.match(instructions, /No deployment/);
+        if (failure) throw Error("summary failed");
+        return "Verified update. CURRENT STATE AND NEXT STEPS: Run remaining regression. No deployment.";
+      };
+      session.archiveEntries = () => [{ id: "operator", role: "user", text: mandate },
+        { id: "effect", role: "assistant", text: "Update verified; do not replay" }];
+      session.seedHandover = async text => {
+        events.push("seed"); assert.match(text, /No deployment/); assert.match(text, /Archive ID:/);
+      };
+      return session;
+    };
+    const maintenance = new ContextMaintenance(home, () => contextPolicy());
+    const h = new Harness({ runtime, tickMs: 60000, contextMaintenance: maintenance,
+      completionCheck: async input => {
+        assert.equal(input.completionAnchor?.task, mandate);
+        events.push("check");
+        return events.includes("work") ? { state: "completed" } : {
+          state: "continue", next: "Verify remaining regression without replaying update", contextPreparation: preparation,
+        };
+      } });
+    h.addChannel(new MemoryChannel());
+    h.restoreSessions([{ key: "mem:room1", replyTo: { channel: "mem", target: "room1" }, task: {
+      id: "retained", original: mandate, state: "active", depth: 2,
+      lastReply: "Update verified; context exhausted before regression verification",
+    } }]);
+    h.onStateChange = async () => {
+      persisted.push(JSON.parse(JSON.stringify({ sessions: h.snapshotSessions(), pending: h.pendingInputs() })));
+    };
+    try {
+      await h.recoverTasks();
+      assert.deepEqual(events, ["check"], "startup must persist recovery before releasing work");
+      h.releaseRestored(); await h.drained();
+      assert.deepEqual(events, ["check", ...(preparation === "compact" ? ["compact"] : failure ? ["summary"] : ["summary", "seed"]),
+        ...(failure ? [] : ["work", "check"])]);
+      const queued = persisted.find(state => state.pending.some(input => input.taskId === "retained"));
+      assert.ok(queued, "recovered input must be durably queued");
+      assert.equal(queued.pending[0].contextPreparation, preparation);
+      assert.equal(queued.pending[0].completionAnchor?.task, mandate);
+      assert.equal(queued.sessions[0].task?.original, mandate);
+      assert.equal(queued.sessions[0].task?.contextPreparation, preparation);
+      assert.equal(h.snapshotSessions()[0].task?.original, mandate);
+      if (failure) {
+        assert.equal(runtime.sessions.get("mem:room1")?.prompts.length, 0);
+        const saved = await maintenance.status("mem:room1");
+        assert.equal(saved.continuationPreparationRequired, true);
+        assert.equal(saved.pending?.action, preparation);
+      } else assert.equal(h.snapshotSessions()[0].task?.state, "completed");
+    } finally { await h.stop(0); await rm(home, { recursive: true, force: true }); }
+  });
+}
+
 for (const preparation of ["compact", "handover", undefined] as const)
 for (const failure of [false, true]) {
   if (!preparation && failure) continue;
