@@ -54,6 +54,8 @@ export interface ContextRecord {
   unknownUsageNotified?: boolean;
   assessmentFailures?: Partial<Record<"before" | "after", number>>;
   pending?: MaintenanceRequest;
+  /** A semantic continuation cannot run until this pending prerequisite succeeds. */
+  continuationPreparationRequired?: boolean;
   /** Bounded durable admission dedupe, not proof of completed runtime effects. */
   admission?: { id: string; digest: string; version: number; execution: "pending" | "applied" | "failed" | "superseded" | "cancelled" };
   handover?: { phase: "prepared" | "switched"; from: string; to?: string; text: string; archiveId?: string };
@@ -226,6 +228,7 @@ export class ContextMaintenance {
       if (state.admission.execution === "cancelled") return;
       if (state.admission.execution !== "pending" || !state.pending || state.handover?.phase === "prepared") throw Error("Maintenance cannot be cancelled at this stage");
       state.pending = undefined;
+      state.continuationPreparationRequired = undefined;
       state.failure = undefined;
       state.admission.execution = "cancelled";
       await this.save(key, state);
@@ -253,6 +256,7 @@ export class ContextMaintenance {
           state.handover.phase = "switched";
           this.finishAdmission(state, "applied");
           state.pending = undefined;
+          state.continuationPreparationRequired = undefined;
           state.failure = undefined;
           state.lastError = undefined;
           state.recoveryRetry = undefined;
@@ -278,6 +282,7 @@ export class ContextMaintenance {
         if (state.sessionId !== undefined || !state.admission || state.admission.execution !== "pending") {
           this.finishAdmission(state, "superseded");
           state.pending = undefined;
+          state.continuationPreparationRequired = undefined;
         }
         state.handover = undefined;
         state.recoveryRetry = undefined;
@@ -297,10 +302,47 @@ export class ContextMaintenance {
     if (percent < policy.assessPercent) return "";
     return `Context usage is ${Math.round(percent)}%. Assess whether compaction is useful at this task boundary. If needed request plugin_context_maintenance with what to preserve and how to resume. Continue normally if continuity is more important. ${preserve}`;
   }
+  /** Checker prerequisite uses the same durable request, archive and runtime lifecycle.
+   * Unlike optional threshold maintenance, failure must hold the working prompt.
+   * Disabled automatic policy never becomes permission for an implicit manual request.
+   */
+  async prepareContinuation(key: string, session: RuntimeSession, rotate: (handover: ContextRecord["handover"]) => Promise<RuntimeSession>, action: "compact" | "handover", preserveText: string, resume: string, target?: Address): Promise<void> {
+    const policy = this.policy();
+    if (!["compact", "handover"].includes(action) || !policy.enabled || (action === "handover" && !policy.autoHandover)) throw new MaintenanceError("assessment", "failed");
+    const existing = await this.status(key);
+    if (existing.continuationPreparationRequired && existing.pending) {
+      await this.beforeTurn(key, session, rotate, target, resume);
+      return;
+    }
+    await this.serial(this.file(key), async () => {
+      const state = await this.load(key);
+      if (state.pending || state.handover?.phase === "prepared") throw new MaintenanceError("assessment", "failed");
+      if (preserveText.length + resume.length > 16000) throw new MaintenanceError("assessment", "failed");
+      state.sessionId = session.status().sessionId;
+      state.pending = { action, preserve: preserveText, resume };
+      state.continuationPreparationRequired = true;
+      state.failure = undefined;
+      await this.save(key, state);
+    });
+    await this.boundary(key, session, rotate, target, action === "compact" ? "after" : "before", resume, false);
+    const state = await this.status(key);
+    if (state.failure || state.pending || state.handover?.phase === "prepared")
+      throw new MaintenanceError(state.failure?.stage ?? "assessment", state.failure?.code ?? "failed");
+  }
   async beforeTurn(key: string, session: RuntimeSession, rotate: (handover: ContextRecord["handover"]) => Promise<RuntimeSession>, target?: Address, incomingText = ""): Promise<string | undefined> {
+    const state = await this.status(key);
+    if (state.continuationPreparationRequired && state.pending) {
+      const policy = this.policy();
+      if (!policy.enabled || (state.pending.action === "handover" && !policy.autoHandover)) throw new MaintenanceError("assessment", "failed");
+      await this.boundary(key, session, rotate, target, state.pending.action === "compact" ? "after" : "before", incomingText, false);
+      const prepared = await this.status(key);
+      if (prepared.failure || prepared.pending || prepared.handover?.phase === "prepared")
+        throw new MaintenanceError(prepared.failure?.stage ?? "assessment", prepared.failure?.code ?? "failed");
+      return;
+    }
     return this.boundary(key, session, rotate, target, "before", incomingText);
   }
-  async boundary(key: string, session: RuntimeSession, rotate: (handover: ContextRecord["handover"]) => Promise<RuntimeSession>, target?: Address, phase: "before" | "after" = "after", incomingText = ""): Promise<string | undefined> {
+  async boundary(key: string, session: RuntimeSession, rotate: (handover: ContextRecord["handover"]) => Promise<RuntimeSession>, target?: Address, phase: "before" | "after" = "after", incomingText = "", advanceTurn = true): Promise<string | undefined> {
     return this.serial(this.file(key), async () => {
       const policy = this.policy();
       const state = await this.load(key);
@@ -336,6 +378,7 @@ export class ContextMaintenance {
         state.sessionId = state.handover.to;
         this.finishAdmission(state, "applied");
         state.pending = undefined;
+        state.continuationPreparationRequired = undefined;
         state.failure = undefined;
         state.lastError = undefined;
         state.recoveryRetry = undefined;
@@ -360,6 +403,7 @@ export class ContextMaintenance {
       if (state.sessionId && state.sessionId !== id) {
         this.finishAdmission(state, "superseded");
         state.pending = undefined;
+        state.continuationPreparationRequired = undefined;
         state.pressureSinceCompaction = false;
         state.lastCompact = undefined;
         state.lastHandover = undefined;
@@ -367,14 +411,15 @@ export class ContextMaintenance {
         state.unknownUsageNotified = false;
       }
       state.sessionId = id;
-      if (phase === "after") state.turns++;
+      if (phase === "after" && advanceTurn) state.turns++;
       const request = state.pending;
       const usage = session.status().contextPercent;
       const percent = usage !== undefined && Number.isFinite(usage) ? usage : undefined;
       // Independent cooldowns: compaction cannot continually postpone handover.
       const last = phase === "before" ? state.lastHandover : state.lastCompact;
       const due = state.turns - (last ?? -1000) >= policy.cooldownTurns;
-      const retryDue = !state.failure || state.turns - state.lastMaintenance >= policy.cooldownTurns;
+      if (state.continuationPreparationRequired && state.failure) this.checkRecoveryRetry(state);
+      const retryDue = state.continuationPreparationRequired || !state.failure || state.turns - state.lastMaintenance >= policy.cooldownTurns;
       const matchingRequest = request && retryDue && (phase === "before" ? request.action === "handover" : request.action === "compact");
       const pressure = percent !== undefined && percent >= (phase === "before" ? policy.assessPercent : policy.compactPercent);
       const failedAt = state.assessmentFailures?.[phase];
@@ -438,15 +483,18 @@ export class ContextMaintenance {
           notice = "♻️ Kontext kompaktiert.";
         }
         state.lastError = undefined;
+        state.recoveryRetry = undefined;
         state.failure = undefined;
         this.finishAdmission(state, "applied");
         state.pending = undefined;
+        state.continuationPreparationRequired = undefined;
       } catch (err) {
         const error = maintenanceError(phase === "before" ? "summary" : "compact", err);
         // A cancelled model operation defers rather than consumes admitted intent.
         if (error.code !== "cancelled") this.finishAdmission(state, "failed");
         state.failure = { stage: error.stage, code: error.code, phase, turn: state.turns, action: phase === "before" ? "handover" : "compact" };
         state.lastError = error.message;
+        if (state.continuationPreparationRequired) this.recordRecoveryFailure(state);
         notice = `⚠️ Kontextwartung nicht vollständig abgeschlossen; kein bestätigter Abschluss. Wiederherstellungsstand bleibt erhalten. Stufe: ${error.stage}; Code: ${error.code}.`;
       }
       this.recordNotice(key, state, notice);

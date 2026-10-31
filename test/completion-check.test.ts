@@ -14,7 +14,7 @@ test("completion classifier needs independent authorization and preserves explic
   assert.equal(planned.continuation.next, "Already scheduled");
   assert.deepEqual(await assessCompletion(yes, input(), "Still need tests", auth, signal(), undefined, () => 1000), { state: "continue", next: "Run the missing regression test", expiresAt: 2000 });
 });
-test("uncertain, malformed, expired, cancelled and budget-exhausted assessments fail closed", async () => {
+test("uncertain, malformed, expired and cancelled assessments fail closed", async () => {
   for (const raw of ['not json', '{"state":"uncertain"}', '{"state":"continue","next":""}']) {
     assert.equal(await assessCompletion(backend(raw), input(), "reply", auth, signal(), undefined, () => 1000), undefined);
   }
@@ -22,8 +22,9 @@ test("uncertain, malformed, expired, cancelled and budget-exhausted assessments 
   assert.equal(await assessCompletion(yes, input(), "reply", auth, signal(), undefined, () => 2000), undefined);
   const abort = new AbortController(); abort.abort();
   assert.equal(await assessCompletion(yes, input(), "reply", auth, abort.signal, undefined, () => 1000), undefined);
-  const exhausted = input(); exhausted.continuationDepth = 20;
-  assert.equal(await assessCompletion(yes, exhausted, "reply", auth, signal(), undefined, () => 1000), undefined);
+  const deep = input(); deep.continuationDepth = 20;
+  assert.deepEqual(await assessCompletion(yes, deep, "reply", auth, signal(), undefined, () => 1000),
+    { state: "continue", next: "test", expiresAt: 2000 }, "the host owns the repetition budget; depth is not exhaustion");
 });
 test("explicit completed is independently assessed without erasing its checkpoint", async () => {
   const planned = input(); planned.continuation = { state: "completed" };

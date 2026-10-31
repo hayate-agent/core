@@ -951,7 +951,7 @@ for (const premature of ["completed", "waiting", "blocked"] as const) test(`prem
   } finally {await h.stop(1000);}
 });
 
-test("completed assessment preserves terminal boundaries and explicit completion without a valid plan", async () => {
+test("completed assessment preserves terminal boundaries and retains inconclusive completion for recovery", async () => {
   for (const boundary of ["finished","invalid","failed","waiting","blocked","stopped","cancelled","expired","depth","pause","denied"] as const) {
     let turns=0,checks=0;
     const h=new Harness({runtime:new FakeRuntime(()=>{
@@ -966,14 +966,16 @@ test("completed assessment preserves terminal boundaries and explicit completion
       checks++;
       if(boundary==="failed") throw Error("classifier unavailable");
       if(boundary==="invalid") return {state:"continue",next:""};
-      return ["finished","denied","waiting","blocked"].includes(boundary) ? undefined : {state:"continue",next:"remaining"};
+      if(boundary==="finished") return {state:"completed"};
+      return ["denied","waiting","blocked"].includes(boundary) ? undefined : {state:"continue",next:"remaining"};
     }});
     h.addChannel(new MemoryChannel());h.onStateChange=async()=>{};
     try {
       await h.submit({...msg("original task"),...(boundary==="depth"?{continuationDepth:20}:{})});await h.drained();
       assert.equal(turns,1,boundary);
       assert.equal(checks,["finished","invalid","failed","denied","waiting","blocked"].includes(boundary)?1:0,boundary);
-      if(["finished","invalid","failed","denied","expired","pause"].includes(boundary)) assert.equal(h.state("mem:room1").task?.state,"completed",boundary);
+      if(["finished","expired","pause"].includes(boundary)) assert.equal(h.state("mem:room1").task?.state,"completed",boundary);
+      if(["invalid","failed","denied"].includes(boundary)) assert.equal(h.state("mem:room1").task?.state,"active",boundary);
     } finally {await h.stop(1000);}
   }
 });

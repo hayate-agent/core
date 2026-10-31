@@ -13,7 +13,8 @@ never silently select another strategy. No sandbox, download or background resou
 lifecycle is provided; prompt methods must be pure. The CLI
 injects the bundled default when unconfigured. Other hosts calling assessCompletion
 must inject a prompt strategy; omission disables classification rather than importing
-a concrete default from Core. Existing timeout, numeric grants and chain cap remain.
+a concrete default from Core. Existing timeout and numeric grants remain. The host
+owns the repetition budget; total continuation depth is not an assessment limit.
 Build/merge does not activate a running installation.
 
 ## Local prompt strategy lifecycle
@@ -43,8 +44,10 @@ No running installation changes until this implementation is deployed.
 
 The optional completion assessor is invoked after successful working turns,
 including turns with explicit continue or timed-wait checkpoints. Existing scheduled
-steps and bounded waits are preserved rather than overwritten by an advisory result.
-Self-reported waiting/blocked/completed plans without an explicit scheduled step may
+next steps are preserved. A model-authored timed wait does not veto an independently
+assessed safe continuation: replacing it clears the pending wait in the same durable
+settlement. A waiting verdict retains the bounded timer, and real pending dependencies
+still fence execution. Self-reported waiting/blocked/completed plans may
 be reassessed against the original task. Other retained active mandates without a
 next step can be independently assessed under their own original anchors. Pending
 child executions do not suppress assessment; they still block execution of their
@@ -100,8 +103,17 @@ asynchronous PI setup). Expiry prevents a new working prompt; it is not a timer
 that interrupts an already-running prompt. Other runtime adapters must honor the
 host `beforeExecution` guard after their own asynchronous setup.
 
-The existing twenty-follow-up chain cap and normal tool/review approval policies
-remain in force. Model output is advisory and can misclassify task scope; grants
+The host's twenty-consecutive-attempt allowance without fresh host evidence and
+normal tool/review approval policies remain in force. Productive progress can
+therefore continue beyond twenty total turns. If an eligible assessment is
+inconclusive, a self-reported completed checkpoint is not sealed as completion:
+the active mandate is retained for the existing bounded recovery assessment
+(three durable attempts with its existing retry delay and attention escalation).
+No executable next step is invented on failure. Empty/NO_REPLY output cannot
+independently confirm completion. Valid non-executable verdicts can correct a
+self-reported completion and close a task-bound dispatcher result without replay.
+Explicit scheduled next steps and independently confirmed timed waits remain preserved.
+Model output is advisory and can misclassify task scope; grants
 should therefore be narrow and short-lived. Revocation currently requires changing
 installation configuration and restart. /pause and /stop remain immediate runtime
 controls. Deployment is required; a source build is not activation evidence.
