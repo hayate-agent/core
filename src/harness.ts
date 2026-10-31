@@ -59,10 +59,9 @@ export interface DurableTask {
   recoveryAttentionId?: string;
   /** Persist before inference; legacy claims without retry metadata remain fail-closed. */
   recoveryAssessment?: "claimed" | "decided";
-  /** Independent of productive/review budgets: consecutive inconclusive/failed
-   * recovery assessments, including an in-flight
-   * crash reservation; cleared by a usable decision, never charged for normal turns. */
-  recoveryRetry?: { attempts: number; nextAt: number };
+  /** Consecutive technical failures, including an in-flight crash reservation.
+   * Normal turns and valid semantic uncertainty do not consume this budget. */
+  recoveryRetry?: { attempts: number; nextAt: number; diagnostic?: import("./completion-check.js").CompletionDiagnostic };
   wait?: { reason: string; nextAt: number; deadline: number };
   /** Monotonic scheduler claims, independent of productive follow-up depth. */
   waitChecks?: number;
@@ -169,7 +168,7 @@ export interface HarnessOptions {
   /** May feed review findings back into the same serialized working turn. */
   afterTurn?: (input: Inbound, reply: string, session: RuntimeSession, promptOptions: PromptOptions, signal: AbortSignal) => Promise<string>;
   /** Advisory fallback; production caller must supply independently authorized task scope. */
-  completionCheck?: (input: Inbound, reply: string, signal: AbortSignal) => Promise<NonNullable<Inbound["continuation"]> | undefined>;
+  completionCheck?: (input: Inbound, reply: string, signal: AbortSignal, diagnostic?: import("./completion-check.js").CompletionDiagnosticSink) => Promise<NonNullable<Inbound["continuation"]> | undefined>;
   /** Trusted host routing for child approval requests; never supplied by model input. */
   approvalTarget?: (sessionKey: string) => Address | undefined;
   conversationStopped?: (sessionKey: string) => Promise<void>;
@@ -1401,11 +1400,11 @@ export class Harness {
     // recovery boundary. Startup/idle reconciliation still surfaces retained work.
     if (betweenTurns && !this.opts.completionCheck && !task.recoveryAssessment) return;
     const retry = task.recoveryRetry;
-    if (!this.opts.completionCheck || (task.recoveryAssessment && !retry) ||
-        (retry && (!Number.isSafeInteger(retry.attempts) || retry.attempts < 1 || retry.attempts >= 3 ||
-          !Number.isSafeInteger(retry.nextAt)))) {
-      this.recoveryAttention(s, task, !this.opts.completionCheck ? "unavailable" :
-        retry ? "exhausted" : task.recoveryAssessment === "claimed" ? "interrupted" : "inconclusive");
+    const invalidRetry = retry && (!Number.isSafeInteger(retry.attempts) || retry.attempts < 1 ||
+      !Number.isSafeInteger(retry.nextAt));
+    if (invalidRetry || !this.opts.completionCheck || (task.recoveryAssessment && !retry) || (retry && retry.attempts >= 3)) {
+      this.recoveryAttention(s, task, invalidRetry ? "invalid" : retry && retry.attempts >= 3 ? "exhausted" :
+        !this.opts.completionCheck ? "unavailable" : task.recoveryAssessment === "claimed" ? "interrupted" : "inconclusive");
       await this.outbox.barrier();
       return;
     }
@@ -1427,11 +1426,21 @@ export class Harness {
       executions: this.opts.executionStore?.list(s.key).slice(-20).map(e => ({ id: e.id, status: e.status, parentStopped: e.parentStopped })) ?? [] });
     let plan: Inbound["continuation"];
     input.completionContext = this.completionEvidence(s);
-    let assessmentFailed = false;
-    try { plan = await this.opts.completionCheck(input, evidence, new AbortController().signal); }
-    catch { assessmentFailed = true; this.log("retained task assessment failed; bounded retry retained"); }
+    let diagnostic: import("./completion-check.js").CompletionDiagnostic | undefined;
+    try { plan = await this.opts.completionCheck(input, evidence, new AbortController().signal, value => {
+      if (["technical", "invalid_response", "inconclusive", "unavailable"].includes(value)) diagnostic = value;
+    }); }
+    catch { diagnostic = "technical"; this.log("retained task assessment failed; bounded retry retained"); }
     if (!unchanged()) return;
+    if (diagnostic) task.recoveryRetry.diagnostic = diagnostic;
     task.recoveryAssessment = "decided";
+    if (diagnostic === "inconclusive" || diagnostic === "unavailable") {
+      // A valid semantic non-decision is not a failed transport/parse attempt.
+      task.recoveryRetry = retry;
+      this.recoveryAttention(s, task, diagnostic);
+      await this.outbox.barrier();
+      return;
+    }
     if (plan?.state === "continue" && typeof plan.next === "string" && plan.next.trim() && plan.next.length <= 4000 &&
         (plan.expiresAt === undefined || (Number.isSafeInteger(plan.expiresAt) && plan.expiresAt > this.now() &&
           (task.expiresAt === undefined || plan.expiresAt <= task.expiresAt)))) {
@@ -1450,23 +1459,32 @@ export class Harness {
       task.state = plan.state; // No timer or executable next step is granted.
       task.recoveryRetry = undefined;
     } else if (task.recoveryRetry.attempts >= 3) {
-      this.recoveryAttention(s, task, assessmentFailed ? "failed" : "exhausted");
+      this.recoveryAttention(s, task, "exhausted");
     }
     await this.outbox.barrier();
   }
 
   private recoveryAttention(s: SessionState, task: DurableTask,
-    reason: "interrupted" | "unavailable" | "inconclusive" | "failed" | "mismatched" | "exhausted"): void {
+    reason: "interrupted" | "unavailable" | "inconclusive" | "mismatched" | "invalid" | "exhausted"): void {
+    const diagnostics = {
+      technical: "Die Recovery-Bewertung ist technisch fehlgeschlagen; die technische Ursache ist hier nicht verifiziert.",
+      invalid_response: "Die Recovery-Bewertung lieferte eine ungültige Antwort.",
+      inconclusive: "Die Recovery-Bewertung hat kein verwertbares Ergebnis geliefert.",
+      unavailable: "Die Completion-Bewertung war nicht verfügbar.",
+    };
+    const diagnostic = task.recoveryRetry?.diagnostic;
+    const detail = diagnostic && Object.hasOwn(diagnostics, diagnostic) ? diagnostics[diagnostic] :
+      "Ein verwertbares Bewertungsergebnis ist nicht gesichert.";
     const reasons = {
-      exhausted: "Das begrenzte Recovery-Bewertungsbudget ist ausgeschöpft oder sein gespeicherter Zustand ist ungültig; ein geprüfter nächster Schritt liegt nicht vor.",
+      invalid: "Der gespeicherte Recovery-Retryzustand ist ungültig; daraus folgt keine verlässliche Aussage über verbrauchte Bewertungsversuche.",
+      exhausted: `Die drei Recovery-Bewertungsversuche sind ausgeschöpft. ${detail}`,
       interrupted: "Die gespeicherte Recovery-Bewertung wurde begonnen, aber ihr Ergebnis nicht dauerhaft gesichert (unterbrochen).",
       unavailable: "Eine Completion-Bewertung ist nicht konfiguriert; ein nächster Schritt ist nicht dauerhaft festgelegt.",
-      inconclusive: "Die Recovery-Bewertung hat kein verwertbares Ergebnis für einen sicheren nächsten Schritt geliefert.",
-      failed: "Der Aufruf der Recovery-Bewertung ist fehlgeschlagen; ein Ergebnis liegt nicht vor. Die technische Ursache ist hier nicht verifiziert.",
+      inconclusive: "Die unabhängige Bewertung ist semantisch unentschieden; dies ist kein technischer Fehler und keine Bestätigung eines fachlichen Blockers.",
       mismatched: "Die gespeicherte Recovery-Freigabe passt nicht mehr zum gespeicherten Auftrag oder nächsten Schritt.",
     };
     task.state = "blocked";
-    if ((reason === "failed" || reason === "exhausted" || reason === "interrupted") && (task.recoveryRetry?.attempts ?? 0) >= 3)
+    if ((reason === "exhausted" || reason === "interrupted") && (task.recoveryRetry?.attempts ?? 0) >= 3)
       task.termination = "recovery_assessment_failed";
     if (task.recoveryAttentionId) return;
     const id = task.recoveryAttentionId = `task-recovery:${s.key}:${task.id}${task.budgetEpoch ? `:${task.budgetEpoch}` : ""}`;
@@ -1474,13 +1492,12 @@ export class Harness {
     if (to) {
       const text = `⚠️ Recovery angehalten: ${reasons[reason]}\nAuftrag: ${task.original}\n` +
         `Verifizierter Stand: Auftrag und Fortsetzungstiefe ${task.depth} sind gespeichert. ` +
-        `Ein dazu passender, ausführbarer nächster Schritt ist nicht gesichert; der Abschluss ist nicht bestätigt. ` +
+        `Der Abschluss ist nicht unabhängig bestätigt; das belegt nicht, dass der Auftrag unerledigt ist. ` +
         `Es wird keine automatische Fortsetzung gestartet.\n` +
-        `Entscheidung nötig: Soll dieser Auftrag fortgesetzt werden oder ist keine weitere Arbeit gewünscht? ` +
-        `Bitte antworte mit dem konkreten nächsten Schritt innerhalb dieses Auftrags ` +
-        `(zuerst vorhandene Ergebnisse prüfen, keine Wirkungen blind wiederholen), ` +
-        `oder bestätige ausdrücklich, dass keine weitere Arbeit gewünscht ist. ` +
-        `Ohne diese Klärung bleibt der Auftrag blockiert.`;
+        (task.lastReply ? `UNVERIFIED EVIDENCE (letzte Antwort, keine Ausführungsfreigabe): ${JSON.stringify(task.lastReply.slice(0, 8000))}\n` : "") +
+        `Eine fehlende Bewertung erfordert für sich genommen keinen neuen fachlichen Auftrag. ` +
+        `Vor einer möglichen Fortsetzung müssen vorhandene Ergebnisse geprüft werden; ` +
+        `bestehende Stopps, Autorisierungs-, Abhängigkeits- und Ablaufgrenzen gelten weiter.`;
       const entry = { ...this.outbox.create(s.key, to, text), id };
       s.outbox.push(entry);
     }
@@ -1700,7 +1717,15 @@ export class Harness {
             this.log(`task ${task.id}: productive_budget_exhausted; next retained; no automatic work scheduled`);
           }
           if (repetitions(task) >= 20 && task.state === "blocked") this.budgetAttention(s, task);
+          const diagnostic = this.completionDiagnostics.get(input);
+          if (!plan && task.state === "active" && (diagnostic === "inconclusive" || diagnostic === "unavailable") &&
+              (task.expiresAt === undefined || task.expiresAt > this.now()) &&
+              !this.paused && !this.stopping && !s.queue.length && !this.hasPendingDependency(s.key, task.id)) {
+            task.recoveryAssessment = "decided";
+            this.recoveryAttention(s, task, diagnostic);
+          }
         }
+        this.completionDiagnostics.delete(input);
         if ((input.source !== "host" || this.resultMandate(input)) && input.continuation?.state === "continue" && input.continuation.next && repetitions(task ?? { depth: input.continuationDepth ?? 0 }) < 20 && input.source !== "api" && s.key !== "improvement:nightly" && !s.queue.length && !this.stopping && !this.hasPendingDependency(s.key)) {
           s.queue.push({ id: randomUUID(), sessionKey: s.key, source: "cron", replyTo: input.replyTo ?? s.replyTo,
             text: `Continue the explicitly authorized task with this recorded next step. Recheck blockers and authorization; do not repeat completed side effects.\n${input.continuation.next}`,
@@ -1744,9 +1769,11 @@ export class Harness {
     if (this.isDrained()) for (const r of [...this.idle]) (this.idle.delete(r), r());
   }
 
+  private readonly completionDiagnostics = new WeakMap<Inbound, import("./completion-check.js").CompletionDiagnostic>();
   private readonly assessedProgress = new WeakMap<Inbound, { fingerprint?: string; advanced?: boolean; normal?: boolean; receipt?: string }>();
 
   private async runTurn(s: SessionState, input: Inbound): Promise<void> {
+    this.completionDiagnostics.delete(input);
     this.assessedProgress.delete(input);
     let reply: string;
     let outcome: TurnOutcome | undefined;
@@ -1960,7 +1987,9 @@ export class Harness {
           assessmentInput.continuationExpiresAt = Math.min(target.expiresAt ?? Infinity, target.wait?.deadline ?? Infinity);
           if (assessmentInput.continuationExpiresAt === Infinity) assessmentInput.continuationExpiresAt = undefined;
         }
-        const assessed = await this.opts.completionCheck(assessmentInput, reply, assessmentAbort.signal);
+        const assessed = await this.opts.completionCheck(assessmentInput, reply, assessmentAbort.signal, diagnostic => {
+          if (assessmentEligible() && !assessmentAbort.signal.aborted) this.completionDiagnostics.set(input, diagnostic);
+        });
         // Independent assessment may change the plan, never its selected scope.
         const plan = assessed && { ...assessed, taskId: checkpoint?.taskId };
         if (assessmentEligible() && !this.paused && !this.stopping && !s.queue.length &&
