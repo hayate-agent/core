@@ -3,8 +3,9 @@ import { dispatcherConfig, type DispatcherConfig } from "./dispatcher-config.js"
 import { validateGatewayOverlay, type GatewayOverlay, type GatewayOverride } from "./gateway-provider.js";
 import { memoryConfig, type MemoryConfig } from "./memory.js";
 import { validateGatewayConfig, type GatewayConfig } from "./gateway-settings.js";
-import { mkdir, readFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, lstat, open } from "node:fs/promises";
 import path from "node:path";
+import { constants } from "node:fs";
 import { isDeepStrictEqual } from "node:util";
 import { parse, stringify } from "yaml";
 import { writeFileDurable } from "./durable.js";
@@ -93,10 +94,23 @@ export function validateReasoningEffortNoneModels(value: unknown): asserts value
   }
 }
 
+/** Category-specific layering: arrays replace; only documented maps merge. */
+function mergeSettings(base: LocalSettings, layer: LocalSettings): LocalSettings {
+  const result = { ...base, ...layer };
+  for (const key of ["dispatcher", "memory", "review", "skills", "contextMaintenance", "toolResultPruning", "gatewayPlugins", "policyPlugins", "extensionPlugins"] as const) {
+    if (base[key] !== undefined || layer[key] !== undefined) (result as Record<string, unknown>)[key] = { ...base[key], ...layer[key] };
+  }
+  if (base.gateways !== undefined || layer.gateways !== undefined) {
+    const overrides = { ...base.gateways?.overrides };
+    for (const [name, fields] of Object.entries(layer.gateways?.overrides ?? {})) overrides[name] = { ...overrides[name], ...fields };
+    result.gateways = { ...base.gateways, ...layer.gateways, overrides };
+  }
+  return structuredClone(result);
+}
+
 /** One owner per Harness home; atomic serialized updates, published only after durable save. */
 export class SettingsService {
   private overlay: LocalSettings = {};
-  private ignored: Record<string, unknown> = Object.create(null);
   readonly diagnostics: string[] = [];
   private writing: Promise<unknown> = Promise.resolve();
   revision = 0;
@@ -108,7 +122,7 @@ export class SettingsService {
     this.diagnostics.push(bounded);
     this.warn(bounded);
   }
-  private async readOverlay(live: boolean): Promise<void> {
+  private async readLegacyOverlay(live: boolean): Promise<void> {
     this.diagnostics.length = 0;
     let raw: unknown;
     try {
@@ -187,6 +201,119 @@ export class SettingsService {
     check(result);
     this.overlay = result;
   }
+  /** Desired startup-bound changes are separate from the actually active snapshot. */
+  restartPending: string[] = [];
+  private layered = false;
+  private check(value: unknown): asserts value is LocalSettings {
+    validate(value, this.defaults.contextMaintenance, this.defaults.toolResultPruning, this.defaults.dispatcher);
+  }
+  private async readSettingsFile(file: string, optional = false): Promise<LocalSettings> {
+    let handle;
+    try {
+      handle = await open(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+      if (!(await handle.stat()).isFile()) throw Error("not a regular file");
+      const value: unknown = parse(await handle.readFile("utf8")) ?? {};
+      this.check(value);
+      return value;
+    } catch (error) {
+      if (optional && (error as NodeJS.ErrnoException).code === "ENOENT") return {};
+      // Do not expose parser excerpts or misplaced secrets.
+      throw Error(`Invalid or unreadable settings file: ${file}`);
+    } finally { await handle?.close(); }
+  }
+  private async dropins(): Promise<string[]> {
+    const directory = path.join(path.dirname(this.file), "settings.d");
+    try {
+      const stat = await lstat(directory);
+      if (!stat.isDirectory() || stat.isSymbolicLink()) throw Error("not a regular directory");
+      return (await readdir(directory)).filter(name => /\.ya?ml$/.test(name)).sort().map(name => path.join(directory, name));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+      throw Error(`Invalid or unreadable settings directory: ${directory}`);
+    }
+  }
+  private async candidate(local?: LocalSettings): Promise<LocalSettings> {
+    const files = await this.dropins();
+    let result = local ?? await this.readSettingsFile(this.file, true);
+    for (const file of files) {
+      result = mergeSettings(result, await this.readSettingsFile(file));
+      try { this.check(mergeSettings(this.defaults, result)); }
+      catch { throw Error(`Invalid combined settings at: ${file}`); }
+    }
+    try { this.check(mergeSettings(this.defaults, result)); }
+    catch { throw Error(`Invalid combined settings at: ${this.file}`); }
+    return result;
+  }
+  private activate(candidate: LocalSettings, live: boolean): void {
+    this.restartPending = [];
+    if (!live) { this.overlay = candidate; return; }
+    const active = structuredClone(this.overlay);
+    const before = mergeSettings(this.defaults, active);
+    const after = mergeSettings(this.defaults, candidate);
+    for (const key of new Set([...Object.keys(before), ...Object.keys(after)]) as Set<keyof LocalSettings>) {
+      if (key === "reasoningEffortNoneModels") continue;
+      if (key === "dispatcher") {
+        const { rules: _a, ...a } = before.dispatcher ?? {};
+        const { rules: _b, ...b } = after.dispatcher ?? {};
+        if (!isDeepStrictEqual(a, b)) this.restartPending.push(key);
+      } else if (!isDeepStrictEqual(before[key], after[key])) this.restartPending.push(key);
+    }
+    if (candidate.reasoningEffortNoneModels === undefined) delete active.reasoningEffortNoneModels;
+    else active.reasoningEffortNoneModels = candidate.reasoningEffortNoneModels;
+    if (active.dispatcher || candidate.dispatcher?.rules !== undefined) {
+      active.dispatcher = { ...active.dispatcher };
+      if (candidate.dispatcher?.rules === undefined) delete active.dispatcher.rules;
+      else active.dispatcher.rules = candidate.dispatcher.rules;
+    }
+    this.overlay = active;
+    for (const key of this.restartPending) this.diagnose(`Pending ${key}: restart required; active value unchanged.`);
+  }
+  private async readOverlay(live: boolean): Promise<void> {
+    this.diagnostics.length = 0;
+    try {
+      // Preserve historical startup salvage for installations without settings.d.
+      // Once the directory exists, every layer is a strict transaction.
+      const directory = path.join(path.dirname(this.file), "settings.d");
+      const hasDirectory = await lstat(directory).then(() => true, error => {
+        if (error.code === "ENOENT") return false;
+        throw error;
+      });
+      this.layered ||= hasDirectory;
+      if (!this.layered) {
+        await this.readLegacyOverlay(live);
+      } else this.activate(await this.candidate(), live);
+    } catch (error) {
+      this.diagnose((error as Error).message);
+      if (live) throw error;
+    }
+  }
+  private async localForMutation(): Promise<LocalSettings> {
+    const directory = path.join(path.dirname(this.file), "settings.d");
+    this.layered ||= await lstat(directory).then(() => true, error => {
+      if (error.code === "ENOENT") return false;
+      throw error;
+    });
+    const local = this.layered ? await this.readSettingsFile(this.file, true) : this.snapshot();
+    return local;
+  }
+  private async saveLocal(updated: LocalSettings, target: string[], additionalTargets: string[][] = []): Promise<void> {
+    this.check(updated);
+    const candidate = await this.candidate(updated);
+    await mkdir(path.dirname(this.file), { recursive: true });
+    await writeFileDurable(this.file, stringify(updated));
+    if (!this.layered) { this.activate(candidate, false); return; }
+    // Publish only the explicitly requested field/entry, even for identical disk writes.
+    const publish = (active: Record<string, unknown>, desired: Record<string, unknown>, segments: string[]): void => {
+      const [key, ...rest] = segments;
+      if (rest.length) {
+        active[key] = { ...(active[key] as object | undefined) };
+        publish(active[key] as Record<string, unknown>, (desired[key] ?? {}) as Record<string, unknown>, rest);
+      } else if (desired[key] === undefined) delete active[key];
+      else active[key] = structuredClone(desired[key]);
+    };
+    for (const segments of [target, ...additionalTargets].filter(segments => segments.length)) publish(this.overlay as Record<string, unknown>, candidate as Record<string, unknown>, segments);
+    this.activate(candidate, true);
+  }
   async load(): Promise<void> {
     await this.readOverlay(false);
   }
@@ -200,26 +327,22 @@ export class SettingsService {
     return next;
   }
   effective(): LocalSettings {
-    const overrides: NonNullable<GatewayConfig["overrides"]> = {};
-    for (const name of new Set([...Object.keys(this.defaults.gateways?.overrides ?? {}), ...Object.keys(this.overlay.gateways?.overrides ?? {})])) {
-      overrides[name] = { ...this.defaults.gateways?.overrides?.[name], ...this.overlay.gateways?.overrides?.[name] };
-    }
-    return { ...this.defaults, ...this.overlay, dispatcher: dispatcherConfig({ ...this.defaults.dispatcher, ...this.overlay.dispatcher }), memory: { ...this.defaults.memory, ...this.overlay.memory }, gateways: { ...this.defaults.gateways, ...this.overlay.gateways, overrides }, review: { ...this.defaults.review, ...this.overlay.review }, skills: { ...this.defaults.skills, ...this.overlay.skills }, contextMaintenance: { ...this.defaults.contextMaintenance, ...this.overlay.contextMaintenance }, toolResultPruning: { ...this.defaults.toolResultPruning, ...this.overlay.toolResultPruning } };
+    const result = mergeSettings(this.defaults, this.overlay);
+    result.dispatcher = dispatcherConfig(result.dispatcher);
+    return result;
   }
-  source(key: SettingPath): "local overlay" | "installation/default" {
+  source(key: SettingPath): string {
     const value = key.startsWith("review.") ? this.overlay.review?.[key.slice(7) as "model" | "thinking"] : this.overlay[key as "model" | "thinking"];
     return value === undefined ? "installation/default" : "local overlay";
   }
   setExtensionPlugin(name: string, spec?: PolicyOverride): Promise<void> {
     validatePolicyOverlay({ [name]: spec ?? {} });
     const next = this.writing.catch(() => {}).then(async () => {
-      const updated = structuredClone(this.overlay);
+      const updated = await this.localForMutation();
       updated.extensionPlugins = { ...updated.extensionPlugins };
       if (spec) updated.extensionPlugins[name] = spec; else delete updated.extensionPlugins[name];
       validate(updated, this.defaults.contextMaintenance, this.defaults.toolResultPruning, this.defaults.dispatcher);
-      await mkdir(path.dirname(this.file), { recursive: true });
-      await writeFileDurable(this.file, stringify({ ...this.ignored, ...updated }));
-      this.overlay = updated;
+      await this.saveLocal(updated, ["extensionPlugins", name]);
     });
     this.writing = next; return next;
   }
@@ -227,12 +350,10 @@ export class SettingsService {
   setPolicyPlugin(name: string, spec?: PolicyOverride): Promise<void> {
     const next = this.writing.catch(() => {}).then(async () => {
       validatePolicyOverlay({ [name]: spec ?? {} });
-      const updated = this.snapshot();
+      const updated = await this.localForMutation();
       updated.policyPlugins = { ...updated.policyPlugins };
       if (spec) updated.policyPlugins[name] = spec; else delete updated.policyPlugins[name];
-      await mkdir(path.dirname(this.file), { recursive: true });
-      await writeFileDurable(this.file, stringify({ ...this.ignored, ...updated }));
-      this.overlay = updated;
+      await this.saveLocal(updated, ["policyPlugins", name]);
     });
     this.writing = next;
     return next;
@@ -240,72 +361,60 @@ export class SettingsService {
   setGatewayPlugin(name: string, spec?: GatewayOverride): Promise<void> {
     const next = this.writing.catch(() => {}).then(async () => {
       validateGatewayOverlay({ [name]: spec ?? {} });
-      const updated = this.snapshot();
+      const updated = await this.localForMutation();
       updated.gatewayPlugins = { ...updated.gatewayPlugins };
       if (spec) updated.gatewayPlugins[name] = spec; else delete updated.gatewayPlugins[name];
-      await mkdir(path.dirname(this.file), { recursive: true });
-      await writeFileDurable(this.file, stringify({ ...this.ignored, ...updated }));
-      this.overlay = updated;
+      await this.saveLocal(updated, ["gatewayPlugins", name]);
     });
     this.writing = next;
     return next;
   }
   setCompactionStrategy(value: string | undefined): Promise<void> {
     const next = this.writing.catch(() => {}).then(async () => {
-      const updated = this.snapshot();
+      const updated = await this.localForMutation();
       if (value === undefined) delete updated.compactionStrategy; else updated.compactionStrategy = value;
       validate(updated, this.defaults.contextMaintenance, this.defaults.toolResultPruning, this.defaults.dispatcher);
-      await mkdir(path.dirname(this.file), { recursive: true });
-      await writeFileDurable(this.file, stringify({ ...this.ignored, ...updated }));
-      this.overlay = updated;
+      await this.saveLocal(updated, ["compactionStrategy"]);
     });
     this.writing = next;
     return next;
   }
   setContextStrategy(value: string | null | undefined): Promise<void> {
     const next = this.writing.catch(() => {}).then(async () => {
-      const updated = this.snapshot();
+      const updated = await this.localForMutation();
       if (value === undefined) delete updated.contextStrategy; else updated.contextStrategy = value;
       validate(updated, this.defaults.contextMaintenance, this.defaults.toolResultPruning, this.defaults.dispatcher);
-      await mkdir(path.dirname(this.file), { recursive: true });
-      await writeFileDurable(this.file, stringify({ ...this.ignored, ...updated }));
-      this.overlay = updated;
+      await this.saveLocal(updated, ["contextStrategy"]);
     });
     this.writing = next;
     return next;
   }
   setNightlyStrategy(value: string | null | undefined): Promise<void> {
     const next = this.writing.catch(() => {}).then(async () => {
-      const updated = this.snapshot();
+      const updated = await this.localForMutation();
       if (value === undefined) delete updated.nightlyStrategy; else updated.nightlyStrategy = value;
       validate(updated, this.defaults.contextMaintenance, this.defaults.toolResultPruning, this.defaults.dispatcher);
-      await mkdir(path.dirname(this.file), { recursive: true });
-      await writeFileDurable(this.file, stringify({ ...this.ignored, ...updated }));
-      this.overlay = updated;
+      await this.saveLocal(updated, ["nightlyStrategy"]);
     });
     this.writing = next;
     return next;
   }
   setCompletionStrategy(value: string | null | undefined): Promise<void> {
     const next = this.writing.catch(() => {}).then(async () => {
-      const updated = this.snapshot();
+      const updated = await this.localForMutation();
       if (value === undefined) delete updated.completionStrategy; else updated.completionStrategy = value;
       validate(updated, this.defaults.contextMaintenance, this.defaults.toolResultPruning, this.defaults.dispatcher);
-      await mkdir(path.dirname(this.file), { recursive: true });
-      await writeFileDurable(this.file, stringify({ ...this.ignored, ...updated }));
-      this.overlay = updated;
+      await this.saveLocal(updated, ["completionStrategy"]);
     });
     this.writing = next;
     return next;
   }
   setMemory(value: Partial<MemoryConfig>): Promise<void> {
     const next = this.writing.catch(() => {}).then(async () => {
-      const updated = this.snapshot();
+      const updated = await this.localForMutation();
       updated.memory = { ...updated.memory, ...value };
       validate(updated, this.defaults.contextMaintenance, this.defaults.toolResultPruning, this.defaults.dispatcher);
-      await mkdir(path.dirname(this.file), { recursive: true });
-      await writeFileDurable(this.file, stringify({ ...this.ignored, ...updated }));
-      this.overlay = updated;
+      await this.saveLocal(updated, ["memory"]);
     });
     this.writing = next;
     return next;
@@ -313,7 +422,7 @@ export class SettingsService {
   setGateways(value: GatewayConfig): Promise<void> {
     const next = this.writing.catch(() => {}).then(async () => {
       validateGatewayConfig(value);
-      const updated = this.snapshot();
+      const updated = await this.localForMutation();
       const overrides = { ...updated.gateways?.overrides };
       for (const [name, fields] of Object.entries(value.overrides ?? {})) {
         overrides[name] = { ...overrides[name], ...fields };
@@ -321,22 +430,21 @@ export class SettingsService {
       updated.gateways = { ...updated.gateways, ...value,
         ...(updated.gateways?.overrides || value.overrides ? { overrides } : {}),
       };
-      await mkdir(path.dirname(this.file), { recursive: true });
-      await writeFileDurable(this.file, stringify({ ...this.ignored, ...updated }));
-      this.overlay = updated;
+      const targets = Object.keys(value).flatMap(key => key === "overrides"
+        ? Object.entries(value.overrides ?? {}).flatMap(([name, fields]) => Object.keys(fields).map(field => ["gateways", "overrides", name, field]))
+        : [["gateways", key]]);
+      await this.saveLocal(updated, targets[0] ?? [], targets.slice(1));
     });
     this.writing = next;
     return next;
   }
   setContext(value: Partial<ContextPolicy>): Promise<void> {
     const next = this.writing.catch(() => {}).then(async () => {
-      const updated = this.snapshot();
+      const updated = await this.localForMutation();
       updated.contextMaintenance = { ...updated.contextMaintenance, ...value };
       validate(updated, this.defaults.contextMaintenance, this.defaults.toolResultPruning, this.defaults.dispatcher);
       contextPolicy({ ...this.defaults.contextMaintenance, ...updated.contextMaintenance });
-      await mkdir(path.dirname(this.file), { recursive: true });
-      await writeFileDurable(this.file, stringify({ ...this.ignored, ...updated }));
-      this.overlay = updated;
+      await this.saveLocal(updated, ["contextMaintenance"]);
     });
     this.writing = next;
     return next;
@@ -345,7 +453,7 @@ export class SettingsService {
     const next = this.writing.catch(() => {}).then(async () => {
       if (!Object.hasOwn(keys, key)) throw new Error("Unsupported local setting");
       if (value !== undefined) validateModelSetting(keys[key], value);
-      const updated = this.snapshot();
+      const updated = await this.localForMutation();
       if (key.startsWith("review.")) {
         updated.review ??= {};
         const field = key.slice(7) as "model" | "thinking";
@@ -356,9 +464,7 @@ export class SettingsService {
         if (value === undefined) delete updated[field]; else updated[field] = value;
       }
       validate(updated, this.defaults.contextMaintenance, this.defaults.toolResultPruning, this.defaults.dispatcher);
-      await mkdir(path.dirname(this.file), { recursive: true });
-      await writeFileDurable(this.file, stringify({ ...this.ignored, ...updated }));
-      this.overlay = updated;
+      await this.saveLocal(updated, key.split("."));
       if (key === "model" || key === "thinking") this.revision++;
     });
     this.writing = next;
