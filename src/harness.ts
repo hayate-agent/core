@@ -1836,7 +1836,7 @@ export class Harness {
     const to = input.replyTo ?? (input.source === "cron" ? undefined : s.replyTo);
     const typingCh = to ? this.channels.get(to.channel) : undefined;
     const activity = new TurnActivity({ id: input.waitRecheck ? `wait:${s.key}:${input.taskId}` : input.executionTurnId ?? input.id ?? randomUUID(),
-      role: s.key.startsWith("dispatch:") ? "worker" : "main",
+      role: s.key.startsWith("dispatch:") ? "worker" : "main", outputTags: structuredClone(input.outputTags),
       context: s.key.startsWith("dispatch:") ? "worker" : input.source === "host" ? "host" : input.source === "channel" || input.source === "api" ? "operator" : "scheduled" },
       event => { if (to && this.opts.activity?.enabled !== false) typingCh?.taskActivity?.(to, event, input); }, this.opts.activity, this.now);
     this.activities.set(input, { activity, outcome: "failed" });

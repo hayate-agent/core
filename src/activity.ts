@@ -6,6 +6,8 @@ export interface ActivitySnapshot {
   id: string;
   role: "main" | "worker";
   parent?: string;
+  /** Captured by the host from the exact originating assignment, never runtime events. */
+  outputTags?: string[];
   context: "operator" | "host" | "scheduled" | "worker";
   phase: "starting" | "running" | "tool" | "completed" | "failed" | "cancelled";
   activity: "opening session" | "runtime active" | "tool running" | "tool settled" | "turn settled";
@@ -35,7 +37,7 @@ export class TurnActivity {
   private readonly interval: number;
   private readonly maxAlive: number;
   private readonly enabled: boolean;
-  constructor(private readonly input: { id: string; role: "main" | "worker"; parent?: string; context: ActivitySnapshot["context"] },
+  constructor(private readonly input: { id: string; role: "main" | "worker"; parent?: string; outputTags?: string[]; context: ActivitySnapshot["context"] },
     private readonly emit: (event: ActivityEvent) => void, policy: ActivityPolicy = {}, private readonly now = Date.now) {
     this.enabled = policy.enabled !== false;
     this.started = this.last = this.lastEmitted = now();
