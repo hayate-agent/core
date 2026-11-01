@@ -13,6 +13,13 @@ import type { ExecutionStore } from "./execution.js";
 export class DispatcherRuntime {
   private pending = new Map<string, { resolve(value: string): void; reject(error: Error): void }>();
   constructor(private readonly harness: Harness, private readonly store: ExecutionStore, private readonly rules?: DispatchModelRule[] | (() => Promise<DispatchModelRule[] | undefined>)) {}
+  eventText(event: ExecutionEvent): string {
+    const task = this.store.list(event.parent).find(item => item.id === event.executionId);
+    const question = event.type === "question" ? /^Question ([a-f0-9-]{36}): ([\s\S]*)$/.exec(event.text) : null;
+    // Retained events can outlive a newer question on the same execution.
+    const questionId = question?.[1] ?? task?.question?.id;
+    return this.labelEvent(event, `Dispatcher — ${question?.[2] ?? event.text}${event.type === "question" ? `\n/dispatch answer ${event.executionId} ${questionId} <Antwort>` : ""}`);
+  }
   private taskForSession(key: string) {
     return this.store.list().find(task => key === `dispatch:${task.id}:${task.token}`);
   }
@@ -111,7 +118,7 @@ export class DispatcherRuntime {
       if (!target) return;
       // Do not forward worker input/prose as parent input or authority. Preserve
       // only host activity and a synthetic routing envelope.
-      const routed = { ...event, snapshot: { ...event.snapshot, parent: `task-${task.id.slice(0, 8)}` } };
+      const routed = { ...event, snapshot: { ...event.snapshot, outputTags: structuredClone(task.dependency?.anchor?.outputTags), parent: `task-${task.id.slice(0, 8)}` } };
       try {
         this.harness.channels.get(target.channel)?.taskActivity?.(target, routed, {
           sessionKey: task.parent, source: "host", text: "", replyTo: target,
