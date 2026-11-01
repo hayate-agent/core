@@ -17,6 +17,11 @@ test("archive retains source, retrospective and bounded searchable original entr
   assert.equal(read.entries[0].id, "entry-1");
   assert.equal(read.entries[0].text.length, 1500);
   assert.equal(read.entries[0].truncated, true);
+  const linked = await archives.completionEvidence("chat-a", "new-session");
+  assert.ok(linked.entries.some(entry => entry.role === "archive-summary" && entry.text.includes("Decided X")));
+  assert.ok(linked.entries.some(entry => entry.role === "archive-user"));
+  assert.equal((await archives.completionEvidence("chat-b", "new-session")).entries.length, 0);
+  assert.equal((await archives.completionEvidence("chat-a", "unrelated-session")).entries.length, 0);
   await assert.rejects(archives.load("chat-b", archive.id));
   await assert.rejects(archives.load("chat-a", "../../etc/passwd"));
   await assert.rejects(archives.read("chat-a", archive.id, { limit: 1000 }));
