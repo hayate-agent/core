@@ -51,8 +51,12 @@ session.prompt=async(text)=>{
 };
 await harness.submit(msg('Discuss #Release today'));await harness.drained();
 assert.equal(harness.state('mem:room1').hashtags.length,1);
+assert.equal(ch.texts().at(-1),'#release · saved');
+assert.ok(session.archiveEntries().some(e=>e.role==='assistant'&&e.text==='saved'));
+assert.ok(!session.archiveEntries().some(e=>e.role==='assistant'&&e.text.includes('#release ·')));
 await harness.submit({...msg('#robot'),source:'api'});await harness.drained();
 assert.equal(harness.state('mem:room1').hashtags.length,1);
+assert.equal(ch.texts().at(-1),'saved');
 // Explicitly checkpoint external provider through its supported adapter lifecycle.
 await session.dispose();harness.state('mem:room1').session=undefined;
 await harness.stop(1000);

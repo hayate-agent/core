@@ -1,3 +1,5 @@
+import { labelOutput } from "./hashtags.js";
+import type { ExecutionEvent } from "./execution.js";
 import { ToolGuardError } from "./tool-guard-error.js";
 import { pickModelRule, type DispatchModelRule } from "./dispatcher-config.js";
 import type { Harness } from "./harness.js";
@@ -19,6 +21,11 @@ export class DispatcherRuntime {
     if (!task) return undefined;
     const target = this.harness.sessions.get(task.parent)?.replyTo ?? this.harness.home;
     return target?.channel === "dispatch" || target?.channel === "subagents" ? undefined : target;
+  }
+  /** Exact persisted parent+execution lookup, never current conversation focus. */
+  labelEvent(event: ExecutionEvent, text: string): string {
+    const task = this.store.list(event.parent).find(task => task.id === event.executionId);
+    return labelOutput(text, task?.dependency?.anchor?.outputTags);
   }
   isWorker(key: string): boolean { return key.startsWith("dispatch:"); }
   resultAllowed(parent: string, id: string): boolean {

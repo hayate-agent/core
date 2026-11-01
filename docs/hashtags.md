@@ -34,5 +34,26 @@ no global session search or cross-conversation index is added. In shared rooms
 this retains the existing room-level authorization boundary, not a new private
 per-sender history. Providers must retain referenced history for lookup to work.
 
-No context switching, focus/task binding, dispatcher workflow, profile changes or
-LLM summarization is part of this feature.
+## Output labels
+
+Fresh operator channel turns capture normalized tags on their durable originating
+assignment. Main replies and dispatcher question/status/result envelopes use the
+same `#hashtags #rollout · …` prefix: unique tags in ASCII alphabetical order,
+matching the parser. The host renders it, not the model. The model receives only
+the current assignment's labels as metadata; labels never grant authority.
+Queued turns, task continuations and dispatcher executions retain their original
+labels through the existing inbox/assignment/execution state. Delivered Main
+replies retain label metadata in the durable outbox, including retries/restart.
+A late worker result uses its exact stored execution's originating labels, not
+the conversation's newer task. Untagged and legacy work remains untagged. Internal
+worker transport keeps the raw result; user-facing delivery adds the prefix once.
+Returned `#other · …` prefixes cannot override a tagged assignment's host prefix.
+
+Only operator text is parsed. Generated labels are not new hashtag references and
+are not copied into operator transcripts or the reference index. API inputs,
+worker prose and host result text do not create tags. Native and external session
+providers use the same Harness-owned durable metadata, scoped to the existing
+conversation/execution identities, without global session searches.
+
+No context switching, autofocus, routing mode, profile changes or LLM
+summarization is part of this feature.

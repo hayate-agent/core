@@ -568,7 +568,7 @@ async function main(argv: string[]): Promise<void> {
         if (!task || task.parentStopped) return;
         if ((event.type === "question" || event.type === "status") && !event.parent.startsWith("cron-followup:")) {
           const to = parent?.replyTo ?? harness.home;
-          const text = `Dispatcher ${event.executionId}: ${event.text}${event.type === "question" ? `\n/dispatch answer ${event.executionId} ${task.question?.id} <Antwort>` : ""}`;
+          const text = dispatchRuntime!.labelEvent(event, `Dispatcher ${event.executionId}: ${event.text}${event.type === "question" ? `\n/dispatch answer ${event.executionId} ${task.question?.id} <Antwort>` : ""}`);
           // Questions and recovery blockers require attention. Routine lifecycle
           // belongs to one update row, never a succession of final answers.
           if (attentionRequired(event, task.status)) {

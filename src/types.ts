@@ -52,7 +52,9 @@ export interface Inbound {
   /** Trusted numeric authorization boundary inherited by generated work. */
   continuationExpiresAt?: number;
   /** Core-captured original chat input; inherited by generated follow-ups, never reply text. */
-  completionAnchor?: { id: string; task: string; receivedAt: number };
+  completionAnchor?: { id: string; task: string; receivedAt: number; outputTags?: string[] };
+  /** Host-captured assignment labels, persisted with the inbox; never model authority. */
+  outputTags?: string[];
   /** Host-owned bounded evidence for independent completion assessment; never an authority grant. */
   completionContext?: {
     resolved?: import("./completion-context.js").ResolvedCompletionContext;
