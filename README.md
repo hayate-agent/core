@@ -150,8 +150,10 @@ image digests and expect private configuration and secrets to be supplied separa
 
 ## Current boundaries
 
-- **Matrix E2EE is not yet supported.** Do not use encrypted rooms expecting the
-  current released adapter to decrypt or answer them.
+- **Native Matrix E2EE** uses the Rust SDK with an identity-bound persistent store;
+  see [configuration, limits and acceptance](docs/matrix-e2ee.md). This capability
+  requires the matching published crypto-enabled plugin pin and runtime image;
+  older releases, including v0.1.129, do not support encrypted conversations.
 - **Slack and Telegram adapters are not included.** The plugin channel interface
   supports additional transports, but does not implement them automatically.
 - A Web UI and automatic activation/rollback of agent-built runtime versions are

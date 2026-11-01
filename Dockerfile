@@ -7,7 +7,9 @@ ARG NODE_IMAGE=node:24.22.1-bookworm-slim@sha256:55fb5f5a527ea2c5c4a95f963e48ef9
 FROM ${NODE_IMAGE} AS build
 WORKDIR /src
 COPY package.json package-lock.json ./
-RUN npm ci --ignore-scripts
+RUN npm ci --ignore-scripts \
+    && npm rebuild @matrix-org/matrix-sdk-crypto-nodejs \
+    && node --input-type=module -e 'await import("@matrix-org/matrix-sdk-crypto-nodejs")'
 COPY tsconfig.json plugins.lock.json ./
 COPY scripts ./scripts
 COPY src ./src
