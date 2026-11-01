@@ -10,11 +10,15 @@ export function guardResultOrchestration(harness: Harness, key: string, tool: st
   const input = harness.sessions.get(key)?.current;
   if (input?.source !== "host") return;
   const mandate = harness.resultMandate(input);
+  const plan = args as { action?: unknown; state?: unknown } | null;
+  // A validated host result may inspect its parent's existing executions even
+  // without productive continuation authority (for example an API-only turn).
+  // The caller's host-event guard and dispatcher's parent scope still apply.
+  if (tool === "plugin_dispatch" && plan?.action === "status") return;
   if (!mandate && orchestration.has(tool)) throw new ToolGuardError("authority_revoked", "Result orchestration requires a live stored parent mandate");
   if (!mandate) return;
   // Reporting a blocker/completion or inspecting existing work is still valid at
   // the limit. Do not misreport exhausted productive budget as revoked authority.
-  const plan = args as { action?: unknown; state?: unknown } | null;
   const session = harness.sessions.get(key)!;
   const task = session.tasks?.find(task => task.id === mandate.taskId) ?? session.task;
   if ((!task || repetitions(task) >= 20) &&
