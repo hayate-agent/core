@@ -472,6 +472,22 @@ export class PiRuntime implements AgentRuntime {
     return (await runtime.getAvailable()).map((m) => `${m.provider}/${m.id}`);
   }
 
+  async sessionHistory(key: string, id: string): Promise<import("../session-archive.js").ArchiveEntry[]> {
+    const provider = this.opts.sessionProvider?.();
+    let entries: unknown[];
+    if (provider) {
+      const record = await provider.load(id);
+      if (record.key !== key) throw new Error("Session not found in this conversation");
+      entries = record.entries;
+    } else {
+      const dir = path.join(this.opts.sessionsDir, safeKey(key));
+      const info = (await SessionManager.list(this.opts.cwd, dir)).find(row => row.id === id);
+      if (!info) throw new Error("Session not found in this conversation");
+      entries = SessionManager.open(info.path, dir, this.opts.cwd).getEntries();
+    }
+    return (await import("../hashtags.js")).transcriptEntries(entries);
+  }
+
   async open(sessionKey: string, options: OpenSessionOptions = {}): Promise<RuntimeSession> {
     const { cwd, sessionsDir } = this.opts;
     const models = await this.modelRuntime();
