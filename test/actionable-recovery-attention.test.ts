@@ -40,8 +40,7 @@ for (const mode of ["interrupted", "unavailable", "inconclusive", "failed", "mis
     const channel = new MemoryChannel();
     const task: DurableTask = { id: "retained", original: "Was ist mit Deinem Self-Improvement?!", state: "active", depth: 2 };
     if (mode === "interrupted") task.recoveryAssessment = "claimed";
-    // Integration with bounded retries: attention is emitted only after the
-    // third inconclusive/failed attempt, never on the first transient failure.
+    // Exhausted assessments reconcile through working execution, not attention.
     if (mode === "inconclusive" || mode === "failed")
       task.recoveryRetry = { attempts: 2, nextAt: 0 };
     if (mode === "invalid" || mode === "exhausted") task.recoveryRetry = { attempts: mode === "invalid" ? 0 : 3, nextAt: 0 };
@@ -74,7 +73,7 @@ for (const mode of ["interrupted", "unavailable", "inconclusive", "failed", "mis
     h.onStateChange = async () => { if (offline) throw Error("disk unavailable"); await save(); };
     let next: Harness | undefined;
     try {
-      // Persist the assessment claim first; fail the subsequent attention barrier.
+      // Persist the assessment claim first; fail the subsequent recovery barrier.
       if (["inconclusive", "failed", "technical", "parse"].includes(mode)) {
         h.onStateChange = async () => {
           if (h.state(key).task?.recoveryAssessment === "claimed") await save();
@@ -84,6 +83,33 @@ for (const mode of ["interrupted", "unavailable", "inconclusive", "failed", "mis
       await assert.rejects(h.recoverTasks(), /disk unavailable/);
       assert.equal(channel.sent.length, 0);
       assert.equal(h.pendingInputs().length, 0);
+      if (mode !== "invalid" && mode !== "mismatched") {
+        assert.equal(h.state(key).task!.state, "active");
+        assert.match(h.state(key).task!.next!, /Reconcile the original/);
+        assert.equal(h.outboxEntries().length, 0);
+        offline = false; await save();
+        const checkpoint = (await store.load())!;
+        const saved = checkpoint.sessions[0]!.task!;
+        assert.equal(saved.state, "active");
+        if (mode === "technical" || mode === "parse") {
+          assert.equal(saved.recoveryRetry?.attempts, 3);
+          assert.equal(saved.recoveryRetry?.diagnostic, mode === "technical" ? "technical" : "invalid_response");
+        }
+        assert.doesNotMatch(JSON.stringify(checkpoint), /PRIVATE_PROVIDER_TOKEN|raw provider error/);
+        let turns = 0;
+        next = new Harness({ runtime: new FakeRuntime(() => { turns++; return "Receipt verified"; }), tickMs: 60000,
+          completionCheck: async () => ({ state: "completed" }) }); next.addChannel(channel);
+        next.restoreSessions(checkpoint.sessions); next.restorePending(checkpoint.pending ?? []);
+        next.onStateChange = () => store.save({ ...checkpoint, sessions: next!.snapshotSessions(), pending: next!.pendingInputs() });
+        await next.recoverTasks();
+        assert.equal(next.pendingInputs().length, 1);
+        assert.match(next.pendingInputs()[0]!.text, /never replay completed effects/);
+        next.releaseRestored(); await next.drained();
+        await next.tick(); await next.drained();
+        assert.equal(turns, 1);
+        assert.equal(next.state(key).task!.state, "completed");
+        return;
+      }
       assert.equal(h.outboxEntries().length, 1);
       const notice = h.outboxEntries()[0]!;
       assert.match(notice.text, /Auftrag: Was ist mit Deinem Self-Improvement/);

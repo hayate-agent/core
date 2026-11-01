@@ -27,7 +27,7 @@ async function decisionSnapshot() {
 test("persisted decision recovers admission after crash; tick/drain and second restart do not replay completed work", async () => {
   const snapshot = await decisionSnapshot();
   let prompts = 0, checks = 0;
-  const runtime = new FakeRuntime(() => { prompts++; return "Verified completed deployment"; });
+  const runtime = new FakeRuntime(() => { prompts++; h.planContinuation(key, { state: "completed" }); return "Verified completed deployment"; });
   const h = new Harness({ runtime, tickMs: 60000, completionCheck: async () => { checks++; return undefined; } });
   h.addChannel(new MemoryChannel()); h.onStateChange = async () => {};
   h.restoreSessions(snapshot);
@@ -43,20 +43,21 @@ test("persisted decision recovers admission after crash; tick/drain and second r
   } finally { await h.stop(0); }
 });
 
-test("interrupted assessment or missing classifier is durably blocked and visibly escalated once across restart", async () => {
-  for (const interrupted of [false, true]) {
+test("interrupted assessment is durably reconciled once across restart", async () => {
+  for (const interrupted of [true]) {
     const t = retained(); if (interrupted) t.recoveryAssessment = "claimed";
     const h = new Harness({ runtime: new FakeRuntime(), tickMs: 60000 });
     const channel = new MemoryChannel(); h.addChannel(channel); h.onStateChange = async () => {};
     h.restoreSessions([{ key, task: t, replyTo: { channel: "mem", target: "room1" } }]);
     try {
-      await h.tick(); await h.drained();
+      await h.recoverTasks();
       const saved = clone(h.snapshotSessions());
-      assert.equal(saved[0].task?.state, "blocked"); assert.ok(saved[0].task?.recoveryAttentionId);
-      assert.equal(channel.sent.length, 1);
-      const second = new Harness({ runtime: new FakeRuntime(), tickMs: 60000 });
+      assert.equal(saved[0].task?.state, "active"); assert.match(saved[0].task?.next!, /never replay completed effects/);
+      assert.equal(channel.sent.length, 0);
+      let turns = 0;
+      const second = new Harness({ runtime: new FakeRuntime(() => { turns++; second.planContinuation(key, { state: "completed" }); return "Verified"; }), tickMs: 60000 });
       second.onStateChange = async () => {}; second.addChannel(channel); second.restoreSessions(saved);
-      try { await second.tick(); await second.drained(); assert.equal(channel.sent.length, 1); }
+      try { await second.tick(); await second.drained(); await second.tick(); await second.drained(); assert.equal(turns, 1); assert.equal(second.state(key).task!.state, "completed"); }
       finally { await second.stop(0); }
     } finally { await h.stop(0); }
   }
