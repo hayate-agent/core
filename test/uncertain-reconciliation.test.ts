@@ -34,10 +34,11 @@ for (const stored of [false, true]) test(`${mode}, stored next=${stored}: restar
   } finally { await restored.stop(0); }
 });
 
-for (const boundary of ["completed", "stopped", "paused", "expired", "budget"] as const)
+for (const boundary of ["completed", "stopped", "paused", "expired", "budget", "blocked"] as const)
 test(`unavailable assessor respects ${boundary}`, async () => {
   const task = retained();
-  if (boundary === "completed" || boundary === "stopped") task.state = boundary;
+  if (boundary === "completed" || boundary === "stopped" || boundary === "blocked") task.state = boundary;
+  task.recoveryRetry = { attempts: 3, nextAt: 0, diagnostic: "technical" };
   if (boundary === "expired") task.expiresAt = 99;
   if (boundary === "budget") task.depth = 20;
   let turns = 0;

@@ -87,7 +87,9 @@ test('registered tool: explicit fleet wait, own-ID question completion, reload, 
     restarted.planContinuation(key, { taskId: 'fleet', state: 'completed' });
     return 'Fleet verification complete';
   });
-  restarted = new Harness({ runtime: followRuntime, now: () => now, tickMs: 60000 });
+  restarted = new Harness({ runtime: followRuntime, now: () => now, tickMs: 60000,
+    // This fixture's separate registration question is answered, not fleet work.
+    completionCheck: async input => input.taskId === 'retry-question' ? { state: 'completed' } : undefined });
   restarted.restoreSessions(snapshot!);
   let persisted = false;
   restarted.onStateChange = async () => { persisted = true; };

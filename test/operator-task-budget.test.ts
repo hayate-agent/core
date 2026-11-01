@@ -109,7 +109,7 @@ test('no resurrection of stopped/completed/expired/explicit blocked or paused ta
   await assert.rejects(f.h.controlTaskBudget(key, 'a', 'reset', f.token(), 'r', 'owner'));
 });
 
-test('three real recovery failures classify exhaustion; reset preserves productive count and audits attempts', async () => {
+test('three real recovery failures retain diagnostics but do not require operator budget reset', async () => {
   const runtime = new FakeRuntime(); let now = 1000;
   const h = new Harness({ runtime, now: () => now, completionCheck: async () => { throw Error('assessment failed'); } });
   h.onStateChange = async () => {};
@@ -117,13 +117,13 @@ test('three real recovery failures classify exhaustion; reset preserves producti
   for (let i = 0; i < 3; i++) { await h.recoverTasks(); now += 61000; }
   let status = h.taskBudgetStatus(key, 'a');
   assert.equal(status.task.recoveryRetry?.attempts, 3);
-  assert.equal(status.task.termination, 'recovery_assessment_failed');
-  await h.controlTaskBudget(key, 'a', 'reset', status.token, 'recovery', 'owner');
-  status = h.taskBudgetStatus(key, 'a');
+  assert.equal(status.task.termination, undefined);
   assert.equal(status.task.depth, 5);
-  assert.equal(status.task.recoveryRetry, undefined);
-  assert.equal(status.task.budgetReceipts?.[0].before.recoveryRetry?.attempts, 3);
-  assert.equal(status.task.state, 'blocked');
+  assert.equal(status.task.state, 'active');
+  assert.match(status.task.next!, /never replay completed effects/);
+  await assert.rejects(h.controlTaskBudget(key, 'a', 'reset', status.token, 'recovery', 'owner'), /Task unavailable, expired, paused or busy/);
+  assert.equal(h.pendingInputs().length, 1);
+  await h.stop(0);
 });
 
 

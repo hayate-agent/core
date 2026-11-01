@@ -1402,14 +1402,15 @@ export class Harness {
     const retry = task.recoveryRetry;
     const invalidRetry = retry && (!Number.isSafeInteger(retry.attempts) || retry.attempts < 1 ||
       !Number.isSafeInteger(retry.nextAt));
-    if (!invalidRetry && ((!this.opts.completionCheck && !task.recoveryAssessment && !retry) || (task.recoveryAssessment === "decided" && !retry))) {
-      this.reconcileUnassessedTask(task);
+    if (invalidRetry) {
+      this.recoveryAttention(s, task, "invalid");
       await this.outbox.barrier();
       return;
     }
-    if (invalidRetry || !this.opts.completionCheck || (task.recoveryAssessment && !retry) || (retry && retry.attempts >= 3)) {
-      this.recoveryAttention(s, task, invalidRetry ? "invalid" : retry && retry.attempts >= 3 ? "exhausted" :
-        task.recoveryAssessment === "claimed" ? "interrupted" : "unavailable");
+    if (!this.opts.completionCheck || (task.recoveryAssessment && !retry) || (retry && retry.attempts >= 3)) {
+      // Assessor outage/exhaustion consumes assessment attempts, not the mandate.
+      // Keep bounded diagnostics until the working turn starts; never replay effects.
+      this.reconcileUnassessedTask(task, true);
       await this.outbox.barrier();
       return;
     }
@@ -1463,14 +1464,15 @@ export class Harness {
     } else if (plan?.state === "waiting" || plan?.state === "blocked") {
       task.state = plan.state; // No timer or executable next step is granted.
       task.recoveryRetry = undefined;
-    } else if (task.recoveryRetry.attempts >= 3) {
-      this.recoveryAttention(s, task, "exhausted");
+    } else {
+      task.recoveryRetry.diagnostic ??= "invalid_response";
+      if (task.recoveryRetry.attempts >= 3) this.reconcileUnassessedTask(task, true);
     }
     await this.outbox.barrier();
   }
 
-  private reconcileUnassessedTask(task: DurableTask): void {
-    task.recoveryRetry = undefined;
+  private reconcileUnassessedTask(task: DurableTask, preserveRetry = false): void {
+    if (!preserveRetry) task.recoveryRetry = undefined;
     task.recoveryAssessment = "decided";
     task.next = "Reconcile the original authorized task against the retained answer, execution evidence and durable continuation. " +
       "First inspect actual state using safe read-only verification where necessary. Preserve completed facts; never replay completed effects. " +

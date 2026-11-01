@@ -82,11 +82,11 @@ test("startup claim survives interrupted assessment and stop/new-input races fen
     try {
       await h.recoverTasks(); await h.recoverTasks();
       assert.equal(checks, mode === "interrupted" ? 0 : 1, mode);
-      assert.equal(h.pendingInputs().filter(i => i.taskId === "retained").length, 0, mode);
+      assert.equal(h.pendingInputs().filter(i => i.taskId === "retained").length, mode === "interrupted" ? 1 : 0, mode);
       const next = new Harness({ runtime: new FakeRuntime(), tickMs: 60000, now: () => now,
         completionCheck: async () => { throw Error("must not reassess"); } });
       next.onStateChange = async () => {};
-      try { next.restoreSessions(JSON.parse(JSON.stringify(h.snapshotSessions()))); await next.recoverTasks(); assert.equal(next.pendingInputs().length, 0); }
+      try { next.restoreSessions(JSON.parse(JSON.stringify(h.snapshotSessions()))); await next.recoverTasks(); assert.equal(next.pendingInputs().length, mode === "interrupted" ? 1 : 0); }
       finally { await next.stop(1000); }
     } finally { await h.stop(1000); }
   }
