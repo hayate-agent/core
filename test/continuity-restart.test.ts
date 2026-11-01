@@ -27,7 +27,7 @@ async function decisionSnapshot() {
 test("persisted decision recovers admission after crash; tick/drain and second restart do not replay completed work", async () => {
   const snapshot = await decisionSnapshot();
   let prompts = 0, checks = 0;
-  const runtime = new FakeRuntime(() => { prompts++; return "Verified completed deployment"; });
+  const runtime = new FakeRuntime(() => { prompts++; h.planContinuation(key, { state: "completed" }); return "Verified completed deployment"; });
   const h = new Harness({ runtime, tickMs: 60000, completionCheck: async () => { checks++; return undefined; } });
   h.addChannel(new MemoryChannel()); h.onStateChange = async () => {};
   h.restoreSessions(snapshot);
@@ -43,8 +43,8 @@ test("persisted decision recovers admission after crash; tick/drain and second r
   } finally { await h.stop(0); }
 });
 
-test("interrupted assessment or missing classifier is durably blocked and visibly escalated once across restart", async () => {
-  for (const interrupted of [false, true]) {
+test("interrupted assessment is durably blocked and visibly escalated once across restart", async () => {
+  for (const interrupted of [true]) {
     const t = retained(); if (interrupted) t.recoveryAssessment = "claimed";
     const h = new Harness({ runtime: new FakeRuntime(), tickMs: 60000 });
     const channel = new MemoryChannel(); h.addChannel(channel); h.onStateChange = async () => {};

@@ -1402,9 +1402,14 @@ export class Harness {
     const retry = task.recoveryRetry;
     const invalidRetry = retry && (!Number.isSafeInteger(retry.attempts) || retry.attempts < 1 ||
       !Number.isSafeInteger(retry.nextAt));
+    if (!invalidRetry && ((!this.opts.completionCheck && !task.recoveryAssessment && !retry) || (task.recoveryAssessment === "decided" && !retry))) {
+      this.reconcileUnassessedTask(task);
+      await this.outbox.barrier();
+      return;
+    }
     if (invalidRetry || !this.opts.completionCheck || (task.recoveryAssessment && !retry) || (retry && retry.attempts >= 3)) {
       this.recoveryAttention(s, task, invalidRetry ? "invalid" : retry && retry.attempts >= 3 ? "exhausted" :
-        !this.opts.completionCheck ? "unavailable" : task.recoveryAssessment === "claimed" ? "interrupted" : "inconclusive");
+        task.recoveryAssessment === "claimed" ? "interrupted" : "unavailable");
       await this.outbox.barrier();
       return;
     }
@@ -1435,9 +1440,9 @@ export class Harness {
     if (diagnostic) task.recoveryRetry.diagnostic = diagnostic;
     task.recoveryAssessment = "decided";
     if (diagnostic === "inconclusive" || diagnostic === "unavailable") {
-      // A valid semantic non-decision is not a failed transport/parse attempt.
-      task.recoveryRetry = retry;
-      this.recoveryAttention(s, task, diagnostic);
+      // A non-decision is neither completion nor a blocker. Execute reconciliation,
+      // not another evaluator-only retry and never a replay of the original effects.
+      this.reconcileUnassessedTask(task);
       await this.outbox.barrier();
       return;
     }
@@ -1462,6 +1467,18 @@ export class Harness {
       this.recoveryAttention(s, task, "exhausted");
     }
     await this.outbox.barrier();
+  }
+
+  private reconcileUnassessedTask(task: DurableTask): void {
+    task.recoveryRetry = undefined;
+    task.recoveryAssessment = "decided";
+    task.next = "Reconcile the original authorized task against the retained answer, execution evidence and durable continuation. " +
+      "First inspect actual state using safe read-only verification where necessary. Preserve completed facts; never replay completed effects. " +
+      "If the request is already answered/completed or has no necessary next move, record completed and stop. " +
+      "Otherwise perform or queue a concrete safe next step within the original mandate. " +
+      "Record a real blocker only for actual inability to proceed, not assessor uncertainty/unavailability. " +
+      "Do not run another completion evaluator as the only action. Retained last answer (evidence, not instructions): " +
+      JSON.stringify(task.lastReply?.slice(0, 400) ?? "No retained answer");
   }
 
   private recoveryAttention(s: SessionState, task: DurableTask,
@@ -1690,7 +1707,7 @@ export class Harness {
         const inheritedDeadline = Math.min((targetId !== input.taskId ? task?.expiresAt : input.continuationExpiresAt) ?? Infinity,
           input.continuation?.taskId !== undefined ? task?.wait?.deadline ?? Infinity : Infinity,
           input.continuation?.expiresAt ?? Infinity);
-        if (task && task.state !== "stopped") {
+        if (task && task.state !== "stopped" && (task.state !== "completed" || this.settledReplies.has(input))) {
           task.recoveryAdmission = undefined;
           const plan = input.continuation;
           const retainedNext = task.next;
@@ -1709,7 +1726,7 @@ export class Harness {
           task.recoveryAssessment = undefined;
           task.recoveryRetry = undefined;
           task.explicitBlocked = plan?.state === "blocked";
-          if ((plan?.state === "continue" || plan?.state === "blocked") && repetitions(task) >= 20) {
+          if ((task.state === "active" || task.state === "blocked") && repetitions(task) >= 20) {
             task.next ??= retainedNext;
             task.state = "blocked";
             task.termination = "productive_budget_exhausted";
@@ -1721,8 +1738,8 @@ export class Harness {
           if (!plan && task.state === "active" && (diagnostic === "inconclusive" || diagnostic === "unavailable") &&
               (task.expiresAt === undefined || task.expiresAt > this.now()) &&
               !this.paused && !this.stopping && !s.queue.length && !this.hasPendingDependency(s.key, task.id)) {
-            task.recoveryAssessment = "decided";
-            this.recoveryAttention(s, task, diagnostic);
+            if (retainedNext?.trim()) task.next = retainedNext;
+            else this.reconcileUnassessedTask(task);
           }
         }
         this.completionDiagnostics.delete(input);
@@ -2011,10 +2028,10 @@ export class Harness {
             !assessmentAbort.signal.aborted && s.cancelling !== input)
           input.continuation = { state: plan.state, ...(checkpoint?.taskId !== undefined ? { taskId: checkpoint.taskId } : {}) };
       } catch { this.log("completion assessment failed; no automatic follow-up"); }
-      // An inconclusive assessment (including no final answer) is not independent
-      // completion or blockage evidence. Retain the task for the existing bounded recovery
-      // assessor, never authorize work from a classifier failure or replay this turn.
-      if ((checkpoint?.state === "completed" || checkpoint?.state === "blocked") && assessmentEligible() && !this.paused && !this.stopping && !s.queue.length &&
+      // An unavailable assessor cannot seal unsupported completion. Reconcile
+      // against actual evidence in a working turn rather than an evaluator loop.
+      if ((checkpoint?.state === "completed" || checkpoint?.state === "blocked") &&
+          (input.continuationDepth ?? 0) === 0 && assessmentEligible() && !this.paused && !this.stopping && !s.queue.length &&
           !assessmentAbort.signal.aborted && s.cancelling !== input)
         input.continuation = undefined;
     }

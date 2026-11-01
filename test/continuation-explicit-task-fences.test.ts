@@ -21,7 +21,7 @@ test('explicit continue is saved before effect; failed save holds it and retry e
     }
     return 'Verified result';
   });
-  h = new Harness({ runtime, now: () => 1000, tickMs: 60000 });
+  h = new Harness({ runtime, now: () => 1000, tickMs: 60000, completionCheck: async () => ({ state: "completed" }) });
   h.restoreSessions([{ key, tasks: [task()] }]); h.addChannel(new MemoryChannel());
   h.onStateChange = async () => {
     if (fail) throw Error('disk unavailable');

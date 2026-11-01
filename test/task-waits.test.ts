@@ -5,7 +5,7 @@ import { FakeRuntime, MemoryChannel, msg } from "./fakes.js";
 
 function fixture() {
   let now = 1000;
-  const runtime = new FakeRuntime();
+  const runtime = new FakeRuntime(() => { h.planContinuation("mem:room1", { state: "completed" }); return "verified"; });
   const h = new Harness({ runtime, tickMs: 60000, now: () => now });
   const channel = new MemoryChannel(); h.addChannel(channel); h.onStateChange = async () => {};
   h.restoreSessions([{ key: "mem:room1", replyTo: { channel: "mem", target: "room1" }, task: {
@@ -19,7 +19,7 @@ test("wait survives serialized restart, wakes once with original authority and p
   const f = fixture(); const sessions = JSON.parse(JSON.stringify(f.h.snapshotSessions()));
   await f.h.stop(0);
   let now = 61000; let saved = false;
-  const runtime = new FakeRuntime(() => { assert.ok(saved); return "checked"; });
+  const runtime = new FakeRuntime(() => { assert.ok(saved); h.planContinuation("mem:room1", { state: "completed" }); return "checked"; });
   const h = new Harness({ runtime, tickMs: 60000, now: () => now }); h.addChannel(new MemoryChannel());
   h.restoreSessions(sessions);
   h.onStateChange = async () => { if (h.pendingInputs().some(i => i.id === "wait:task:1")) saved = true; };

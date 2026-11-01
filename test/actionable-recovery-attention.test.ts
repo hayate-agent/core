@@ -84,6 +84,12 @@ for (const mode of ["interrupted", "unavailable", "inconclusive", "failed", "mis
       await assert.rejects(h.recoverTasks(), /disk unavailable/);
       assert.equal(channel.sent.length, 0);
       assert.equal(h.pendingInputs().length, 0);
+      if (mode === "unavailable") {
+        assert.equal(h.state(key).task!.state, "active");
+        assert.match(h.state(key).task!.next!, /Reconcile the original/);
+        assert.equal(h.outboxEntries().length, 0);
+        return;
+      }
       assert.equal(h.outboxEntries().length, 1);
       const notice = h.outboxEntries()[0]!;
       assert.match(notice.text, /Auftrag: Was ist mit Deinem Self-Improvement/);

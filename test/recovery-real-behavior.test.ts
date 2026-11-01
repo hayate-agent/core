@@ -36,13 +36,15 @@ for (const [request, reply] of [["Danke", "Gern."], ["Der Hostname lautet snape,
 }
 
 test("valid semantic uncertainty is not a technical recovery retry, including normal turn", async () => {
-  const h = new Harness({ runtime: new FakeRuntime(() => "Result exists, verification is ambiguous."), tickMs: 60000, completionCheck: await checker('{"state":"uncertain"}') });
+  let turns = 0;
+  const h = new Harness({ runtime: new FakeRuntime(() => { if (++turns > 1) h.planContinuation(key, { state: "completed" }); return "Result exists, verification is ambiguous."; }), tickMs: 60000, completionCheck: await checker('{"state":"uncertain"}') });
   h.addChannel(new MemoryChannel()); h.onStateChange = async () => {};
   try {
     await h.submit(msg("Verify the result")); await h.drained();
     const task = h.snapshotSessions()[0].tasks![0];
     assert.equal(task.recoveryRetry, undefined);
-    assert.equal(task.state, "blocked", "uncertainty must not become automatic technical retries");
+    assert.equal(task.state, "completed", "working reconciliation can close the task without an evaluator verdict");
+    assert.equal(turns, 2);
     await h.recoverTasks(); await h.tick();
     assert.equal(h.snapshotSessions()[0].tasks![0].recoveryRetry, undefined);
   } finally { await h.stop(0); }
@@ -52,7 +54,7 @@ test("startup uncertainty releases reservation without consuming existing techni
   const task: DurableTask = { id: "retained", original: "Check existing result", lastReply: "Result retained", state: "active", depth: 0, recoveryRetry: { attempts: 1, nextAt: 0 } };
   const h = new Harness({ runtime: new FakeRuntime(), tickMs: 60000, completionCheck: await checker('{"state":"uncertain"}') });
   h.addChannel(new MemoryChannel()); h.restoreSessions([{ key, task, replyTo: { channel: "mem", target: "room1" } }]); h.onStateChange = async () => {};
-  try { await h.recoverTasks(); assert.equal(h.state(key).task!.recoveryRetry?.attempts, 1); assert.equal(h.state(key).task!.state, "blocked"); }
+  try { await h.recoverTasks(); assert.equal(h.state(key).task!.recoveryRetry, undefined); assert.equal(h.state(key).task!.state, "active"); assert.match(h.state(key).task!.next!, /Reconcile the original/); }
   finally { await h.stop(0); }
 });
 

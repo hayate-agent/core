@@ -23,7 +23,7 @@ test("failed escalation persistence holds notice; real tick retries once without
 test("restored admitted inbox deduplicates recovery; completed retained state revokes stale queued admission", async () => {
   for (const completed of [false, true]) {
     let prompts = 0;
-    const h = new Harness({ runtime: new FakeRuntime(() => { prompts++; return "Verified effects"; }), tickMs: 60000 });
+    const h = new Harness({ runtime: new FakeRuntime(() => { prompts++; h.planContinuation(key, { state: "completed" }); return "Verified effects"; }), tickMs: 60000 });
     h.onStateChange = async () => {};
     h.restoreSessions([{ key, task: { id: "t", original: "Verify effects", state: completed ? "completed" : "active", depth: 0,
       next: "Inspect", recoveryAssessment: "decided",
