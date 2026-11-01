@@ -8,6 +8,7 @@ import type { PruningPolicy, ToolResultProjector } from "../tool-result-pruning.
 import { nativeCompaction, type CompactionStrategy } from "../compaction.js";
 import type { SessionProvider, SessionRecord, SessionSummary } from "../sessions.js";
 import type { PluginTool } from "../plugins.js";
+import { prepareStructuredToolArgs } from "../tool-args.js";
 import { mkdir, readFile } from "node:fs/promises";
 import { writeFileDurable } from "../durable.js";
 import { createHash } from "node:crypto";
@@ -554,6 +555,9 @@ export class PiRuntime implements AgentRuntime {
                 name: tool.name, label: tool.name, description: tool.description,
                 // JSON Schema is the runtime-neutral contract; SDK consumes the same schema.
                 parameters: tool.parameters as import("@earendil-works/pi-coding-agent").ToolDefinition["parameters"],
+                // Parse string-encoded structured arguments before validation;
+                // see src/tool-args.ts for why (model-emitted double encoding).
+                prepareArguments: (args) => prepareStructuredToolArgs(tool.parameters, args),
                 execute: async (_id, input, signal) => {
                   let text = await tool.execute(input as Record<string, unknown>, { sessionKey, signal });
                   if (typeof text !== "string") throw new Error("Plugin tool must return text");
