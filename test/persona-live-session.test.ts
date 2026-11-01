@@ -67,7 +67,7 @@ for(const key of ['mem:parent','dispatch:task:claim','subagent:child']) {
  await rm(dir+'/01.md'); expected='NEXT TURN EDIT'; await wrapped.prompt('third request');
  assert.doesNotMatch(session.systemPrompt,/ADDED OVERLAY/);
  assert.deepEqual(settings.effective().reasoningEffortNoneModels,['fixture/model']);
- assert.equal(settings.effective().model,'old/model'); assert.ok(settings.restartPending.includes('model'));
+ assert.equal(settings.effective().model,'next/model'); assert.ok(!settings.restartPending.includes('model'));
  const calls=contexts.length;
  await writeFile(dir+'/00.md',Buffer.from([255])); await wrapped.prompt('repair using old prompt');
  assert.equal(contexts.length,calls+1); assert.match(session.systemPrompt,/NEXT TURN EDIT/);

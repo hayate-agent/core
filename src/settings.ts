@@ -145,10 +145,13 @@ export class SettingsService {
     const result: Record<string, any> = Object.assign(Object.create(null), live ? structuredClone(previous) : {});
     const check = (value: unknown) => validate(value, this.defaults.contextMaintenance, this.defaults.toolResultPruning, this.defaults.dispatcher);
     const object = (v: unknown): v is Record<string, any> => !!v && typeof v === "object" && !Array.isArray(v);
-    const livePath = (parts: string[]) => parts[0] === "reasoningEffortNoneModels" || parts.join(".") === "dispatcher.rules";
+    const livePath = (parts: string[]) => parts[0] === "reasoningEffortNoneModels" || ["model", "thinking", "review.model", "review.thinking", "dispatcher.rules"].includes(parts.join("."));
+    if (live) {
+      try { check(raw); } catch { this.diagnose("Ignored invalid local settings overlay; retaining previous settings."); return; }
+    }
     const accept = (value: any, old: any, parts: string[], wrap: (v: any) => unknown): any => {
       const label = parts.map(p => p.replace(/[^a-zA-Z0-9_-]/g, "?").slice(0, 48)).join(".");
-      if (live && !livePath(parts) && parts.join(".") !== "dispatcher") {
+      if (live && !livePath(parts) && !["dispatcher", "review"].includes(parts.join("."))) {
         if (!isDeepStrictEqual(value, old)) this.diagnose(`Ignored ${label}: not live-editable; restart required.`);
         return old;
       }
@@ -162,7 +165,7 @@ export class SettingsService {
         if (!value.length && (raw as Record<string, any>).reasoningEffortNoneModels.length) return old;
       }
       try {
-        if (!(live && parts.join(".") === "dispatcher")) { check(wrap(value)); return structuredClone(value); }
+        if (!(live && ["dispatcher", "review"].includes(parts.join(".")))) { check(wrap(value)); return structuredClone(value); }
       } catch { /* salvage independent fields below */ }
       if (object(value) && ((parts.length === 1 && ["dispatcher", "review", "skills", "contextMaintenance", "toolResultPruning", "memory", "gateways", "gatewayPlugins", "policyPlugins", "extensionPlugins"].includes(parts[0])) ||
           (parts[0] === "gateways" && parts[1] === "overrides" && parts.length <= 3))) {
@@ -198,6 +201,7 @@ export class SettingsService {
       if (!Object.hasOwn(raw, key)) {
         if (!live || livePath([key])) delete result[key];
         else if (key === "dispatcher" && result.dispatcher) delete result.dispatcher.rules;
+        else if (key === "review") delete result.review;
         else this.diagnose(`Ignored removal of ${key.slice(0, 48)}: not live-editable; restart required.`);
         continue;
       }
@@ -205,6 +209,7 @@ export class SettingsService {
       if (value !== undefined) result[key] = value;
     }
     check(result);
+    if (["model", "thinking"].some(key => !isDeepStrictEqual(previous[key], result[key]))) this.revision++;
     this.overlay = result;
   }
   /** Desired startup-bound changes are separate from the actually active snapshot. */
@@ -271,7 +276,7 @@ export class SettingsService {
     const before = mergeSettings(this.defaults, active);
     const after = mergeSettings(this.defaults, candidate);
     for (const key of new Set([...Object.keys(before), ...Object.keys(after)]) as Set<keyof LocalSettings>) {
-      if (key === "reasoningEffortNoneModels") continue;
+      if (["model", "thinking", "review", "reasoningEffortNoneModels"].includes(key)) continue;
       if (key === "dispatcher") {
         const { rules: _a, ...a } = before.dispatcher ?? {};
         const { rules: _b, ...b } = after.dispatcher ?? {};
@@ -284,6 +289,11 @@ export class SettingsService {
       active.dispatcher = { ...active.dispatcher };
       if (candidate.dispatcher?.rules === undefined) delete active.dispatcher.rules;
       else active.dispatcher.rules = candidate.dispatcher.rules;
+    }
+    for (const key of ["model", "thinking", "review"] as const) {
+      if (!isDeepStrictEqual(active[key], candidate[key])) this.revision++;
+      if (candidate[key] === undefined) delete active[key];
+      else Object.assign(active, { [key]: structuredClone(candidate[key]) });
     }
     this.overlay = active;
     for (const key of this.restartPending) this.diagnose(`Pending ${key}: ${key.endsWith("Plugins") ? "lifecycle activation pending" : "restart required"}; active value unchanged.`);
@@ -357,7 +367,7 @@ export class SettingsService {
     await this.readOverlay(false);
   }
   snapshot(): LocalSettings { return structuredClone(this.overlay); }
-  /** Only routing/request compatibility options can change at a live boundary. */
+  /** Model defaults, routing and request compatibility change at a live boundary. */
   reload(): Promise<void> {
     const next = this.writing.catch(() => {}).then(async () => {
       await this.readOverlay(true);

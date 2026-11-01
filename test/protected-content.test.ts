@@ -64,10 +64,10 @@ test("local settings cannot override infrastructure protected-content manifest",
   const warnings: string[] = [];
   const settings = new SettingsService(file, { reasoningEffortNoneModels: ["p/base"] }, message => warnings.push(message));
   for (const [index, model] of ["p/startup", "p/reloaded"].entries()) {
-    // Removing the pins is forbidden; a valid live-editable sibling must still apply.
+    // Startup salvages independent fields; invalid live files retain last-good.
     await writeFile(file, `protectedContent:\n  files: []\nreasoningEffortNoneModels: [${model}]\n`);
     if (index === 0) await settings.load(); else await settings.reload();
-    assert.deepEqual(settings.effective().reasoningEffortNoneModels, [model]);
+    assert.deepEqual(settings.effective().reasoningEffortNoneModels, ["p/startup"]);
     assert.equal(Object.hasOwn(settings.snapshot(), "protectedContent"), false);
     assert.equal(Object.hasOwn(settings.effective(), "protectedContent"), false);
     const effective = { ...config, ...settings.effective() };
@@ -78,7 +78,7 @@ test("local settings cannot override infrastructure protected-content manifest",
     await writeFile(path.join(home, "SOUL.md"), "tampered");
     await assert.rejects(policy.verify(), /integrity check failed/);
     assert.equal(settings.diagnostics.length, 1);
-    assert.match(settings.diagnostics[0], /Ignored protectedContent/);
+    assert.match(settings.diagnostics[0], /Ignored (protectedContent|invalid local settings overlay)/);
     assert.ok(settings.diagnostics[0].length <= 240);
   }
   assert.equal(warnings.length, 2, "one bounded warning per startup/reload, not per pin");

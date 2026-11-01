@@ -108,7 +108,6 @@ test("read-only base, writable overlay, tolerant runtime reload and restart", as
     { ...overlay, dispatcher: { rules, enabled: true, concurrentRequests: true } },
     { ...overlay, dispatcher: { rules: [{ model: "bad" }] } },
     { ...overlay, reasoningEffortNoneModels: [42] },
-    { ...overlay, review: { model: "p/new" } },
   ]) {
     await writeFile(file, stringify(bad));
     await settings.reload();

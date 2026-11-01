@@ -668,10 +668,14 @@ export class PiRuntime implements AgentRuntime {
         ...(typeof data?.thinking === "string" ? { thinking: data.thinking } : {}),
       };
     }
+    // Keep the SDK installation fallback even after a removable global overlay
+    // has changed this session's active model/thinking.
+    const fallbackModel = session.model && `${session.model.provider}/${session.model.id}`;
+    const fallbackThinking = session.thinkingLevel;
     const applySelection = async () => {
       const defaults = this.opts.modelDefaults?.();
-      const model = selection.model ?? defaults?.model ?? this.opts.model;
-      const thinking = selection.thinking ?? defaults?.thinking ?? this.opts.thinking;
+      const model = selection.model ?? defaults?.model ?? this.opts.model ?? fallbackModel;
+      const thinking = selection.thinking ?? defaults?.thinking ?? this.opts.thinking ?? fallbackThinking;
       if (model && `${session.model?.provider}/${session.model?.id}` !== model) {
         const ref = parseModelRef(model);
         const resolved = models.getModel(ref.provider, ref.id);

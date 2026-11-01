@@ -1,0 +1,43 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { mkdtemp, writeFile, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { git } from "../src/changeset.js";
+import { reviewConfig } from "../src/review-config.js";
+import { ReviewService } from "../src/builtin-plugins/review.js";
+import { testReviewExecution } from "./review-test-executor.js";
+import { SettingsService } from "../src/settings.js";
+
+test("refreshed review defaults are captured once; in-flight attempt and ledger survive refresh", async t => {
+  const home = await mkdtemp(path.join(os.tmpdir(), "review-model-live-"));
+  t.after(() => rm(home, { recursive: true, force: true }));
+  await git(home, ["init"]); await git(home, ["config", "user.name", "Test"]);
+  await git(home, ["config", "user.email", "test@example.invalid"]);
+  await writeFile(path.join(home, "a.ts"), "base\n");
+  await git(home, ["add", "a.ts"]); await git(home, ["commit", "-m", "base"]);
+  const config = reviewConfig({ baseRef: "HEAD", model: "p/old", thinking: "low" });
+  const settings = new SettingsService(path.join(home, ".git", "settings.local.yaml"), {}); await settings.load();
+  const refresh = async () => { await settings.reload(); Object.assign(config, settings.effective().review); };
+  let release!: () => void, started!: () => void;
+  const entered = new Promise<void>(r => { started = r; });
+  const gate = new Promise<void>(r => { release = r; });
+  const calls: unknown[][] = [];
+  const backend = { async review(_prompt: string, model?: string, thinking?: string) {
+    calls.push([model, thinking]); started(); await gate; return '{"findings":[]}';
+  } };
+  const service = new ReviewService(path.join(home, ".git"), config, backend, async () => {}, testReviewExecution(backend));
+  await service.prepare(home);
+  await writeFile(path.join(home, "a.ts"), "changed\n");
+  await writeFile(settings.file, "review: {model: p/new, thinking: high}\n"); await refresh();
+  const running = service.run(home, "task"); await entered;
+  await writeFile(settings.file, "review: {model: p/next, thinking: off}\n"); await refresh();
+  assert.deepEqual(calls, [["p/new", "high"]]); release();
+  const first = await running;
+  assert.equal(first.rounds.length, 1);
+  await writeFile(path.join(home, "a.ts"), "next\n");
+  const next = await service.run(home, "task");
+  assert.deepEqual(calls, [["p/new", "high"], ["p/next", "off"]]);
+  assert.equal(next.history?.at(-1)?.rounds.length, 1);
+  assert.equal(next.rounds.length, 1);
+});
