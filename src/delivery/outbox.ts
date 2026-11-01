@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { labelOutput } from "../hashtags.js";
 import { type Address, PermanentDeliveryError, type SendMeta, type TurnOutcome } from "../types.js";
 
 export interface OutboxEntry {
@@ -7,6 +8,7 @@ export interface OutboxEntry {
   sessionKey: string;
   to: Address;
   text: string;
+  outputTags?: string[];
   outcome?: TurnOutcome;
   progressId?: string;
   /** Routine status uses a stable update row, not a final reply. */
@@ -37,8 +39,8 @@ export class OutboxDelivery {
 
   constructor(private readonly deps: OutboxDeps) {}
 
-  create(sessionKey: string, to: Address, text: string, outcome?: TurnOutcome): OutboxEntry {
-    return { id: randomUUID(), sessionKey, to, text, ...(outcome ? { outcome } : {}) };
+  create(sessionKey: string, to: Address, text: string, outcome?: TurnOutcome, outputTags?: string[]): OutboxEntry {
+    return { id: randomUUID(), sessionKey, to, text, outputTags: structuredClone(outputTags), ...(outcome ? { outcome } : {}) };
   }
 
   block(entry: OutboxEntry): void {
@@ -64,7 +66,7 @@ export class OutboxDelivery {
       if (this.blocked.has(entry)) return false;
       try {
         entry.id ??= randomUUID();
-        await this.deps.deliver(entry.to, entry.text, { deliveryId: entry.id, ...(entry.statusKey ? { statusKey: entry.statusKey } : {}), ...(entry.progressId ? { progressId: entry.progressId } : {}), ...(entry.outcome ? { outcome: entry.outcome } : {}) });
+        await this.deps.deliver(entry.to, labelOutput(entry.text, entry.to.channel === "dispatch" ? undefined : entry.outputTags), { deliveryId: entry.id, ...(entry.statusKey ? { statusKey: entry.statusKey } : {}), ...(entry.progressId ? { progressId: entry.progressId } : {}), ...(entry.outcome ? { outcome: entry.outcome } : {}) });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         if (!(err instanceof PermanentDeliveryError) || !this.deps.park) {
