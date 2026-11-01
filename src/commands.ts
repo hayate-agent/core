@@ -557,19 +557,19 @@ export const COMMANDS: Command[] = [
   {
     name: "help",
     aliases: ["commands"],
-    help: "Show Harness commands and registered plugin commands",
+    help: "Show Hayate Agent commands and registered plugin commands",
     run: async (_args, _input, ctx) => {
       const commands = [
-        ...COMMANDS.map((c) => ({ ...c, origin: "Harness" })),
+        ...COMMANDS.map((c) => ({ ...c, origin: "Hayate Agent" })),
         ...[...(ctx.pluginCommands?.values() ?? [])].map((c) => ({ ...c, aliases: undefined, origin: "Plugin" })),
       ].sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
       const group = (admin: boolean) => commands.filter((c) => Boolean(c.admin) === admin)
         .map((c) => `/${c.name}${c.aliases?.length ? ` (${c.aliases.map((a) => `/${a}`).join(" ")})` : ""}${c.admin ? " [admin]" : ""} [${c.origin}]: ${c.help}`).join("\n");
-      return `VanillaCore Agent Harness commands ([admin] requires administrator access):\n\nGeneral commands:\n${group(false)}\n\nAdmin commands:\n${group(true)}`;
+      return `Hayate Agent commands ([admin] requires administrator access):\n\nGeneral commands:\n${group(false)}\n\nAdmin commands:\n${group(true)}`;
     },
   },
-  { name: "harness", help: "Locate built-in Harness customization/development guide", run: async () => `VanillaCore Agent Harness development guide: ${developmentGuide}\nRead this guide before changing the Harness. Identity/voice, tools and models are configurable; native plugins support commands/channels/model tools/text panels/lifecycle (see plugins.md); interactive plugin dialogs are available locally; automatic runtime promotion remains planned.` },
-  { name: "version", help: "Show version", run: async (_a, _i, ctx) => `vanillacore-harness ${VERSION} (runtime: ${ctx.harness.runtime.name})` },
+  { name: "harness", help: "Locate built-in Hayate Agent customization/development guide", run: async () => `Hayate Agent development guide: ${developmentGuide}\nRead this guide before changing Hayate Agent. Identity/voice, tools and models are configurable; native plugins support commands/channels/model tools/text panels/lifecycle (see plugins.md); interactive plugin dialogs are available locally; automatic runtime promotion remains planned.` },
+  { name: "version", help: "Show version", run: async (_a, _i, ctx) => `Hayate Agent ${VERSION} (runtime: ${ctx.harness.runtime.name})` },
 ];
 
 const BY_NAME = new Map<string, Command>();

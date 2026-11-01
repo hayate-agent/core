@@ -82,7 +82,7 @@ test("fullscreen layout keeps the editor at the bottom after long output", async
     // Inspect the rendered viewport, not merely presence of terminal escape sequences.
     const screen = (ui as unknown as { tui: { getScreenLines(): string[] } }).tui.getScreenLines();
     assert.equal(screen.length, term.t.rows);
-    assert.match(screen.slice(0, 3).join("\n"), /VanillaCore Agent Harness/);
+    assert.match(screen.slice(0, 3).join("\n"), /Hayate Agent/);
     assert.match(screen.slice(-8).join("\n"), /\/help/);
     assert.ok(!screen.some((line) => /Output line 0$/.test(line)));
   } finally { await ui.stop(); }
@@ -185,7 +185,7 @@ test("TUI submits into the actual Harness and displays its delivered answer", as
     assert.deepEqual(runtime.sessions.get("console:local")!.prompts, ["hello"]);
     term.type("/quit\r");
     assert.equal(quit, true);
-    assert.match(term.output(), /VanillaCore Agent Harness/);
+    assert.match(term.output(), /Hayate Agent/);
   } finally { await harness.stop(); }
 });
 

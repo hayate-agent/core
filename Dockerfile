@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.6
-# VanillaCore Agent Harness runtime image with a pinned Node 24 LTS base.
+# Hayate Agent runtime image with a pinned Node 24 LTS base.
 # Configuration is not baked in: VANILLACORE_HARNESS_HOME (harness.yaml, SOUL.md, state) and
 # PI_CODING_AGENT_DIR (PI models.json/settings.json) come from volumes at run time.
 ARG NODE_IMAGE=node:24.22.1-bookworm-slim@sha256:55fb5f5a527ea2c5c4a95f963e48ef90aa38c7b346054fdc8ee9957a2b55d205

@@ -316,7 +316,7 @@ export class HarnessTuiChannel implements Channel {
       } catch { panelLines.push(`[${panel.name}] panel unavailable`); }
     }
     this.panelText.setText(panelLines.join("\n"));
-    this.header.setText(`VanillaCore Agent Harness · ${this.opts.agent}\n${this.opts.status()}${this.opts.sessions?.current ? `\nSession: ${this.opts.sessions.current.id} · ${this.opts.sessions.current.title} · ${this.opts.sessions.workspace}` : ""}`);
+    this.header.setText(`Hayate Agent · ${this.opts.agent}\n${this.opts.status()}${this.opts.sessions?.current ? `\nSession: ${this.opts.sessions.current.id} · ${this.opts.sessions.current.title} · ${this.opts.sessions.workspace}` : ""}`);
     // Stream into the scrollable conversation, leaving the status area compact.
     this.transcript.setEntries([...this.lines, ...(this.partial ? [{ kind: "assistant" as const, text: this.partial }] : [])], this.color);
     if (!this.dialog) this.activity.setText(tint(this.routineStatus || this.activityLabel(), this.outcome === "failed" || this.failedTools ? "31" : this.working || this.opts.workState?.().running || this.outcome === "cancelled" ? "33" : this.startedAt ? "32" : "2", this.color));
