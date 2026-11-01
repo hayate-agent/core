@@ -76,13 +76,13 @@ test("mutations change only local file and respect higher precedence, pending us
   assert.equal(settings.effective().model, "p/drop");
   assert.deepEqual(parse(await readFile(file, "utf8")), { model: "p/command" });
   await writeFile(drop("a.yaml"), "model: p/edited\nskills: {context: off}\n"); await settings.reload();
-  assert.equal(settings.effective().model, "p/drop"); assert.equal(settings.effective().skills?.context, "lazy");
-  assert.ok(settings.restartPending.includes("model")); assert.ok(settings.restartPending.includes("skills"));
+  assert.equal(settings.effective().model, "p/edited"); assert.equal(settings.effective().skills?.context, "lazy");
+  assert.ok(!settings.restartPending.includes("model")); assert.ok(settings.restartPending.includes("skills"));
   await settings.set("thinking", "off");
-  assert.equal(settings.effective().model, "p/drop"); assert.ok(settings.restartPending.includes("model"));
+  assert.equal(settings.effective().model, "p/edited"); assert.ok(!settings.restartPending.includes("model"));
   const restarted = new SettingsService(file, {}); await restarted.load(); assert.equal(restarted.effective().model, "p/edited");
   await unlink(drop("a.yaml")); await settings.reload();
-  assert.equal(settings.effective().model, "p/drop");
+  assert.equal(settings.effective().model, "p/command");
   const deletedRestart = new SettingsService(file, {}); await deletedRestart.load(); assert.equal(deletedRestart.effective().model, "p/command");
 });
 

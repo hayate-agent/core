@@ -28,30 +28,28 @@ test("tolerant startup/reload, safe routing, recovery, durable restart and prove
   assert.equal(settings.effective().dispatcher?.capacity, 2);
   assert.ok(warnings.length && settings.diagnostics.length <= 20);
   assert.ok(!warnings.join().includes("DO_NOT_LOG_SECRET"));
+  const lastGood = settings.effective();
   await writeFile(file, stringify({ model: "p/forbidden-live", dispatcher: { capacity: 3, rules: [] }, reasoningEffortNoneModels: ["p/new", false], approvals: {} }));
   await settings.reload();
   assert.equal(settings.effective().model, "p/local");
   assert.equal(settings.effective().dispatcher?.capacity, 2);
-  assert.deepEqual(settings.effective().dispatcher?.rules, []);
-  assert.deepEqual(settings.effective().reasoningEffortNoneModels, ["p/new"]);
+  assert.deepEqual(settings.effective(), lastGood);
   for (const match of [{ regex: "[" }, { minChars: "bad" }, { unknown: 1 }]) {
     await writeFile(file, stringify({ dispatcher: { rules: [{ match, model: "p/unsafe" }, { model: "p/fallback" }] }, reasoningEffortNoneModels: ["p/valid"] }));
     await settings.reload();
-    assert.deepEqual(settings.effective().dispatcher?.rules, [], "unsafe replacement retains previous routing, never widens to fallback");
-    assert.equal(pickModelRule("anything", settings.effective().dispatcher?.rules), undefined);
-    assert.deepEqual(settings.effective().reasoningEffortNoneModels, ["p/valid"]);
+    assert.deepEqual(settings.effective(), lastGood, "invalid file retains all previous settings");
   }
   for (const text of ["[broken", "42", "null", "[]"]) {
     await writeFile(file, text);
     await settings.reload();
-    assert.deepEqual(settings.effective().reasoningEffortNoneModels, ["p/valid"]);
+    assert.deepEqual(settings.effective(), lastGood);
     const fresh = new SettingsService(file, base); await fresh.load();
     assert.deepEqual(fresh.effective().reasoningEffortNoneModels, ["p/base"]);
   }
   for (const badRule of [{ model: "invalid" }, { model: "p/good", thinking: "invalid" }]) {
     await writeFile(file, stringify({ dispatcher: { rules: [badRule, { model: "p/fallback" }] }, reasoningEffortNoneModels: ["p/recovered"] }));
     await settings.reload();
-    assert.deepEqual(settings.effective().dispatcher?.rules, []);
+    assert.deepEqual(settings.effective(), lastGood);
     const startup = new SettingsService(file, base); await startup.load();
     assert.deepEqual(startup.effective().dispatcher?.rules, base.dispatcher.rules);
     assert.deepEqual(startup.effective().reasoningEffortNoneModels, ["p/recovered"]);
@@ -63,11 +61,11 @@ test("tolerant startup/reload, safe routing, recovery, durable restart and prove
   await settings.set("thinking", "off");
   const fresh = new SettingsService(file, base); await fresh.load();
   assert.deepEqual(fresh.effective(), settings.effective());
-  assert.match(await readFile(file, "utf8"), /p\/local/);
+  assert.equal(fresh.effective().model, "p/base");
   await writeFile(file, "{}"); await settings.reload();
   assert.deepEqual(settings.effective().dispatcher?.rules, base.dispatcher.rules);
   assert.deepEqual(settings.effective().reasoningEffortNoneModels, ["p/base"]);
-  assert.equal(settings.effective().model, "p/local", "removal of nonlive field also waits for restart");
+  assert.equal(settings.effective().model, "p/base", "removal restores installation defaults");
 });
 
 test("startup cross-field safety and valid coupled values survive invalid siblings", async t => {

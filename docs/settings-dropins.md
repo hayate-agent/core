@@ -27,10 +27,10 @@ invalid, unreadable or non-regular file leaves the last good active snapshot
 unchanged and reports its path, without echoing file contents. Symlink files and
 a symlink directory are rejected. These are trusted operator-owned directories,
 not a hostile-filesystem sandbox. Legacy startup without `settings.d/` retains
-historical per-field salvage of `settings.local.yaml`, including on reload.
+historical per-field startup salvage of `settings.local.yaml`; invalid live edits retain the whole last-good snapshot.
 An empty `settings.d/` explicitly opts into strict startup validation.
 
-Reasoning-effort opt-ins and dispatcher rules are live. Validated gateway,
+Model/thinking defaults, review model/thinking, reasoning-effort opt-ins and dispatcher rules are live. Model defaults refresh before the next regular prompt; explicit session choices retain independent per-field precedence. Review defaults refresh at tool, command and automatic finish entry, before the attempt captures its arguments; in-flight calls retain their captured values. Removing overrides restores installation defaults/fallbacks. Validated gateway,
 policy and extension plugin map changes enqueue the existing lifecycle managers;
 their timers apply at an idle boundary, never by waiting inside a provider request.
 Unchanged entries do not reload. Removing an entry restores the captured policy or
@@ -56,7 +56,7 @@ Persona uses the same next-safe-call principle via `SOUL.md.d/` and
 
 | Category | Disk additions/edits/deletions at next safe call | Explicit command boundary |
 | --- | --- | --- |
-| model/thinking, review model/thinking | restart pending; existing session choices preserved | `/settings` publishes only selected field; session model precedence unchanged |
+| model/thinking, review model/thinking | live before prompt/review entry; existing explicit session choices preserved | `/settings` recomputes live defaults; session model precedence unchanged |
 | reasoning-effort compatibility | live at provider request | settings validation |
 | dispatcher rules | live before worker selection | existing routing boundary |
 | dispatcher capacity/enabled/strategy | restart pending | startup only |

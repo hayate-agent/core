@@ -236,6 +236,7 @@ async function main(argv: string[]): Promise<void> {
       if (message !== reloadError) log(`[settings] ${message}`);
       reloadError = message;
     }
+    updateReviewDefaults();
   };
   const completion = await completionStrategyHolder(config.home, config.completionStrategy,
     { apiVersion: 1, prompt: completionPrompt }, settings.snapshot().completionStrategy);
@@ -290,6 +291,7 @@ async function main(argv: string[]): Promise<void> {
       return skillContextCache ??= `Available skills (metadata only; read the named SKILL.md when relevant):\n${JSON.stringify(skills)}`;
     },
     toolGuard: async (key, tool, input) => {
+      if (tool === "plugin_review") await reloadRuntimeSettings();
       subagents.guardTool(key, tool);
       dispatchRuntime?.guardTool(key, tool);
       await harness.guardWaitTool(key, tool, input);
@@ -384,6 +386,7 @@ async function main(argv: string[]): Promise<void> {
       return assessCompletion(runtimeReviewer(runtime), input, reply, grant, signal, effectiveModels().reviewModel, Date.now, completion.current, diagnostic);
     },
     afterTurn: async (input, reply, session, options, signal) => {
+      await reloadRuntimeSettings();
       const result = await plugins.policies.finish(config.cwd, input, reply, session, options, signal);
       await improvement?.completed(input, result);
       return result;
@@ -661,6 +664,13 @@ async function main(argv: string[]): Promise<void> {
     process.exit(code);
   };
 
+  // The bundled review command is startup-owned; retain the live registry for
+  // dynamically replaced extension commands.
+  const reviewCommand = plugins.commands.get("review");
+  if (reviewCommand) plugins.commands.set("review", { ...reviewCommand, run: async (...args) => {
+    await reloadRuntimeSettings();
+    return reviewCommand.run(...args);
+  } });
   installCommands({
     harness,
     scheduler,
