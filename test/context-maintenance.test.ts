@@ -35,6 +35,8 @@ test("slow maintenance serializes its conversation without blocking another conv
 
 test("context policy validates ordered thresholds", () => {
   assert.equal(contextPolicy().autoHandover, true);
+  assert.equal(contextPolicy({ compactionOwner: "agent" }).compactionOwner, "agent");
+  assert.throws(() => contextPolicy({ compactionOwner: "both" as any }));
   assert.throws(() => contextPolicy({ compactPercent: 50 }));
   assert.throws(() => contextPolicy({ cooldownTurns: 0 }));
 });

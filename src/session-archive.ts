@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, readFile } from "node:fs/promises";
+import { mkdir, readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { writeFileDurable } from "./durable.js";
 
@@ -40,6 +40,37 @@ export class SessionArchives {
     const archive = await this.load(key, id);
     archive.targetSessionId = targetSessionId;
     await this.save(key, archive);
+  }
+  /** Resolve only host-linked predecessors in this conversation. No transcript
+   * path, archive ID or claimed user role can grant authority. */
+  async completionEvidence(key: string, sessionId: string): Promise<{ entries: ArchiveEntry[]; incomplete: boolean }> {
+    const dir = path.join(this.home, "session-archives", createHash("sha256").update(key).digest("hex"));
+    let files: string[];
+    try { files = await readdir(dir); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return { entries: [], incomplete: false }; throw error; }
+    const names = files.filter(file => /^[a-f0-9-]{36}\.json$/.test(file));
+    let incomplete = names.length > 64;
+    const archives: SessionArchive[] = [];
+    for (const name of names.slice(-64)) {
+      try { archives.push(await this.load(key, name.slice(0, -5))); }
+      catch { incomplete = true; }
+    }
+    const entries: ArchiveEntry[] = [];
+    const visited = new Set<string>();
+    let target = sessionId;
+    for (let depth = 0; depth < 4; depth++) {
+      const matches = archives.filter(archive => archive.targetSessionId === target);
+      if (!matches.length) break;
+      if (matches.length !== 1 || visited.has(matches[0].id)) { incomplete = true; break; }
+      const archive = matches[0]; visited.add(archive.id);
+      // Summaries and archived roles are explicitly untrusted context.
+      entries.unshift({ id: `${archive.id}:summary`, role: "archive-summary", text: archive.retrospective },
+        ...archive.entries.slice(-48).map(entry => ({ ...entry, id: `${archive.id}:${entry.id}`, role: `archive-${entry.role}` })));
+      if (archive.entries.length > 48) incomplete = true;
+      target = archive.sourceSessionId;
+      if (depth === 3 && archives.some(item => item.targetSessionId === target)) incomplete = true;
+    }
+    return { entries, incomplete };
   }
   async read(key: string, id: string, options: { query?: string; offset?: number; limit?: number; section?: string; charOffset?: number }): Promise<string> {
     const archive = await this.load(key, id);

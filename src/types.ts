@@ -55,6 +55,7 @@ export interface Inbound {
   completionAnchor?: { id: string; task: string; receivedAt: number };
   /** Host-owned bounded evidence for independent completion assessment; never an authority grant. */
   completionContext?: {
+    resolved?: import("./completion-context.js").ResolvedCompletionContext;
     /** Bounded untrusted tool observations for the independent assessor, never grants. */
     tools?: Array<{ name: string; error: boolean; result?: string }>;
     recent: Array<{ role: "user" | "assistant"; text: string }>;

@@ -1,13 +1,13 @@
 {
   "files": {
     "boundary-assessor.ts": "50673771d39126c132829704b5b2ab6172092e867245f8edca8c9b0eb71615cb",
-    "completion-prompt.ts": "1fbaff752aa90760fb87d6cfea3bbbb9c36c8a44743832dd5e277b22680fd832",
+    "completion-prompt.ts": "1b60245aea3ee244f177ab64ce7f50e477d02bf26f0026d2fb11c8f3d7a0206e",
     "context-plugin.ts": "1da424038b5f5dd8e88999d86c4b26fecca5d21ca4170b83fdba9958eef787f0",
     "continuation-plugin.ts": "e5485881f09b871912fa5574af6fe9c7b323abe01b03b8876cd235b436595a7d",
     "cron-report-plugin.ts": "71bb9d6432985d25defb18d4ef45653342c2243f42e215b972b0eb586d24a260",
     "cron-report-processing.ts": "4e40d3f4c9801d87af1bdd8e2624a12f21e02ad49378a504abaea7a1bb49856f",
     "cron-reports.ts": "0bbf04e0c3ce1c8a499cdcc2e3bba1d27c88aacd71218f1b4027002591947991",
-    "dispatcher-plugin.ts": "7a1b0b9c30437ac9d25e1728dc8913652ddd3511419fefe81be33d84f93ed293",
+    "dispatcher-plugin.ts": "210fc5f5f9e2b8e26378f0f7b0501396a5ded0f51b4da67b5a28f1a87934291a",
     "extension-manager-plugin.ts": "51ea7b167e2683b180f510a005305975afabb22819e02aa03aafbc434061200c",
     "gateway-baselines.ts": "7e4422bfef1e74ad4e767d4c88947b88082c45aeccb9b3da2193ccbff9baaa1c",
     "gateway-manager-plugin.ts": "520465902c186b429fde132b2a4120b0ff6bd8e68439c6ed35c1049e852a316a",
@@ -47,6 +47,6 @@
     "review-executor.ts": "f215d18047084aa626cdd3f46fa6cfbca3701810f6166ab88ac8f356a15fbe0a"
   },
   "repository": "https://git.vanillacore.net/harness/plugins",
-  "revision": "679a12e2a1e23d9c5ffd597cbbef67acea4c73e4",
+  "revision": "3529c443fc0fa2edcfc6cfbd4ba6142b46d6d2f7",
   "schema": 1
 }

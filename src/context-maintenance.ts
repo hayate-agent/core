@@ -7,6 +7,8 @@ import type { Address, RuntimeSession } from "./types.js";
 import type { BoundaryAssessment } from "./context-assessment.js";
 
 export interface ContextPolicy {
+  /** Single automatic compaction owner; handover remains host-managed. */
+  compactionOwner?: "harness" | "agent";
   enabled: boolean;
   checkEveryTurns: number;
   assessPercent: number;
@@ -15,10 +17,11 @@ export interface ContextPolicy {
   autoHandover: boolean;
 }
 export const defaultContextPolicy: ContextPolicy = {
-  enabled: true, checkEveryTurns: 5, assessPercent: 60, compactPercent: 75, cooldownTurns: 5, autoHandover: true,
+  compactionOwner: "harness", enabled: true, checkEveryTurns: 5, assessPercent: 60, compactPercent: 75, cooldownTurns: 5, autoHandover: true,
 };
 export function contextPolicy(input: Partial<ContextPolicy> = {}): ContextPolicy {
   const policy = { ...defaultContextPolicy, ...input };
+  if (!["harness", "agent"].includes(policy.compactionOwner!)) throw new Error("Invalid compaction owner");
   if (typeof policy.enabled !== "boolean" || typeof policy.autoHandover !== "boolean" ||
       !Number.isInteger(policy.checkEveryTurns) || policy.checkEveryTurns < 1 ||
       !Number.isInteger(policy.cooldownTurns) || policy.cooldownTurns < 1 ||
@@ -425,6 +428,7 @@ export class ContextMaintenance {
       const failedAt = state.assessmentFailures?.[phase];
       const assessmentDue = failedAt === undefined || state.turns - failedAt >= policy.cooldownTurns;
       const eligible = !request && due && assessmentDue && policy.enabled && percent !== undefined &&
+        (phase === "before" || policy.compactionOwner !== "agent") &&
         (phase === "before" ? policy.autoHandover && (pressure || state.pressureSinceCompaction === true) : pressure);
       let decision = percent === undefined ? "usage-unknown" : !due ? "cooldown" : !assessmentDue ? "assessment-backoff" : "below-threshold";
       let automatic = false;

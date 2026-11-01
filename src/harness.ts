@@ -16,6 +16,7 @@ import { OutboxDelivery, type OutboxEntry } from "./delivery/outbox.js";
 import { SeenWindow } from "./delivery/seen.js";
 import { approvalPreview } from "./approval-preview.js";
 import { ToolGuardError } from "./tool-guard-error.js";
+import { resolveCompletionContext } from "./completion-context.js";
 
 import { accountRepetition, repetitions, type RepetitionBudget } from "./repetition-budget.js";
 
@@ -54,6 +55,8 @@ export interface DurableTask {
   anchor?: Inbound["completionAnchor"];
   /** Settled answer for this task, never a neighbouring conversation turn. */
   lastReply?: string;
+  /** Bounded untrusted task evidence, persisted independently of recent chat. */
+  completionObservations?: import("./session-archive.js").ArchiveEntry[];
   /** Persisted host admission; inference dedup is not an execution permit. */
   recoveryAdmission?: { id: string; depth: number; next: string; original: string; expiresAt?: number };
   recoveryAttentionId?: string;
@@ -154,6 +157,7 @@ export interface HarnessOptions {
   beforeExecution?: (input: Inbound) => void;
   memory?: { recall(sessionKey: string, text: string): Promise<string>; capture(turn: import("./memory.js").MemoryTurn): Promise<void> };
   contextMaintenance?: {
+    archives?: Pick<import("./session-archive.js").SessionArchives, "completionEvidence">;
     interrupt?(key: string): boolean;
     guidance(key: string, session: RuntimeSession): Promise<string>;
     prepareContinuation?(key: string, session: RuntimeSession, rotate: (handover: import("./context-maintenance.js").ContextRecord["handover"]) => Promise<RuntimeSession>, action: "compact" | "handover", preserve: string, resume: string, target?: Address): Promise<void>;
@@ -818,8 +822,22 @@ export class Harness {
     s.completionRecent = [...(s.completionRecent ?? []), { role, text: text.slice(0, 2000) }].slice(-8);
   }
 
-  private completionEvidence(s: SessionState): NonNullable<Inbound["completionContext"]> {
-    return { recent: structuredClone(s.completionRecent ?? []), tasks: this.tasks(s).slice(-8).map(task => ({
+  private async completionEvidence(s: SessionState, input?: Inbound): Promise<NonNullable<Inbound["completionContext"]>> {
+    const taskId = input?.continuation?.taskId ?? input?.taskId;
+    const task = this.tasks(s).find(t => t.id === taskId);
+    const ingress = this.tasks(s).map(t => ({ id: t.id, text: t.original, state: t.state,
+      receivedAt: t.anchor?.receivedAt, expiresAt: t.expiresAt, termination: t.termination,
+      provenance: t.anchor?.task === t.original ? "host-task-anchor" as const : "legacy-task-original" as const }));
+    const current = s.session?.archiveEntries?.() ?? [];
+    let archived: { entries: import("./session-archive.js").ArchiveEntry[]; incomplete: boolean } = { entries: [], incomplete: false };
+    const sessionId = s.session?.status().sessionId;
+    if (sessionId && this.opts.contextMaintenance?.archives) {
+      try { archived = await this.opts.contextMaintenance.archives.completionEvidence(s.key, sessionId); }
+      catch { archived.incomplete = true; }
+    }
+    const resolved = resolveCompletionContext(taskId, ingress, [...archived.entries, ...(task?.completionObservations ?? [])], current, archived.incomplete);
+
+    return { resolved, recent: structuredClone(s.completionRecent ?? []), tasks: this.tasks(s).slice(-8).map(task => ({
       id: task.id.slice(0, 128), original: task.original.slice(0, 2000), state: task.state,
       ...(task.next ? { next: task.next.slice(0, 1000) } : {}),
       ...(task.wait ? { wait: { reason: task.wait.reason.slice(0, 1000), deadline: task.wait.deadline } } : {}),
@@ -1425,7 +1443,9 @@ export class Harness {
     const evidence = JSON.stringify({ startup: true, reply: retainedReply ? task.lastReply : "No retained turn result. Completion is unknown. Assess the original mandate; any next step must first reconcile actual effects, never blindly replay work.",
       executions: this.opts.executionStore?.list(s.key).slice(-20).map(e => ({ id: e.id, status: e.status, parentStopped: e.parentStopped })) ?? [] });
     let plan: Inbound["continuation"];
-    input.completionContext = this.completionEvidence(s);
+    // Assessment is read-only: never open a working runtime just to reconcile a
+    // retained task. Persisted observations and linked archives remain available.
+    input.completionContext = await this.completionEvidence(s, input);
     let diagnostic: import("./completion-check.js").CompletionDiagnostic | undefined;
     try { plan = await this.opts.completionCheck(input, evidence, new AbortController().signal, value => {
       if (["technical", "invalid_response", "inconclusive", "unavailable"].includes(value)) diagnostic = value;
@@ -1699,6 +1719,8 @@ export class Harness {
           const answer = this.settledReplies.get(input);
           this.settledReplies.delete(input);
           task.lastReply = answer && answer.length <= 8000 ? answer : undefined;
+          if (input.completionContext?.resolved?.taskId === task.id)
+            task.completionObservations = input.completionContext.resolved.observations.map(({ id, role, text }) => ({ id, role, text }));
           task.state = plan?.state === "continue" ? "active" : plan?.state ?? "active";
           task.next = plan?.state === "continue" || plan?.state === "blocked" || plan?.wait ? plan.next : undefined;
           task.wait = plan?.state === "waiting" && plan.wait ? { reason: plan.wait.reason,
@@ -1970,7 +1992,7 @@ export class Harness {
     // Self-reported completion or blockage is evidence, not final authority.
     // Recheck against the original mandate; retain explicit continuation plans.
     if (reply && reply !== NO_REPLY && outcome !== "cancelled") this.rememberCompletion(s, "assistant", reply);
-    input.completionContext = { ...this.completionEvidence(s), tools: progressTools };
+    input.completionContext = { ...await this.completionEvidence(s, input), tools: progressTools };
     const checkpoint = input.continuation;
     const assessmentEligible = () => input.continuation === checkpoint &&
       (input.continuationExpiresAt === undefined || (Number.isSafeInteger(input.continuationExpiresAt) && input.continuationExpiresAt > this.now()));

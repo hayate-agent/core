@@ -277,6 +277,7 @@ async function main(argv: string[]): Promise<void> {
     sessionProvider: () => sessionProvider,
     legacySessionProvider: new FilesystemSessionProvider(path.join(config.home, "session-store")),
     compaction: () => compactionAdapter,
+    compactionOwner: () => contextPolicy(settings.effective().contextMaintenance).compactionOwner ?? "harness",
     mcp: config.mcp,
     skillPaths: config.skills.paths,
     skillContext: async () => {
