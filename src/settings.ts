@@ -250,7 +250,21 @@ export class SettingsService {
     catch { throw Error(`Invalid combined settings at: ${this.file}`); }
     return result;
   }
+  private desiredOverlay: LocalSettings = {};
+  private pluginReload?: () => Promise<void>;
+  onPluginReload(reload: () => Promise<void>): void { this.pluginReload = reload; }
+  desired(): LocalSettings { return mergeSettings(this.defaults, this.desiredOverlay); }
+  /** Managers publish only after a successful idle-boundary activation. */
+  appliedPlugin(key: "gatewayPlugins" | "policyPlugins" | "extensionPlugins", id: string, spec: PolicyOverride | undefined): void {
+    const entries: Record<string, PolicyOverride> = { ...this.overlay[key] };
+    if (spec === undefined) delete entries[id]; else entries[id] = structuredClone(spec);
+    this.overlay[key] = entries;
+    if (isDeepStrictEqual(this.effective()[key] ?? {}, this.desired()[key] ?? {})) {
+      this.restartPending = this.restartPending.filter(pending => pending !== key);
+    }
+  }
   private activate(candidate: LocalSettings, live: boolean): void {
+    this.desiredOverlay = structuredClone(candidate);
     this.restartPending = [];
     if (!live) { this.overlay = candidate; return; }
     const active = structuredClone(this.overlay);
@@ -272,7 +286,7 @@ export class SettingsService {
       else active.dispatcher.rules = candidate.dispatcher.rules;
     }
     this.overlay = active;
-    for (const key of this.restartPending) this.diagnose(`Pending ${key}: restart required; active value unchanged.`);
+    for (const key of this.restartPending) this.diagnose(`Pending ${key}: ${key.endsWith("Plugins") ? "lifecycle activation pending" : "restart required"}; active value unchanged.`);
   }
   private async readOverlay(live: boolean): Promise<void> {
     this.diagnostics.length = 0;
@@ -287,6 +301,17 @@ export class SettingsService {
       this.layered ||= hasDirectory;
       if (!this.layered) {
         await this.readLegacyOverlay(live);
+        if (!live) this.desiredOverlay = this.snapshot();
+        else {
+          try {
+            const candidate = await this.candidate();
+            const desired = this.snapshot();
+            for (const key of ["gatewayPlugins", "policyPlugins", "extensionPlugins"] as const) {
+              if (candidate[key] === undefined) delete desired[key]; else desired[key] = candidate[key];
+            }
+            this.activate(desired, true);
+          } catch { /* Legacy tolerance retains last good plugin snapshot too. */ }
+        }
       } else this.activate(await this.candidate(), live);
     } catch (error) {
       this.diagnose((error as Error).message);
@@ -299,7 +324,7 @@ export class SettingsService {
       if (error.code === "ENOENT") return false;
       throw error;
     });
-    const local = this.layered ? await this.readSettingsFile(this.file, true) : this.snapshot();
+    const local = this.layered ? await this.readSettingsFile(this.file, true) : structuredClone(this.desiredOverlay);
     return local;
   }
   private async saveLocal(updated: LocalSettings, target: string[], additionalTargets: string[][] = []): Promise<void> {
@@ -307,7 +332,15 @@ export class SettingsService {
     const candidate = await this.candidate(updated);
     await mkdir(path.dirname(this.file), { recursive: true });
     await writeFileDurable(this.file, stringify(updated));
-    if (!this.layered) { this.activate(candidate, false); return; }
+    if (!this.layered && !target[0]?.endsWith("Plugins")) {
+      const active = this.snapshot();
+      this.activate(candidate, false);
+      for (const key of ["gatewayPlugins", "policyPlugins", "extensionPlugins"] as const) {
+        if (active[key] === undefined) delete this.overlay[key]; else this.overlay[key] = active[key];
+        if (!isDeepStrictEqual(this.effective()[key] ?? {}, this.desired()[key] ?? {})) this.restartPending.push(key);
+      }
+      return;
+    }
     // Publish only the explicitly requested field/entry, even for identical disk writes.
     const publish = (active: Record<string, unknown>, desired: Record<string, unknown>, segments: string[]): void => {
       const [key, ...rest] = segments;
@@ -317,7 +350,7 @@ export class SettingsService {
       } else if (desired[key] === undefined) delete active[key];
       else active[key] = structuredClone(desired[key]);
     };
-    for (const segments of [target, ...additionalTargets].filter(segments => segments.length)) publish(this.overlay as Record<string, unknown>, candidate as Record<string, unknown>, segments);
+    for (const segments of [target, ...additionalTargets].filter(segments => segments.length && !segments[0].endsWith("Plugins"))) publish(this.overlay as Record<string, unknown>, candidate as Record<string, unknown>, segments);
     this.activate(candidate, true);
   }
   async load(): Promise<void> {
@@ -328,6 +361,7 @@ export class SettingsService {
   reload(): Promise<void> {
     const next = this.writing.catch(() => {}).then(async () => {
       await this.readOverlay(true);
+      await this.pluginReload?.();
     });
     this.writing = next;
     return next;

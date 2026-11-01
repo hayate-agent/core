@@ -21,19 +21,22 @@ export class PolicyManager {
   constructor(private readonly harness: Pick<Harness, "atIdleBoundary">, private readonly registry: PolicyRegistry,
     private readonly settings: SettingsService, private readonly context: { home: string; cwd: string; agent: string }) {}
   async load(): Promise<void> {
-    for (const id of Object.keys(this.settings.effective().policyPlugins ?? {})) await this.request(id);
+    for (const id of Object.keys(this.settings.desired().policyPlugins ?? {})) await this.request(id);
     await this.tick();
     if (this.pending.size || this.errors.size) throw Error("Initial policy activation failed; inspect policy status/local module");
   }
   /** Check before persisting desired state; required identities cannot be disabled. */
-  validate(id: string, spec = this.settings.effective().policyPlugins?.[id]): void {
+  validate(id: string, spec = this.settings.desired().policyPlugins?.[id]): void {
     validatePolicyOverlay({ [id]: spec ?? {} });
     if (this.stopping) throw Error("Policy manager stopping");
     if (this.degraded.has(id)) throw Error("Policy lifecycle uncertain; restart required");
     if (spec?.disabled && this.registry.isRequired(id)) throw Error("Required policy cannot be disabled");
   }
   async request(id: string): Promise<void> {
-    this.validate(id);
+    try { this.validate(id); } catch (error) {
+      this.errors.set(id, "Invalid desired policy configuration; previous selection retained");
+      throw error;
+    }
     if (!this.baseline.has(id)) this.baseline.set(id, this.registry.get(id));
     this.pending.set(id, ++this.generation);
   }
@@ -60,7 +63,7 @@ export class PolicyManager {
     this.resources.delete(instance);
   }
   private async apply(id: string, generation: number): Promise<void> {
-    const spec = this.settings.effective().policyPlugins?.[id];
+    const spec = this.settings.desired().policyPlugins?.[id];
     this.validate(id, spec);
     const previous = this.active.get(id);
     let candidate: PolicyInstance | undefined;
@@ -92,6 +95,7 @@ export class PolicyManager {
       if (previous) this.resources.delete(previous);
       if (candidate) this.active.set(id, candidate); else this.active.delete(id);
       this.errors.delete(id);
+      this.settings.appliedPlugin("policyPlugins", id, spec);
     } catch {
       let uncertain = false;
       if (candidate && this.resources.has(candidate)) {
