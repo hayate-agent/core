@@ -1,5 +1,7 @@
 # Hayate Agent
 
+<img src="docs/assets/hayate-agent.jpg" alt="Hayate Agent" width="640">
+
 A persistent AI agent for your terminal and messaging gateways. Use it to work on
 code interactively, or keep it running to handle conversations, scheduled tasks
 and longer-term goals.
