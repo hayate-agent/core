@@ -11,20 +11,20 @@ import { personaSections } from "../src/persona.js";
 const root = new URL("../", import.meta.url);
 const text = (file: string) => readFile(new URL(file, root), "utf8");
 
-test("CLI displays Hayate Agent while keeping the legacy executable", () => {
+test("CLI displays canonical Hayate Agent executable and environment", () => {
   const help = execFileSync(process.execPath, ["--import", "tsx", "src/cli.ts", "--help"], { cwd: root, encoding: "utf8" });
   assert.match(help, /^Hayate Agent /);
   assert.match(help, /Interactive Hayate Agent TUI/);
-  assert.match(help, /vanillacore-harness run/);
-  assert.match(help, /VANILLACORE_HARNESS_HOME/);
+  assert.match(help, /hayate-agent run/);
+  assert.match(help, /HAYATE_AGENT_HOME/);
   assert.doesNotMatch(help, /VanillaCore Agent Harness/);
 });
 
-test("package keeps technical identifiers while docs use canonical repositories", async () => {
+test("package uses canonical identifiers while internal repository stays exempt", async () => {
   const pkg = JSON.parse(await text("package.json"));
   assert.match(pkg.description, /^Hayate Agent:/);
-  assert.equal(pkg.name, "vanillacore-harness");
-  assert.deepEqual(pkg.bin, { "vanillacore-harness": "./dist/cli.js" });
+  assert.equal(pkg.name, "hayate-agent");
+  assert.deepEqual(pkg.bin, { "hayate-agent": "./dist/cli.js" });
   assert.equal(pkg.repository.url, "https://git.vanillacore.net/harness/core.git");
   assert.equal(JSON.parse(await text("package-lock.json")).name, pkg.name);
   assert.match(await text("README.md"), /^# Hayate Agent\n/);
@@ -37,7 +37,7 @@ test("package keeps technical identifiers while docs use canonical repositories"
   assert.match(await text("docs/installation.md"), /git clone https:\/\/github\.com\/hayate-agent\/core\.git/);
   assert.match(await text("docs/development.md"), /^# Developing and extending Hayate Agent/);
   assert.match(await text("deploy/kubernetes/SOUL.md"), /running in Hayate Agent/);
-  assert.match(defaultConfig().home, /\.vanillacore-harness$/);
+  assert.equal(defaultConfig({ home: "/explicit/hayate" }).home, "/explicit/hayate");
 });
 
 test("new persona and diagnostics use product name but preserve configured identity and state", async () => {

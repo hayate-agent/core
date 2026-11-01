@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import os from "node:os";
+import { agentHome, configurationFile } from "./product-paths.js";
 import path from "node:path";
 import { parse } from "yaml";
 import { validateGatewayConfig, type GatewayConfig } from "./gateway-settings.js";
@@ -43,7 +43,7 @@ export interface HarnessConfig {
   tools?: string[];
   /** Trusted local ESM plugin paths, relative to Harness home or absolute. */
   plugins?: string[];
-  /** Models that accept reasoning_effort "none" for thinking "off" turns; merged with HARNESS_REASONING_EFFORT_NONE_MODELS at the runtime call site. */
+  /** Models that accept reasoning_effort "none" for thinking "off" turns; merged with HAYATE_AGENT_REASONING_EFFORT_NONE_MODELS at the runtime call site. */
   reasoningEffortNoneModels?: string[];
   /** Trusted tool-only ESM modules with explicit generation replacement. */
   reloadableToolPlugins?: string[];
@@ -150,10 +150,10 @@ export function defaultConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
       (activity.maxAlive !== undefined && (!Number.isInteger(activity.maxAlive) || activity.maxAlive < 0 || activity.maxAlive > 120)))) {
     throw Error("Invalid activity policy");
   }
-  const home = overrides.home ?? process.env.VANILLACORE_HARNESS_HOME ?? path.join(os.homedir(), ".vanillacore-harness");
+  const home = agentHome(overrides.home);
   return {
     activity: overrides.activity,
-    agent: overrides.agent ?? process.env.VANILLACORE_HARNESS_AGENT ?? "agent",
+    agent: overrides.agent ?? process.env.HAYATE_AGENT_AGENT ?? process.env.VANILLACORE_HARNESS_AGENT ?? "agent",
     home,
     cwd: overrides.cwd ?? process.cwd(),
     timezone: overrides.timezone ?? process.env.TZ ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
@@ -211,10 +211,10 @@ function instructionPaths(value: unknown): string[] {
   return value;
 }
 
-/** Load `<home>/harness.yaml` (if present) over the defaults. */
+/** Load canonical configuration, falling back to the pre-rename file on upgrade. */
 export async function loadConfig(home?: string): Promise<HarnessConfig> {
   const base = defaultConfig(home ? { home } : {});
-  const file = path.join(base.home, "harness.yaml");
+  const file = configurationFile(base.home);
   let raw: Partial<HarnessConfig> = {};
   try {
     raw = (parse(await readFile(file, "utf8")) ?? {}) as Partial<HarnessConfig>;

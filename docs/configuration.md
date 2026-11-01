@@ -3,12 +3,27 @@
 Each instance supplies its own configuration; identity and providers are not
 hardcoded in the application.
 
-- `VANILLACORE_HARNESS_HOME`: harness configuration, personality and persistent state
-  (default `~/.vanillacore-harness`).
-- `VANILLACORE_HARNESS_AGENT`: default agent key; `agent` in harness.yaml overrides it.
-- `PI_CODING_AGENT_DIR`: PI provider/settings/extension directory.
+- `HAYATE_AGENT_HOME`: configuration, personality and persistent state
+  (default `~/.hayate-agent`).
+- `HAYATE_AGENT_AGENT`: default agent key; `agent` in hayate-agent.yaml overrides it.
+- `HAYATE_AGENT_REASONING_EFFORT_NONE_MODELS`: comma-separated provider/model opt-ins
+  for reasoning effort `none`, merged with `reasoningEffortNoneModels` in YAML.
+- `PI_CODING_AGENT_DIR`: PI provider/settings/extension directory (third-party PI).
 
-## harness.yaml
+### Existing running local agents
+
+Explicit `--home` wins, then `HAYATE_AGENT_HOME`, then the legacy
+`VANILLACORE_HARNESS_HOME`. Without either variable, an existing
+`~/.vanillacore-harness` is reused; a fresh install uses `~/.hayate-agent`.
+If both directories exist, select the authoritative home explicitly. No directory
+is moved or deleted. In that home, `hayate-agent.yaml` wins; existing `harness.yaml`
+is a fallback. `init` preserves existing files, including legacy configuration.
+`VANILLACORE_HARNESS_AGENT` and `HARNESS_REASONING_EFFORT_NONE_MODELS` are fallback
+inputs only when their canonical variables are absent (an empty canonical value
+still wins). These inputs support local upgrades, not new deployment examples.
+The image does not force a home variable, so existing mounted homes stay usable.
+
+## hayate-agent.yaml
 
 ```yaml
 agent: example-agent
@@ -53,7 +68,7 @@ instead explicitly designate a directory as overlays after verifying that **all*
 its Markdown files are their own cumulative instructions. YAML/technical settings
 are never inferred as prompt content; overlay Markdown must contain instructions,
 not secrets. Config changes still require the normal configuration activation;
-this implementation does not hot-reload harness.yaml.
+this implementation does not hot-reload hayate-agent.yaml.
 
 Prompt order is foundation, own SOUL, own VOICE, optional legacy selected profile,
 ordered overlays, conversation guidance, skill metadata and current run instructions.
@@ -113,15 +128,15 @@ overlay keys: an overlay update applies at the next worker dispatch boundary wit
 restart. Rules apply only to dispatcher worker turns;
 the parent agent keeps the session model. Reasoning levels above `off` require models
 that handle `reasoning_content` correctly; models listed in
-`HARNESS_REASONING_EFFORT_NONE_MODELS` or `reasoningEffortNoneModels` are exempt for
+`HAYATE_AGENT_REASONING_EFFORT_NONE_MODELS` or `reasoningEffortNoneModels` are exempt for
 `thinking: off` turns.
 
 ## Reasoning effort none opt-in
 
 Some OpenAI-compatible servers only accept `reasoning_effort: "none"` instead of a
 thinking switch. Opt in models verified to accept that parameter via
-`reasoningEffortNoneModels` in `harness.yaml` (preferred, config-owned) or the
-`HARNESS_REASONING_EFFORT_NONE_MODELS` environment variable; both lists are merged:
+`reasoningEffortNoneModels` in `hayate-agent.yaml` (preferred, config-owned) or the
+`HAYATE_AGENT_REASONING_EFFORT_NONE_MODELS` environment variable; both lists are merged:
 
 ```yaml
 reasoningEffortNoneModels:
@@ -130,7 +145,7 @@ reasoningEffortNoneModels:
 
 For opted-in `openai-completions` models, a per-turn thinking `off` injects
 `samplingParamsByThinkingLevel.off.reasoning_effort = "none"` into the selected
-model and restores the original selection after the turn. Changing `harness.yaml`
+model and restores the original selection after the turn. Changing `hayate-agent.yaml`
 requires a restart or `/restart`; a `settings.local.yaml` overlay with the same key
 (`reasoningEffortNoneModels`) is live-editable and applies at the next request
 boundary, merged with the config and environment lists.
@@ -161,7 +176,7 @@ conversation. A skill created during a running prompt becomes discoverable on th
 next prompt; it can also be read directly immediately. No filesystem watcher is
 required. `/reload-skills` remains a manual fallback.
 
-Skill metadata injection is configurable via `skills.context` (harness.yaml) or
+Skill metadata injection is configurable via `skills.context` (hayate-agent.yaml) or
 `skills.context` in `settings.local.yaml`:
 
 - `auto` (default): inject the catalog metadata once per session, cached; the
@@ -210,7 +225,7 @@ Core commands (global changes require administrator rights):
 - `/model --global` and `/reasoning --global` show the effective defaults.
 
 Chat overrides live in `<home>/settings.local.yaml`, not `state.json` or the
-potentially read-only `harness.yaml`. Only explicit overrides are stored, not a copy
+potentially read-only `hayate-agent.yaml`. Only explicit overrides are stored, not a copy
 of all defaults. Setters validate and serialize updates, atomically save, then publish
 the new effective values. Output identifies whether a value comes from the local
 overlay or installation/default. `--global` must be the final argument.
@@ -224,7 +239,7 @@ Unknown keys, secrets, plugin paths and security policy are rejected, not merged
 ### Live routing and request compatibility overlay
 
 The existing `<home>/settings.local.yaml` is the writable surface above the
-installation's (possibly root-owned/read-only) `harness.yaml`. No base write,
+installation's (possibly root-owned/read-only) `hayate-agent.yaml`. No base write,
 permission change or restart is needed for these two live keys:
 
 ```yaml

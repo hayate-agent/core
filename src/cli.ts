@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { reasoningEffortNoneModels } from "./product-paths.js";
 import { workingTreeEvidence } from "./repetition-budget.js";
 import { ToolGuardError } from "./tool-guard-error.js";
 import { improvementPlugin } from "./builtin-plugins/improvement-plugin.js";
@@ -99,17 +100,17 @@ import { appendFileDurable } from "./durable.js";
 const USAGE = `Hayate Agent ${VERSION}
 
 Usage:
-  vanillacore-harness                      Interactive Hayate Agent TUI in the current directory
-  vanillacore-harness run [--home <dir>]   Start the agent loop (console channel on stdin/stdout)
-  vanillacore-harness init [--home <dir>] [--cwd <dir>] [--agent <name>] [--model <provider/model>]
-  vanillacore-harness run --observe-directory <private-dir> --observe-session <exact-key> [--home <dir>]
-  vanillacore-harness run --maintenance-directory <private-dir> --maintenance-session <exact-key> [--home <dir>]
-  vanillacore-harness attach <local-socket-path>  Read-only JSON status; Ctrl+C detaches
-  vanillacore-harness doctor [--home <dir>]
-  vanillacore-harness maintenance <socket> status | admit <id> <version> <request.json> | cancel <id> <version>
-  vanillacore-harness version
+  hayate-agent                      Interactive Hayate Agent TUI in the current directory
+  hayate-agent run [--home <dir>]   Start the agent loop (console channel on stdin/stdout)
+  hayate-agent init [--home <dir>] [--cwd <dir>] [--agent <name>] [--model <provider/model>]
+  hayate-agent run --observe-directory <private-dir> --observe-session <exact-key> [--home <dir>]
+  hayate-agent run --maintenance-directory <private-dir> --maintenance-session <exact-key> [--home <dir>]
+  hayate-agent attach <local-socket-path>  Read-only JSON status; Ctrl+C detaches
+  hayate-agent doctor [--home <dir>]
+  hayate-agent maintenance <socket> status | admit <id> <version> <request.json> | cancel <id> <version>
+  hayate-agent version
 
-Home (default ~/.vanillacore-harness, env VANILLACORE_HARNESS_HOME): harness.yaml, SOUL.md, VOICE.md,
+Home (default ~/.hayate-agent, env HAYATE_AGENT_HOME): hayate-agent.yaml, SOUL.md, VOICE.md,
 personalities/<name>.md, skills/, cron/jobs.yaml (+ cron/scripts, cron/prompts), sessions/.`;
 
 const sessionOwners = new Set<LocalSessions>();
@@ -266,7 +267,7 @@ async function main(argv: string[]): Promise<void> {
     thinking: config.thinking,
     beforeRequest: reloadRuntimeSettings,
     reasoningEffortNoneModels: () => [...settings.effective().reasoningEffortNoneModels ?? [],
-      ...(process.env.HARNESS_REASONING_EFFORT_NONE_MODELS ?? "").split(",").map(value => value.trim()).filter(Boolean)],
+      ...reasoningEffortNoneModels()],
     pruning: () => pruningPolicy(settings.effective().toolResultPruning),
     projectToolResults: (messages, policy) => (strategies.current ?? disabledContextStrategies).project(messages, policy),
     modelDefaults: () => ({ revision: settings.revision, model: effectiveModels().model, thinking: effectiveModels().thinking }),
