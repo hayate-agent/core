@@ -1,6 +1,6 @@
 # Semantic completion fallback
 
-The bundled advisory classification wording is owned by `harness/plugins` and
+The bundled advisory classification wording is owned by [hayate-agent/plugins](https://github.com/hayate-agent/plugins) and
 injected into the host assessor. Core keeps eligibility, task anchors, deadline,
 cancellation, output validation and durable follow-up admission. No authorization
 checks or task-state persistence move into the wording implementation.

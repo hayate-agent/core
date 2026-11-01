@@ -3,7 +3,7 @@
 ## Strategy ownership
 
 The bundled work prompt, experiment receipt parser/deduplication, productivity and
-completion decisions, and bounded report renderer are owned by `harness/plugins`.
+completion decisions, and bounded report renderer are owned by [hayate-agent/plugins](https://github.com/hayate-agent/plugins).
 Core retains calendar scheduling, durable turn reservations/window checks, inbox/
 outbox coordination and the infrastructure-pinned evaluator/process runner. Existing
 state files and report archives require no migration.

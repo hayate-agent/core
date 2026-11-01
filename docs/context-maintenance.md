@@ -3,7 +3,7 @@
 ## Strategy ownership and startup selection
 
 The bundled semantic boundary assessor and pure tool-result projection algorithm
-are maintained in `harness/plugins`, pinned with immutable revision and hashes.
+are maintained in [hayate-agent/plugins](https://github.com/hayate-agent/plugins), pinned with immutable revision and hashes.
 Core keeps the boundary state machine, persistence, usage observations, cooldowns,
 authority checks, provider rotation and compatibility configuration validation.
 No state/checkpoint format or default behavior changes in this extraction.

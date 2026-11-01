@@ -20,7 +20,7 @@ test("CLI displays Hayate Agent while keeping the legacy executable", () => {
   assert.doesNotMatch(help, /VanillaCore Agent Harness/);
 });
 
-test("package and docs brand the product without renaming repositories or imports", async () => {
+test("package keeps technical identifiers while docs use canonical repositories", async () => {
   const pkg = JSON.parse(await text("package.json"));
   assert.match(pkg.description, /^Hayate Agent:/);
   assert.equal(pkg.name, "vanillacore-harness");
@@ -28,7 +28,13 @@ test("package and docs brand the product without renaming repositories or import
   assert.equal(pkg.repository.url, "https://git.vanillacore.net/harness/core.git");
   assert.equal(JSON.parse(await text("package-lock.json")).name, pkg.name);
   assert.match(await text("README.md"), /^# Hayate Agent\n/);
-  assert.match(await text("README.md"), /git clone https:\/\/git.vanillacore.net\/harness\/core.git/);
+  const readme = await text("README.md");
+  assert.match(readme, /git clone https:\/\/github\.com\/hayate-agent\/core\.git/);
+  for (const repo of ["core", "plugins", "deployments"]) {
+    assert.ok(readme.includes(`https://github.com/hayate-agent/${repo}`));
+  }
+  assert.doesNotMatch(readme, /Repository names and URLs .*are\s+unchanged/s);
+  assert.match(await text("docs/installation.md"), /git clone https:\/\/github\.com\/hayate-agent\/core\.git/);
   assert.match(await text("docs/development.md"), /^# Developing and extending Hayate Agent/);
   assert.match(await text("deploy/kubernetes/SOUL.md"), /running in Hayate Agent/);
   assert.match(defaultConfig().home, /\.vanillacore-harness$/);
