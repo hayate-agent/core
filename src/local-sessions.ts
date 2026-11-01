@@ -1,6 +1,7 @@
 import type { SessionProvider } from "./sessions.js";
 import { randomUUID, createHash } from "node:crypto";
-import { mkdir, open, readFile, readdir, realpath, unlink } from "node:fs/promises";
+import { mkdir, open, readFile, readdir, realpath } from "node:fs/promises";
+import { SessionLock } from "./session-lock.js";
 import path from "node:path";
 import { writeFileDurable } from "./durable.js";
 
@@ -18,7 +19,7 @@ export class LocalSessions {
   private constructor(private readonly home: string, readonly workspace: string) {}
   private active?: LocalSession;
   provider?: SessionProvider;
-  private readonly locks = new Set<string>();
+  private readonly locks = new Map<string, SessionLock>();
 
   static async open(home: string, cwd: string): Promise<LocalSessions> {
     const store = new LocalSessions(home, await realpath(cwd));
@@ -89,29 +90,12 @@ export class LocalSessions {
 
   private async acquireLock(lock: string): Promise<void> {
     if (this.locks.has(lock)) return;
-    let file;
-    try { file = await open(lock, "wx", 0o600); }
-    catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
-      const pid = Number(await readFile(lock, "utf8"));
-      if (!Number.isInteger(pid) || pid <= 0) throw new Error("Invalid session lock; inspect it manually");
-      try { process.kill(pid, 0); }
-      catch (probe) {
-        if ((probe as NodeJS.ErrnoException).code !== "ESRCH") throw probe;
-        // Do not steal locks automatically: a stale lock can be inspected safely by the operator.
-        throw new Error(`Stale session lock: ${lock}. Remove it only after confirming no owner is running.`);
-      }
-      throw new Error("Session or Harness home is already open in another terminal. Use a separate VANILLACORE_HARNESS_HOME for an independent process.");
-    }
-    try { await file.writeFile(String(process.pid)); await file.sync(); }
-    finally { await file.close(); }
-    // Keep ownership of opened sessions until shutdown: their background jobs/runtime
-    // objects can remain alive even when another conversation is visible.
-    this.locks.add(lock);
+    // Keep ownership until shutdown: background jobs may outlive the visible session.
+    this.locks.set(lock, await SessionLock.acquire(lock));
   }
 
   async release(): Promise<void> {
-    for (const lock of this.locks) { await unlink(lock); this.locks.delete(lock); }
+    for (const [file, lock] of this.locks) { await lock.release(); this.locks.delete(file); }
     this.active = undefined;
   }
 
