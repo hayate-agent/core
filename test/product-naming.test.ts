@@ -15,20 +15,21 @@ test("canonical defaults and explicit precedence preserve existing local homes w
     assert.equal(agentHome(undefined, {}, root), canonical);
     await mkdir(legacy);
     await writeFile(path.join(legacy, "harness.yaml"), "agent: existing\n");
-    assert.equal(agentHome(undefined, {}, root), legacy);
-    assert.equal(configurationFile(legacy), path.join(legacy, "harness.yaml"));
-    assert.equal((await loadConfig(legacy)).agent, "existing");
-    await initialize({ home: legacy, cwd: root });
-    assert.equal((await loadConfig(legacy)).agent, "existing");
-    assert.equal((await diagnose(legacy)).ok, true);
+    assert.equal(agentHome(undefined, {}, root), canonical);
+    assert.equal(configurationFile(legacy), path.join(legacy, "hayate-agent.yaml"));
+    assert.notEqual((await loadConfig(legacy)).agent, "existing");
     await mkdir(canonical);
-    assert.throws(() => agentHome(undefined, {}, root), /select the authoritative home/);
+    assert.equal(agentHome(undefined, {}, root), canonical);
     const env = { HAYATE_AGENT_HOME: canonical, VANILLACORE_HARNESS_HOME: legacy };
     assert.equal(agentHome(undefined, env, root), canonical);
     assert.equal(agentHome(legacy, env, root), legacy);
-    assert.equal(agentHome(undefined, { VANILLACORE_HARNESS_HOME: legacy }, root), legacy);
+    assert.equal(agentHome(undefined, { VANILLACORE_HARNESS_HOME: legacy }, root), canonical);
+    assert.equal(agentHome(undefined, { HAYATE_AGENT_HOME: legacy }, root), legacy);
     await writeFile(path.join(legacy, "hayate-agent.yaml"), "agent: canonical\n");
     assert.equal((await loadConfig(legacy)).agent, "canonical");
+    await initialize({ home: legacy, cwd: root });
+    assert.equal((await loadConfig(legacy)).agent, "canonical");
+    assert.equal((await diagnose(legacy)).ok, true);
     assert.equal(await readFile(path.join(legacy, "harness.yaml"), "utf8"), "agent: existing\n");
   } finally { await rm(root, { recursive: true, force: true }); }
 });
@@ -36,7 +37,7 @@ test("canonical defaults and explicit precedence preserve existing local homes w
 test("reasoning environment canonical precedence includes explicit empty opt-out", () => {
   assert.deepEqual(reasoningEffortNoneModels({ HAYATE_AGENT_REASONING_EFFORT_NONE_MODELS: " p/a, p/b, ", HARNESS_REASONING_EFFORT_NONE_MODELS: "old/model" }), ["p/a", "p/b"]);
   assert.deepEqual(reasoningEffortNoneModels({ HAYATE_AGENT_REASONING_EFFORT_NONE_MODELS: "", HARNESS_REASONING_EFFORT_NONE_MODELS: "old/model" }), []);
-  assert.deepEqual(reasoningEffortNoneModels({ HARNESS_REASONING_EFFORT_NONE_MODELS: "old/model" }), ["old/model"]);
+  assert.deepEqual(reasoningEffortNoneModels({ HARNESS_REASONING_EFFORT_NONE_MODELS: "old/model" }), []);
 });
 
 test("built npm executable uses Hayate help, init, doctor and restart configuration", async () => {
@@ -47,7 +48,10 @@ test("built npm executable uses Hayate help, init, doctor and restart configurat
     assert.deepEqual(pkg.bin, { "hayate-agent": "./dist/cli.js" });
     const executable = path.resolve(pkg.bin["hayate-agent"]);
     const env = { ...process.env, HOME: root, HAYATE_AGENT_AGENT: "canonical-agent" };
-    delete env.VANILLACORE_HARNESS_HOME;
+    const ignoredHome = path.join(root, ".vanillacore-harness");
+    await mkdir(ignoredHome);
+    await writeFile(path.join(ignoredHome, "harness.yaml"), "agent: ignored-agent\n");
+    Object.assign(env, { VANILLACORE_HARNESS_HOME: ignoredHome, VANILLACORE_HARNESS_AGENT: "ignored-agent" });
     delete env.HAYATE_AGENT_HOME;
     const cli = (...args: string[]) => execFileSync(process.execPath, [executable, ...args], { env, encoding: "utf8" });
     const help = cli("--help");
@@ -58,6 +62,18 @@ test("built npm executable uses Hayate help, init, doctor and restart configurat
     const home = path.join(root, ".hayate-agent");
     const yaml = await readFile(path.join(home, "hayate-agent.yaml"), "utf8");
     assert.match(yaml, /canonical-agent/);
+    assert.equal(await readFile(path.join(ignoredHome, "harness.yaml"), "utf8"), "agent: ignored-agent\n");
+    delete (env as NodeJS.ProcessEnv).HAYATE_AGENT_AGENT;
+    const explicitHome = path.join(root, "explicit-state");
+    await mkdir(explicitHome);
+    await writeFile(path.join(explicitHome, "harness.yaml"), "agent: ignored-agent\n");
+    cli("init", "--home", explicitHome, "--cwd", root);
+    assert.match(await readFile(path.join(explicitHome, "hayate-agent.yaml"), "utf8"), /agent: agent\n/);
+    assert.equal(await readFile(path.join(explicitHome, "harness.yaml"), "utf8"), "agent: ignored-agent\n");
+    Object.assign(env, { HAYATE_AGENT_HOME: explicitHome });
+    assert.match(cli("doctor"), /Hayate Agent diagnostics/);
+    cli("init", "--home", home, "--agent", "must-not-overwrite");
+    delete (env as NodeJS.ProcessEnv).HAYATE_AGENT_HOME;
     assert.match(cli("doctor"), /Hayate Agent diagnostics/);
     cli("init", "--agent", "must-not-overwrite");
     assert.equal(await readFile(path.join(home, "hayate-agent.yaml"), "utf8"), yaml);

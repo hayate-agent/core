@@ -10,18 +10,18 @@ hardcoded in the application.
   for reasoning effort `none`, merged with `reasoningEffortNoneModels` in YAML.
 - `PI_CODING_AGENT_DIR`: PI provider/settings/extension directory (third-party PI).
 
-### Existing running local agents
+### Home selection
 
-Explicit `--home` wins, then `HAYATE_AGENT_HOME`, then the legacy
-`VANILLACORE_HARNESS_HOME`. Without either variable, an existing
-`~/.vanillacore-harness` is reused; a fresh install uses `~/.hayate-agent`.
-If both directories exist, select the authoritative home explicitly. No directory
-is moved or deleted. In that home, `hayate-agent.yaml` wins; existing `harness.yaml`
-is a fallback. `init` preserves existing files, including legacy configuration.
-`VANILLACORE_HARNESS_AGENT` and `HARNESS_REASONING_EFFORT_NONE_MODELS` are fallback
-inputs only when their canonical variables are absent (an empty canonical value
-still wins). These inputs support local upgrades, not new deployment examples.
-The image does not force a home variable, so existing mounted homes stay usable.
+Explicit `--home` wins, then `HAYATE_AGENT_HOME`, then `~/.hayate-agent`.
+An explicitly selected directory may have any name; no directory is moved or
+deleted. Only `hayate-agent.yaml` is loaded from the selected home. Other home
+names, environment aliases and configuration filenames are not discovered.
+`init` preserves an existing `hayate-agent.yaml`.
+
+Already-running local agents require a separate deployment transition before
+upgrading: explicitly select their authoritative persistent home and mount their
+configuration as `hayate-agent.yaml`. Preserve sessions, memory and pending work
+in place; this application does not perform that operational transition.
 
 ## hayate-agent.yaml
 

@@ -31,7 +31,7 @@ test("YAML tool selections reach configuration unchanged, including no tools", a
   const dir = await mkdtemp(path.join(os.tmpdir(), "harness-config-"));
   try {
     for (const [yaml, expected] of [["tools: []", []], ["tools: [read, bash]", ["read", "bash"]]] as const) {
-      await writeFile(path.join(dir, "harness.yaml"), yaml);
+      await writeFile(path.join(dir, "hayate-agent.yaml"), yaml);
       assert.deepEqual((await loadConfig(dir)).tools, expected);
     }
   } finally {
@@ -42,9 +42,9 @@ test("YAML tool selections reach configuration unchanged, including no tools", a
 test("YAML reasoning opt-in reaches config and rejects malformed values", async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "harness-reasoning-"));
   try {
-    await writeFile(path.join(dir, "harness.yaml"), "reasoningEffortNoneModels:\n  - homelab/gpt-6.1-sol\n");
+    await writeFile(path.join(dir, "hayate-agent.yaml"), "reasoningEffortNoneModels:\n  - homelab/gpt-6.1-sol\n");
     assert.deepEqual((await loadConfig(dir)).reasoningEffortNoneModels, ["homelab/gpt-6.1-sol"]);
-    await writeFile(path.join(dir, "harness.yaml"), "reasoningEffortNoneModels: invalid\n");
+    await writeFile(path.join(dir, "hayate-agent.yaml"), "reasoningEffortNoneModels: invalid\n");
     await assert.rejects(loadConfig(dir), /reasoningEffortNoneModels/);
   } finally {
     await rm(dir, { recursive: true, force: true });

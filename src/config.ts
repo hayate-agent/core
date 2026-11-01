@@ -153,7 +153,7 @@ export function defaultConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
   const home = agentHome(overrides.home);
   return {
     activity: overrides.activity,
-    agent: overrides.agent ?? process.env.HAYATE_AGENT_AGENT ?? process.env.VANILLACORE_HARNESS_AGENT ?? "agent",
+    agent: overrides.agent ?? process.env.HAYATE_AGENT_AGENT ?? "agent",
     home,
     cwd: overrides.cwd ?? process.cwd(),
     timezone: overrides.timezone ?? process.env.TZ ?? Intl.DateTimeFormat().resolvedOptions().timeZone,

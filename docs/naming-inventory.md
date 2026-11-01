@@ -3,7 +3,7 @@
 This increment changes npm package/bin, CLI help, canonical home/config/env,
 configuration initialization/diagnosis, both reasoning runtime consumers, container
 executable/install path and primary native/Compose instructions. Fresh installs
-use Hayate names. Existing local agent state is read in place, never moved.
+use Hayate names. Explicitly selected state stays in place, never moved.
 Internal repositories, registry images and agent identities are exempt.
 
 ## Remaining public export work (not a full-rename completion)
@@ -19,7 +19,7 @@ Internal repositories, registry images and agent identities are exempt.
   browser-tools, dispatcher, gateway-progress, local-maintenance-control, mcp,
   memory, operator-responsiveness, plugins, protected-content, review,
   self-development, session-attach, settings-dropins. Migrate examples, retaining
-  explicit local-upgrade explanation only.
+  operational local-upgrade prerequisites only, not public compatibility aliases.
 - Kubernetes example: old configuration filename/home mounts and sample public
   resource/image names remain. Update as a separate coherent deploy example;
   actual internal image/repo/resource names are exempt, not blanket rename targets.
@@ -38,11 +38,17 @@ and `[harness]` diagnostic component labels describe the orchestration layer.
 Do not mechanically rename them without evidence of a public product interface.
 Third-party PI names/env and Matrix SDK package names are not Hayate branding.
 
-## Compatibility boundary
+## Operational boundary — merge/activation dependency
 
-Only old local home/config/env inputs remain accepted by this slice. No old npm
-package/bin alias, migration framework, directory move, agent replacement or
-activation is introduced. A legacy home remains authoritative unless explicitly
-selected otherwise; ambiguous dual default homes fail closed. Container home env
-is deliberately not forced, allowing the same local-home resolver for mounted
-existing agents. New Compose paths are canonical; no live Compose/pod is changed.
+There are no public legacy home/config/env aliases or automatic discovery.
+`--home` and `HAYATE_AGENT_HOME` can explicitly select any existing directory;
+only `hayate-agent.yaml` is loaded there. No state move or activation is introduced.
+
+Before merging or activating this slice, separately resolve the GitOps transition
+for already-running authorized local agents: keep their current persistent home
+and PVC, explicitly select that home with `HAYATE_AGENT_HOME`, and adapt the
+configuration mount filename to `hayate-agent.yaml` without changing its content.
+Translate any consumed old agent/reasoning environment names to their Hayate
+names. Preserve sessions, memory, pending work, mounts and identities. Removing
+fallbacks does not activate or transition an agent. New Compose paths are canonical;
+no live Compose/pod is changed. Internal image/repository names remain exempt.
