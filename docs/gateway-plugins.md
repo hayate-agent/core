@@ -2,7 +2,7 @@
 
 The CLI consumes a bundled gateway-module catalog rather than constructing Matrix
 or naming its factory. Matrix factory, transport, sync recovery and native activity
-delivery are maintained in `harness/plugins` and materialized from the immutable
+delivery are maintained in [hayate-agent/plugins](https://github.com/hayate-agent/plugins) and materialized from the immutable
 `plugins.lock.json` revision into generated `builtin-plugins/` modules. The default
 factory implements `src/gateway-provider.ts`; MATRIX_* settings remain compatible.
 Existing local GatewayModule overrides and disable/baseline operations are unchanged.

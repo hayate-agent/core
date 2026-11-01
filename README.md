@@ -14,9 +14,8 @@ Existing PI provider configuration can be reused.
 remain `vanillacore-harness`; existing commands, `~/.vanillacore-harness`,
 `harness.yaml`, `VANILLACORE_HARNESS_HOME`, import names, API/storage identifiers
 and deployment/image identifiers stay compatible. No state migration is needed.
-Repository names and URLs (including `harness/core` and `harness/plugins`) are
-unchanged. “Harness” may still describe the runtime architecture or a technical
-identifier; it is not a second product name.
+“Harness” may still describe the runtime architecture or a technical identifier;
+it is not a second product name.
 
 Branding does not replace configured agent keys, SOUL/VOICE identities or other
 agents' personas. Updated templates apply only to newly created files; existing
@@ -25,6 +24,22 @@ running installation: install the reviewed version and restart through your
 normal deployment process. Cross-repository overlays/plugins may retain their
 own display text until separately updated.
 
+## Repositories
+
+- [hayate-agent/core](https://github.com/hayate-agent/core) — product source and documentation.
+- [hayate-agent/plugins](https://github.com/hayate-agent/plugins) — independently versioned plugin adapters.
+- [hayate-agent/deployments](https://github.com/hayate-agent/deployments) — canonical deployment repository.
+
+These are the canonical repository addresses, not a migration of existing runtime
+remotes, plugin source pins or deployment configuration. The deployments address
+does not establish a directory layout or a mapping from older overlay/base repositories.
+Core's local deployment examples remain in `deploy/`.
+
+Repository publication is still pending: the GitHub repositories are currently
+empty. The installation commands below require Core's source to be published on
+`main`; until then, keep using an existing verified checkout rather than an empty
+clone. Existing installations do not need their remotes or configuration changed.
+
 ## Install and start
 
 You need **Git and Node.js with npm**. Node **24.22.1 LTS** is recommended;
@@ -32,7 +47,7 @@ the native CLI requires at least Node 22.19.0. Linux, macOS and Windows through
 WSL2 are supported.
 
 ```sh
-git clone https://git.vanillacore.net/harness/core.git "$HOME/vanillacore-harness"
+git clone https://github.com/hayate-agent/core.git "$HOME/vanillacore-harness"
 cd "$HOME/vanillacore-harness"
 npm ci
 npm install --global --prefix "$HOME/.local" .

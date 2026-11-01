@@ -27,7 +27,7 @@ per-session successful-status cache is bounded to 128 entries.
 
 ## Required plugin dependency (not implemented in this candidate)
 
-The pinned `harness/plugins` revision
+The pinned [hayate-agent/plugins](https://github.com/hayate-agent/plugins) revision
 `c8e2f9d20de6e8406ef1cf3bf984afe0d6499b64` continuation tool has a closed schema
 without `replyKind`. The core API now accepts and validates the optional enum,
 but the model-visible tool does NOT support it. No generated builtin, lock or

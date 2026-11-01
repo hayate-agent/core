@@ -7,10 +7,14 @@ Node 24.22.1 LTS is recommended and recorded in `.node-version`. No root executi
 
 ## Native installation
 
-Use a user-owned checkout and npm prefix; do not use sudo npm.
+Use a user-owned checkout and npm prefix; do not use sudo npm. The canonical
+source is [hayate-agent/core](https://github.com/hayate-agent/core). Publication
+there is still pending (the repository is currently empty); the clone command
+below requires published source on `main`. Until then, use an existing verified
+checkout.
 
 ```sh
-git clone https://git.vanillacore.net/harness/core.git "$HOME/vanillacore-harness"
+git clone https://github.com/hayate-agent/core.git "$HOME/vanillacore-harness"
 cd "$HOME/vanillacore-harness"
 npm ci
 npm run typecheck
@@ -91,6 +95,12 @@ activation. Do not expose the API publicly without your own ingress policy.
 Add `MATRIX_*` environment entries to a private Compose override if desired.
 
 ## Kubernetes / GitOps
+
+The canonical deployment repository is
+[hayate-agent/deployments](https://github.com/hayate-agent/deployments). It is
+currently empty; no directory layout or migration from older overlay/base
+repositories is established here. The instructions below use Core's checked-in
+example, not an assumed path in that repository.
 
 Render `kubectl kustomize deploy/kubernetes`. Replace the placeholder image with a
 published immutable digest and supply `harness-credentials` out-of-band. Configure

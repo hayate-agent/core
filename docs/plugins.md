@@ -13,7 +13,7 @@ are not preserved when subsequent settings updates serialize the document.
 
 ## Source ownership and build
 
-Bundled plugin adapters are maintained in `harness/plugins`, not copied into this
+Bundled plugin adapters are maintained in [hayate-agent/plugins](https://github.com/hayate-agent/plugins), not copied into this
 repository. `plugins.lock.json` pins an immutable revision and SHA-256 per source
 file. Build, typecheck and test materialize verified sources into ignored
 `src/builtin-plugins/`; generated files are never edited or committed. Core owns
@@ -168,7 +168,7 @@ wait for its own in-flight calls; the registry does not dispose implementation
 resources or grant authority to reload arbitrary code.
 
 The review engine, ledger implementation, guards, lifecycle and bundled default
-composition are owned by `harness/plugins`. Ledger format/path and persistent
+composition are owned by [hayate-agent/plugins](https://github.com/hayate-agent/plugins). Ledger format/path and persistent
 budgets are unchanged; extraction does not grant new review rounds. General plugin
 registration is startup-only; the separate [runtime policy module manager](policy-plugins.md)
 supports admin-selected local ESM overrides, persistent desired state and lifecycle
@@ -218,7 +218,7 @@ failed persistence leave the active selection unchanged. `disable` persists `non
 enabling an orchestrator requires restart. Provider, tools and stored data are
 unchanged; this is neither provider migration nor plugin hot reload.
 
-Plugins must clean up their own resources with `onStop`. The bundled default engine is owned by `harness/plugins` and materialized from the
+Plugins must clean up their own resources with `onStop`. The bundled default engine is owned by [hayate-agent/plugins](https://github.com/hayate-agent/plugins) and materialized from the
 immutable pin; it retains the existing pending-write persistence behavior. Core
 still owns provider reconnection, contracts and selection. Engine source updates
 require image rollout; dynamic registration/removal lifecycle is not provided here. No

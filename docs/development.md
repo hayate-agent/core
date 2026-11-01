@@ -10,7 +10,7 @@ The default CLI supplies **ALWAYS vertical slices. ALWAYS KISS.** through
 `capabilityContext` on every working turn, including dispatcher and managed
 subagent workers. It is independent of persona files, memory, skill discovery,
 tool selection and dispatcher enablement. Core owns this shared instruction path;
-`harness/plugins` owns the dispatcher tool adapter, which has no instruction hook.
+[hayate-agent/plugins](https://github.com/hayate-agent/plugins) owns the dispatcher tool adapter, which has no instruction hook.
 
 Build the smallest simple end-to-end slice from the concrete request to a verified
 result before expanding horizontally. Include persistence, restart, continuation
@@ -113,8 +113,9 @@ contract and roadmap.md for outstanding deployment and integration requirements.
 
 The active project may be unrelated to the Harness. Inspect it before editing.
 The installed guide path identifies the package, not ownership or write permission.
-Use a user-owned checkout of https://git.vanillacore.net/harness/core.git on a
-feature branch. Never use root to overwrite an immutable installation. Deployment
+Use a user-owned checkout of https://github.com/hayate-agent/core.git on a
+feature branch. Publication to that currently empty repository is pending; until
+then, use an existing verified source checkout. Never use root to overwrite an immutable installation. Deployment
 specifics belong in a private overlay, credentials never in either repository.
 
 ## Implement and verify

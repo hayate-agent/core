@@ -15,7 +15,7 @@ against Harness home. `baseline` removes the override and restores the policy
 captured before its first managed replacement (or removes a newly added optional
 policy). Required identities, including `review` when configured, can be replaced
 but not disabled. This does not migrate or reset the review ledger, findings,
-assessments or budget. The bundled review engine and default composition are owned by `harness/plugins`;
+assessments or budget. The bundled review engine and default composition are owned by [hayate-agent/plugins](https://github.com/hayate-agent/plugins);
 the host keeps configuration compatibility and generic policy lifecycle.
 
 A local ESM entry exports default:
