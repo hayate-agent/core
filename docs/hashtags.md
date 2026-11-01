@@ -16,7 +16,8 @@ are indexed. API/host/tool/scheduler/continuation text is not tag intent. Tags
 are case-insensitive ASCII `#slug` tokens: start with a letter, then letters or
 digits, with optional single hyphens between components; whitespace before and
 whitespace, end-of-line or ordinary sentence punctuation after. Examples:
-`#release`, `#content-fix`. Tags do not route prompts or grant authority.
+`#release`, `#content-fix`. Tags select additional historical context but never
+route to a different SDK session or grant authority.
 
 The conservative parser skips fenced and indented code, Markdown blockquotes,
 inline backticks, single/double quoted strings, Markdown links and XML-style
@@ -55,5 +56,27 @@ worker prose and host result text do not create tags. Native and external sessio
 providers use the same Harness-owned durable metadata, scoped to the existing
 conversation/execution identities, without global session searches.
 
-No context switching, autofocus, routing mode, profile changes or LLM
-summarization is part of this feature.
+## Additional context before inference
+
+Fresh operator hashtags mechanically select existing conversation-scoped index
+references at admission, before asynchronous prompt assembly. Unknown tags have
+no hits; no semantic aliases or special `#pr`/`#rollout` modes exist. Multiple tags
+form a deduplicated union, newest indexed first (index order breaks ties), capped
+at eight user messages. Each excerpt is at most 800 characters; exact session and
+message IDs identify its source. Missing retained history is marked unavailable.
+Only indexed user messages are read; there is no recursive tag expansion,
+automatic summary, background model call or historical backfill. `/hashtags`
+lookup remains unchanged.
+
+The durable originating assignment stores the reference snapshot, not copied
+message bodies. Queued/restored inputs, continuations and exact dispatcher
+execution dependencies retain that selection, even after a newer topic arrives.
+Reads use the existing runtime's conversation-scoped history boundary for native
+and external providers, not arbitrary session paths or a global current tag.
+Generated context is prompt metadata and is never indexed as operator text.
+
+Recalled excerpts are explicitly untrusted historical data, not instructions or
+new authority. Current instructions and original permissions/constraints take
+precedence. **This improves relevance, not hard isolation:** existing mixed SDK
+history remains present. No hidden reset, purge, autofocus, routing mode, profile
+change or LLM summarization is part of this feature.
