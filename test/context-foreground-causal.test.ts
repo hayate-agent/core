@@ -1,0 +1,30 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { ContextMaintenance, contextPolicy } from "../src/context-maintenance.js";
+import type { RuntimeSession } from "../src/types.js";
+
+test("controlled stalled maintenance blocks same-conversation foreground guidance, not another conversation", async t => {
+  const home = await mkdtemp(path.join(os.tmpdir(), "foreground-causal-"));
+  t.after(() => rm(home, { recursive: true, force: true }));
+  let enter!: () => void, release!: () => void;
+  const entered = new Promise<void>(resolve => { enter = resolve; });
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const session = { status: () => ({ sessionId: "old", contextPercent: 80 }), compact: async () => { enter(); await gate; } } as unknown as RuntimeSession;
+  const maintenance = new ContextMaintenance(home, () => contextPolicy({ enabled: false }));
+  await maintenance.request("same", { action: "compact", preserve: "intent", resume: "task" });
+  const started = performance.now();
+  const background = maintenance.boundary("same", session, async () => session);
+  await entered;
+  let foregroundFinished = false;
+  const foreground = maintenance.guidance("same", session).then(() => { foregroundFinished = true; });
+  await maintenance.guidance("other", session);
+  assert.equal(foregroundFinished, false);
+  t.diagnostic(`controlled hold before release: ${(performance.now() - started).toFixed(2)}ms; same key waiting, other key completed; zero model/provider calls`);
+  release();
+  await background;
+  await foreground;
+  assert.equal(foregroundFinished, true);
+});

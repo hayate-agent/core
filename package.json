@@ -1,0 +1,52 @@
+{
+  "name": "vanillacore-harness",
+  "version": "0.1.0",
+  "description": "Hayate Agent: a lightweight, persistent agent harness with a swappable runtime.",
+  "type": "module",
+  "license": "Apache-2.0",
+  "private": true,
+  "repository": {
+    "type": "git",
+    "url": "https://git.vanillacore.net/harness/core.git"
+  },
+  "files": [
+    "dist",
+    "docs",
+    "README.md",
+    "LICENSE"
+  ],
+  "bin": {
+    "vanillacore-harness": "./dist/cli.js"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "scripts": {
+    "plugins:materialize": "node scripts/materialize-plugins.mjs",
+    "prebuild": "npm run plugins:materialize",
+    "pretypecheck": "npm run plugins:materialize",
+    "pretest": "npm run plugins:materialize",
+    "build": "tsc -p tsconfig.json",
+    "prepare": "npm run build",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --import tsx --test test/*.test.ts",
+    "test:targeted": "node scripts/test-targeted.mjs",
+    "start": "node --import tsx src/cli.ts run"
+  },
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "1.4.0",
+    "@earendil-works/pi-tui": "1.4.0",
+    "@matrix-org/matrix-sdk-crypto-nodejs": "0.4.0",
+    "croner": "10.0.1",
+    "marked": "18.1.1",
+    "yaml": "2.9.1"
+  },
+  "overrides": {
+    "undici": "8.12.3"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.2",
+    "tsx": "4.23.15",
+    "typescript": "7.0.2"
+  }
+}
