@@ -1,8 +1,7 @@
-# Local use and developing the harness with itself
+# Local use and developing Hayate Agent with itself
 
-This is an additive installation: it does not remove or stop Hermes or PI. The
-harness embeds PI as its model/tool runtime. Bare invocation opens the Harness
-TUI in the current directory, with local login/model dialogs and Harness commands. The
+This is an additive installation: it does not remove or stop Hermes or PI. Hayate Agent embeds PI as its model/tool runtime. Bare invocation opens the Hayate Agent
+TUI in the current directory, with local login/model dialogs and product commands. The
 explicit `run` command remains the gateway with a line-based console. Matrix and the API provide the
 persistent gateway path. Slack, managed MCP/CLI installation and automatic runtime
 promotion/rollback remain unimplemented.
@@ -70,7 +69,7 @@ this unit for an interactive stdin conversation. Example (replace absolute paths
 
 ```ini
 [Unit]
-Description=VanillaCore Agent Harness
+Description=Hayate Agent
 
 [Service]
 Type=simple

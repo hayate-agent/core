@@ -31,7 +31,7 @@ cd /path/to/your/project
 vanillacore-harness
 ```
 
-This opens the Harness TUI (using PI terminal components) in the current directory.
+This opens the Hayate Agent TUI (using PI terminal components) in the current directory.
 Each launch starts a fresh, workspace-scoped conversation. Use `/sessions` and
 `/resume` to explicitly select an earlier conversation, or `/new [title]` to start
 another. The active session is shown in the header; resumed history is displayed.
@@ -46,7 +46,7 @@ Neither Hermes nor PI is uninstalled or stopped.
 You can also test without installing the command globally: after `npm ci`, run
 `node "$HOME/vanillacore-harness/dist/cli.js"` from your project directory.
 
-Optional `init` creates missing Harness persona/configuration files without
+Optional `init` creates missing Hayate Agent persona/configuration files without
 replacing existing files; `doctor` checks local configuration, not provider
 connectivity. Neither is a prerequisite for interactive use. See
 [configuration](configuration.md) for a separate agent profile and
@@ -54,8 +54,8 @@ connectivity. Neither is a prerequisite for interactive use. See
 
 ### Gateway / background service
 
-`vanillacore-harness run` starts the same persistent Harness without its TUI.
-Interactive mode runs the Harness scheduler and configured gateway channels too. For a headless API service, set `API_SERVER_KEY`. Matrix is enabled through
+`vanillacore-harness run` starts the same persistent Hayate Agent without its TUI.
+Interactive mode runs the Hayate Agent scheduler and configured gateway channels too. For a headless API service, set `API_SERVER_KEY`. Matrix is enabled through
 `MATRIX_*` variables (see the main README). Slack is not implemented yet.
 For an always-on native service use your OS supervisor (systemd on Linux/WSL with
 systemd enabled, launchd on macOS), preserving HOME, PATH and your secret injection.

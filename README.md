@@ -1,12 +1,29 @@
-# VanillaCore Agent Harness
+# Hayate Agent
 
 A persistent AI agent for your terminal and messaging gateways. Use it to work on
 code interactively, or keep it running to handle conversations, scheduled tasks
 and longer-term goals.
 
-The Harness owns scheduling, queues and message delivery. PI is the current model
-and tool runtime; you do not need a separate PI installation to install the Harness.
+Hayate Agent owns scheduling, queues and message delivery. PI is the current model
+and tool runtime; you do not need a separate PI installation to install Hayate Agent.
 Existing PI provider configuration can be reused.
+
+## Naming and compatibility
+
+**Hayate Agent** is the product display name. The executable and npm package
+remain `vanillacore-harness`; existing commands, `~/.vanillacore-harness`,
+`harness.yaml`, `VANILLACORE_HARNESS_HOME`, import names, API/storage identifiers
+and deployment/image identifiers stay compatible. No state migration is needed.
+Repository names and URLs (including `harness/core` and `harness/plugins`) are
+unchanged. “Harness” may still describe the runtime architecture or a technical
+identifier; it is not a second product name.
+
+Branding does not replace configured agent keys, SOUL/VOICE identities or other
+agents' personas. Updated templates apply only to newly created files; existing
+files are never overwritten. Updating source or building does not activate a
+running installation: install the reviewed version and restart through your
+normal deployment process. Cross-repository overlays/plugins may retain their
+own display text until separately updated.
 
 ## Install and start
 
@@ -49,7 +66,7 @@ For Docker Compose, Kubernetes and background services, see
 | **Persistent conversations** | Keep history across restarts, name sessions, and explicitly resume work. Native PI session storage is the default. |
 | **Always-on work** | Run heartbeats, recurring loops, cron jobs and standing goals without keeping a terminal open. |
 | **Parallel conversations** | Separate conversations can run concurrently; each conversation processes its own queue in order. |
-| **Matrix gateway** | Talk to the same Harness through DMs or rooms, with allowlists, mention rules, threads and approval handling. |
+| **Matrix gateway** | Talk to the same Hayate Agent through DMs or rooms, with allowlists, mention rules, threads and approval handling. |
 | **HTTP run API** | Submit runs programmatically and stream progress through a Hermes-compatible API. AgentOS integration is optional. |
 | **Identity and skills** | Use `SOUL.md` for identity, `VOICE.md` for tone, and discoverable skills for reusable procedures. |
 | **Trusted plugins** | Add commands, channels, tools, terminal panels and interactive dialogs through local ESM modules. Storage and manual compaction also have extension points. |
@@ -75,7 +92,7 @@ interface rather than memorizing the full command list.
 vanillacore-harness run
 ```
 
-This starts the same Harness without the interactive TUI. Configure Matrix with
+This starts the same Hayate Agent without the interactive TUI. Configure Matrix with
 `MATRIX_HOMESERVER` and either `MATRIX_ACCESS_TOKEN` or password-login settings.
 Set `MATRIX_ALLOWED_USERS` and the room/approval policy before connecting it to
 other people. A configured model provider is required to answer messages.
@@ -91,7 +108,7 @@ and shutdown behavior.
 
 ## Configuration and data
 
-Harness state defaults to **`~/.vanillacore-harness`**. Use
+Hayate Agent state defaults to **`~/.vanillacore-harness`**. Use
 `VANILLACORE_HARNESS_HOME` for a separate agent home. A minimal optional
 `harness.yaml` looks like this:
 

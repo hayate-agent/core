@@ -1,7 +1,7 @@
 {
   "name": "vanillacore-harness",
   "version": "0.1.0",
-  "description": "VanillaCore Agent Harness: a lightweight, persistent agent harness with a swappable runtime.",
+  "description": "Hayate Agent: a lightweight, persistent agent harness with a swappable runtime.",
   "type": "module",
   "license": "Apache-2.0",
   "private": true,

@@ -1,4 +1,4 @@
-# Developing and extending VanillaCore Agent Harness
+# Developing and extending Hayate Agent
 
 This guide ships with the installed package and image. It describes this version,
 not a promise that every planned interface is already implemented. `/harness`

@@ -95,10 +95,10 @@ import { completionStrategyPlugin } from "./builtin-plugins/completion-strategy-
 import { reviewConfig } from "./review-config.js";
 import { appendFileDurable } from "./durable.js";
 
-const USAGE = `VanillaCore Agent Harness ${VERSION}
+const USAGE = `Hayate Agent ${VERSION}
 
 Usage:
-  vanillacore-harness                      Interactive Harness TUI in the current directory
+  vanillacore-harness                      Interactive Hayate Agent TUI in the current directory
   vanillacore-harness run [--home <dir>]   Start the agent loop (console channel on stdin/stdout)
   vanillacore-harness init [--home <dir>] [--cwd <dir>] [--agent <name>] [--model <provider/model>]
   vanillacore-harness run --observe-directory <private-dir> --observe-session <exact-key> [--home <dir>]

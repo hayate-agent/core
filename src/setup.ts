@@ -26,7 +26,7 @@ export async function initialize(opts: InitOptions): Promise<string[]> {
       tools: ["read", "bash", "edit", "write", "grep", "find", "ls"],
       loop: { drainSeconds: 60 },
     }),
-    "SOUL.md": `# Identity\n\nYou are ${config.agent}, a general-purpose personal and development assistant.\nYour operator defines your projects and priorities. Check existing state before\nrepeating side effects after an interruption. Do not disclose credentials.\n`,
+    "SOUL.md": `# Identity\n\nYou are ${config.agent}, a general-purpose personal and development assistant running in Hayate Agent.\nYour operator defines your projects and priorities. Check existing state before\nrepeating side effects after an interruption. Do not disclose credentials.\n`,
     "VOICE.md": "# Voice\n\nBe direct, precise and practical. Match the operator's language.\n",
   };
   for (const [name, text] of Object.entries(files)) {
@@ -51,7 +51,7 @@ export async function initialize(opts: InitOptions): Promise<string[]> {
 /** Local diagnostics only: no provider request, secret values or background mutation. */
 export async function diagnose(home?: string): Promise<{ ok: boolean; lines: string[] }> {
   const config = await loadConfig(home);
-  const lines = [`Node: ${process.version}`, `Home: ${path.resolve(config.home)}`, `Workspace: ${config.cwd}`, `Agent: ${config.agent}`];
+  const lines = ["Hayate Agent diagnostics", `Node: ${process.version}`, `Home: ${path.resolve(config.home)}`, `Workspace: ${config.cwd}`, `Agent: ${config.agent}`];
   let ok = true;
   for (const [label, dest] of [["Workspace", config.cwd], ["Configuration", path.join(config.home, "harness.yaml")]] as const) {
     try {

@@ -135,7 +135,7 @@ test("all relevant Hermes gateway commands exist", () => {
 test("commands do not reach the agent; replies go to the chat", async () => {
   const { send, runtime, ch } = setup();
   await send("/version");
-  assert.match(ch.texts()[0], /vanillacore-harness/);
+  assert.match(ch.texts()[0], /^Hayate Agent /);
   assert.equal(runtime.sessions.size, 0);
 });
 
@@ -174,7 +174,7 @@ for (const name of ["restart", "reload"]) {
       assert.equal(runtime.reloads, 0);
       assert.equal(ch.texts().filter(t => t === "♻️ restarting after current work…").length, 4);
       await send("/help", "owner");
-      assert.match(ch.texts().at(-1)!, /\/restart \(\/reload\) \[admin\] \[Harness\]/);
+      assert.match(ch.texts().at(-1)!, /\/restart \(\/reload\) \[admin\] \[Hayate Agent\]/);
     } finally { await harness.stop(1000); }
   });
 
@@ -331,8 +331,8 @@ test("help identifies Harness and plugin commands, admin access and YOLO scope",
   for (const command of ["/help", "/commands"]) {
     await send(command);
     const text = ch.texts().at(-1)!;
-    assert.match(text, /^VanillaCore Agent Harness commands/);
-    assert.match(text, /\/yolo \[admin\] \[Harness\]: on\|off\|status/);
+    assert.match(text, /^Hayate Agent commands/);
+    assert.match(text, /\/yolo \[admin\] \[Hayate Agent\]: on\|off\|status/);
     assert.match(text, /does not bypass permissions or review/);
     assert.match(text, /same state as \/yolo/);
     assert.match(text, /\/extension \[admin\] \[Plugin\]: Extension command/);
@@ -347,7 +347,7 @@ test("help identifies Harness and plugin commands, admin access and YOLO scope",
     assert.ok(!general.includes("[admin]"));
     assert.ok(names(admin).includes("/z-extension"));
     assert.ok(admin.split("\n").every((line) => line.includes("[admin]")));
-    assert.match(general, /\/help \(\/commands\) \[Harness\]/);
+    assert.match(general, /\/help \(\/commands\) \[Hayate Agent\]/);
     assert.ok(!names(general).includes("/commands"));
   }
 });
