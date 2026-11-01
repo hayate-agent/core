@@ -1,4 +1,5 @@
-import { readFile } from "node:fs/promises";
+import { open, readdir, realpath } from "node:fs/promises";
+import { constants } from "node:fs";
 import path from "node:path";
 import { developmentContext } from "./development.js";
 
@@ -12,36 +13,61 @@ export interface Persona {
   voice?: string;
   /** Active named personality overlay (/personality <name>). */
   personality?: { name: string; text: string };
+  overlays?: { name: string; text: string }[];
 }
 
 export interface PersonaFiles {
   soul: string;
   voice: string;
   personalitiesDir: string;
+  /** Trusted instruction-only Markdown files, in configuration order. */
+  overlays?: string[];
+  /** Trusted instruction-only directory; direct .md children in filename order. */
+  overlaysDir?: string;
 }
 
-async function readOptional(file: string): Promise<string | undefined> {
+async function readInstruction(file: string, optional = false): Promise<string | undefined> {
+  let handle;
   try {
-    const text = (await readFile(file, "utf8")).trim();
-    return text.length ? text : undefined;
+    // Do not follow a file symlink into credentials or another agent's identity.
+    handle = await open(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    const stat = await handle.stat();
+    if (!stat.isFile()) throw new Error("not a regular file");
+    const text = new TextDecoder("utf-8", { fatal: true }).decode(await handle.readFile()).trim();
+    return text || undefined;
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") return undefined;
-    throw err;
-  }
+    if (optional && (err as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw new Error(`Cannot load persona instruction ${file}; correct the file before retrying`, { cause: err });
+  } finally { await handle?.close(); }
 }
 
 const SAFE_NAME = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
 
 export async function loadPersona(files: PersonaFiles, personality?: string): Promise<Persona> {
-  const [soul, voice] = await Promise.all([readOptional(files.soul), readOptional(files.voice)]);
+  const [soul, voice] = await Promise.all([readInstruction(files.soul, true), readInstruction(files.voice, true)]);
+  const paths = [...(files.overlays ?? [])];
+  if (files.overlaysDir) {
+    // An explicitly configured directory must exist. A typo must not remove instructions.
+    if (await realpath(files.overlaysDir) !== path.resolve(files.overlaysDir)) {
+      throw new Error(`Persona overlay directory must not contain symlinks: ${files.overlaysDir}`);
+    }
+    const names = (await readdir(files.overlaysDir)).filter(name => name.endsWith(".md")).sort();
+    paths.push(...names.map(name => path.join(files.overlaysDir!, name)));
+  }
+  const overlays: NonNullable<Persona["overlays"]> = [];
+  for (const file of [...new Set(paths.map(file => path.resolve(file)))]) {
+    if (path.extname(file) !== ".md") throw new Error(`Persona overlays must be Markdown instruction files: ${file}`);
+    const text = await readInstruction(file);
+    if (text) overlays.push({ name: path.basename(file), text });
+  }
   let overlay: Persona["personality"];
   if (personality) {
     if (!SAFE_NAME.test(personality)) throw new Error(`invalid personality name: ${personality}`);
-    const text = await readOptional(path.join(files.personalitiesDir, `${personality}.md`));
+    const text = await readInstruction(path.join(files.personalitiesDir, `${personality}.md`), true);
     if (!text) throw new Error(`unknown personality: ${personality}`);
     overlay = { name: personality, text };
   }
-  return { soul, voice, personality: overlay };
+  return { soul, voice, personality: overlay, overlays };
 }
 
 export interface AgentContext {
@@ -68,6 +94,7 @@ export function personaSections(persona: Persona, context: AgentContext = {}): s
   if (persona.soul) out.push(`# Identity\n\n${persona.soul}`);
   if (persona.voice) out.push(`# Voice\n\nThis is how you sound everywhere (chat, reports, scheduled output). Stay in this voice.\n\n${persona.voice}`);
   if (persona.personality) out.push(`# Personality: ${persona.personality.name}\n\n${persona.personality.text}`);
+  for (const overlay of persona.overlays ?? []) out.push(`# Persona overlay: ${overlay.name}\n\n${overlay.text}`);
   out.push(
     [
       "# Conversation",

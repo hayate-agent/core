@@ -73,6 +73,10 @@ export interface HarnessConfig {
     voice: string;
     /** Named personalities selectable via /personality, file per name. */
     personalitiesDir: string;
+    /** Explicit trusted Markdown instruction paths, in order (not technical configuration). */
+    overlays?: string[];
+    /** Direct Markdown children are composed in filename order. Legacy profiles stay separate. */
+    overlaysDir?: string;
   };
   skills: {
     /** Extra skill dirs in addition to PI's global/project discovery. */
@@ -182,6 +186,12 @@ export function defaultConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
       voice: path.join(home, "VOICE.md"),
       personalitiesDir: path.join(home, "personalities"),
       ...overrides.persona,
+      ...(overrides.persona?.overlays === undefined ? {} : {
+        overlays: instructionPaths(overrides.persona.overlays).map(file => path.resolve(home, file)),
+      }),
+      ...(overrides.persona?.overlaysDir === undefined ? {} : {
+        overlaysDir: path.resolve(home, instructionPaths([overrides.persona.overlaysDir])[0]!),
+      }),
     },
     skills: { paths: [path.join(home, "skills")], context: "auto", ...overrides.skills },
     cron: { jobsFile: path.join(home, "cron", "jobs.yaml"), ...overrides.cron },
@@ -192,6 +202,13 @@ export function defaultConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
     approvers: overrides.approvers ?? [],
     home_address: overrides.home_address,
   };
+}
+
+function instructionPaths(value: unknown): string[] {
+  if (!Array.isArray(value) || value.some(file => typeof file !== "string" || !file.trim())) {
+    throw new Error("persona overlays must be nonempty file/directory paths");
+  }
+  return value;
 }
 
 /** Load `<home>/harness.yaml` (if present) over the defaults. */

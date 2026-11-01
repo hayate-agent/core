@@ -423,7 +423,7 @@ export const COMMANDS: Command[] = [
         return `personality: ${ctx.personality.current ?? "none"}\navailable: ${all.join(", ") || "none"}`;
       }
       await ctx.personality.set(a === "none" ? undefined : a);
-      return `personality: ${a} (use /new to apply to this conversation)`;
+      return `personality: ${a} (applies on the next model call)`;
     },
   },
   {

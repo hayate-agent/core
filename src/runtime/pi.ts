@@ -84,7 +84,8 @@ export interface PiRuntimeOptions {
   /** Fresh validated skill context before each turn, without reloading extensions. */
   skillContext?: () => Promise<string>;
   toolGuard?: (sessionKey: string, tool: string, input: unknown) => Promise<void>;
-  /** Returns persona sections, read on every session open (so persona edits apply to new sessions). */
+  /** Provider-neutral instruction supplier: reread before every working model call,
+   * including existing sessions and continuation iterations; reject read failures. */
   personaSections: () => Promise<string[]>;
   /** "off" (default, YOLO) or "manual". Mutable at runtime via /approvals and /yolo on|off (no argument reports status). */
   approvals: { mode: "off" | "manual"; tools: string[] };
@@ -170,6 +171,21 @@ export async function boundedMaintenance<T>(run: () => Promise<T>, abort: () => 
       }, timeoutMs);
     })]);
   } finally { if (timer) clearTimeout(timer); }
+}
+
+/** PI 1.4 has no public prompt setter. Keep this version-pinned bridge here,
+ * not in the provider-neutral host. Both owner snapshots must change: PI clears
+ * run options on settlement and clones them between continuation iterations.
+ * Its normal structured prompt diff persists updates without replaying history.
+ */
+function updatePersonaPrompt(session: AgentSession, appendSystemPrompt: string): void {
+  const owner = session as unknown as {
+    _baseSystemPromptOptions: { appendSystemPrompt: string };
+    _runSystemPromptOptions?: { appendSystemPrompt: string };
+  };
+  if (!owner._baseSystemPromptOptions) throw new Error("PI persona refresh unsupported: expected PI 1.4 prompt owner");
+  owner._baseSystemPromptOptions.appendSystemPrompt = appendSystemPrompt;
+  if (owner._runSystemPromptOptions) owner._runSystemPromptOptions.appendSystemPrompt = appendSystemPrompt;
 }
 
 export class PiSession implements RuntimeSession {
@@ -484,8 +500,14 @@ export class PiRuntime implements AgentRuntime {
       sessionManager = SessionManager.open(info.path, dir, cwd);
     } else sessionManager = options.fresh ? SessionManager.create(cwd, dir) : SessionManager.continueRecent(cwd, dir);
 
-    const sections = options.ephemeral ? [] : await this.opts.personaSections();
+    let sections = options.ephemeral ? [] : await this.opts.personaSections();
+    // Publish only complete snapshots; read errors block the next request.
+    const refreshPersona = async () => {
+      if (!options.ephemeral) sections = await this.opts.personaSections();
+    };
     let skillContext = "";
+    const promptAddendum = () => [...sections, skillContext,
+      slot.instructions ? `<run_instructions>\n${slot.instructions}\n</run_instructions>` : ""].filter(Boolean).join("\n\n");
     const approvals = this.opts.approvals;
     const requestApproval = this.opts.requestApproval;
     const slot: TurnSlot = {};
@@ -546,8 +568,8 @@ export class PiRuntime implements AgentRuntime {
           factory: (pi) => {
             const adaptive = !options.ephemeral ? this.opts.adaptiveSkills : undefined;
             if (adaptive) installAdaptiveSkillHooks(pi, adaptive, sessionKey);
-            // Sent as this request's leading system prompt, not recorded in the transcript:
-            // the instructions apply to this one run only.
+            // PI emits structured system patches; current run instructions are
+            // replaced on the next run, without resetting the conversation.
             pi.on("context", (event) => {
               const policy = this.opts.pruning?.();
               return policy && this.opts.projectToolResults ? { messages: this.opts.projectToolResults(event.messages, policy) } : undefined;
@@ -558,8 +580,8 @@ export class PiRuntime implements AgentRuntime {
                 adaptive.begin(sessionKey);
                 reference = await adaptive.match(sessionKey, "prompt" in event ? event.prompt : "");
               }
-              const extra = [skillContext, slot.instructions ? `<run_instructions>\n${slot.instructions}\n</run_instructions>` : ""].filter(Boolean).join("\n\n");
-              return { ...(extra ? { systemPrompt: `${event.systemPrompt}\n\n${extra}` } : {}),
+              event.systemPromptOptions.appendSystemPrompt = promptAddendum();
+              return {
                 ...(reference ? { message: { customType: "harness-skill-reference", content: reference, display: false } } : {}) };
             });
           },
@@ -591,6 +613,14 @@ export class PiRuntime implements AgentRuntime {
       noTools: options.ephemeral || this.opts.tools?.length === 0 ? "all" : undefined,
     });
     unownedSession = session;
+    // The public next-turn hook precedes PI's prompt diff. Mutate the options
+    // PI owns, keeping session.systemPrompt and the actual provider in step.
+    const prepareNext = session.agent.prepareNextTurnWithContext;
+    session.agent.prepareNextTurnWithContext = async (turn, signal) => {
+      await refreshPersona();
+      updatePersonaPrompt(session, promptAddendum());
+      return prepareNext?.(turn, signal);
+    };
     // Extensions may register providers (e.g. a custom AI gateway), so resolve the
     // configured model only after they are bound.
     await session.bindExtensions({});
@@ -669,6 +699,8 @@ export class PiRuntime implements AgentRuntime {
     let appliedMcpFingerprint = "";
     const wrapped = new PiSession(session, models, slot, checkpoint, record, this.opts.compaction?.(), async () => {
       await this.opts.beforeRequest?.();
+      await refreshPersona();
+      updatePersonaPrompt(session, promptAddendum());
       const fingerprint = await mcpFingerprint();
       const tools = toolCatalogFingerprint();
       if (!options.ephemeral && (appliedResourceRevision !== this.resourceRevision || fingerprint !== appliedMcpFingerprint || tools !== appliedToolFingerprint)) {
