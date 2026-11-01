@@ -47,7 +47,7 @@ test("category merge preserves maps and replaces arrays; all allowlisted categor
   assert.deepEqual(effective.skills, { paths: ["b"], context: "lazy" });
   assert.deepEqual(effective.reasoningEffortNoneModels, ["p/new"]);
   assert.deepEqual(effective.dispatcher?.rules, [{ match: {}, model: "p/new" }]);
-  assert.deepEqual(effective.gatewayPlugins?.sample, { disabled: true });
+  assert.deepEqual(effective.gatewayPlugins?.sample, { module: "old.mjs", disabled: true });
   assert.equal(effective.extensionPlugins?.custom.module, "extension.mjs");
   assert.equal(effective.memory?.enabled, true);
   assert.equal(effective.completionStrategy, null);

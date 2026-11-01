@@ -16,8 +16,8 @@ arbitrary configuration overlay or a secrets store.
 
 Arrays replace rather than concatenate (including dispatcher rules, skills paths,
 and reasoning-effort opt-ins). Review, dispatcher, memory, skills, maintenance and
-pruning fields merge by field. Plugin maps merge by plugin ID; a later plugin
-spec replaces that ID's entire spec. Gateway overrides merge by gateway ID and
+pruning fields merge by field. Plugin maps merge by plugin ID and typed entry field; disabling/re-enabling
+an entry retains its module from a lower layer. Gateway overrides merge by gateway ID and
 field, retaining the existing gateway configuration semantics. This deliberately
 is not a generic recursive deep merge. `null` strategy disabling remains supported
 where the corresponding setting permits it.
@@ -43,5 +43,28 @@ higher-precedence layers before publishing the result. Existing command replies
 read the effective value, so an overridden local write is not reported as active.
 An unrelated mutation does not activate pending startup-bound file edits.
 
-This is independent of persona-file overlays. Persona `.d` support and any
-changes to persona/runtime/configuration wiring are separate work.
+Persona uses the same next-safe-call principle via `SOUL.md.d/` and
+`VOICE.md.d/`, plus explicitly configured Markdown overlays; see configuration.md.
+
+## Activation inventory (actual contract)
+
+| Category | Disk additions/edits/deletions at next safe call | Explicit command boundary |
+| --- | --- | --- |
+| model/thinking, review model/thinking | restart pending; existing session choices preserved | `/settings` publishes only selected field; session model precedence unchanged |
+| reasoning-effort compatibility | live at provider request | settings validation |
+| dispatcher rules | live before worker selection | existing routing boundary |
+| dispatcher capacity/enabled/strategy | restart pending | startup only |
+| context maintenance, pruning | restart pending | existing context/pruning settings commands publish only explicit fields |
+| context/completion/nightly/compaction strategy | restart pending | existing idle strategy managers, no new loader |
+| memory | restart pending | existing memory settings/provider/orchestration lifecycle |
+| skills paths/context | restart pending | existing skills lifecycle; no automatic extension reload |
+| gateways, gateway/policy/extension plugin maps | restart pending | existing idle managers; no automatic module import on disk edit |
+| persona | live, whole last-good prompt on invalid edit | `/personality` remains explicit legacy selection |
+
+This deliberately does **not** claim every startup-bound value is hot-reloadable.
+Desired disk values are validated together, active values remain truthful, and
+`restartPending` plus path/category diagnostics identify the required activation.
+No restart, deployment, live-config write or extension reload is automated.
+`harness.yaml` and arbitrary security/secrets/provider settings are outside this
+runtime-writable allowlist. The existing installation defaults remain startup input.
+A permitted overlay is not permission to import arbitrary categories.

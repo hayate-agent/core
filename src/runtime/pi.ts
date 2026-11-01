@@ -178,12 +178,18 @@ export async function boundedMaintenance<T>(run: () => Promise<T>, abort: () => 
  * run options on settlement and clones them between continuation iterations.
  * Its normal structured prompt diff persists updates without replaying history.
  */
-function updatePersonaPrompt(session: AgentSession, appendSystemPrompt: string): void {
+export function updatePersonaPrompt(session: AgentSession, appendSystemPrompt: string): void {
   const owner = session as unknown as {
     _baseSystemPromptOptions: { appendSystemPrompt: string };
     _runSystemPromptOptions?: { appendSystemPrompt: string };
   };
-  if (!owner._baseSystemPromptOptions) throw new Error("PI persona refresh unsupported: expected PI 1.4 prompt owner");
+  const compatible = (value: unknown): value is { appendSystemPrompt: string } =>
+    !!value && typeof value === "object" && typeof (value as { appendSystemPrompt?: unknown }).appendSystemPrompt === "string" &&
+    Object.getOwnPropertyDescriptor(value, "appendSystemPrompt")?.writable === true;
+  if (!compatible(owner._baseSystemPromptOptions) ||
+      (owner._runSystemPromptOptions !== undefined && !compatible(owner._runSystemPromptOptions))) {
+    throw new Error("PI persona refresh unsupported: expected writable PI 1.4 prompt snapshots; retain pinned SDK or update adapter");
+  }
   owner._baseSystemPromptOptions.appendSystemPrompt = appendSystemPrompt;
   if (owner._runSystemPromptOptions) owner._runSystemPromptOptions.appendSystemPrompt = appendSystemPrompt;
 }
@@ -501,9 +507,13 @@ export class PiRuntime implements AgentRuntime {
     } else sessionManager = options.fresh ? SessionManager.create(cwd, dir) : SessionManager.continueRecent(cwd, dir);
 
     let sections = options.ephemeral ? [] : await this.opts.personaSections();
-    // Publish only complete snapshots; read errors block the next request.
+    // A complete startup snapshot is mandatory. Later invalid edits must not
+    // remove instructions or prevent the operator from asking for a repair.
     const refreshPersona = async () => {
-      if (!options.ephemeral) sections = await this.opts.personaSections();
+      if (!options.ephemeral) {
+        try { sections = await this.opts.personaSections(); }
+        catch (error) { console.error(`Persona reload retained last complete prompt: ${error instanceof Error ? error.message : "invalid persona paths"}`); }
+      }
     };
     let skillContext = "";
     const promptAddendum = () => [...sections, skillContext,

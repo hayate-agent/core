@@ -97,8 +97,14 @@ export function validateReasoningEffortNoneModels(value: unknown): asserts value
 /** Category-specific layering: arrays replace; only documented maps merge. */
 function mergeSettings(base: LocalSettings, layer: LocalSettings): LocalSettings {
   const result = { ...base, ...layer };
-  for (const key of ["dispatcher", "memory", "review", "skills", "contextMaintenance", "toolResultPruning", "gatewayPlugins", "policyPlugins", "extensionPlugins"] as const) {
+  for (const key of ["dispatcher", "memory", "review", "skills", "contextMaintenance", "toolResultPruning"] as const) {
     if (base[key] !== undefined || layer[key] !== undefined) (result as Record<string, unknown>)[key] = { ...base[key], ...layer[key] };
+  }
+  for (const key of ["gatewayPlugins", "policyPlugins", "extensionPlugins"] as const) {
+    if (base[key] === undefined && layer[key] === undefined) continue;
+    const entries: Record<string, GatewayOverride> = { ...base[key] };
+    for (const [name, fields] of Object.entries(layer[key] ?? {})) entries[name] = { ...entries[name], ...fields };
+    result[key] = entries;
   }
   if (base.gateways !== undefined || layer.gateways !== undefined) {
     const overrides = { ...base.gateways?.overrides };
@@ -414,7 +420,8 @@ export class SettingsService {
       const updated = await this.localForMutation();
       updated.memory = { ...updated.memory, ...value };
       validate(updated, this.defaults.contextMaintenance, this.defaults.toolResultPruning, this.defaults.dispatcher);
-      await this.saveLocal(updated, ["memory"]);
+      const targets = Object.keys(value).map(key => ["memory", key]);
+      await this.saveLocal(updated, targets[0] ?? [], targets.slice(1));
     });
     this.writing = next;
     return next;
@@ -444,7 +451,8 @@ export class SettingsService {
       updated.contextMaintenance = { ...updated.contextMaintenance, ...value };
       validate(updated, this.defaults.contextMaintenance, this.defaults.toolResultPruning, this.defaults.dispatcher);
       contextPolicy({ ...this.defaults.contextMaintenance, ...updated.contextMaintenance });
-      await this.saveLocal(updated, ["contextMaintenance"]);
+      const targets = Object.keys(value).map(key => ["contextMaintenance", key]);
+      await this.saveLocal(updated, targets[0] ?? [], targets.slice(1));
     });
     this.writing = next;
     return next;

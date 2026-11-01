@@ -34,12 +34,12 @@ import { defaultConfig } from "../src/config.js";
   assert.equal((await loadPersona(files)).overlays?.[0]?.text, "LEGACY OTHER", "existing operator file can be explicitly migrated without selection");
 });
 
-test("invalid/missing configured overlays, symlinks, nonfiles and UTF-8 fail closed; YAML cannot be an explicit instruction", async t => {
+test("deleted overlays inherit lower layers; invalid files, symlinks, nonfiles and UTF-8 fail closed", async t => {
   const home = await mkdtemp(path.join(os.tmpdir(), "persona-invalid-"));
   t.after(() => rm(home, {recursive:true, force:true}));
   const files = defaultConfig({home}).persona;
   const file = path.join(home,"instruction.md"); files.overlays = [file];
-  await assert.rejects(loadPersona(files), /Cannot load persona instruction/);
+  assert.deepEqual((await loadPersona(files)).overlays, []);
   await writeFile(file, Buffer.from([0xff])); await assert.rejects(loadPersona(files), /Cannot load persona instruction/);
   await rm(file); await mkdir(file); await assert.rejects(loadPersona(files), /Cannot load persona instruction/);
   await rm(file,{recursive:true}); await writeFile(path.join(home,"secret"),"secret"); await symlink(path.join(home,"secret"),file);

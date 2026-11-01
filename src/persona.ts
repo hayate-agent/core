@@ -1,4 +1,4 @@
-import { open, readdir, realpath } from "node:fs/promises";
+import { open, readdir, realpath, lstat } from "node:fs/promises";
 import { constants } from "node:fs";
 import path from "node:path";
 import { developmentContext } from "./development.js";
@@ -44,20 +44,28 @@ async function readInstruction(file: string, optional = false): Promise<string |
 const SAFE_NAME = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
 
 export async function loadPersona(files: PersonaFiles, personality?: string): Promise<Persona> {
-  const [soul, voice] = await Promise.all([readInstruction(files.soul, true), readInstruction(files.voice, true)]);
-  const paths = [...(files.overlays ?? [])];
-  if (files.overlaysDir) {
-    // An explicitly configured directory must exist. A typo must not remove instructions.
-    if (await realpath(files.overlaysDir) !== path.resolve(files.overlaysDir)) {
-      throw new Error(`Persona overlay directory must not contain symlinks: ${files.overlaysDir}`);
+  const directoryFiles = async (directory: string): Promise<string[]> => {
+    try {
+      const entry = await lstat(directory);
+      if (!entry.isDirectory() || entry.isSymbolicLink() || await realpath(directory) !== path.resolve(directory)) throw Error("invalid or symlink directory");
+      return (await readdir(directory)).filter(name => name.endsWith(".md")).sort().map(name => path.join(directory, name));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+      throw Error(`Cannot load persona directory ${directory}; correct the path before retrying`);
     }
-    const names = (await readdir(files.overlaysDir)).filter(name => name.endsWith(".md")).sort();
-    paths.push(...names.map(name => path.join(files.overlaysDir!, name)));
-  }
+  };
+  const layeredInstruction = async (file: string) => {
+    const texts = [await readInstruction(file, true)];
+    for (const child of await directoryFiles(`${file}.d`)) texts.push(await readInstruction(child));
+    return texts.filter(Boolean).join("\n\n") || undefined;
+  };
+  const [soul, voice] = await Promise.all([layeredInstruction(files.soul), layeredInstruction(files.voice)]);
+  const paths = [...(files.overlays ?? [])];
+  if (files.overlaysDir) paths.push(...await directoryFiles(files.overlaysDir));
   const overlays: NonNullable<Persona["overlays"]> = [];
   for (const file of [...new Set(paths.map(file => path.resolve(file)))]) {
     if (path.extname(file) !== ".md") throw new Error(`Persona overlays must be Markdown instruction files: ${file}`);
-    const text = await readInstruction(file);
+    const text = await readInstruction(file, true);
     if (text) overlays.push({ name: path.basename(file), text });
   }
   let overlay: Persona["personality"];

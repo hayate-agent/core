@@ -42,8 +42,10 @@ persona:
 
 Every explicitly listed file is loaded, followed by every Markdown child of the
 explicit directory. There is no selection and no file-count limit. List order,
-then filename order, is stable; duplicate absolute paths load once. No directory
-is scanned by default: `personalities/` remains the legacy alternative-profile
+then filename order, is stable; duplicate absolute paths load once. By default,
+`SOUL.md.d/` and `VOICE.md.d/` beside the configured base files append all direct
+`.md` children in lexical filename order (1 or 50 files, no limit). Base identity
+and voice remain present. `personalities/` remains the legacy alternative-profile
 store, loaded only by an explicit `/personality name`. To migrate the already
 written `personalities/severus-delivery.md`, add the `overlays` entry shown above;
 do not select a profile or copy other agents' SOUL/VOICE files. An operator may
@@ -68,9 +70,10 @@ adapter bridge to update both owned prompt snapshots; its normal structured syst
 patches preserve user/assistant/tool history. Other runtime adapters must implement
 this next-call contract rather than caching instructions at session creation.
 
-Missing explicit files/directories, invalid UTF-8, file symlinks or nonregular files
-fail the next call with an actionable path error; the last complete prompt remains
-intact. Fix and retry. Removing a directory child intentionally removes that overlay;
+Invalid UTF-8, symlinks or nonregular files produce an actionable path diagnostic.
+Initial invalid persona loading fails; after a complete baseline, invalid edits retain
+the **whole** last good prompt and the next call continues safely, allowing repair.
+Removing a configured file, directory or child intentionally restores lower layers;
 a missing base SOUL/VOICE retains legacy optional-file semantics. No watcher, new
 permission state, arbitrary size/count cap or automatic repository Markdown scan
 is introduced. The model's context limit still applies. This is trusted local
