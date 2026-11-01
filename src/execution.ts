@@ -289,7 +289,7 @@ export class ExecutionStore {
   }
   submit(parent: string, requestId: string, input: string, strategy: string, strategyVersion = 1, dependency?: Execution["dependency"]): Promise<Execution> {
     return this.mutate(async draft => {
-      if (![parent, requestId, input, strategy].every(value => typeof value === "string" && value.trim()) || input.length > 64000 ||
+      if (![parent, requestId, input, strategy].every(value => typeof value === "string" && value.trim()) || input.length > 1024 * 1024 ||
           !Number.isSafeInteger(strategyVersion) || strategyVersion < 1) throw Error("Invalid execution submission");
       const old = draft.executions.find(item => item.parent === parent && item.requestId === requestId) ?? await this.archived(parent, requestId);
       if (old) {

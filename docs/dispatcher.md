@@ -55,7 +55,9 @@ With an explicit nonempty model-tool allowlist, dispatcher mode adds
 {"action":"submit","requestId":"stable-request-1","task":"The authorized task and its constraints"}
 ```
 
-It returns after durable acceptance and scheduling, not after completion. Reuse
+It returns after durable acceptance and scheduling, not after completion. Task
+inputs are validated at submission: nonempty strings up to 1 MiB; larger
+submissions fail closed. Reuse
 `requestId` only for an identical retry in the same parent conversation. A
 conflicting task with that ID is rejected. `status` lists this conversation's
 records; `pause`, `resume` and `cancel` require an `id`. Models in managed children
