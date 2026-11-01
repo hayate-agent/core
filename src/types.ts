@@ -173,6 +173,8 @@ export interface AgentRuntime {
   /** Model refs ("provider/model") usable for per-turn overrides. */
   models?(): Promise<string[]>;
   sessions?(key: string, offset?: number): Promise<import("./sessions.js").SessionSummary[]>;
+  /** Read retained history without opening, binding or activating a session. */
+  sessionHistory?(key: string, id: string): Promise<import("./session-archive.js").ArchiveEntry[]>;
   login?(ui: LoginUI): Promise<void>;
   /** Re-read persona/skills/config for sessions opened afterwards. */
   reload(): Promise<void>;

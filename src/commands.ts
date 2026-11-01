@@ -150,6 +150,29 @@ export const COMMANDS: Command[] = [
   },
   // -- Session
   {
+    name: "hashtags", help: "List tags or find retained messages: /hashtags [#slug]",
+    run: async (args, input, ctx) => {
+      const refs = ctx.harness.state(input.sessionKey).hashtags ?? [];
+      if (!args.trim()) return [...new Set(refs.map(ref => ref.tag))].sort().map(tag => `#${tag}`).join("\n") || "No hashtags indexed yet.";
+      if (!/^#[a-zA-Z][a-zA-Z0-9]*(?:-[a-zA-Z0-9]+)*$/.test(args.trim())) return "usage: /hashtags [#slug]";
+      const matches = refs.filter(ref => ref.tag === args.trim().slice(1).toLowerCase());
+      if (!matches.length) return "No references for this hashtag.";
+      const rows: string[] = [];
+      for (const ref of matches) {
+        try {
+          if (!ctx.harness.runtime.sessionHistory) throw new Error("Runtime history retrieval unavailable");
+          const entries = await ctx.harness.runtime.sessionHistory(input.sessionKey, ref.sessionId);
+          const message = entries.find(entry => entry.id === ref.messageId && entry.role === "user");
+          if (!message) throw new Error("Referenced message no longer retained");
+          rows.push(`${ref.date} · ${ref.sessionId}\n  ${message.text.replace(/\s+/g, " ").slice(0, 180)}\n  /resume ${ref.sessionId}`);
+        } catch (error) {
+          rows.push(`${ref.date} · ${ref.sessionId} · unavailable: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
+      return rows.join("\n");
+    },
+  },
+  {
     name: "sessions", help: "List conversation sessions: /sessions [page]",
     run: async (args, input, ctx) => {
       const page = args.trim() ? Number(args) : 1;
