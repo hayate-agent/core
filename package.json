@@ -36,6 +36,7 @@
   "dependencies": {
     "@earendil-works/pi-coding-agent": "1.4.0",
     "@earendil-works/pi-tui": "1.4.0",
+    "@matrix-org/matrix-sdk-crypto-nodejs": "0.4.0",
     "croner": "10.0.1",
     "marked": "18.1.1",
     "yaml": "2.9.1"

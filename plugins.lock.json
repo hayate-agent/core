@@ -15,9 +15,9 @@
     "improvement-plugin.ts": "97e965b6f71567d823549d8a3b2a6888a2ed1f86eda76c2bc29c565b82431ca5",
     "improvement-report.ts": "2e206939ef70e86df87059a5ab5584b203dec1decf289e437642e163d630b273",
     "loop-plugin.ts": "ab7e0ea59919503cd4d9c36b01eb08f7687c00ef88679de2dcc33067b56ae6cd",
-    "matrix-channel.ts": "cb518647a90b7acd19f5047225bba2f5cc92008ab4b0fca9a27a2f87968293e8",
+    "matrix-channel.ts": "ded88236fee80e2a9eb074ec42dd31293e346baa7c4e939d5ef378cbbcf09073",
     "matrix-gateway.ts": "cab666ab5d2675d9b459102f119598b4444dcbbdecb3a5d16d473a676a131be3",
-    "matrix-sync.ts": "b86e52e78c3c251743c71b5903b7e64ac45b4b3649ec58e6df985ce28d794003",
+    "matrix-sync.ts": "32a217a65dc5f05f0c0940e2f52426c1ab2044688513befb282af7376943b5c1",
     "memory-orchestration-plugin.ts": "c796ff18def036016ac47095d18a490fab0d15ff8eaff342e463babc16bf78ea",
     "memory-plugin.ts": "1fa1a44e6151fb3357cafaf20445263b27b68f8a910f17932f24890b073292be",
     "memory-service.ts": "ab314fb8e059c93ec0dede58bcf0dfa45975916d2f68d3a6d384c971a2ea3f7e",
@@ -44,9 +44,10 @@
     "nightly-strategy-plugin.ts": "f2307c66003387167318055b7e49ce84e115ffd5d8e7d1a21ae8106318dbc0a8",
     "context-strategy-plugin.ts": "104c0e4a9b9619d361a8089b43724986366bc3665993c2146268e5f847698643",
     "compaction-strategy-plugin.ts": "8dadb434b15443524827b302af9c98c22ce40e892e0c0c2bc60e558dae33c932",
-    "review-executor.ts": "f215d18047084aa626cdd3f46fa6cfbca3701810f6166ab88ac8f356a15fbe0a"
+    "review-executor.ts": "f215d18047084aa626cdd3f46fa6cfbca3701810f6166ab88ac8f356a15fbe0a",
+    "matrix-crypto.ts": "a89018c1cf22afc221df6ca6d621332dc9cae9a2dc222452f44b5444f249ded4"
   },
   "repository": "https://git.vanillacore.net/harness/plugins",
-  "revision": "3529c443fc0fa2edcfc6cfbd4ba6142b46d6d2f7",
+  "revision": "ea3ff26df5a35ed33c7dd66f74266c980586a45f",
   "schema": 1
 }
