@@ -27,8 +27,57 @@ files describe identity and tone, not secrets. Every session also receives a gen
 Harness foundation: product identity, runtime distinction, task context and truthful
 self-development instructions. It does not hardcode a persona or claim unavailable
 integrations. SOUL and VOICE add your configured identity and writing style even when
-no named personality overlay is selected. Existing live sessions need a restart or
-`/new` to receive changed system context. See README for Matrix settings.
+no named personality overlay is selected. See README for Matrix settings.
+
+### Composed persona instructions (not alternative profiles)
+
+```yaml
+persona:
+  # Relative overlay paths resolve against Harness home, never the working repository.
+  overlays:
+    - personalities/severus-delivery.md
+  # Optional: all direct .md children, ordered by filename; no recursion.
+  # overlaysDir: persona-overlays
+```
+
+Every explicitly listed file is loaded, followed by every Markdown child of the
+explicit directory. There is no selection and no file-count limit. List order,
+then filename order, is stable; duplicate absolute paths load once. By default,
+`SOUL.md.d/` and `VOICE.md.d/` beside the configured base files append all direct
+`.md` children in lexical filename order (1 or 50 files, no limit). Base identity
+and voice remain present. `personalities/` remains the legacy alternative-profile
+store, loaded only by an explicit `/personality name`. To migrate the already
+written `personalities/severus-delivery.md`, add the `overlays` entry shown above;
+do not select a profile or copy other agents' SOUL/VOICE files. An operator may
+instead explicitly designate a directory as overlays after verifying that **all**
+its Markdown files are their own cumulative instructions. YAML/technical settings
+are never inferred as prompt content; overlay Markdown must contain instructions,
+not secrets. Config changes still require the normal configuration activation;
+this implementation does not hot-reload harness.yaml.
+
+Prompt order is foundation, own SOUL, own VOICE, optional legacy selected profile,
+ordered overlays, conversation guidance, skill metadata and current run instructions.
+Overlays supplement the configured agent key/name and VOICE; they are not a new
+identity selector or authorization source.
+
+After configuration activation, the complete set is reread at the next model call
+in **existing** conversations and managed/dispatcher workers, including continuation
+and tool iterations. Additions, edits and deletions take effect without `/new`,
+transcript replay or restart. In-flight provider requests are not changed. Read-only
+ephemeral reviews intentionally have no working-agent persona. Native and external
+session storage use the same refresh path. PI 1.4 requires a small version-pinned
+adapter bridge to update both owned prompt snapshots; its normal structured system
+patches preserve user/assistant/tool history. Other runtime adapters must implement
+this next-call contract rather than caching instructions at session creation.
+
+Invalid UTF-8, symlinks or nonregular files produce an actionable path diagnostic.
+Initial invalid persona loading fails; after a complete baseline, invalid edits retain
+the **whole** last good prompt and the next call continues safely, allowing repair.
+Removing a configured file, directory or child intentionally restores lower layers;
+a missing base SOUL/VOICE retains legacy optional-file semantics. No watcher, new
+permission state, arbitrary size/count cap or automatic repository Markdown scan
+is introduced. The model's context limit still applies. This is trusted local
+operator configuration, not a sandbox against an operator replacing parent paths.
 
 ## Dispatcher model routing rules
 
