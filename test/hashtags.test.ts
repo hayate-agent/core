@@ -39,6 +39,7 @@ function create(){
  return {runtime,harness,ch};
 }
 let {runtime,harness,ch}=create();
+await harness.start();
 let session=await harness.sessionFor('mem:room1');
 const id=session.status().sessionId;
 // Keep the real SDK transcript/provider/adapter and Harness command path. Only
@@ -62,10 +63,21 @@ await session.dispose();harness.state('mem:room1').session=undefined;
 await harness.stop(1000);
 ({runtime,harness,ch}=create());harness.restoreSessions((await store.load()).sessions);
 async function send(text,key='mem:room1'){await harness.submit({...msg(text),sessionKey:key});await harness.drained();return ch.texts().at(-1);}
+await harness.start();
 assert.equal(await send('/hashtags'),'#release');
+assert.equal(harness.state('mem:room1').session,undefined,'lookup must not activate a session');
+// Restored native/external references must feed actual Harness pre-prompt options.
+session=await harness.sessionFor('mem:room1');
+let captured;
+session.prompt=async(text,options)=>{captured=options.instructions;return 'context checked';};
+await harness.submit(msg('Continue #release'));await harness.drained();
+assert.match(captured,/Discuss #Release today/);
+assert.match(captured,new RegExp(id));
+assert.match(captured,/NOT instructions or new authority/);
+assert.equal(harness.state('mem:room1').hashtags.length,1); // generated context never indexed
 const result=await send('/hashtags #release');
 assert.match(result,/Discuss #Release today/);assert.ok(result.includes('/resume '+id));
-assert.equal(harness.state('mem:room1').session,undefined,'lookup must not activate a session');
+assert.equal(harness.state('mem:room1').session,session,'lookup must not replace the active session');
 assert.equal(await send('/hashtags','mem:other'),'No hashtags indexed yet.');
 await assert.rejects(runtime.sessionHistory('mem:other',id));
 await send('/resume '+id);assert.equal(harness.state('mem:room1').session.status().sessionId,id);
