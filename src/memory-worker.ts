@@ -10,12 +10,22 @@ const idPattern = /^[a-f0-9]{64}$/;
 const words = (s: string) => [...new Set(s.toLocaleLowerCase().match(/[\p{L}\p{N}_-]{2,}/gu) ?? [])];
 function validDate(value: unknown): boolean { return value === undefined || (typeof value === "string" && Number.isFinite(Date.parse(value))); }
 function validate(e: MemoryEntry): void {
-  if (!e || !idPattern.test(e.id) || typeof e.sessionKey !== "string" || !e.sessionKey || e.sessionKey.length > 1000 ||
-      typeof e.title !== "string" || !e.title.trim() || e.title.length > 300 || typeof e.text !== "string" || !e.text.trim() || e.text.length > 12000 ||
-      !["note", "lesson", "decision", "operation"].includes(e.kind) || !["reported", "observed"].includes(e.verification) ||
-      !["active", "revoked", "archived"].includes(e.state) || typeof e.source !== "string" || e.source.length > 1000 ||
-      typeof e.revision !== "string" || !e.revision || !validDate(e.createdAt) || !validDate(e.updatedAt) || !e.createdAt || !e.updatedAt ||
-      !validDate(e.expiresAt) || !validDate(e.reviewAfter) || !Array.isArray(e.links) || e.links.length > 20 || e.links.some((x) => typeof x !== "string" || !idPattern.test(x))) throw Error("Invalid memory entry");
+  const fail = (field: string) => { throw Error(`Invalid memory entry: ${field}`); };
+  if (!e) fail("entry missing");
+  if (!idPattern.test(e.id)) fail("id");
+  if (typeof e.sessionKey !== "string" || !e.sessionKey || e.sessionKey.length > 1000) fail("sessionKey");
+  if (typeof e.title !== "string" || !e.title.trim() || e.title.length > 300) fail("title");
+  if (typeof e.text !== "string" || !e.text.trim() || e.text.length > 12000) fail("text");
+  if (!["note", "lesson", "decision", "operation"].includes(e.kind)) fail("kind");
+  if (!["reported", "observed"].includes(e.verification)) fail("verification");
+  if (!["active", "revoked", "archived"].includes(e.state)) fail("state");
+  if (typeof e.source !== "string" || e.source.length > 1000) fail("source");
+  if (typeof e.revision !== "string" || !e.revision) fail("revision");
+  if (!validDate(e.createdAt) || !e.createdAt) fail("createdAt");
+  if (!validDate(e.updatedAt) || !e.updatedAt) fail("updatedAt");
+  if (!validDate(e.expiresAt)) fail("expiresAt");
+  if (!validDate(e.reviewAfter)) fail("reviewAfter");
+  if (!Array.isArray(e.links) || e.links.length > 20 || e.links.some((x) => typeof x !== "string" || !idPattern.test(x))) fail("links");
 }
 interface Row { entry: MemoryEntry; contentHash: string; inputHash?: string; vector?: number[]; model?: string }
 export class FileMemoryStore implements MemoryProvider {
@@ -128,7 +138,7 @@ export class FileMemoryStore implements MemoryProvider {
     return this.serial(async () => {
       if (!input || typeof input.key !== "string" || !input.key || input.key.length > 500 || !ctx.sessionKey) throw Error("Invalid memory write key");
       const id = hash(ctx.sessionKey + "\0" + input.key);
-      const normalized = { title: input.title, text: input.text, kind: input.kind ?? "note", source: input.source, links: input.links ?? [], reviewAfter: input.reviewAfter, expiresAt: input.expiresAt };
+      const normalized = { title: input.title, text: input.text, kind: input.kind ?? "note", source: input.source ?? ctx.sessionKey, links: input.links ?? [], reviewAfter: input.reviewAfter, expiresAt: input.expiresAt };
       // Retry identity includes validity deadlines; persisted capture jobs retain them.
       const inputHash = hash(JSON.stringify(normalized));
       const existing = await this.read(id);
@@ -139,7 +149,7 @@ export class FileMemoryStore implements MemoryProvider {
       if (this.rows.size >= this.config.maxEntries) throw Error("Memory entry budget exceeded");
       const now = new Date().toISOString();
       const entry: MemoryEntry = { id, revision: randomUUID(), sessionKey: ctx.sessionKey, title: input.title, text: input.text,
-        kind: input.kind ?? "note", verification: "reported", source: input.source, createdAt: now, updatedAt: now,
+        kind: input.kind ?? "note", verification: "reported", source: input.source ?? ctx.sessionKey, createdAt: now, updatedAt: now,
         ...(input.reviewAfter !== undefined ? { reviewAfter: input.reviewAfter } : {}), ...(input.expiresAt !== undefined ? { expiresAt: input.expiresAt } : {}), state: "active", links: input.links ?? [] };
       await this.write({ entry, contentHash: hash(entry.title + "\n" + entry.text), inputHash });
       // Markdown is authoritative: snapshot failure cannot uncommit a durable write.
