@@ -30,12 +30,18 @@ not a hostile-filesystem sandbox. Legacy startup without `settings.d/` retains
 historical per-field salvage of `settings.local.yaml`, including on reload.
 An empty `settings.d/` explicitly opts into strict startup validation.
 
-Reload preserves the existing activation contract: reasoning-effort opt-ins and
-dispatcher rules are live; other file edits are startup-bound. `effective()` and
-`snapshot()` describe active values, not the desired disk state.
-`restartPending` lists changed startup-bound categories and diagnostics explicitly
-say that a restart is required. Deleting a startup-bound setting also remains
-pending until restart. No restart or deployment is performed by this feature.
+Reasoning-effort opt-ins and dispatcher rules are live. Validated gateway,
+policy and extension plugin map changes enqueue the existing lifecycle managers;
+their timers apply at an idle boundary, never by waiting inside a provider request.
+Unchanged entries do not reload. Removing an entry restores the captured policy or
+configured gateway baseline, or removes a dynamic extension. Required policies
+cannot be disabled. `effective()` and `snapshot()` publish a plugin entry only
+after successful activation; `desired()` includes pending/failed desired entries.
+Manager status reports pending/errors/degraded cleanup. An attempted failure does
+not hot-loop imports: change the desired entry or use the explicit plugin reload
+command to retry. Other categories remain startup-bound. `restartPending` includes
+unapplied plugin maps as well as startup-bound categories. No restart or deployment
+is performed.
 
 Existing `/settings`-backed mutations edit only `settings.local.yaml`, never copy
 merged drop-ins into that file and never rewrite drop-ins. They recompute the
@@ -58,13 +64,16 @@ Persona uses the same next-safe-call principle via `SOUL.md.d/` and
 | context/completion/nightly/compaction strategy | restart pending | existing idle strategy managers, no new loader |
 | memory | restart pending | existing memory settings/provider/orchestration lifecycle |
 | skills paths/context | restart pending | existing skills lifecycle; no automatic extension reload |
-| gateways, gateway/policy/extension plugin maps | restart pending | existing idle managers; no automatic module import on disk edit |
+| gateways | restart pending | existing gateway settings commands |
+| gateway/policy/extension plugin maps | changed/removed entries queued, applied at idle; failures retain previous active selection | existing plugin commands, same effective file precedence |
 | persona | live, whole last-good prompt on invalid edit | `/personality` remains explicit legacy selection |
 
 This deliberately does **not** claim every startup-bound value is hot-reloadable.
 Desired disk values are validated together, active values remain truthful, and
 `restartPending` plus path/category diagnostics identify the required activation.
-No restart, deployment, live-config write or extension reload is automated.
+No restart, deployment or live-config write is automated. Plugin map edits explicitly
+request trusted local module activation; editing module source without changing a
+map entry still requires an explicit reload command.
 `harness.yaml` and arbitrary security/secrets/provider settings are outside this
 runtime-writable allowlist. The existing installation defaults remain startup input.
 A permitted overlay is not permission to import arbitrary categories.

@@ -2,6 +2,7 @@
 import { workingTreeEvidence } from "./repetition-budget.js";
 import { ToolGuardError } from "./tool-guard-error.js";
 import { improvementPlugin } from "./builtin-plugins/improvement-plugin.js";
+import { pluginOverlayReload } from "./plugin-overlay-reload.js";
 import { gatewayManagerPlugin } from "./builtin-plugins/gateway-manager-plugin.js";
 import { bundledGatewayModules } from "./builtin-plugins/gateway-baselines.js";
 import { reloadableToolsPlugin } from "./builtin-plugins/reloadable-tools-plugin.js";
@@ -530,6 +531,7 @@ async function main(argv: string[]): Promise<void> {
   const extensionManager = new ExtensionManager(harness, plugins, settings, { home: config.home, cwd: config.cwd, agent: config.agent },
     [...builtinCommandNames, "sessions", "resume", ...skills.map(s => s.name)]);
   const policyManager = new PolicyManager(harness, plugins.policies, settings, { home: config.home, cwd: config.cwd, agent: config.agent });
+  settings.onPluginReload(pluginOverlayReload(settings, { gateway: gatewayManager, policy: policyManager, extension: extensionManager }));
   const reportPlugin = cronReportPlugin({ home: config.home,
     backend: { analyze: (prompt, signal) => runtimeReviewer(runtime).review(prompt, effectiveModels().reviewModel, "off", signal) },
     dispatch: async (report, requestId, task) => {
