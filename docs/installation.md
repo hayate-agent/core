@@ -73,7 +73,7 @@ From the checkout:
 
 ```sh
 mkdir -p config
-(set -C; cat deploy/kubernetes/harness.yaml > config/hayate-agent.yaml) || exit 1
+(set -C; cat deploy/kubernetes/hayate-agent.yaml > config/hayate-agent.yaml) || exit 1
 for file in SOUL.md models.json; do
   # Exclusive creation: stop rather than overwrite an existing configuration.
   (set -C; cat "deploy/kubernetes/$file" > "config/$file") || exit 1

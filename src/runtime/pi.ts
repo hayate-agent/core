@@ -564,7 +564,7 @@ export class PiRuntime implements AgentRuntime {
           ? [createCodemodeExtension({ mode: "on" }), createToolSearchExtension(), createMcpExtension()]
           : []),
         {
-          name: "vanillacore-harness-plugin-tools",
+          name: "hayate-agent-plugin-tools",
           factory: (pi) => {
             for (const tool of boundTools) {
               pi.registerTool({
@@ -594,7 +594,7 @@ export class PiRuntime implements AgentRuntime {
           },
         },
         {
-          name: "vanillacore-harness-turn",
+          name: "hayate-agent-turn",
           factory: (pi) => {
             const adaptive = !options.ephemeral ? this.opts.adaptiveSkills : undefined;
             if (adaptive) installAdaptiveSkillHooks(pi, adaptive, sessionKey);
@@ -617,7 +617,7 @@ export class PiRuntime implements AgentRuntime {
           },
         },
         {
-          name: "vanillacore-harness-approvals",
+          name: "hayate-agent-approvals",
           factory: (pi) => {
             pi.on("tool_call", async (event) => {
               try { await this.opts.toolGuard?.(sessionKey, event.toolName, event.input); }

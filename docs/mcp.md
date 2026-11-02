@@ -1,6 +1,6 @@
 # MCP with the PI runtime
 
-MCP is explicitly opt-in in harness.yaml:
+MCP is explicitly opt-in in hayate-agent.yaml:
 
 ```yaml
 mcp:

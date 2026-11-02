@@ -196,7 +196,7 @@ round budget remain enforced; a second empty/invalid response still fails.
 Some local OpenAI-compatible servers require `reasoning_effort: "none"` rather
 than their ordinary thinking switch. Opt in only models verified to accept that
 parameter — through the Harness process environment or, preferred, the
-`reasoningEffortNoneModels` key in `harness.yaml` (the process environment
+`reasoningEffortNoneModels` key in `hayate-agent.yaml` (the process environment
 variable keeps working and all lists are merged; a `settings.local.yaml` overlay
 with the same key is live-editable and applies at the next request boundary, see
 configuration.md "Reasoning effort none opt-in"):
@@ -206,7 +206,7 @@ HARNESS_REASONING_EFFORT_NONE_MODELS='homelab/deepseek-v4-flash,homelab/glm-5.3-
 ```
 
 ```yaml
-# harness.yaml
+# hayate-agent.yaml
 reasoningEffortNoneModels:
   - homelab/deepseek-v4-flash
   - homelab/glm-5.3-flash

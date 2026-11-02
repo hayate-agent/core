@@ -1,6 +1,6 @@
 # Adaptive local skill recipes (opt-in)
 
-Installation configuration (`harness.yaml`):
+Installation configuration (`hayate-agent.yaml`):
 
 ```yaml
 skills:

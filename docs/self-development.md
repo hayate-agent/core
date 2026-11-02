@@ -12,11 +12,11 @@ Install from a user-owned checkout as described in installation.md, then:
 
 ```sh
 cd "$HOME/projects/my-project"
-vanillacore-harness
+hayate-agent
 ```
 
 No initialization is required. The current directory is always the interactive
-workspace, even if harness.yaml contains a daemon cwd. Optional init/doctor commands
+workspace, even if hayate-agent.yaml contains a daemon cwd. Optional init/doctor commands
 are administrative helpers, not prerequisites. Configure provider credentials
 in PI's user configuration or the provider's supported environment variables.
 Existing PI provider/extension configuration is reused from the same agent directory;
@@ -30,9 +30,9 @@ to apply changes to existing sessions.
 Use a feature branch and the checkout as the configured working directory:
 
 ```sh
-cd "$HOME/projects/vanillacore-harness"
+cd "$HOME/projects/hayate-agent"
 git switch -c feat/my-change
-VANILLACORE_HARNESS_HOME="$HOME/.vanillacore-harness-dev" vanillacore-harness
+HAYATE_AGENT_HOME="$HOME/.hayate-agent-dev" hayate-agent
 ```
 
 Example task to give the running agent:
@@ -53,7 +53,7 @@ is not enabled here; runtime-neutral MCP support remains future work.
 
 The running Node process does not hot-replace imported code. After a successful
 build, use a second terminal to smoke-test `node dist/cli.js version` and
-`node dist/cli.js doctor --home "$HOME/.vanillacore-harness-dev"`. Finish or stop
+`node dist/cli.js doctor --home "$HOME/.hayate-agent-dev"`. Finish or stop
 the current session, then restart the installed CLI to activate the new build.
 The global local-directory installation points to this checkout. Avoid replacing
 node_modules during an active turn; finish it before dependency updates.
@@ -74,8 +74,8 @@ Description=Hayate Agent
 [Service]
 Type=simple
 WorkingDirectory=/home/USER/projects
-EnvironmentFile=/home/USER/.config/vanillacore-harness/service.env
-ExecStart=/home/USER/.local/bin/vanillacore-harness run
+EnvironmentFile=/home/USER/.config/hayate-agent/service.env
+ExecStart=/home/USER/.local/bin/hayate-agent run
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=90

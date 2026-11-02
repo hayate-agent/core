@@ -117,7 +117,7 @@ export class ApiChannel implements Channel {
   private async route(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const url = new URL(req.url ?? "/", "http://localhost");
     const p = url.pathname.replace(/\/+$/, "") || "/";
-    if (req.method === "GET" && (p === "/health" || p === "/v1/health")) return this.json(res, 200, { status: "ok", platform: "vanillacore-harness" });
+    if (req.method === "GET" && (p === "/health" || p === "/v1/health")) return this.json(res, 200, { status: "ok", platform: "hayate-agent" });
     if (!this.authorized(req)) throw new HttpError(401, "Invalid API key", "invalid_api_key");
     if (p === "/v1/update-admission") {
       const owner = this.opts.updateAdmission;
@@ -160,7 +160,7 @@ export class ApiChannel implements Channel {
   private capabilities(): Record<string, unknown> {
     return {
       object: "hermes.api_server.capabilities",
-      platform: "vanillacore-harness",
+      platform: "hayate-agent",
       agent: this.opts.agent,
       features: {
         run_submission: true,
@@ -200,7 +200,7 @@ export class ApiChannel implements Channel {
   private async modelList(): Promise<Record<string, unknown>> {
     const { refs, aliases } = await this.modelIds();
     const ids = new Set([...refs, ...aliases.keys()]);
-    return { object: "list", data: [...ids].sort().map((id) => ({ id, object: "model", owned_by: "vanillacore-harness" })) };
+    return { object: "list", data: [...ids].sort().map((id) => ({ id, object: "model", owned_by: "hayate-agent" })) };
   }
 
   private run(runId: string) {
