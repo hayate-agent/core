@@ -93,6 +93,7 @@ export interface TurnOptions {
 
 /** Progress of a running turn, for channels that stream it (API runs). */
 export type TurnEvent =
+  | { type: "execution"; selection: import("./builtin-plugins/execution-metadata.js").ExecutionMetadata }
   | { type: "text"; delta: string }
   | { type: "tool"; phase: "start" | "end"; name: string; callId?: string; error?: boolean; detail?: string }
   /** One assistant message finished; usage is for that message only. */

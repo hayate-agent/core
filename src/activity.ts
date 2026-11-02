@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { TurnEvent } from "./types.js";
+import { executionMetadata, type ExecutionMetadata } from "./builtin-plugins/execution-metadata.js";
 
 /** Host evidence only. No model text, arguments, results or authorization are accepted. */
 export interface ActivitySnapshot {
@@ -12,6 +13,7 @@ export interface ActivitySnapshot {
   phase: "starting" | "running" | "tool" | "completed" | "failed" | "cancelled";
   activity: "opening session" | "runtime active" | "tool running" | "tool settled" | "turn settled";
   tools: Array<{ callId: string; name: string }>;
+  execution?: ExecutionMetadata;
   elapsedMs: number;
   inactiveMs: number;
 }
@@ -32,6 +34,7 @@ export class TurnActivity {
   private timer?: ReturnType<typeof setInterval>;
   private tools = new Map<string, { callId: string; name: string }>();
   private legacy = 0;
+  private execution?: ExecutionMetadata;
   private phase: ActivitySnapshot["phase"] = "starting";
   private activity: ActivitySnapshot["activity"] = "opening session";
   private readonly interval: number;
@@ -52,6 +55,7 @@ export class TurnActivity {
   snapshot(): ActivitySnapshot {
     const now = this.now();
     return { ...this.input, id: `turn-${identity(this.input.id)}`, parent: this.input.parent ? `context-${identity(this.input.parent)}` : undefined,
+      execution: this.execution ? { ...this.execution } : undefined,
       phase: this.phase, activity: this.activity, tools: [...this.tools.values()], elapsedMs: Math.max(0, now - this.started), inactiveMs: Math.max(0, now - this.last) };
   }
   private publish(kind: ActivityEvent["kind"], tool?: ActivityEvent["tool"]): void {
@@ -67,6 +71,11 @@ export class TurnActivity {
     if (this.closed) return;
     // Text/usage indicate real activity, but their content is never exported.
     this.last = this.now();
+    if (event.type === "execution") {
+      this.execution = executionMetadata(event.selection);
+      this.publish("progress");
+      return;
+    }
     if (event.type !== "tool") return;
     const name = safeName(event.name);
     const key = event.callId ?? (event.phase === "start" ? `legacy-${++this.legacy}` : [...this.tools].find(([, tool]) => tool.name === name)?.[0]);

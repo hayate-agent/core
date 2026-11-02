@@ -25,6 +25,13 @@ test("worker activity uses current claim and synthetic parent envelope without p
   const event: ActivityEvent = { type: "activity", kind: "alive", snapshot: { id: "turn-hash", role: "worker", context: "worker", phase: "running", activity: "runtime active", tools: [], elapsedMs: 1000, inactiveMs: 1000 } };
   const input: Inbound = { sessionKey: `dispatch:${key}`, source: "api", text: "PRIVATE TASK" };
   const emit = (target = key, envelope = input) => bridge.channel.taskActivity!({ channel: "dispatch", target }, event, envelope);
+  bridge.channel.turnEvent!({ channel: "dispatch", target: key }, { type: "execution", selection: { model: "p/actual", thinking: "off" } }, input);
+  // Serialize behind the asynchronous observation without relying on a display sink.
+  await store.checkpoint(task.id, claim.token!, "observed");
+  assert.deepEqual(store.list("parent")[0].execution, { model: "p/actual", thinking: "off" });
+  bridge.channel.turnEvent!({ channel: "dispatch", target: `${task.id}:obsolete` }, { type: "execution", selection: { model: "bad" } }, input);
+  await store.checkpoint(task.id, claim.token!, "still observed");
+  assert.equal(store.list("parent")[0].execution?.model, "p/actual");
   emit();
   assert.equal(seen.length, 1);
   assert.equal(seen[0].input.text, ""); assert.equal(seen[0].input.sessionKey, "parent");

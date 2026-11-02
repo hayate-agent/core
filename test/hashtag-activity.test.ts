@@ -34,10 +34,10 @@ test("actual channel activity renderer labels the first opening event and every 
   assert.ok(snapshots.length >= 3);
   assert.equal(snapshots[0]!.snapshot.phase, "starting");
   assert.deepEqual(snapshots[0]!.snapshot.outputTags, ["alpha"]);
-  assert.equal(rows.at(-1), "#alpha · Main · 0s · completed");
+  assert.equal(rows.at(-1), "#alpha · Main · 0s · model unknown/pending · reasoning unknown/pending · completed");
   const firstSession = runtime.sessions.get("mem:room1");
   await h.accept(msg("topic B #beta")); await idle(h); await native.flush();
-  assert.equal(rows.at(-1), "#beta · Main · 0s · completed");
+  assert.equal(rows.at(-1), "#beta · Main · 0s · model unknown/pending · reasoning unknown/pending · completed");
   assert.equal(runtime.sessions.get("mem:room1"), firstSession, "tags do not select another SDK session");
   assert.equal(runtime.opened.length, 1);
   assert.equal(firstSession!.prompts.length, 2);
@@ -70,7 +70,7 @@ test("stored worker origin overrides spoofed snapshot labels; lifecycle and ques
     type: "activity", kind: "progress", snapshot: { id: "old-worker", role: "worker", outputTags: ["spoof"], context: "worker", phase: "completed", activity: "turn settled", tools: [], elapsedMs: 28000, inactiveMs: 0 },
   }, { sessionKey: key, source: "host", text: "#spoof" });
   await native.flush();
-  assert.equal(rows.at(-1), "#alpha · Worker · 28s · completed");
+  assert.equal(rows.at(-1), "#alpha · Worker · 28s · model unknown/pending · reasoning unknown/pending · completed");
   for (const event of store.events()) assert.match(bridge.eventText(event), /^#alpha · Dispatcher — /);
   await store.ask(task.id, claimed.token!, "Which target?");
   const question = store.events().find(e => e.type === "question")!;
@@ -91,6 +91,6 @@ test("native persisted restart recovery keeps labels and legacy stays untagged",
   await native.flush(); native.stop();
   const reopened = new NativeActivityDelivery(file, send, 60000); t.after(() => reopened.stop());
   reopened.metadata(ROOM, "legacy", "running"); await reopened.flush();
-  assert.ok(rows.includes("#alpha · Main · 0s · Werkzeug read: interrupted (host restart)"));
+  assert.ok(rows.includes("#alpha · Main · 0s · model unknown/pending · reasoning unknown/pending · Werkzeug read: interrupted (host restart)"));
   assert.equal(rows.at(-1), "Dispatcher: running");
 });

@@ -191,7 +191,7 @@ export class RunRegistry {
     if (!r || TERMINAL.has(r.status) || this.finals.has(runId)) return; // frozen while finishing
     if (event.type === "text") this.emit(r, "message.delta", { delta: event.delta });
     else if (event.type === "tool") this.emit(r, event.phase === "start" ? "tool.started" : "tool.completed", { tool: event.name, ...(event.error ? { error: true } : {}) });
-    else {
+    else if (event.type === "usage") {
       // Validate the complete update before mutating counters, routing metadata or events.
       const previous = r.usage;
       const deltas = [event.input, event.output, event.cacheRead, event.cacheWrite];

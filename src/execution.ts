@@ -1,3 +1,4 @@
+import { executionMetadata, type ExecutionMetadata } from "./builtin-plugins/execution-metadata.js";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
@@ -24,6 +25,7 @@ export interface Execution {
   strategy: string;
   strategyVersion: number;
   status: ExecutionStatus;
+  execution?: ExecutionMetadata;
   checkpoint?: string;
   result?: string;
   token?: string;
@@ -326,11 +328,15 @@ export class ExecutionStore {
       if (reason) throw Error(reason);
       const claimedRecoveryAction = task.recoveryGrant?.restarts === task.restarts ? task.recoveryGrant.action : undefined;
       delete task.recoveryGrant;
+      delete task.execution; // A new attempt has no observed selection yet.
       task.token = randomUUID();
       task.status = "running";
       this.event(draft, task, "status", "Ausführung gestartet");
       return { ...task, claimedRecoveryAction };
     });
+  }
+  observeExecution(id: string, token: string, selection: ExecutionMetadata): Promise<void> {
+    return this.mutate(draft => { this.owned(draft, id, token).execution = executionMetadata(selection); });
   }
   checkpoint(id: string, token: string, checkpoint: string): Promise<void> {
     return this.mutate(draft => {
