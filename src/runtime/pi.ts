@@ -1,6 +1,7 @@
 /**
  * PI runtime adapter. The only module that imports the PI SDK.
  */
+import { reasoningEffortNoneModels as reasoningEffortNoneModelsFromEnv } from "../product-paths.js";
 import type { AdaptiveSkills } from "../adaptive-skills.js";
 import { toolGuardDenialReason } from "../tool-guard-error.js";
 import { MaintenanceError, maintenanceStep, type MaintenanceStage } from "../context-maintenance.js";
@@ -210,8 +211,7 @@ export class PiSession implements RuntimeSession {
     private readonly compaction: CompactionStrategy = nativeCompaction,
     private readonly beforePrompt?: () => Promise<void>,
     private readonly onSessionSelection?: (selection: { model?: string; thinking?: string }) => void | Promise<void>,
-    private readonly reasoningEffortNoneModels: () => readonly string[] = () =>
-      (process.env.HARNESS_REASONING_EFFORT_NONE_MODELS ?? "").split(",").map(value => value.trim()).filter(Boolean),
+    private readonly reasoningEffortNoneModels: () => readonly string[] = reasoningEffortNoneModelsFromEnv,
   ) {}
 
   get busy(): boolean {
@@ -564,7 +564,7 @@ export class PiRuntime implements AgentRuntime {
           ? [createCodemodeExtension({ mode: "on" }), createToolSearchExtension(), createMcpExtension()]
           : []),
         {
-          name: "vanillacore-harness-plugin-tools",
+          name: "hayate-agent-plugin-tools",
           factory: (pi) => {
             for (const tool of boundTools) {
               pi.registerTool({
@@ -594,7 +594,7 @@ export class PiRuntime implements AgentRuntime {
           },
         },
         {
-          name: "vanillacore-harness-turn",
+          name: "hayate-agent-turn",
           factory: (pi) => {
             const adaptive = !options.ephemeral ? this.opts.adaptiveSkills : undefined;
             if (adaptive) installAdaptiveSkillHooks(pi, adaptive, sessionKey);
@@ -617,7 +617,7 @@ export class PiRuntime implements AgentRuntime {
           },
         },
         {
-          name: "vanillacore-harness-approvals",
+          name: "hayate-agent-approvals",
           factory: (pi) => {
             pi.on("tool_call", async (event) => {
               try { await this.opts.toolGuard?.(sessionKey, event.toolName, event.input); }

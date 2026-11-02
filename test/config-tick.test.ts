@@ -14,6 +14,6 @@ test('configuration rejects timer coercion and overflow instead of creating 1ms 
 });
 test('YAML tick overflow fails at config loading boundary',async(t)=>{
  const dir=await mkdtemp(path.join(os.tmpdir(),'config-tick-'));t.after(()=>rm(dir,{recursive:true,force:true}));
- await writeFile(path.join(dir,'harness.yaml'),'loop:\n  tickMs: 2147483648\n');
+ await writeFile(path.join(dir,'hayate-agent.yaml'),'loop:\n  tickMs: 2147483648\n');
  await assert.rejects(loadConfig(dir),/loop.tickMs/);
 });

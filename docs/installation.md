@@ -14,14 +14,14 @@ below requires published source on `main`. Until then, use an existing verified
 checkout.
 
 ```sh
-git clone https://github.com/hayate-agent/core.git "$HOME/vanillacore-harness"
-cd "$HOME/vanillacore-harness"
+git clone https://github.com/hayate-agent/core.git "$HOME/hayate-agent"
+cd "$HOME/hayate-agent"
 npm ci
 npm run typecheck
 npm test
 npm install --global --prefix "$HOME/.local" .
 export PATH="$HOME/.local/bin:$PATH"
-vanillacore-harness version
+hayate-agent version
 ```
 
 Persist that PATH entry in your shell profile if needed. The local global install
@@ -32,7 +32,7 @@ links this checkout: keep it at its installed location. `npm ci` builds the CLI 
 
 ```sh
 cd /path/to/your/project
-vanillacore-harness
+hayate-agent
 ```
 
 This opens the Hayate Agent TUI (using PI terminal components) in the current directory.
@@ -48,7 +48,7 @@ Changes to shared PI settings can also affect your regular PI installation.
 Neither Hermes nor PI is uninstalled or stopped.
 
 You can also test without installing the command globally: after `npm ci`, run
-`node "$HOME/vanillacore-harness/dist/cli.js"` from your project directory.
+`node "$HOME/hayate-agent/dist/cli.js"` from your project directory.
 
 Optional `init` creates missing Hayate Agent persona/configuration files without
 replacing existing files; `doctor` checks local configuration, not provider
@@ -58,7 +58,7 @@ connectivity. Neither is a prerequisite for interactive use. See
 
 ### Gateway / background service
 
-`vanillacore-harness run` starts the same persistent Hayate Agent without its TUI.
+`hayate-agent run` starts the same persistent Hayate Agent without its TUI.
 Interactive mode runs the Hayate Agent scheduler and configured gateway channels too. For a headless API service, set `API_SERVER_KEY`. Matrix is enabled through
 `MATRIX_*` variables (see the main README). Slack is not implemented yet.
 For an always-on native service use your OS supervisor (systemd on Linux/WSL with
@@ -73,7 +73,8 @@ From the checkout:
 
 ```sh
 mkdir -p config
-for file in harness.yaml SOUL.md models.json; do
+(set -C; cat deploy/kubernetes/hayate-agent.yaml > config/hayate-agent.yaml) || exit 1
+for file in SOUL.md models.json; do
   # Exclusive creation: stop rather than overwrite an existing configuration.
   (set -C; cat "deploy/kubernetes/$file" > "config/$file") || exit 1
 done

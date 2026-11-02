@@ -16,7 +16,7 @@ test("configured pins survive defaults and YAML loading and enforce integrity", 
   const sha256 = createHash("sha256").update(text).digest("hex");
   const manifest = { files: [{ path: "SOUL.md", sha256 }] };
   assert.deepEqual(defaultConfig({ home, protectedContent: manifest }).protectedContent, manifest);
-  await writeFile(path.join(home, "harness.yaml"), `protectedContent:\n  files:\n    - path: SOUL.md\n      sha256: ${sha256}\n`);
+  await writeFile(path.join(home, "hayate-agent.yaml"), `protectedContent:\n  files:\n    - path: SOUL.md\n      sha256: ${sha256}\n`);
   const config = await loadConfig(home);
   assert.deepEqual(config.protectedContent, manifest);
   const policy = new ProtectedContent(config.home, config.protectedContent);
@@ -59,7 +59,7 @@ test("local settings cannot override infrastructure protected-content manifest",
   const file = path.join(home, "settings.local.yaml");
   const text = "infrastructure-controlled identity";
   const manifest = { files: [{ path: "SOUL.md", sha256: createHash("sha256").update(text).digest("hex") }] };
-  await writeFile(path.join(home, "harness.yaml"), `protectedContent:\n  files:\n    - path: SOUL.md\n      sha256: ${manifest.files[0].sha256}\n`);
+  await writeFile(path.join(home, "hayate-agent.yaml"), `protectedContent:\n  files:\n    - path: SOUL.md\n      sha256: ${manifest.files[0].sha256}\n`);
   const config = await loadConfig(home);
   const warnings: string[] = [];
   const settings = new SettingsService(file, { reasoningEffortNoneModels: ["p/base"] }, message => warnings.push(message));
