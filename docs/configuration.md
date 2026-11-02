@@ -348,8 +348,10 @@ an immutable installation baseline and a separate local replacement overlay.
 
 ## Models and credentials
 
-Provider definitions live in PI's `models.json`; examples are in
-`deploy/kubernetes/models.json`. Choose the actual endpoint and model IDs, and
+Provider definitions live in PI's `models.json`. The public repository does not
+include a model configuration bundle; create one for your provider using
+[PI's model configuration reference](https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/docs/models.md).
+Choose the actual endpoint and model IDs, and
 reference credentials by environment name, for example `"apiKey": "$MODEL_API_KEY"`.
 The secret is supplied to the process, not embedded in Git or the image.
 API authentication uses a separate `API_SERVER_KEY`. Do not reuse a model key.
