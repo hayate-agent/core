@@ -8,10 +8,8 @@ Node 24.22.1 LTS is recommended and recorded in `.node-version`. No root executi
 ## Native installation
 
 Use a user-owned checkout and npm prefix; do not use sudo npm. The canonical
-source is [hayate-agent/core](https://github.com/hayate-agent/core). Publication
-there is still pending (the repository is currently empty); the clone command
-below requires published source on `main`. Until then, use an existing verified
-checkout.
+source is [hayate-agent/core](https://github.com/hayate-agent/core), with
+installation source available on `main`.
 
 ```sh
 git clone https://github.com/hayate-agent/core.git "$HOME/hayate-agent"
@@ -73,15 +71,16 @@ From the checkout:
 
 ```sh
 mkdir -p config
-(set -C; cat deploy/kubernetes/hayate-agent.yaml > config/hayate-agent.yaml) || exit 1
-for file in SOUL.md models.json; do
-  # Exclusive creation: stop rather than overwrite an existing configuration.
-  (set -C; cat "deploy/kubernetes/$file" > "config/$file") || exit 1
-done
+# Exclusive creation: stop rather than overwrite an existing identity.
+(set -C; cat deploy/kubernetes/SOUL.md > config/SOUL.md) || exit 1
 ```
 
-Edit those files before starting. Set `API_SERVER_KEY` and `MODEL_API_KEY` in the
-calling shell using your secret manager, then:
+Edit `config/SOUL.md` for your agent. Create `config/hayate-agent.yaml` using the
+[configuration guide](configuration.md), and `config/models.json` using PI's
+provider configuration described there. These must be regular files before
+Compose starts: the public repository does not include those configuration
+examples. Keep provider secrets out of source control. Set `API_SERVER_KEY` and
+`MODEL_API_KEY` in the calling shell using your secret manager, then:
 
 ```sh
 docker compose up --build -d
@@ -99,16 +98,19 @@ Add `MATRIX_*` environment entries to a private Compose override if desired.
 
 The canonical deployment repository is
 [hayate-agent/deployments](https://github.com/hayate-agent/deployments). It is
-currently empty; no directory layout or migration from older overlay/base
-repositories is established here. The instructions below use Core's checked-in
-example, not an assumed path in that repository.
+not a source of public manifests at present; no directory layout or migration
+from older overlay/base repositories is established here. Core's public
+`deploy/kubernetes/` contains only the `SOUL.md` persona example. It has no
+`kustomization.yaml`, workload manifest or model/configuration bundle, so
+`kubectl kustomize deploy/kubernetes` is not an installation command for the
+public checkout.
 
-Render `kubectl kustomize deploy/kubernetes`. Replace the placeholder image with a
-published immutable digest and supply `harness-credentials` out-of-band. Configure
-identity, models and any channel credentials in your private overlay repository.
-The example does not create an Ingress or restrict egress; supply NetworkPolicies
-appropriate to your environment. Configuration mounted with subPath requires a pod
-restart after changes. Provision a persistent volume usable by uid/gid 1000.
+Kubernetes deployment requires your own manifests in an operator-managed
+repository. Pin a verified image by immutable digest, configure identity and
+models, supply credentials out-of-band, and provision persistent storage usable
+by uid/gid 1000. Define ingress and NetworkPolicies for your environment.
+Configuration mounted with subPath requires a pod restart after changes. Private
+deployment files are not part of the public installation instructions.
 
 ## Verification scope
 
