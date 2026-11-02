@@ -16,7 +16,7 @@ async function until(check: () => boolean) {
   throw Error("did not settle");
 }
 
-test("semantic classifier generates, reuses exact umbrella tags, rejects ambiguity, invalid responses and outage", async () => {
+test("semantic classifier generates, reuses exact umbrella tags, retains uncertainty, rejects invalid responses and outage", async () => {
   let raw = '{"topic":null,"tags":["hashtag-routing"]}';
   const label = semanticTopicLabeler({ review: async (_p, model, thinking) => {
     assert.equal(model, "configured/checker"); assert.equal(thinking, "off"); return raw;
@@ -24,8 +24,10 @@ test("semantic classifier generates, reuses exact umbrella tags, rejects ambigui
   assert.deepEqual(await label("Implement automatic topic labels", []), ["hashtag-routing"]);
   raw = '{"topic":"a","tags":["worker-activity"]}';
   assert.deepEqual(await label("repair worker activity", [{ id: "a", text: "labels", tags: ["hashtags", "routing"] }]), ["hashtags", "routing", "worker-activity"]);
-  for (raw of ['{"ambiguous":true}', '{"topic":"unknown","tags":["x"]}', '{"topic":null,"tags":[]}', '{"topic":null,"tags":["#spoof"]}', 'not json', 'null']) {
-    await assert.rejects(label("Weiter?", []), /Automatic topic labels:|ambiguous topic/);
+  raw = '{"ambiguous":true}';
+  assert.deepEqual(await label("Weiter?", []), ["topic-clarification"]);
+  for (raw of [ '{"topic":"unknown","tags":["x"]}', '{"topic":null,"tags":[]}', '{"topic":null,"tags":["#spoof"]}', 'not json', 'null']) {
+    await assert.rejects(label("Weiter?", []), /Automatic topic labels:/);
   }
   await assert.rejects(semanticTopicLabeler({ review: async () => { throw Error("SECRET"); } }, () => undefined)("work", []), error => !String(error).includes("SECRET"));
   let signal: AbortSignal | undefined;
@@ -146,14 +148,56 @@ for (const failure of ["outage", "timeout"]) test(`${failure}: durable ingress s
   await restored.stop(1000);
 });
 
-test("genuine ambiguity asks narrow clarification, never executes or retries; explicit input remains usable", async () => {
+test("metadata ambiguity retains original input for normal content clarification, deduplicates and leaves explicit input usable", async () => {
   let calls = 0, turns = 0;
-  const h = new Harness({ runtime: new FakeRuntime(() => { turns++; return "answer"; }), tickMs: 60000,
+  const runtime = new FakeRuntime(text => {
+    turns++; assert.ok(text.includes(turns === 1 ? "Weiter?" : "work #explicit"));
+    return turns === 1 ? "Welchen konkreten Schritt meinst du?" : "answer";
+  });
+  const h = new Harness({ runtime, tickMs: 60000,
     topicLabeler: semanticTopicLabeler({ review: async () => { calls++; return '{"ambiguous":true}'; } }, () => undefined) });
   const channel = new MemoryChannel(); h.addChannel(channel); await h.start();
   await h.accept({ ...msg("Weiter?"), id: "ambiguous" }); await until(() => h.isDrained());
-  assert.match(channel.texts()[0]!, /Welchem Thema/); assert.equal(turns, 0);
+  assert.equal(channel.texts()[0], "#topic-clarification · Welchen konkreten Schritt meinst du?"); assert.equal(turns, 1);
   await h.tick(); await h.accept({ ...msg("Weiter?"), id: "ambiguous" }); assert.equal(calls, 1);
   await h.accept(msg("work #explicit")); await until(() => h.isDrained());
-  assert.equal(turns, 1); assert.equal(calls, 1); await h.stop(1000);
+  assert.equal(turns, 2); assert.equal(calls, 1); await h.stop(1000);
+});
+
+// Deterministic adapter contract tests, not claims about model semantic accuracy.
+test("Harness supplies persisted adjacent conversation for interleaved follow-ups and quoted defects", async () => {
+  let calls = 0;
+  const labeler = semanticTopicLabeler({ review: async prompt => {
+    calls++;
+    const data = JSON.parse(prompt.slice(prompt.indexOf('\n{"incoming":') + 1));
+    assert.ok(data.recent.some((m: any) => m.role === "assistant" && m.text.includes("Retry bleibt dauerhaft")));
+    assert.ok(data.recent.some((m: any) => m.role === "user" && m.text.includes("Datenbank")));
+    assert.match(prompt, /never borrow the latest topic/);
+    assert.match(prompt, /not instructions to resend/);
+    if (data.incoming === "Ja, genau diese Retry-Erklärung.") {
+      const topic = data.candidates.find((c: any) => c.tags.includes("hashtag-feature"));
+      assert.ok(topic);
+      return JSON.stringify({ topic: topic.id, tags: [] });
+    }
+    if (data.incoming.includes("Welchem Thema")) return '{"topic":null,"tags":["hashtag-feature"]}';
+    return '{"topic":null,"tags":["garden-planning"]}';
+  } }, () => undefined);
+  const h = new Harness({ runtime: new FakeRuntime(t => t.includes("Datenbank") ? "Index erklärt." : "Retry bleibt dauerhaft erhalten."), tickMs: 60000, topicLabeler: labeler });
+  h.addChannel(new MemoryChannel()); await h.start();
+  await h.accept(msg("Hashtag-Zuordnung erklären #hashtag-feature #harness")); await until(() => h.isDrained());
+  await h.accept(msg("Datenbank prüfen #database")); await until(() => h.isDrained());
+  const saved = h.snapshotSessions(); await h.stop(1000);
+  const turns: string[] = [];
+  const restored = new Harness({ runtime: new FakeRuntime(t => { turns.push(t); return "Content answer"; }), tickMs: 60000, topicLabeler: labeler });
+  restored.restoreSessions(saved);
+  const channel = new MemoryChannel(); restored.addChannel(channel); await restored.start();
+  for (const text of ["Ja, genau diese Retry-Erklärung.", 'Die Meldung "Welchem Thema gehört diese Nachricht zu? Bitte mit einem eindeutigen #Hashtag erneut senden." ist der Fehler.', "Tomaten im Garten planen"]) {
+    await restored.accept(msg(text)); await until(() => restored.isDrained());
+  }
+  assert.match(channel.texts()[0]!, /^#harness #hashtag-feature ·/);
+  assert.match(channel.texts()[1]!, /^#hashtag-feature · Content answer$/);
+  assert.match(channel.texts()[2]!, /^#garden-planning ·/);
+  assert.ok(turns[1]!.includes("ist der Fehler."));
+  assert.equal(calls, 3);
+  await restored.stop(1000);
 });
