@@ -276,7 +276,7 @@ async function main(argv: string[]): Promise<void> {
     tools: (() => {
       const workflow = workflowTools(config.tools, config.memory.enabled, false);
       const tools = workflow?.length ? [...new Set([...workflow, ...(reviewModule?.modelTools ?? [])])] : workflow;
-      return dispatchPolicy.enabled && tools?.length ? [...new Set([...tools, "plugin_dispatch"])] : tools;
+      return dispatchPolicy.enabled && tools?.length ? [...new Set([...tools, "plugin_dispatch", "plugin_worker_tasks"])] : tools;
     })(),
     pluginTools: () => composeToolCatalog(plugins.tools, initialReloadableTools, reloadableTools?.tools ?? new Map()),
     sessionProvider: () => sessionProvider,
@@ -367,7 +367,7 @@ async function main(argv: string[]): Promise<void> {
       selectedTools: (() => {
         const workflow = workflowTools(config.tools, config.memory.enabled, false);
         const tools = workflow?.length ? [...new Set([...workflow, ...(reviewModule?.modelTools ?? [])])] : workflow;
-        return dispatchPolicy.enabled && tools?.length ? [...new Set([...tools, "plugin_dispatch"])] : tools;
+        return dispatchPolicy.enabled && tools?.length ? [...new Set([...tools, "plugin_dispatch", "plugin_worker_tasks"])] : tools;
       })(),
       registeredTools: composeToolCatalog(plugins.tools, initialReloadableTools, reloadableTools?.tools ?? new Map()).map(tool => tool.name),
       dispatcherEnabled: dispatchPolicy.enabled, dispatcherReady: dispatcher?.ready === true,

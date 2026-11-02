@@ -54,7 +54,7 @@ export class DispatcherRuntime {
   }
   guardTool(key: string, tool: string): void {
     this.beforeTurn(key);
-    if (this.isWorker(key) && ["plugin_dispatch", "plugin_subagent", "plugin_loop", "plugin_task_continuation", "plugin_improvement_evaluate"].includes(tool)) {
+    if (this.isWorker(key) && ["plugin_worker_tasks", "plugin_dispatch", "plugin_subagent", "plugin_loop", "plugin_task_continuation", "plugin_improvement_evaluate"].includes(tool)) {
       throw new ToolGuardError("worker_orchestration_denied", "Dispatcher worker orchestration is disabled; return a result or blocker");
     }
   }
