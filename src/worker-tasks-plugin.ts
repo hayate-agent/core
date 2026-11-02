@@ -2,7 +2,7 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import { readFile, mkdir } from "node:fs/promises";
 import { writeFileDurable } from "./durable.js";
-import type { PluginModule } from "./plugins.js";
+import type { PluginModule, PluginCommand } from "./plugins.js";
 import type { Dispatcher } from "./dispatcher.js";
 
 type Board = { profiles: Record<string, string>; tasks: Record<string, { profile: string; task: string; input: string }> };
@@ -22,8 +22,8 @@ export function workerTasksPlugin(home: string, getDispatcher: () => Dispatcher 
     await writeFileDurable(file(parent), JSON.stringify(board));
   };
   return { apiVersion: 1, activate(api) {
-    api.registerCommand({ name: "worker-tasks", help: "Worker profiles and durable tasks: profile <name> <instructions> | submit <request-id> <profile> <task> | status",
-      async run(args, context) {
+    const command: PluginCommand & { run(args: string, context: { sessionKey: string }, model?: boolean): Promise<string> } = { name: "worker-tasks", help: "Worker profiles and durable tasks: profile <name> <instructions> | submit <request-id> <profile> <task> | status",
+      async run(args, context, model = false) {
         if (/^(dispatch|subagent):/.test(context.sessionKey)) throw Error("Nested delegation is disabled");
         const dispatcher = getDispatcher();
         if (!dispatcher) throw Error("Dispatcher is not active");
@@ -50,7 +50,9 @@ export function workerTasksPlugin(home: string, getDispatcher: () => Dispatcher 
             // dispatcher request identity even across a crash in this gap.
             board.tasks[id] = { profile, task, input };
             await save(context.sessionKey, board);
-            const execution = await submit(context.sessionKey, `worker-tasks:${id}`, input);
+            // Model calls inherit the live parent mandate through normal dispatcher
+            // admission. Only explicit operator commands may create a new mandate.
+            const execution = await (model ? dispatcher.submit.bind(dispatcher) : submit)(context.sessionKey, `worker-tasks:${id}`, input);
             return JSON.stringify({ requestId: id, id: execution.id, status: execution.status });
           }
           if (action === "status" && !id) {
@@ -66,6 +68,29 @@ export function workerTasksPlugin(home: string, getDispatcher: () => Dispatcher 
         const result = writes.then(run);
         writes = result.then(() => {}, () => {});
         return result;
+      },
+    };
+    api.registerCommand(command);
+    api.registerTool({
+      name: "plugin_worker_tasks",
+      description: "Manage conversation-scoped worker profiles and durable tasks using the existing dispatcher. Only submit work authorized by the current operator mandate. Results arrive as host events; status includes persisted results. Reuse requestId only for identical retries. Profiles do not grant permissions.",
+      parameters: { type: "object", additionalProperties: false, properties: {
+        action: { type: "string", enum: ["profile", "submit", "status"] },
+        name: { type: "string", pattern: "^[a-zA-Z0-9_-]{1,80}$" },
+        instructions: { type: "string", minLength: 1, maxLength: 16000 },
+        requestId: { type: "string", pattern: "^[a-zA-Z0-9_-]{1,80}$" },
+        profile: { type: "string", pattern: "^[a-zA-Z0-9_-]{1,80}$" },
+        task: { type: "string", minLength: 1, maxLength: 64000 },
+      }, required: ["action"] },
+      async execute(input, context) {
+        if (context.signal?.aborted) throw Error("Worker task call aborted");
+        const identifier = (value: unknown): value is string => typeof value === "string" && /^[a-zA-Z0-9_-]{1,80}$/.test(value);
+        if (input.action === "status") return command.run("status", context, true);
+        if (input.action === "profile" && identifier(input.name) && typeof input.instructions === "string" && input.instructions.trim())
+          return command.run(`profile ${input.name} ${input.instructions}`, context, true);
+        if (input.action === "submit" && identifier(input.requestId) && identifier(input.profile) && typeof input.task === "string" && input.task.trim())
+          return command.run(`submit ${input.requestId} ${input.profile} ${input.task}`, context, true);
+        throw Error("Invalid worker task operation");
       },
     });
   } };
