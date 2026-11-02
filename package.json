@@ -1,5 +1,5 @@
 {
-  "name": "vanillacore-harness",
+  "name": "hayate-agent",
   "version": "0.1.0",
   "description": "Hayate Agent: a lightweight, persistent agent harness with a swappable runtime.",
   "type": "module",
@@ -16,7 +16,7 @@
     "LICENSE"
   ],
   "bin": {
-    "vanillacore-harness": "./dist/cli.js"
+    "hayate-agent": "./dist/cli.js"
   },
   "engines": {
     "node": ">=22.19.0"

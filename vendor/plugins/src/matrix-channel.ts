@@ -428,7 +428,7 @@ export class MatrixChannel implements Channel {
       password: this.o.password,
       // Stable device so restarts do not pile up login devices.
       device_id: this.o.deviceId ?? `PIHARNESS_${createHash("sha256").update(this.o.userId ?? "").digest("hex").slice(0, 10).toUpperCase()}`,
-      initial_device_display_name: "vanillacore-harness",
+      initial_device_display_name: "hayate-agent",
     });
     if (this.o.deviceId && r.device_id !== this.o.deviceId) throw Error("Matrix login device_id mismatch");
     this.o.deviceId = r.device_id;

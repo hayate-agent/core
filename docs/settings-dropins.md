@@ -74,6 +74,6 @@ Desired disk values are validated together, active values remain truthful, and
 No restart, deployment or live-config write is automated. Plugin map edits explicitly
 request trusted local module activation; editing module source without changing a
 map entry still requires an explicit reload command.
-`harness.yaml` and arbitrary security/secrets/provider settings are outside this
+`hayate-agent.yaml` and arbitrary security/secrets/provider settings are outside this
 runtime-writable allowlist. The existing installation defaults remain startup input.
 A permitted overlay is not permission to import arbitrary categories.

@@ -79,8 +79,8 @@ pipeline. A source edit does not activate a running Harness.
 |---|---|
 | Identity, role, duties | Harness home SOUL.md; no product-code change |
 | Tone | VOICE.md and personalities/*.md |
-| Model/provider | harness.yaml model + PI models.json/auth, local /model and /login |
-| Exposed tools | harness.yaml tools: literal names, [] disables model-visible tools |
+| Model/provider | hayate-agent.yaml model + PI models.json/auth, local /model and /login |
+| Exposed tools | hayate-agent.yaml tools: literal names, [] disables model-visible tools |
 | Reusable task instructions | skills/<name>/SKILL.md with name/description frontmatter |
 | Scheduled work | cron/jobs.yaml and /cron; /goal, /heartbeat, /loop for persistent work |
 | PI tools/providers/hooks | PI extensions in its configured agent/project directories |

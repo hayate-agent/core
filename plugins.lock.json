@@ -15,11 +15,11 @@
     "improvement-plugin.ts": "97e965b6f71567d823549d8a3b2a6888a2ed1f86eda76c2bc29c565b82431ca5",
     "improvement-report.ts": "2e206939ef70e86df87059a5ab5584b203dec1decf289e437642e163d630b273",
     "loop-plugin.ts": "ab7e0ea59919503cd4d9c36b01eb08f7687c00ef88679de2dcc33067b56ae6cd",
-    "matrix-channel.ts": "fc6615255b5522813bdbcce93026e33f8e317cfa4e4b1a2b8f9c3c576eb36ad2",
+    "matrix-channel.ts": "a5388ad6aeddf9bc14cbbe2b463d4df93dd09af7a96aeff3f128db52360b0e97",
     "matrix-gateway.ts": "cab666ab5d2675d9b459102f119598b4444dcbbdecb3a5d16d473a676a131be3",
     "matrix-sync.ts": "32a217a65dc5f05f0c0940e2f52426c1ab2044688513befb282af7376943b5c1",
     "memory-orchestration-plugin.ts": "c796ff18def036016ac47095d18a490fab0d15ff8eaff342e463babc16bf78ea",
-    "memory-plugin.ts": "1fa1a44e6151fb3357cafaf20445263b27b68f8a910f17932f24890b073292be",
+    "memory-plugin.ts": "d253236ebdda0f6914532afcef299939e98d0f4dab17dcfa178ce39628e1eee5",
     "memory-service.ts": "ab314fb8e059c93ec0dede58bcf0dfa45975916d2f68d3a6d384c971a2ea3f7e",
     "native-activity.ts": "e7b8b0a353554c5966568ce14091fc7b6283b60b304c616ee851610c115476b1",
     "nightly-default.ts": "d807ad49e01dcb867f97fc748362e73e877c3540892755538eb2cc1840da2736",
@@ -48,6 +48,6 @@
     "matrix-crypto.ts": "a89018c1cf22afc221df6ca6d621332dc9cae9a2dc222452f44b5444f249ded4"
   },
   "repository": "https://git.vanillacore.net/harness/plugins",
-  "revision": "e04f7d8235fa244cdfd06e7c4e38752776f98a69",
+  "revision": "b564c3b021b372a665362acd5aa33f3825b09040",
   "schema": 1
 }

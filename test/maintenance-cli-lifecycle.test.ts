@@ -41,7 +41,7 @@ test("real CLI reconciles pending intent across owner restart, applies once and 
   };
   const command = async (...args: string[]) => {
     const { stdout } = await exec(process.execPath, ["--import", "tsx", cli, "maintenance", endpoint, ...args], {
-      timeout: 5000, env: { ...process.env, VANILLACORE_HARNESS_HOME: path.join(home, "invalid-home") },
+      timeout: 5000, env: { ...process.env, HAYATE_AGENT_HOME: path.join(home, "invalid-home") },
     });
     return JSON.parse(stdout.trim());
   };

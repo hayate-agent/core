@@ -23,9 +23,9 @@ test("native initialization writes configurable identity and workspace without o
     const file = path.join(dir, "not-a-directory");
     await writeFile(file, "file");
     await assert.rejects(initialize({ home: path.join(dir, "invalid-profile"), cwd: file }), /not a directory/);
-    await writeFile(path.join(home, "harness.yaml"), `cwd: ${JSON.stringify(file)}\n`);
+    await writeFile(path.join(home, "hayate-agent.yaml"), `cwd: ${JSON.stringify(file)}\n`);
     assert.equal((await diagnose(home)).ok, false);
-    await rm(path.join(home, "harness.yaml"));
+    await rm(path.join(home, "hayate-agent.yaml"));
     assert.equal((await diagnose(home)).ok, false);
   } finally { await rm(dir, { recursive: true, force: true }); }
 });

@@ -1,0 +1,34 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { mkdtemp, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { LocalMemory } from "../src/memory-local.js";
+import { memoryConfig } from "../src/memory.js";
+import { MemoryService } from "../src/builtin-plugins/memory-service.js";
+import { memoryPlugin } from "../src/builtin-plugins/memory-plugin.js";
+
+test("memory tool validates before IPC and preserves durable retry identity across provider restart", async t => {
+  const home = await mkdtemp(path.join(os.tmpdir(), "memory-contract-"));
+  let provider = await LocalMemory.open(home, memoryConfig());
+  t.after(async () => { await provider.close(); await rm(home, { recursive: true, force: true }); });
+  const service = new MemoryService(memoryConfig(), () => {}, home);
+  service.provider = provider;
+  let tool: any;
+  memoryPlugin(service).activate({ registerTool(value: unknown) { tool = value; }, registerCommand() {} } as any);
+  const context = { sessionKey: "conversation-a" };
+  const entry = { key: "decision:contract:v1", title: "Stable identity", text: "Retry unchanged content with the same key." };
+  await assert.rejects(tool.execute({ action: "put", entry: { ...entry, key: " " } }, context), /entry\.key/);
+  await assert.rejects(tool.execute({ action: "put", entry }, {}), /host conversation context/);
+  assert.equal((await provider.status()).entries, 0);
+  const first = JSON.parse(await tool.execute({ action: "put", entry }, context));
+  assert.equal(first.source, context.sessionKey);
+  assert.deepEqual(JSON.parse(await tool.execute({ action: "put", entry }, context)), first);
+  await assert.rejects(tool.execute({ action: "put", entry: { ...entry, text: "Changed" } }, context), /conflict/);
+  assert.equal(await provider.get({ sessionKey: "conversation-b" }, first.id), undefined);
+  await provider.close();
+  provider = await LocalMemory.open(home, memoryConfig());
+  service.provider = provider;
+  assert.deepEqual(JSON.parse(await tool.execute({ action: "put", entry }, context)), first);
+  assert.equal((await provider.status()).entries, 1);
+});
