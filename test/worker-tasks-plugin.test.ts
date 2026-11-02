@@ -7,6 +7,15 @@ import { Dispatcher } from "../src/dispatcher.js";
 import { ExecutionStore } from "../src/execution.js";
 import { PluginHost } from "../src/plugins.js";
 import { workerTasksPlugin } from "../src/worker-tasks-plugin.js";
+import { builtinCommandNames } from "../src/commands.js";
+
+test("worker board activates with the real built-in command reservations", async () => {
+  const registry = new PluginHost();
+  await registry.load([], { home: ".", agent: "test", cwd: "." }, builtinCommandNames, [],
+    [workerTasksPlugin(".", () => undefined, async () => { throw Error("not invoked"); })]);
+  assert.ok(builtinCommandNames.includes("agents"));
+  assert.ok(registry.commands.has("tasks"));
+});
 
 test("worker board executes through durable dispatcher, survives reload and archive, deduplicates profile snapshots", async t => {
   const home = await mkdtemp(path.join(os.tmpdir(), "worker-board-"));
