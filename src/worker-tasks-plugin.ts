@@ -22,7 +22,7 @@ export function workerTasksPlugin(home: string, getDispatcher: () => Dispatcher 
     await writeFileDurable(file(parent), JSON.stringify(board));
   };
   return { apiVersion: 1, activate(api) {
-    api.registerCommand({ name: "tasks", help: "Worker profiles and durable tasks: profile <name> <instructions> | submit <request-id> <profile> <task> | status",
+    api.registerCommand({ name: "worker-tasks", help: "Worker profiles and durable tasks: profile <name> <instructions> | submit <request-id> <profile> <task> | status",
       async run(args, context) {
         if (/^(dispatch|subagent):/.test(context.sessionKey)) throw Error("Nested delegation is disabled");
         const dispatcher = getDispatcher();
@@ -61,7 +61,7 @@ export function workerTasksPlugin(home: string, getDispatcher: () => Dispatcher 
             }));
             return JSON.stringify({ profiles: board.profiles, tasks }, null, 2);
           }
-          throw Error("Use /tasks profile <name> <instructions> | submit <request-id> <profile> <task> | status");
+          throw Error("Use /worker-tasks profile <name> <instructions> | submit <request-id> <profile> <task> | status");
         };
         const result = writes.then(run);
         writes = result.then(() => {}, () => {});

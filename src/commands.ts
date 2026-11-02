@@ -293,8 +293,7 @@ export const COMMANDS: Command[] = [
   },
   {
     name: "agents",
-    // /tasks belongs to the bundled durable worker board.
-    // Reserving it here prevents PluginHost startup entirely.
+    aliases: ["tasks"],
     help: "Show active sessions and running tasks",
     run: async (_a, _i, ctx) => {
       const rows = [...ctx.harness.sessions.values()].map((s) => {

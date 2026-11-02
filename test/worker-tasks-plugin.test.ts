@@ -14,7 +14,7 @@ test("worker board activates with the real built-in command reservations", async
   await registry.load([], { home: ".", agent: "test", cwd: "." }, builtinCommandNames, [],
     [workerTasksPlugin(".", () => undefined, async () => { throw Error("not invoked"); })]);
   assert.ok(builtinCommandNames.includes("agents"));
-  assert.ok(registry.commands.has("tasks"));
+  assert.ok(registry.commands.has("worker-tasks"));
 });
 
 test("worker board executes through durable dispatcher, survives reload and archive, deduplicates profile snapshots", async t => {
@@ -30,7 +30,7 @@ test("worker board executes through durable dispatcher, survives reload and arch
     await dispatcher.start();
     const registry = new PluginHost();
     await registry.load([], { home, agent: "test", cwd: home }, [], [], [workerTasksPlugin(home, () => dispatcher, (parent, id, input) => dispatcher.submit(parent, id, input))]);
-    const run = (args: string, sessionKey = "operator") => registry.commands.get("tasks")!.run(args, { sessionKey });
+    const run = (args: string, sessionKey = "operator") => registry.commands.get("worker-tasks")!.run(args, { sessionKey });
     return { dispatcher, store, run };
   };
   let runtime = await create();
