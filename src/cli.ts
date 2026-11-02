@@ -44,6 +44,7 @@ import { DispatcherRuntime } from "./dispatcher-runtime.js";
 import { attentionRequired } from "./notification-routing.js";
 import { dispatcherConfig } from "./dispatcher-config.js";
 import { dispatcherPlugin } from "./builtin-plugins/dispatcher-plugin.js";
+import { workerTasksPlugin } from "./worker-tasks-plugin.js";
 import { subagentPlugin } from "./builtin-plugins/subagent-plugin.js";
 import { wasmToolsPlugin } from "./builtin-plugins/wasm-tools-plugin.js";
 import { ReloadableTools, composeToolCatalog } from "./reloadable-tools.js";
@@ -555,7 +556,16 @@ async function main(argv: string[]): Promise<void> {
     admit: (id: string, request: import("./context-maintenance.js").MaintenanceRequest, version: number) => maintenance.admit(values["--maintenance-session"]!, id, request, version),
     cancel: (id: string, version: number) => maintenance.cancelAdmission(values["--maintenance-session"]!, id, version),
     maintain: () => harness.maintainIdle(values["--maintenance-session"]!),
-  }), path.resolve(values["--maintenance-directory"]))] : []), ...(values["--observe-directory"] ? [sessionObserverPlugin(Object.freeze({ observeSession: (key: string) => harness.observeSession(key) }), path.resolve(values["--observe-directory"]), values["--observe-session"]!)] : []), memoryOrchestrationPlugin(plugins.memoryOrchestration, settings, harness, config.memory.enabled), completionStrategyPlugin(completion, settings, harness), contextStrategyPlugin(strategies, settings, harness, maintenance), compactionStrategyPlugin(selectedCompaction, settings, harness, maintenance), nightlyStrategyPlugin(nightly, settings, improvement), reportPlugin, dispatcherPlugin(() => dispatcher), subagentPlugin(subagents,async()=>{await persist();}), ...(reloadableTools ? [reloadableToolsPlugin(reloadableTools)] : []), wasmToolsPlugin(config.home, config.wasmTools ?? []), continuationPlugin(harness), loopPlugin(harness), improvementPlugin(improvement!), protectedContentPlugin(protectedContent), gatewayManagerPlugin(gatewayManager, settings), policyManagerPlugin(policyManager, settings), extensionManagerPlugin(extensionManager, settings), gatewayPlugin(settings, harness), contextPlugin(maintenance, settings), ...(config.memory.enabled ? [memoryPlugin(memory)] : []), skillSearchPlugin(skillCatalog), ...(adaptiveSkills ? [adaptiveSkills.plugin()] : []), ...reviewEngine.plugins]);
+  }), path.resolve(values["--maintenance-directory"]))] : []), ...(values["--observe-directory"] ? [sessionObserverPlugin(Object.freeze({ observeSession: (key: string) => harness.observeSession(key) }), path.resolve(values["--observe-directory"]), values["--observe-session"]!)] : []), memoryOrchestrationPlugin(plugins.memoryOrchestration, settings, harness, config.memory.enabled), completionStrategyPlugin(completion, settings, harness), contextStrategyPlugin(strategies, settings, harness, maintenance), compactionStrategyPlugin(selectedCompaction, settings, harness, maintenance), nightlyStrategyPlugin(nightly, settings, improvement), reportPlugin, dispatcherPlugin(() => dispatcher), workerTasksPlugin(config.home, () => dispatcher, async (parent, requestId, input) => {
+      if (!dispatcher || harness.paused) throw Error("Dispatcher unavailable or Harness paused");
+      const existing = await executions.findRequest(parent, requestId);
+      if (existing) {
+        if (existing.input !== input) throw Error("Conflicting operator task request");
+        return existing;
+      }
+      const mandate = await harness.operatorTaskMandate(parent, requestId, input);
+      return dispatcher.submitScheduled(parent, requestId, input, mandate);
+    }), subagentPlugin(subagents,async()=>{await persist();}), ...(reloadableTools ? [reloadableToolsPlugin(reloadableTools)] : []), wasmToolsPlugin(config.home, config.wasmTools ?? []), continuationPlugin(harness), loopPlugin(harness), improvementPlugin(improvement!), protectedContentPlugin(protectedContent), gatewayManagerPlugin(gatewayManager, settings), policyManagerPlugin(policyManager, settings), extensionManagerPlugin(extensionManager, settings), gatewayPlugin(settings, harness), contextPlugin(maintenance, settings), ...(config.memory.enabled ? [memoryPlugin(memory)] : []), skillSearchPlugin(skillCatalog), ...(adaptiveSkills ? [adaptiveSkills.plugin()] : []), ...reviewEngine.plugins]);
   if (dispatchPolicy.enabled) {
     dispatchRuntime = new DispatcherRuntime(harness, executions, async () => {
       await reloadRuntimeSettings();

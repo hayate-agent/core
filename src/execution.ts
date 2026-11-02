@@ -268,6 +268,12 @@ export class ExecutionStore {
       turn.settlement = structuredClone(turn.stopped ? this.stoppedSettlement(settlement) : settlement);
     });
   }
+  /** Conversation-scoped durable lookup, including compacted terminal records. */
+  async findRequest(parent: string, requestId: string): Promise<Execution | undefined> {
+    const task = this.data.executions.find(item => item.parent === parent && item.requestId === requestId)
+      ?? await this.archived(parent, requestId);
+    return task ? structuredClone(task) : undefined;
+  }
   list(parent?: string): Execution[] {
     return structuredClone(this.data.executions.filter(item => parent === undefined || item.parent === parent));
   }
