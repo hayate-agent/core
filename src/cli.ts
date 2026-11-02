@@ -298,7 +298,9 @@ async function main(argv: string[]): Promise<void> {
       await harness.guardWaitTool(key, tool, input);
       const current = harness.sessions.get(key)?.current;
       if (current?.source === "host") {
-        if (!current.hostEvent || !dispatchRuntime?.resultAllowed(key, current.hostEvent.executionId)) throw new ToolGuardError("authority_revoked", "Host event authority revoked");
+        if (!current.hostEvent) throw new ToolGuardError("authority_revoked", "Host event authority unavailable");
+        if (!dispatchRuntime) throw new ToolGuardError("dispatcher_unavailable", "Host result dispatcher unavailable");
+        dispatchRuntime.guardResult(key, current.hostEvent.executionId);
         guardResultOrchestration(harness, key, tool, input);
       }
       await plugins.policies.beforeTool(config.cwd, tool, input);

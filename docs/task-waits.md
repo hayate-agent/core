@@ -84,7 +84,13 @@ after the productive charge persistence barrier. Valid-path charge ordering and
 budget accounting are unchanged. A diagnostic persistence failure still denies
 the tool, emitting only a fixed host log message; no raw exception is forwarded.
 Without an execution store the same denial applies, but no receipt is retained.
-Model-facing denial remains the sanitized `authority_revoked` response.
+Model-facing denials use fixed, sanitized host codes: `deadline_expired` for a
+positively established elapsed execution deadline, `execution_cancelled` for
+stop/cancellation, `ownership_lost` for a stale turn or wait sequence, and
+`parent_mandate_missing` when no live parent mandate is available. Invalid deadline
+metadata and otherwise unclassified revocations retain `authority_revoked`.
+These codes do not renew authority or impose a global build/deployment ban.
+Arbitrary exception messages are never forwarded; receipt storage is unchanged.
 
 This is prospective instrumentation, not a repair or retrospective diagnosis of
 the historical PR72 denial: its exact failed predicate was not recoverable from

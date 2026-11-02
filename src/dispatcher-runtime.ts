@@ -39,10 +39,18 @@ export class DispatcherRuntime {
     const task = this.store.list(parent).find(item => item.id === id);
     return !!task && task.status === "completed" && !task.parentStopped;
   }
+  guardResult(parent: string, id: string): void {
+    const task = this.store.list(parent).find(item => item.id === id);
+    if (!task) throw new ToolGuardError("parent_mandate_missing", "Host result execution missing");
+    if (task.parentStopped || task.status === "cancelled") throw new ToolGuardError("execution_cancelled", "Host result stopped");
+    if (task.status !== "completed") throw new ToolGuardError("authority_revoked", "Host result not completed");
+  }
   beforeTurn(key: string): void {
     if (!this.isWorker(key)) return;
     const task = this.taskForSession(key);
-    if (!task || task.status !== "running" || task.parentStopped) throw new ToolGuardError("authority_revoked", "Dispatcher worker no longer authorized");
+    if (!task) throw new ToolGuardError("ownership_lost", "Dispatcher worker no longer authorized: ownership missing");
+    if (task.parentStopped || task.status === "cancelled") throw new ToolGuardError("execution_cancelled", "Dispatcher worker no longer authorized: stopped");
+    if (task.status !== "running") throw new ToolGuardError("authority_revoked", "Dispatcher worker no longer authorized: not running");
   }
   guardTool(key: string, tool: string): void {
     this.beforeTurn(key);

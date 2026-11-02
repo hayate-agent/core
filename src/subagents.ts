@@ -43,9 +43,10 @@ export class Subagents {
   beforeTurn(key: string): void {
     if (!this.isChild(key)) return;
     const record = [...this.records.values()].find(r => r.sessionKey === key);
-    if (!record || !["queued", "running"].includes(record.state) || record.expiresAt <= Date.now()) {
-      throw new ToolGuardError("authority_revoked", "Subagent no longer authorized to execute");
-    }
+    if (!record) throw new ToolGuardError("ownership_lost", "Subagent ownership missing");
+    if (record.expiresAt <= Date.now()) throw new ToolGuardError("deadline_expired", "Subagent no longer authorized: deadline elapsed");
+    if (record.state === "cancelled") throw new ToolGuardError("execution_cancelled", "Subagent no longer authorized: cancelled");
+    if (!["queued", "running"].includes(record.state)) throw new ToolGuardError("authority_revoked", "Subagent no longer active");
   }
   guardTool(key: string, tool: string): void {
     this.beforeTurn(key);

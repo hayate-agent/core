@@ -15,7 +15,7 @@ export function guardResultOrchestration(harness: Harness, key: string, tool: st
   // without productive continuation authority (for example an API-only turn).
   // The caller's host-event guard and dispatcher's parent scope still apply.
   if (tool === "plugin_dispatch" && plan?.action === "status") return;
-  if (!mandate && orchestration.has(tool)) throw new ToolGuardError("authority_revoked", "Result orchestration requires a live stored parent mandate");
+  if (!mandate && orchestration.has(tool)) throw new ToolGuardError("parent_mandate_missing", "Result orchestration requires a live stored parent mandate");
   if (!mandate) return;
   // Reporting a blocker/completion or inspecting existing work is still valid at
   // the limit. Do not misreport exhausted productive budget as revoked authority.

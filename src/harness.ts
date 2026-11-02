@@ -773,12 +773,15 @@ export class Harness {
         !task ? "missing-task" : task.state === "stopped" ? "stopped-task" :
         input.waitCheck!.sequence !== task.waitChecks ? "sequence" : undefined;
       if (reason) return (async (): Promise<never> => {
+        const code = reason === "ownership" || reason === "sequence" ? "ownership_lost" :
+          reason === "cancelled" || reason === "stopped-task" ? "execution_cancelled" :
+          reason === "deadline" && Number.isSafeInteger(input.continuationExpiresAt) ? "deadline_expired" :
+          reason === "missing-task" ? "parent_mandate_missing" : "authority_revoked";
         try {
           await this.opts.executionStore?.recordWaitAuthorityDenial({ reason, at, taskId: input.taskId,
             waitSequence: input.waitCheck!.sequence, taskWaitSequence: task?.waitChecks, turnId: input.executionTurnId });
         } catch { this.log("wait authority denial receipt persistence failed"); }
-        throw new ToolGuardError("authority_revoked",
-          ["ownership", "cancelled", "deadline"].includes(reason) ? "Wait authorization expired or cancelled" : "Wait task authority revoked");
+        throw new ToolGuardError(code, "Wait task authority revoked");
       })();
       return task;
     };
@@ -920,7 +923,7 @@ export class Harness {
     const input = this.sessions.get(key)?.current;
     if (input?.source === "host") {
       const mandate = this.resultMandate(input);
-      if (!mandate) throw new ToolGuardError("authority_revoked", "No live parent mandate for result continuation");
+      if (!mandate) throw new ToolGuardError("parent_mandate_missing", "No live parent mandate for result continuation");
       if (plan.state === "continue" && repetitions(this.tasks(this.state(key)).find(t => t.id === mandate.taskId)!) >= 20)
         throw new ToolGuardError("continuation_budget_exhausted", `Task ${mandate.taskId}: productive continuation budget exhausted; status rechecks only`);
     }
