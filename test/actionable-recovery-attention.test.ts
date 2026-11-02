@@ -84,13 +84,14 @@ for (const mode of ["interrupted", "unavailable", "inconclusive", "failed", "mis
       assert.equal(channel.sent.length, 0);
       assert.equal(h.pendingInputs().length, 0);
       if (mode !== "invalid" && mode !== "mismatched") {
-        assert.equal(h.state(key).task!.state, "active");
-        assert.match(h.state(key).task!.next!, /Reconcile the original/);
+        assert.equal(h.state(key).task!.state, "blocked");
+        assert.match(h.state(key).task!.next!, /Independent supervisor admission unavailable/);
+        assert.equal(h.state(key).task!.recoveryAdmission, undefined);
         assert.equal(h.outboxEntries().length, 0);
         offline = false; await save();
         const checkpoint = (await store.load())!;
         const saved = checkpoint.sessions[0]!.task!;
-        assert.equal(saved.state, "active");
+        assert.equal(saved.state, "blocked");
         if (mode === "technical" || mode === "parse") {
           assert.equal(saved.recoveryRetry?.attempts, 3);
           assert.equal(saved.recoveryRetry?.diagnostic, mode === "technical" ? "technical" : "invalid_response");
@@ -102,12 +103,11 @@ for (const mode of ["interrupted", "unavailable", "inconclusive", "failed", "mis
         next.restoreSessions(checkpoint.sessions); next.restorePending(checkpoint.pending ?? []);
         next.onStateChange = () => store.save({ ...checkpoint, sessions: next!.snapshotSessions(), pending: next!.pendingInputs() });
         await next.recoverTasks();
-        assert.equal(next.pendingInputs().length, 1);
-        assert.match(next.pendingInputs()[0]!.text, /never replay completed effects/);
+        assert.equal(next.pendingInputs().length, 0);
         next.releaseRestored(); await next.drained();
         await next.tick(); await next.drained();
-        assert.equal(turns, 1);
-        assert.equal(next.state(key).task!.state, "completed");
+        assert.equal(turns, 0);
+        assert.equal(next.state(key).task!.state, "blocked");
         return;
       }
       assert.equal(h.outboxEntries().length, 1);

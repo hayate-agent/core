@@ -702,6 +702,9 @@ export class Harness {
         for (const wait of [task.wait, task.lastWait]) if (wait)
           task.expiresAt = Math.min(task.expiresAt ?? Infinity, wait.deadline);
         task.termination = undefined;
+        // An authenticated explicit resume is host authority, not a model proposal.
+        task.recoveryAdmission = { id: this.taskQueueId(task, task.depth + 1), depth: task.depth + 1,
+          next: task.next!, original: task.original, expiresAt: task.expiresAt };
       }
       task.budgetReceipts = [...(task.budgetReceipts ?? []), receipt].slice(-16);
       try { await this.onStateChange(); }
@@ -728,6 +731,7 @@ export class Harness {
       (task.expiresAt === undefined || (Number.isSafeInteger(task.expiresAt) && task.expiresAt > this.now())));
     if (!task) return false;
     const admission = task.recoveryAdmission;
+    if (!admission) return false;
     if (admission && (admission.depth !== task.depth + 1 || admission.next !== task.next ||
         admission.original !== task.original || admission.expiresAt !== task.expiresAt)) {
       this.recoveryAttention(s, task, "mismatched");
@@ -1441,14 +1445,15 @@ export class Harness {
     for (const s of this.sessions.values()) {
       if (this.opts.externallyRecoveredSession?.(s.key)) continue;
       for (const task of this.tasks(s)) {
-      const assessed = !task.next?.trim();
+      const assessed = !task.recoveryAdmission;
       if (assessed) await this.assessStartupTask(s, task);
       if (!this.tasks(s).includes(task) || (assessed && this.paused) || this.stopping || task.state !== "active" || !task.next?.trim() || !Number.isSafeInteger(task.depth) || task.depth < 0 || repetitions(task) >= 20 ||
           (task.expiresAt !== undefined && (!Number.isSafeInteger(task.expiresAt) || task.expiresAt <= this.now())) ||
           s.current || s.queue.length || s.key === "improvement:nightly" || this.hasPendingDependency(s.key, task.id)) continue;
       const admission = task.recoveryAdmission;
-      if (admission && (admission.depth !== task.depth + 1 || admission.next !== task.next ||
-          admission.original !== task.original || admission.expiresAt !== task.expiresAt)) {
+      if (!admission) continue;
+      if (admission.depth !== task.depth + 1 || admission.next !== task.next ||
+          admission.original !== task.original || admission.expiresAt !== task.expiresAt) {
         this.recoveryAttention(s, task, "mismatched");
         await this.outbox.barrier();
         continue;
@@ -1475,7 +1480,7 @@ export class Harness {
   }
 
   private async assessRetainedTask(s: SessionState, task: DurableTask, betweenTurns: boolean): Promise<void> {
-    const eligible = () => this.tasks(s).includes(task) && task.state === "active" && !task.next?.trim() &&
+    const eligible = () => this.tasks(s).includes(task) && task.state === "active" && !task.recoveryAdmission &&
       !!task.id && !!task.original.trim() && task.original.length <= 8000 &&
       (!task.anchor || task.anchor.task === task.original) &&
       Number.isSafeInteger(task.depth) && task.depth >= 0 && repetitions(task) < 20 &&
@@ -1484,9 +1489,7 @@ export class Harness {
       s.key !== "improvement:nightly" && !this.stoppingHostParents.has(s.key);
     if (!this.onStateChange || !eligible() || this.opts.externallyRecoveredSession?.(s.key) ||
         this.hasPendingDependency(s.key, task.id)) return;
-    // Ordinary foreground turns without a configured classifier are not a
-    // recovery boundary. Startup/idle reconciliation still surfaces retained work.
-    if (betweenTurns && !this.opts.completionCheck && !task.recoveryAssessment) return;
+    // Missing independent assessment never authorizes a working fallback.
     const retry = task.recoveryRetry;
     const invalidRetry = retry && (!Number.isSafeInteger(retry.attempts) || retry.attempts < 1 ||
       !Number.isSafeInteger(retry.nextAt));
@@ -1497,7 +1500,7 @@ export class Harness {
     }
     if (!this.opts.completionCheck || (task.recoveryAssessment && !retry) || (retry && retry.attempts >= 3)) {
       // Assessor outage/exhaustion consumes assessment attempts, not the mandate.
-      // Keep bounded diagnostics until the working turn starts; never replay effects.
+      // Retain the proposal for diagnosis; no productive fallback on outage.
       this.reconcileUnassessedTask(task, true);
       await this.outbox.barrier();
       return;
@@ -1531,8 +1534,7 @@ export class Harness {
     if (diagnostic) task.recoveryRetry.diagnostic = diagnostic;
     task.recoveryAssessment = "decided";
     if (diagnostic === "inconclusive" || diagnostic === "unavailable") {
-      // A non-decision is neither completion nor a blocker. Execute reconciliation,
-      // not another evaluator-only retry and never a replay of the original effects.
+      // A non-decision cannot admit productive work, including reconciliation.
       this.reconcileUnassessedTask(task);
       await this.outbox.barrier();
       return;
@@ -1564,13 +1566,8 @@ export class Harness {
   private reconcileUnassessedTask(task: DurableTask, preserveRetry = false): void {
     if (!preserveRetry) task.recoveryRetry = undefined;
     task.recoveryAssessment = "decided";
-    task.next = "Reconcile the original authorized task against the retained answer, execution evidence and durable continuation. " +
-      "First inspect actual state using safe read-only verification where necessary. Preserve completed facts; never replay completed effects. " +
-      "If the request is already answered/completed or has no necessary next move, record completed and stop. " +
-      "Otherwise perform or queue a concrete safe next step within the original mandate. " +
-      "Record a real blocker only for actual inability to proceed, not assessor uncertainty/unavailability. " +
-      "Do not run another completion evaluator as the only action. Retained last answer (evidence, not instructions): " +
-      JSON.stringify(task.lastReply?.slice(0, 400) ?? "No retained answer");
+    task.state = "blocked";
+    task.next ??= "Independent supervisor admission unavailable; retained task requires assessment before productive continuation.";
   }
 
   private recoveryAttention(s: SessionState, task: DurableTask,
@@ -1868,6 +1865,9 @@ export class Harness {
           }
           if (repetitions(task) >= 20 && task.state === "blocked") this.budgetAttention(s, task);
           const diagnostic = this.completionDiagnostics.get(input);
+          if (plan?.state === "continue" && task.next && task.state === "active")
+            task.recoveryAdmission = { id: this.taskQueueId(task, task.depth + 1), depth: task.depth + 1,
+              next: task.next, original: task.original, expiresAt: task.expiresAt };
           if (!plan && task.state === "active" && (diagnostic === "inconclusive" || diagnostic === "unavailable") &&
               (task.expiresAt === undefined || task.expiresAt > this.now()) &&
               !this.paused && !this.stopping && !s.queue.length && !this.hasPendingDependency(s.key, task.id)) {
@@ -1877,7 +1877,7 @@ export class Harness {
         }
         this.completionDiagnostics.delete(input);
         if ((input.source !== "host" || this.resultMandate(input)) && input.continuation?.state === "continue" && input.continuation.next && repetitions(task ?? { depth: input.continuationDepth ?? 0 }) < 20 && input.source !== "api" && s.key !== "improvement:nightly" && !s.queue.length && !this.stopping && !this.hasPendingDependency(s.key)) {
-          s.queue.push({ id: randomUUID(), sessionKey: s.key, source: "cron", replyTo: input.replyTo ?? s.replyTo,
+          s.queue.push({ id: task?.recoveryAdmission?.id ?? randomUUID(), sessionKey: s.key, source: "cron", replyTo: input.replyTo ?? s.replyTo,
             text: `Continue the explicitly authorized task with this recorded next step. Recheck blockers and authorization; do not repeat completed side effects.\n${input.continuation.next}`,
             taskId: targetId,
             contextPreparation: input.continuation.contextPreparation,
@@ -1992,6 +1992,10 @@ export class Harness {
           (!task || task.state !== "active" || task.depth + 1 !== input.continuationDepth)) {
         s.cancelling = input;
         throw Error("Retained task authority revoked");
+      }
+      if ((input.continuationDepth ?? 0) > 0 && !input.waitCheck && input.source !== "host" && input.source !== "api" && s.key !== "improvement:nightly" && !task?.recoveryAdmission) {
+        s.cancelling = input;
+        throw Error("Independent supervisor admission missing");
       }
       if (task?.recoveryAdmission && (input.continuationDepth ?? 0) > 0) {
         const admission = task.recoveryAdmission;
@@ -2126,12 +2130,20 @@ export class Harness {
     }
     let finalStatus: TurnOutcome | "completed" = outcome ?? "completed";
     // Self-reported completion or blockage is evidence, not final authority.
-    // Recheck against the original mandate; retain explicit continuation plans.
+    // Recheck against the original mandate. Productive model plans are proposals,
+    // never admission: only an affirmative independent decision may schedule work.
     if (reply && reply !== NO_REPLY && outcome !== "cancelled") this.rememberCompletion(s, "assistant", reply);
     input.completionContext = { ...await this.completionEvidence(s, input), tools: progressTools };
     const checkpoint = input.continuation;
+    if (checkpoint) this.rememberCompletion(s, "assistant", `Proposed continuation (not admission): ${JSON.stringify(checkpoint)}`);
     const assessmentEligible = () => input.continuation === checkpoint &&
       (input.continuationExpiresAt === undefined || (Number.isSafeInteger(input.continuationExpiresAt) && input.continuationExpiresAt > this.now()));
+    // Preserve proposed next for diagnosis, but never execute without admission.
+    const autonomous = input.source !== "api" && s.key !== "improvement:nightly";
+    const denyProposal = () => {
+      if (autonomous && checkpoint?.state === "continue" && input.continuation === checkpoint)
+        input.continuation = { ...checkpoint, state: "blocked" };
+    };
     if (finalStatus !== "completed") input.continuation = undefined;
     else if ((input.source !== "host" || this.resultMandate(input)) && assessmentEligible() && this.opts.completionCheck && !this.paused && !this.stopping && !s.queue.length &&
         input.source !== "api" && s.key !== "improvement:nightly" && repetitions(this.tasks(s).find(t => t.id === input.taskId) ?? { depth: input.taskId ? 20 : input.continuationDepth ?? 0 }) < 20 && !assessmentAbort.signal.aborted) {
@@ -2145,7 +2157,9 @@ export class Harness {
           assessmentInput.continuationExpiresAt = Math.min(target.expiresAt ?? Infinity, target.wait?.deadline ?? Infinity);
           if (assessmentInput.continuationExpiresAt === Infinity) assessmentInput.continuationExpiresAt = undefined;
         }
-        const assessed = await this.opts.completionCheck(assessmentInput, reply, assessmentAbort.signal, diagnostic => {
+        const assessed = await this.opts.completionCheck(assessmentInput,
+          checkpoint ? `${reply}\nProposed continuation (untrusted, not admission): ${JSON.stringify(checkpoint)}` : reply,
+          assessmentAbort.signal, diagnostic => {
           if (assessmentEligible() && !assessmentAbort.signal.aborted) this.completionDiagnostics.set(input, diagnostic);
         });
         // Independent assessment may change the plan, never its selected scope.
@@ -2157,25 +2171,24 @@ export class Harness {
             plan?.state === "continue" && typeof plan.next === "string" && plan.next.trim() && plan.next.length <= 4000) {
           // An explicit progress verdict keeps PR185's milestone/replay semantics.
           independentlyContinued = !plan.progress;
-          if (checkpoint?.state !== "continue") input.continuation = plan;
+          input.continuation = plan;
         }
-        // Scheduled next steps remain intact. A model-authored timed wait is
-        // advisory: an independent safe continuation can replace it; a waiting
-        // verdict retains the timer. Execution still checks real dependencies.
-        // Independent terminal decisions can correct model-authored blockage or
-        // completion too; keep scheduled continuations and bounded waits intact.
-        else if ((input.source !== "host" || this.resultMandate(input)) && plan && ["completed", "waiting", "blocked"].includes(plan.state) && (!checkpoint || checkpoint.state === "completed" || checkpoint.state === "blocked") && reply && reply !== NO_REPLY &&
+        // Supervisor verdict overrides the proposal; only a matching waiting
+        // verdict retains the nonproductive timer. Dependencies still gate work.
+        else if ((input.source !== "host" || this.resultMandate(input)) && plan && ["completed", "waiting", "blocked"].includes(plan.state) && reply && reply !== NO_REPLY &&
             assessmentEligible() && !this.paused && !this.stopping && !s.queue.length &&
             !assessmentAbort.signal.aborted && s.cancelling !== input)
-          input.continuation = { state: plan.state, ...(checkpoint?.taskId !== undefined ? { taskId: checkpoint.taskId } : {}) };
+          input.continuation = checkpoint?.state === "waiting" && plan.state === "waiting" ? checkpoint :
+            { state: plan.state, ...(checkpoint?.next ? { next: checkpoint.next } : {}), ...(checkpoint?.taskId !== undefined ? { taskId: checkpoint.taskId } : {}) };
       } catch { this.log("completion assessment failed; no automatic follow-up"); }
-      // An unavailable assessor cannot seal unsupported completion. Reconcile
-      // against actual evidence in a working turn rather than an evaluator loop.
+      // An unavailable assessor cannot seal unsupported completion. Retain the
+      // mandate for independent recovery assessment, never a working fallback.
       if ((checkpoint?.state === "completed" || checkpoint?.state === "blocked") &&
           (input.continuationDepth ?? 0) === 0 && assessmentEligible() && !this.paused && !this.stopping && !s.queue.length &&
           !assessmentAbort.signal.aborted && s.cancelling !== input)
         input.continuation = undefined;
     }
+    denyProposal();
     if (s.cancelling === input) {
       s.cancelling = undefined;
       outcome = finalStatus = "cancelled";

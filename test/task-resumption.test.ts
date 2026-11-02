@@ -11,7 +11,7 @@ function setup() {
   const runtime = new FakeRuntime();
   const h = new Harness({ runtime, tickMs: 60000 });
   h.addChannel(new MemoryChannel()); h.onStateChange = async () => {};
-  h.restoreSessions([{ key: "mem:room1", task: { id: "development", original: "Implement provider lifecycle", state: "active", next: "Test provider drain", depth: 2 }, replyTo: { channel: "mem", target: "room1" } }]);
+  h.restoreSessions([{ key: "mem:room1", task: { id: "development", original: "Implement provider lifecycle", state: "active", next: "Test provider drain", depth: 2, recoveryAdmission: { id: "task:development:3", depth: 3, next: "Test provider drain", original: "Implement provider lifecycle" } }, replyTo: { channel: "mem", target: "room1" } }]);
   return { h, runtime };
 }
 
@@ -91,7 +91,7 @@ test("running worker prevents duplicate work; result keeps original mandate acro
   } finally { await h.stop(1000); await rm(home, { recursive: true, force: true }); }
 });
 
-test("question queued during working turn cannot erase its committed next step", async () => {
+test("queued question prevents unassessed proposal execution but preserves proposed next", async () => {
   const runtime = new FakeRuntime(); const h = new Harness({ runtime, tickMs: 60000, busyMode: "queue" });
   h.addChannel(new MemoryChannel()); h.onStateChange = async () => {};
   runtime.answer = (text, key) => {
@@ -105,7 +105,8 @@ test("question queued during working turn cannot erase its committed next step",
     release(); await h.drained();
     assert.equal(session.busy, false);
     const prompts = runtime.sessions.get("mem:room1")!.prompts;
-    assert.equal(prompts.length, 3); assert.match(prompts[1], /Which version/); assert.match(prompts[2], /Run original regression/);
+    assert.equal(prompts.length, 2); assert.match(prompts[1], /Which version/);
+    assert.equal(h.snapshotSessions()[0].tasks?.find(t => t.original === "Implement feature")?.next, "Run original regression");
   } finally { await h.stop(1000); }
 });
 

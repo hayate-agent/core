@@ -119,10 +119,10 @@ test('three real recovery failures retain diagnostics but do not require operato
   assert.equal(status.task.recoveryRetry?.attempts, 3);
   assert.equal(status.task.termination, undefined);
   assert.equal(status.task.depth, 5);
-  assert.equal(status.task.state, 'active');
-  assert.match(status.task.next!, /never replay completed effects/);
-  await assert.rejects(h.controlTaskBudget(key, 'a', 'reset', status.token, 'recovery', 'owner'), /Task unavailable, expired, paused or busy/);
-  assert.equal(h.pendingInputs().length, 1);
+  assert.equal(status.task.state, 'blocked');
+  assert.match(status.task.next!, /supervisor admission unavailable/);
+  await assert.rejects(h.controlTaskBudget(key, 'a', 'reset', status.token, 'recovery', 'owner'), /not host budget-blocked/);
+  assert.equal(h.pendingInputs().length, 0);
   await h.stop(0);
 });
 
@@ -146,22 +146,21 @@ test('atomic StateStore persistence roundtrip keeps audit, deadline, scope and i
 });
 
 
-test('real productive twentieth continuation is resettable but explicit blocked twentieth is not', async () => {
+test('unassessed twentieth proposal is blocked and cannot masquerade as host budget admission', async () => {
   for (const state of ['continue', 'blocked'] as const) {
     const runtime = new FakeRuntime();
     const h = new Harness({ runtime });
     h.addChannel(new MemoryChannel());
     runtime.answer = () => { h.planContinuation(key, { state, next: 'verify before acting' }); return 'checkpoint'; };
     h.onStateChange = async () => {};
-    h.restoreSessions([{ key, tasks: [{ id: 'a', original: 'work', state: 'active', depth: 19 }] }]);
-    await h.submit({ ...msg('twentieth'), source: 'cron', taskId: 'a', continuationDepth: 20 });
+    h.restoreSessions([{ key, tasks: [{ id: 'a', original: 'work', state: 'active', depth: 19, next: 'verify before acting', recoveryAdmission: { id: 'twentieth-id', depth: 20, next: 'verify before acting', original: 'work' } }] }]);
+    await h.submit({ ...msg('twentieth'), id: 'twentieth-id', source: 'cron', taskId: 'a', continuationDepth: 20 });
     await h.drained();
     const status = h.taskBudgetStatus(key, 'a');
     assert.equal(status.task.depth, 20);
     assert.equal(status.task.termination, 'productive_budget_exhausted');
     const reset = h.controlTaskBudget(key, 'a', 'reset', status.token, 'twenty', 'owner');
-    if (state === 'continue') await reset;
-    else await assert.rejects(reset, /not host budget-blocked/);
+    await assert.rejects(reset, /not host budget-blocked/);
   }
 });
 

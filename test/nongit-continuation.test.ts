@@ -64,7 +64,9 @@ for (const mode of ['fresh', 'error', 'missing'] as const) {
       if (turns < 35) h.planContinuation(key, { state: 'continue', next: 'Validate original scope' });
       return 'checkpoint';
     });
-    h = new Harness({ runtime, now: () => 1000 }); h.addChannel(new MemoryChannel()); h.onStateChange = async () => {};
+    h = new Harness({ runtime, now: () => 1000,
+      completionCheck: async () => turns < 35 ? { state: 'continue', next: 'Validate original scope', progress: { advanced: false } } : { state: 'completed' } });
+    h.addChannel(new MemoryChannel()); h.onStateChange = async () => {};
     await h.accept(msg('Validate original scope')); await h.drained();
     assert.equal(turns, mode === 'fresh' ? 35 : 20);
     if (mode !== 'fresh') assert.equal(h.snapshotSessions()[0]!.tasks![0]!.state, 'blocked');
