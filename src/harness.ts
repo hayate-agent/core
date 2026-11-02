@@ -11,6 +11,7 @@ import { TurnActivity } from "./activity.js";
 import { deliverTaskStatus, routineWait, taskStatusId } from "./notification-routing.js";
 import type { PersistedSession } from "./state.js";
 import type { Address, AgentRuntime, BusyMode, Channel, Inbound, PromptOptions, RuntimeSession, SendMeta, TurnEvent, TurnOutcome } from "./types.js";
+import { AmbiguousTopicError } from "./topic-labels.js";
 import { InboxLedger, idsOf, replayable } from "./delivery/inbox.js";
 import { parseHashtags, selectHashtagContext, hashtagContext } from "./hashtags.js";
 import { OutboxDelivery, type OutboxEntry } from "./delivery/outbox.js";
@@ -173,6 +174,8 @@ export interface HarnessOptions {
   turnCommitted?: (input: Inbound) => Promise<void>;
   /** May feed review findings back into the same serialized working turn. */
   afterTurn?: (input: Inbound, reply: string, session: RuntimeSession, promptOptions: PromptOptions, signal: AbortSignal) => Promise<string>;
+  /** Trusted ingress metadata classifier; never changes task authority. */
+  topicLabeler?: import("./topic-labels.js").TopicLabeler;
   /** Advisory fallback; production caller must supply independently authorized task scope. */
   completionCheck?: (input: Inbound, reply: string, signal: AbortSignal, diagnostic?: import("./completion-check.js").CompletionDiagnosticSink) => Promise<NonNullable<Inbound["continuation"]> | undefined>;
   /** Trusted host routing for child approval requests; never supplied by model input. */
@@ -1144,14 +1147,47 @@ export class Harness {
     return this.withForegroundWork(() => this.submitForeground(input, deferPump));
   }
 
+  private readonly labeledInputs = new WeakSet<Inbound>();
+
+  private needsTopic(input: Inbound): boolean {
+    return input.source === "channel" && !!this.opts.topicLabeler && !this.labeledInputs.has(input) &&
+      !parseHashtags(input.text).length &&
+      !input.text.trimStart().startsWith("/") && !naturalBudgetReset(input.text);
+  }
+
+  private async prepareTopic(input: Inbound): Promise<void> {
+    if (this.labeledInputs.has(input)) return;
+    const s = this.state(input.sessionKey);
+    let tags = parseHashtags(input.text);
+    // Control commands remain usable when the semantic service is down.
+    if (!tags.length && this.opts.topicLabeler && !input.text.trimStart().startsWith("/") && !naturalBudgetReset(input.text)) {
+      const candidates = this.tasks(s).filter(t => t.anchor?.outputTags?.length).slice(-16)
+        .map(t => ({ id: t.id, text: t.original.slice(0, 2000), tags: [...t.anchor!.outputTags!] }));
+      tags = await this.opts.topicLabeler(input.text, candidates);
+    }
+    input.outputTags = tags;
+    input.completionAnchor = { id: randomUUID(), task: input.text, receivedAt: this.now(), outputTags: tags,
+      hashtagSelection: selectHashtagContext(s.key, tags, s.hashtags ?? []) };
+    this.labeledInputs.add(input);
+  }
+
   private async submitForeground(input: Inbound, deferPump = false): Promise<void> {
     if (this.budgetChanging) throw Error("Host control in progress; retry input");
     const s = this.state(input.sessionKey);
-    if (input.source === "channel") {
-      input.outputTags = parseHashtags(input.text);
-      input.completionAnchor = { id: randomUUID(), task: input.text, receivedAt: this.now(), outputTags: input.outputTags,
-        hashtagSelection: selectHashtagContext(s.key, input.outputTags, s.hashtags ?? []) };
+    if (this.needsTopic(input)) {
+      input.id ??= `ingress:${randomUUID()}`;
+      input.outputTags = undefined;
+      input.completionAnchor = undefined;
+      input.topicPending = { attempts: 0, nextAt: 0 };
+      if (input.replyTo) s.replyTo = input.replyTo;
+      s.queue.push(input);
+      if (!deferPump) {
+        this.inbox.unsaved.add(input);
+        void this.persistQueued();
+      }
+      return;
     }
+    if (input.source === "channel") await this.prepareTopic(input);
     // API runs answer to the run itself, never become the session's conversation address.
     if (input.replyTo && input.source !== "api" && input.source !== "host") s.replyTo = input.replyTo;
     s.lastActivity = this.now();
@@ -1307,10 +1343,19 @@ export class Harness {
    * Enqueue without command parsing (used by commands, cron, tick). Replayable inputs
    * (cron, API, …) only start once they are in the saved inbox; ticks are ephemeral.
    */
+  /** Host command expansion: assign metadata without parsing the expanded text as another command. */
+  async enqueueChannel(input: Inbound, retainAssignment = false): Promise<void> {
+    if (input.source === "channel" && retainAssignment) this.labeledInputs.add(input);
+    else if (this.needsTopic(input)) { await this.submit(input); return; }
+    else if (input.source === "channel") await this.prepareTopic(input);
+    this.enqueue(input);
+  }
+
   enqueue(input: Inbound): void {
-    if (input.source === "channel") {
+    if (input.source === "channel" && !this.labeledInputs.has(input)) {
+      if (this.opts.topicLabeler) throw Error("Channel topic assignment requires async accept/submit");
       input.outputTags = parseHashtags(input.text);
-      input.completionAnchor ??= { id: randomUUID(), task: input.text, receivedAt: this.now(), outputTags: input.outputTags,
+      input.completionAnchor = { id: randomUUID(), task: input.text, receivedAt: this.now(), outputTags: input.outputTags,
         hashtagSelection: selectHashtagContext(input.sessionKey, input.outputTags, this.state(input.sessionKey).hashtags ?? []) };
     }
     if (this.updateFenced) throw Error("update admission; retry input");
@@ -1593,11 +1638,42 @@ export class Harness {
         if (!s.queue.length || this.paused) break;
         // Stable foreground priority also applies to restored inboxes and saved
         // wait/continuation turns. The durability gate below still applies.
-        const foregroundIndex = s.queue.findIndex(input => input.source === "channel" || input.source === "api");
+        const ready = (input: Inbound) => !input.topicPending;
+        let foregroundIndex = s.queue.findIndex(input => ready(input) && (input.source === "channel" || input.source === "api"));
+        if (foregroundIndex < 0) foregroundIndex = s.queue.findIndex(ready);
         if (foregroundIndex > 0) s.queue.unshift(s.queue.splice(foregroundIndex, 1)[0]!);
         const input = s.queue[0]!;
         // Not yet durable (acceptance/inbox save pending) or restored before channels are ready.
         if (this.inbox.held(input)) break;
+        if (input.topicPending) {
+          if (input.topicPending.nextAt > this.now()) break;
+          try {
+            await this.prepareTopic(input);
+            input.topicPending = undefined;
+          } catch (error) {
+            if (error instanceof AmbiguousTopicError) {
+              // A semantic non-decision is not a provider outage. Do not execute or guess.
+              s.queue.shift();
+              const dest = input.replyTo ?? s.replyTo ?? this.home;
+              if (dest) s.outbox.push(this.outbox.create(s.key, dest,
+                "Welchem Thema gehört diese Nachricht zu? Bitte mit einem eindeutigen #Hashtag erneut senden."));
+              s.unsaved = true;
+              continue;
+            }
+            const attempts = Math.min((input.topicPending?.attempts ?? 0) + 1, 10);
+            input.topicPending = { attempts, nextAt: this.now() + Math.min(300000, 15000 * 2 ** (attempts - 1)) };
+            this.log("automatic topic labeling unavailable; durable input retained for retry");
+          }
+          // Persist the assignment (or retry deadline) before inference. Failed saves
+          // retain the in-memory decision and retry the save, never reclassify it.
+          try { await this.onStateChange?.(); }
+          catch { this.inbox.unsaved.add(input); break; }
+          if (this.halting) break;
+          if (input.topicPending) {
+            if (s.queue.some(ready)) continue;
+            break;
+          }
+        }
         s.queue.shift();
         if (input.source === "host" && (this.stoppingHostParents.has(s.key) || !this.opts.hostEventAllowed?.(input))) {
           s.unsaved = true;
@@ -2007,7 +2083,7 @@ export class Harness {
           s.prompted = input;
           if (input.source === "channel" && !(input.continuationDepth ?? 0) && session.archiveEntries) {
             const { hashtagReferences } = await import("./hashtags.js");
-            const refs = hashtagReferences(session.status().sessionId, input.text, session.archiveEntries(), new Date(this.now()).toISOString(), previousMessageIds);
+            const refs = hashtagReferences(session.status().sessionId, input.text, session.archiveEntries(), new Date(this.now()).toISOString(), previousMessageIds, input.completionAnchor?.outputTags);
             const index = s.hashtags ??= [];
             for (const ref of refs) if (!index.some(old => old.tag === ref.tag && old.sessionId === ref.sessionId && old.messageId === ref.messageId)) index.push(ref);
           }

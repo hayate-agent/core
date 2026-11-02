@@ -42,8 +42,8 @@ export function labelOutput(text: string, tags?: readonly string[]): string {
   return prefix + text.replace(/^(?:#[a-zA-Z][a-zA-Z0-9]*(?:-[a-zA-Z0-9]+)*\s+)+·\s*/g, "");
 }
 
-export function hashtagReferences(sessionId: string, text: string, entries: ArchiveEntry[], date: string, previousIds: Set<string>): HashtagReference[] {
-  const tags = parseHashtags(text);
+export function hashtagReferences(sessionId: string, text: string, entries: ArchiveEntry[], date: string, previousIds: Set<string>, assignedTags?: readonly string[]): HashtagReference[] {
+  const tags = assignedTags ?? parseHashtags(text);
   if (!tags.length) return [];
   // Only a real user transcript entry can be referenced, never a tool observation.
   const message = entries.findLast(entry => !previousIds.has(entry.id) && entry.role === "user" && entry.text.includes(text));

@@ -55,6 +55,8 @@ export interface Inbound {
   completionAnchor?: { id: string; task: string; receivedAt: number; outputTags?: string[]; hashtagSelection?: import("./hashtags.js").HashtagSelection };
   /** Host-captured assignment labels, persisted with the inbox; never model authority. */
   outputTags?: string[];
+  /** Durable semantic metadata retry; the existing inbox tick resumes it after restart. */
+  topicPending?: { attempts: number; nextAt: number };
   /** Host-owned bounded evidence for independent completion assessment; never an authority grant. */
   completionContext?: {
     resolved?: import("./completion-context.js").ResolvedCompletionContext;

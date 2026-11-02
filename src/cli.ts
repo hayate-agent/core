@@ -91,6 +91,7 @@ import { contextStrategyHolder, disabledContextStrategies, diagnosedBoundaryAsse
 import { contextStrategyPlugin } from "./builtin-plugins/context-strategy-plugin.js";
 import { guardResultOrchestration } from "./result-orchestration.js";
 import { assessCompletion } from "./completion-check.js";
+import { semanticTopicLabeler } from "./topic-labels.js";
 import { completionPrompt } from "./builtin-plugins/completion-prompt.js";
 import { completionStrategyHolder } from "./completion-strategy.js";
 import { completionStrategyPlugin } from "./builtin-plugins/completion-strategy-plugin.js";
@@ -381,6 +382,7 @@ async function main(argv: string[]): Promise<void> {
     reportContext: input => plugins.reportProcessing.context(input),
     turnCommitted: async (input) => { await improvement?.committed(input); },
     continuationDeadline: input => config.completionCheck?.authorizations[input.sessionKey]?.expiresAt,
+    topicLabeler: semanticTopicLabeler(runtimeReviewer(runtime), () => effectiveModels().reviewModel),
     completionCheck: async (input, reply, signal, diagnostic) => {
       const grant = config.completionCheck?.authorizations[input.sessionKey] ??
         (input.completionAnchor ? { task: input.completionAnchor.task } : undefined);
