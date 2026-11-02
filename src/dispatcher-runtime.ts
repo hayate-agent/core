@@ -1,5 +1,5 @@
 import { labelOutput } from "./hashtags.js";
-import type { ExecutionEvent } from "./execution.js";
+import { ExecutionWorkerFailure, type ExecutionEvent } from "./execution.js";
 import { ToolGuardError } from "./tool-guard-error.js";
 import { pickModelRule, type DispatchModelRule } from "./dispatcher-config.js";
 import type { Harness } from "./harness.js";
@@ -139,7 +139,7 @@ export class DispatcherRuntime {
       // An obsolete worker's durable outbox must be drainable, but cannot
       // complete a replacement execution or reanimate a cancelled task.
       if (!pending) return;
-      if (meta?.outcome === "failed" || meta?.outcome === "cancelled") pending.reject(Error(`Worker ${meta.outcome}`));
+      if (meta?.outcome === "failed" || meta?.outcome === "cancelled") pending.reject(new ExecutionWorkerFailure(meta.outcome === "failed" ? "worker-failed" : "worker-cancelled"));
       else pending.resolve(text.slice(0, 64000));
     },
   };

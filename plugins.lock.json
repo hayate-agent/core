@@ -7,7 +7,7 @@
     "cron-report-plugin.ts": "71bb9d6432985d25defb18d4ef45653342c2243f42e215b972b0eb586d24a260",
     "cron-report-processing.ts": "4e40d3f4c9801d87af1bdd8e2624a12f21e02ad49378a504abaea7a1bb49856f",
     "cron-reports.ts": "0bbf04e0c3ce1c8a499cdcc2e3bba1d27c88aacd71218f1b4027002591947991",
-    "dispatcher-plugin.ts": "210fc5f5f9e2b8e26378f0f7b0501396a5ded0f51b4da67b5a28f1a87934291a",
+    "dispatcher-plugin.ts": "0274dc68506592f21f1d0cb18f6d45ac69834c796713effbc7aafde186c0187f",
     "extension-manager-plugin.ts": "51ea7b167e2683b180f510a005305975afabb22819e02aa03aafbc434061200c",
     "gateway-baselines.ts": "7e4422bfef1e74ad4e767d4c88947b88082c45aeccb9b3da2193ccbff9baaa1c",
     "gateway-manager-plugin.ts": "520465902c186b429fde132b2a4120b0ff6bd8e68439c6ed35c1049e852a316a",
@@ -20,7 +20,7 @@
     "matrix-sync.ts": "32a217a65dc5f05f0c0940e2f52426c1ab2044688513befb282af7376943b5c1",
     "memory-orchestration-plugin.ts": "c796ff18def036016ac47095d18a490fab0d15ff8eaff342e463babc16bf78ea",
     "memory-plugin.ts": "d253236ebdda0f6914532afcef299939e98d0f4dab17dcfa178ce39628e1eee5",
-    "memory-service.ts": "ab314fb8e059c93ec0dede58bcf0dfa45975916d2f68d3a6d384c971a2ea3f7e",
+    "memory-service.ts": "04cbbfd77a4a03021c15ddb1039314facf2bbf9f6839afdd49db47d52f8cbd7d",
     "native-activity.ts": "e7b8b0a353554c5966568ce14091fc7b6283b60b304c616ee851610c115476b1",
     "nightly-default.ts": "d807ad49e01dcb867f97fc748362e73e877c3540892755538eb2cc1840da2736",
     "policy-manager-plugin.ts": "ef61d6f32c3fadd75f16bec3732763f15e0fa131a12a7af30240a0599a44ef44",
@@ -48,6 +48,6 @@
     "matrix-crypto.ts": "a89018c1cf22afc221df6ca6d621332dc9cae9a2dc222452f44b5444f249ded4"
   },
   "repository": "https://git.vanillacore.net/harness/plugins",
-  "revision": "b564c3b021b372a665362acd5aa33f3825b09040",
+  "revision": "e5de441bcd57ecb1dac3638bdccbbc7a051d7c02",
   "schema": 1
 }
