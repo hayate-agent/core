@@ -11,7 +11,6 @@ import { TurnActivity } from "./activity.js";
 import { deliverTaskStatus, routineWait, taskStatusId } from "./notification-routing.js";
 import type { PersistedSession } from "./state.js";
 import type { Address, AgentRuntime, BusyMode, Channel, Inbound, PromptOptions, RuntimeSession, SendMeta, TurnEvent, TurnOutcome } from "./types.js";
-import { AmbiguousTopicError } from "./topic-labels.js";
 import { InboxLedger, idsOf, replayable } from "./delivery/inbox.js";
 import { parseHashtags, selectHashtagContext, hashtagContext } from "./hashtags.js";
 import { OutboxDelivery, type OutboxEntry } from "./delivery/outbox.js";
@@ -1178,7 +1177,9 @@ export class Harness {
     if (!tags.length && this.opts.topicLabeler && !input.text.trimStart().startsWith("/") && !naturalBudgetReset(input.text)) {
       const candidates = this.tasks(s).filter(t => t.anchor?.outputTags?.length).slice(-16)
         .map(t => ({ id: t.id, text: t.original.slice(0, 2000), tags: [...t.anchor!.outputTags!] }));
-      tags = await this.opts.topicLabeler(input.text, candidates);
+      // Reuse the persisted, bounded conversation evidence; metadata only, not
+      // a mandate selector. Do not include queued/unprocessed channel inputs.
+      tags = await this.opts.topicLabeler(input.text, candidates, structuredClone(s.completionRecent ?? []));
     }
     input.outputTags = tags;
     input.completionAnchor = { id: randomUUID(), task: input.text, receivedAt: this.now(), outputTags: tags,
@@ -1666,15 +1667,6 @@ export class Harness {
             await this.prepareTopic(input);
             input.topicPending = undefined;
           } catch (error) {
-            if (error instanceof AmbiguousTopicError) {
-              // A semantic non-decision is not a provider outage. Do not execute or guess.
-              s.queue.shift();
-              const dest = input.replyTo ?? s.replyTo ?? this.home;
-              if (dest) s.outbox.push(this.outbox.create(s.key, dest,
-                "Welchem Thema gehört diese Nachricht zu? Bitte mit einem eindeutigen #Hashtag erneut senden."));
-              s.unsaved = true;
-              continue;
-            }
             const attempts = Math.min((input.topicPending?.attempts ?? 0) + 1, 10);
             input.topicPending = { attempts, nextAt: this.now() + Math.min(300000, 15000 * 2 ** (attempts - 1)) };
             this.log("automatic topic labeling unavailable; durable input retained for retry");
