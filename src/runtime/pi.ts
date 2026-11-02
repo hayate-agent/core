@@ -344,9 +344,11 @@ export class PiSession implements RuntimeSession {
       const message = record.message as { role?: string; content?: unknown } | undefined;
       const content = message?.content ?? (record.type === "custom_message" && record.customType === "harness-handover" ? record.content : undefined);
       const text = typeof content === "string" ? content : Array.isArray(content)
-        ? content.map((p) => p?.type === "text" && typeof p.text === "string" ? p.text
-          : p?.type === "toolCall" ? JSON.stringify({ type: "toolCall", id: p.id, name: p.name, arguments: p.arguments })
-          : "").filter(Boolean).join("\n")
+        ? content.some(p => p?.type === "toolCall")
+          ? content.length === 1 && content[0]?.type === "toolCall"
+            ? JSON.stringify({ type: "toolCall", id: content[0].id, name: content[0].name, arguments: content[0].arguments })
+            : JSON.stringify({ type: "assistantBlocks", blocks: content.filter(p => p?.type === "text" || p?.type === "toolCall") })
+          : content.map(p => p?.type === "text" && typeof p.text === "string" ? p.text : "").filter(Boolean).join("\n")
         : typeof record.summary === "string" ? record.summary : "";
       const result = message?.role === "toolResult" ? message as unknown as { toolCallId?: string; toolName?: string; isError?: boolean } : undefined;
       const evidence = result ? JSON.stringify({ type: "toolResult", toolCallId: result.toolCallId, toolName: result.toolName, isError: result.isError, text }) : text;
