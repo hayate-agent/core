@@ -30,17 +30,16 @@ own display text until separately updated.
 
 - [hayate-agent/core](https://github.com/hayate-agent/core) — product source and documentation.
 - [hayate-agent/plugins](https://github.com/hayate-agent/plugins) — independently versioned plugin adapters.
-- [hayate-agent/deployments](https://github.com/hayate-agent/deployments) — canonical deployment repository.
+- [hayate-agent/deployments](https://github.com/hayate-agent/deployments) — reserved deployment repository; no public deployment manifests are available there.
 
 These are the canonical repository addresses, not a migration of existing runtime
 remotes, plugin source pins or deployment configuration. The deployments address
 does not establish a directory layout or a mapping from older overlay/base repositories.
-Core's local deployment examples remain in `deploy/`.
-
-Repository publication is still pending: the GitHub repositories are currently
-empty. The installation commands below require Core's source to be published on
-`main`; until then, keep using an existing verified checkout rather than an empty
-clone. Existing installations do not need their remotes or configuration changed.
+Core and Plugins publish source on GitHub. Core's public `deploy/kubernetes/`
+contains only a `SOUL.md` persona example, not Kubernetes manifests or a complete
+configuration bundle. Use the native or Compose instructions below; Kubernetes
+requires operator-owned manifests. Existing installations do not need their
+remotes or configuration changed.
 
 ## Install and start
 
@@ -145,8 +144,9 @@ is required for normal interactive use.
 The container runs as UID/GID 1000 and includes Chromium runtime libraries,
 Python virtual environments and native build tools. Agents can install their own
 CLI tools in writable persistent storage; no particular browser CLI is required.
-See [browser tooling](docs/browser-tools.md). Kubernetes examples use immutable
-image digests and expect private configuration and secrets to be supplied separately.
+See [browser tooling](docs/browser-tools.md). For operator-owned Kubernetes
+deployments, pin immutable image digests and supply private configuration and
+secrets separately.
 
 ## Current boundaries
 

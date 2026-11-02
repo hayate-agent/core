@@ -114,8 +114,8 @@ contract and roadmap.md for outstanding deployment and integration requirements.
 The active project may be unrelated to the Harness. Inspect it before editing.
 The installed guide path identifies the package, not ownership or write permission.
 Use a user-owned checkout of https://github.com/hayate-agent/core.git on a
-feature branch. Publication to that currently empty repository is pending; until
-then, use an existing verified source checkout. Never use root to overwrite an immutable installation. Deployment
+feature branch; published source is available on `main`. Never use root to
+overwrite an immutable installation. Deployment
 specifics belong in a private overlay, credentials never in either repository.
 
 ## Implement and verify
