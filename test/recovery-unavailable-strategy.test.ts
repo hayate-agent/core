@@ -5,7 +5,7 @@ import { runtimeReviewer } from "../src/runtime/reviewer.js";
 import { Harness } from "../src/harness.js";
 import { FakeRuntime, MemoryChannel, msg } from "./fakes.js";
 
-test("absent production strategy queues evidence reconciliation, not inference or fabricated blockage", async () => {
+test("absent production strategy holds work without inference or productive reconciliation", async () => {
   const reviewer = new FakeRuntime(() => { throw Error("must not infer without strategy"); });
   let turns = 0;
   const runtime = new FakeRuntime(() => {
@@ -18,11 +18,13 @@ test("absent production strategy queues evidence reconciliation, not inference o
   const ch = new MemoryChannel(); h.addChannel(ch); h.onStateChange = async () => {};
   try {
     await h.submit(msg("Verify existing result")); await h.drained();
-    assert.match(runtime.sessions.get("mem:room1")!.prompts[1], /Reconcile the original/);
+    assert.equal(runtime.sessions.get("mem:room1")!.prompts.length, 1);
+    assert.equal(h.pendingInputs().length, 0);
     await h.tick(); await h.drained();
-    assert.equal(turns, 2); assert.equal(reviewer.opened.length, 0);
-    assert.equal(h.snapshotSessions()[0].tasks![0].state, "completed");
+    assert.equal(turns, 1); assert.equal(reviewer.opened.length, 0);
+    assert.equal(h.snapshotSessions()[0].tasks![0].state, "blocked");
+    assert.equal(h.snapshotSessions()[0].tasks![0].recoveryAdmission, undefined);
     assert.equal(ch.texts().some(t => t.includes("Recovery angehalten")), false);
-    await h.tick(); await h.drained(); assert.equal(turns, 2);
+    await h.tick(); await h.drained(); assert.equal(turns, 1);
   } finally { await h.stop(0); }
 });

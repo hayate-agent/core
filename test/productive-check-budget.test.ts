@@ -32,7 +32,13 @@ test('working-model progress field cannot grant credit without independent asses
     return `Progress claim ${turns}`;
   });
   const h = new Harness({ runtime, tickMs: 60000 }); h.addChannel(new MemoryChannel()); h.onStateChange = async () => {};
-  try { await h.submit(msg('Verify approved scope')); await h.drained(); assert.equal(turns, 20); }
+  try {
+    await h.submit(msg('Verify approved scope')); await h.drained();
+    assert.equal(turns, 1, 'model progress cannot grant admission');
+    assert.equal(h.state('mem:room1').task?.state, 'blocked');
+    assert.equal(h.state('mem:room1').task?.recoveryAdmission, undefined);
+    assert.equal(h.pendingInputs().length, 0);
+  }
   finally { await h.stop(0); }
 });
 

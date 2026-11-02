@@ -43,8 +43,9 @@ test("valid semantic uncertainty is not a technical recovery retry, including no
     await h.submit(msg("Verify the result")); await h.drained();
     const task = h.snapshotSessions()[0].tasks![0];
     assert.equal(task.recoveryRetry, undefined);
-    assert.equal(task.state, "completed", "working reconciliation can close the task without an evaluator verdict");
-    assert.equal(turns, 2);
+    assert.equal(task.state, "blocked", "uncertainty cannot admit working reconciliation");
+    assert.equal(task.recoveryAdmission, undefined);
+    assert.equal(turns, 1);
     await h.recoverTasks(); await h.tick();
     assert.equal(h.snapshotSessions()[0].tasks![0].recoveryRetry, undefined);
   } finally { await h.stop(0); }
@@ -54,7 +55,8 @@ test("startup uncertainty releases reservation without consuming existing techni
   const task: DurableTask = { id: "retained", original: "Check existing result", lastReply: "Result retained", state: "active", depth: 0, recoveryRetry: { attempts: 1, nextAt: 0 } };
   const h = new Harness({ runtime: new FakeRuntime(), tickMs: 60000, completionCheck: await checker('{"state":"uncertain"}') });
   h.addChannel(new MemoryChannel()); h.restoreSessions([{ key, task, replyTo: { channel: "mem", target: "room1" } }]); h.onStateChange = async () => {};
-  try { await h.recoverTasks(); assert.equal(h.state(key).task!.recoveryRetry, undefined); assert.equal(h.state(key).task!.state, "active"); assert.match(h.state(key).task!.next!, /Reconcile the original/); }
+  try { await h.recoverTasks(); assert.equal(h.state(key).task!.recoveryRetry, undefined); assert.equal(h.state(key).task!.state, "blocked"); assert.match(h.state(key).task!.next!, /Independent supervisor admission unavailable/);
+    assert.equal(h.pendingInputs().length, 0); }
   finally { await h.stop(0); }
 });
 
@@ -71,7 +73,8 @@ for (const [output, category] of [[new Error("PRIVATE failure"), "technisch"], [
       for (let i = 1; i <= 3; i++) { await h.recoverTasks(); assert.equal(h.state(key).task!.recoveryRetry!.attempts, i); now += 60001; }
       assert.equal(h.outboxEntries().length, 0);
       const task = h.state(key).task!;
-      assert.equal(task.state, "active"); assert.match(task.next!, /never replay completed effects/);
+      assert.equal(task.state, "blocked"); assert.match(task.next!, /Independent supervisor admission unavailable/);
+      assert.equal(task.recoveryAdmission, undefined); assert.equal(h.pendingInputs().length, 0);
       assert.match(task.lastReply!, /registry authentication missing/i);
       assert.equal(task.recoveryRetry?.diagnostic, output instanceof Error ? "technical" : "invalid_response");
       assert.doesNotMatch(JSON.stringify(h.snapshotSessions()), /PRIVATE/);

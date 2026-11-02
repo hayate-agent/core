@@ -4,7 +4,7 @@ import { Harness, type DurableTask } from "../src/harness.js";
 import { FakeRuntime, MemoryChannel } from "./fakes.js";
 
 const key = "mem:room1";
-function setup(depth: number, work: (h: Harness) => Promise<void>) {
+function setup(depth: number, work: (h: Harness) => Promise<void>, completionCheck?: NonNullable<ConstructorParameters<typeof Harness>[0]["completionCheck"]>) {
   let now = 61000;
   const runtime = new FakeRuntime();
   const open = runtime.open.bind(runtime);
@@ -14,7 +14,7 @@ function setup(depth: number, work: (h: Harness) => Promise<void>) {
     return session;
   };
   const channel = new MemoryChannel();
-  const h = new Harness({ runtime, now: () => now }); h.addChannel(channel);
+  const h = new Harness({ runtime, now: () => now, completionCheck }); h.addChannel(channel);
   h.onStateChange = async () => {};
   const task: DurableTask = { id: "task", original: "Deliver feature", state: "waiting", next: "Check dispatcher delivery",
     depth, wait: { reason: "delivery running", nextAt: now, deadline: 10000000 } };
@@ -84,7 +84,7 @@ test("wait to productive continuation spends next step, depth20 retains blocked 
     const f = setup(depth, async h => {
       calls++;
       h.planContinuation(key, { state: "continue", next: "Perform remaining authorized work" });
-    });
+    }, async () => calls === 1 ? { state: "continue", next: "Perform remaining authorized work", progress: { advanced: false, fingerprint: "same-step" } } : { state: "blocked" });
     try {
       await f.h.tick(); await f.h.drained();
       const task = f.h.state(key).task!;
