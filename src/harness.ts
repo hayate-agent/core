@@ -855,13 +855,25 @@ export class Harness {
   /** Install a host-configured scheduled mandate before submitting its worker.
    * The ID and original scope must remain identical across durable retries. */
   async scheduledMandate(key: string, id: string, original: string): Promise<NonNullable<import("./execution.js").Execution["dependency"]>> {
-    if (!key.startsWith("cron-followup:") || !original.trim() || !this.onStateChange) throw Error("Invalid scheduled mandate");
+    if (!key.startsWith("cron-followup:")) throw Error("Invalid scheduled mandate");
+    return this.installExplicitMandate(key, id, original);
+  }
+
+  /** Host-only authenticated operator command admission, independent of a running turn. */
+  async operatorTaskMandate(key: string, id: string, original: string): Promise<NonNullable<import("./execution.js").Execution["dependency"]>> {
+    if (/^(dispatch|subagent):/.test(key) || !id.startsWith("worker-tasks:")) throw Error("Invalid operator task mandate");
+    return this.installExplicitMandate(key, id, original);
+  }
+
+  private async installExplicitMandate(key: string, id: string, original: string): Promise<NonNullable<import("./execution.js").Execution["dependency"]>> {
+    if (!original.trim() || !this.onStateChange) throw Error("Invalid explicit mandate");
     const s = this.state(key);
     let task = this.tasks(s).find(task => task.id === id);
     if (task && (task.original !== original || task.state === "stopped" || task.state === "completed")) throw Error("Scheduled mandate unavailable");
     if (!task) {
       task = { id, original, state: "waiting", depth: 0, anchor: { id, task: original, receivedAt: this.now() } };
-      s.tasks = [...this.tasks(s), task]; s.task = task;
+      s.tasks = [...this.tasks(s), task];
+      if (key.startsWith("cron-followup:")) s.task = task;
     }
     await this.onStateChange();
     return { taskId: task.id, original: task.original, depth: task.depth, anchor: task.anchor };
