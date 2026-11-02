@@ -7,6 +7,7 @@ import { Harness } from "../src/harness.js";
 import { ExecutionStore } from "../src/execution.js";
 import { DispatcherRuntime } from "../src/dispatcher-runtime.js";
 import { guardResultOrchestration } from "../src/result-orchestration.js";
+import { toolGuardDenialReason } from "../src/tool-guard-error.js";
 import { FakeRuntime } from "./fakes.js";
 
 for (const drift of ["none", "depth", "operator", "missing-checkpoint", "blocked", "completed"])
@@ -89,7 +90,12 @@ test("deterministic revocation/expiry and worker checks do not classify result s
   for (const tool of ["plugin_dispatch", "plugin_task_continuation"]) {
     assert.throws(() => guardResultOrchestration(harness, "main", tool), /live stored parent mandate/);
   }
-  assert.throws(() => harness.planContinuation("main", { state: "continue", next: "not authorized" }), /No live parent mandate/);
+  for (const guard of [
+    () => guardResultOrchestration(harness, "main", "plugin_dispatch", { action: "submit" }),
+    () => harness.planContinuation("main", { state: "continue", next: "not authorized" }),
+  ]) assert.throws(guard, error => {
+    assert.match(toolGuardDenialReason(error), /^parent_mandate_missing:/); return true;
+  });
   assert.equal(new DispatcherRuntime(harness, store).resultAllowed("main", child.id), false);
   const bridge = new DispatcherRuntime(harness, store);
   assert.throws(() => bridge.guardTool("dispatch:missing:claim", "plugin_dispatch"), /no longer authorized/);

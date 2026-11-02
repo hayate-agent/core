@@ -22,13 +22,30 @@ test("guard throw sites classify orchestration and revoked authority", () => {
   denial(() => worker.guardTool("dispatch:id:token", "plugin_loop"), "worker_orchestration_denied");
   assert.doesNotThrow(() => worker.guardTool("dispatch:id:token", "read"));
   task.parentStopped = true;
+  denial(() => worker.guardTool("dispatch:id:token", "read"), "execution_cancelled");
+  denial(() => worker.guardResult("parent", "id"), "execution_cancelled");
+  task.parentStopped = false;
+  task.status = "cancelled";
+  denial(() => worker.guardTool("dispatch:id:token", "read"), "execution_cancelled");
+  task.status = "failed";
   denial(() => worker.guardTool("dispatch:id:token", "read"), "authority_revoked");
+  denial(() => worker.guardResult("parent", "id"), "authority_revoked");
+  task.status = "completed";
+  assert.doesNotThrow(() => worker.guardResult("parent", "id"));
+  denial(() => worker.guardResult("parent", "absent"), "parent_mandate_missing");
+  denial(() => worker.guardTool("dispatch:id:stale-token", "read"), "ownership_lost");
   const children = new Subagents({} as never, async () => {});
   const record = { sessionKey: "subagent:child", state: "running", expiresAt: Date.now() + 60_000 };
   (children as any).records.set("child", record);
   denial(() => children.guardTool(record.sessionKey, "plugin_loop"), "worker_orchestration_denied");
   record.expiresAt = 0;
+  denial(() => children.guardTool(record.sessionKey, "read"), "deadline_expired");
+  record.expiresAt = Date.now() + 60_000;
+  record.state = "cancelled";
+  denial(() => children.guardTool(record.sessionKey, "read"), "execution_cancelled");
+  record.state = "completed";
   denial(() => children.guardTool(record.sessionKey, "read"), "authority_revoked");
+  denial(() => children.guardTool("subagent:absent", "read"), "ownership_lost");
 });
 
 test("classification never reads arbitrary error properties or exposes messages", () => {
@@ -60,7 +77,7 @@ try {
  const s=wrapped.session;
  const toolCall={type:'toolCall',name:'plugin_probe',id:'probe',arguments:{}};
  const call=()=>runToolCall(toolCall,{tools:[{...tool,execute:async()=>{executions++;return {content:[{type:'text',text:'executed'}]};}}],context:{messages:[]},assistantMessage:{role:'assistant',content:[toolCall]},beforeToolCall:s.agent.beforeToolCall});
- for(const code of ['review_required','worker_orchestration_denied','authority_revoked','dispatcher_unavailable']) {
+ for(const code of ['review_required','worker_orchestration_denied','authority_revoked','dispatcher_unavailable','deadline_expired','execution_cancelled','ownership_lost','parent_mandate_missing']) {
   failure=new ToolGuardError(code,'SECRET arbitrary internal detail');
   const result=await call();
   assert.equal(result.isError,true);

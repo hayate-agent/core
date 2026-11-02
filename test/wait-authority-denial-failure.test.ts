@@ -24,7 +24,7 @@ test("receipt storage failure cannot authorize a tool or leak exception text", a
       const s = h.state("mem:room1"); s.cancelling = s.current;
       for (const tool of ["bash", "plugin_task_continuation", "plugin_dispatch"]) {
         await assert.rejects(h.guardWaitTool("mem:room1", tool, { action: "status", command: "SECRET" }), error => {
-          assert.match(toolGuardDenialReason(error)!, /^authority_revoked:/);
+          assert.match(toolGuardDenialReason(error)!, /^execution_cancelled:/);
           assert.doesNotMatch(String(error), /SECRET/); return true;
         });
       }
