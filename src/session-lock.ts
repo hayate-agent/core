@@ -6,7 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 // ownership. Neither this file nor the database may be unlinked/replaced while
 // the home is in use (including by maintenance tooling).
 const MARKER = "vanillacore-session-lock:sqlite-exclusive:v1\n";
-const BUSY = "Session or Harness home is already open in another terminal. Use a separate VANILLACORE_HARNESS_HOME for an independent process.";
+const BUSY = "Session or Harness home is already open in another terminal. Use a separate HAYATE_AGENT_HOME for an independent process.";
 
 /**
  * Kernel-owned, not PID-owned. SQLite's rollback-journal locking coordinates

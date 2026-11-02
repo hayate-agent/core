@@ -46,7 +46,7 @@ Other plugins are explicitly enabled local ESM modules. They execute trusted Jav
 with the process user's permissions: this is NOT a sandbox. Review code and pin
 its dependencies. No discovery/download/installation from incoming chat messages.
 
-In harness.yaml:
+In hayate-agent.yaml:
 
 ```yaml
 plugins:

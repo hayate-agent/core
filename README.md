@@ -12,12 +12,12 @@ Existing PI provider configuration can be reused.
 
 ## Naming and compatibility
 
-**Hayate Agent** is the product display name. The executable and npm package
-remain `vanillacore-harness`; existing commands, `~/.vanillacore-harness`,
-`harness.yaml`, `VANILLACORE_HARNESS_HOME`, import names, API/storage identifiers
-and deployment/image identifiers stay compatible. No state migration is needed.
-“Harness” may still describe the runtime architecture or a technical identifier;
-it is not a second product name.
+**Hayate Agent** uses npm package and executable `hayate-agent`, home
+`~/.hayate-agent`, configuration `hayate-agent.yaml` and `HAYATE_AGENT_*`
+environment variables. Existing local agent state is read without moving it;
+see [configuration](docs/configuration.md). Internal repository/image names are
+exempt. “Harness” describes runtime architecture, not a second product name.
+The remaining audit is tracked in [the naming inventory](docs/naming-inventory.md).
 
 Branding does not replace configured agent keys, SOUL/VOICE identities or other
 agents' personas. Updated templates apply only to newly created files; existing
@@ -49,14 +49,14 @@ the native CLI requires at least Node 22.19.0. Linux, macOS and Windows through
 WSL2 are supported.
 
 ```sh
-git clone https://github.com/hayate-agent/core.git "$HOME/vanillacore-harness"
-cd "$HOME/vanillacore-harness"
+git clone https://github.com/hayate-agent/core.git "$HOME/hayate-agent"
+cd "$HOME/hayate-agent"
 npm ci
 npm install --global --prefix "$HOME/.local" .
 export PATH="$HOME/.local/bin:$PATH"
 
 cd /path/to/your/project
-vanillacore-harness
+hayate-agent
 ```
 
 Keep the checkout: this local installation links to it. Add the PATH line to your
@@ -106,7 +106,7 @@ interface rather than memorizing the full command list.
 ## Run as a gateway
 
 ```sh
-vanillacore-harness run
+hayate-agent run
 ```
 
 This starts the same Hayate Agent without the interactive TUI. Configure Matrix with
@@ -125,9 +125,9 @@ and shutdown behavior.
 
 ## Configuration and data
 
-Hayate Agent state defaults to **`~/.vanillacore-harness`**. Use
-`VANILLACORE_HARNESS_HOME` for a separate agent home. A minimal optional
-`harness.yaml` looks like this:
+Hayate Agent state defaults to **`~/.hayate-agent`**. Use
+`HAYATE_AGENT_HOME` for a separate agent home. A minimal optional
+`hayate-agent.yaml` looks like this:
 
 ```yaml
 agent: example-agent

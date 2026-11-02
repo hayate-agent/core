@@ -1,6 +1,6 @@
 # Gateway progress and status reactions
 
-Configure global defaults and optional per-gateway overrides in harness.yaml:
+Configure global defaults and optional per-gateway overrides in hayate-agent.yaml:
 
 ```yaml
 gateways:

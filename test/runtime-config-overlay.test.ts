@@ -21,7 +21,7 @@ const models = rules.map(rule => rule.model);
 
 test("read-only base, writable overlay, tolerant runtime reload and restart", async t => {
   assert.notEqual(process.getuid?.(), 0, "fixture must run without root");
-  // /etc is root-owned and non-writable; deliberately absent harness.yaml exercises defaults.
+  // /etc is root-owned and non-writable; deliberately absent hayate-agent.yaml exercises defaults.
   await assert.rejects(access("/etc", 2));
   assert.equal((await loadConfig("/etc")).dispatcher?.enabled, false);
   const home = await mkdtemp(path.join(os.tmpdir(), "runtime-overlay-"));
@@ -37,7 +37,7 @@ test("read-only base, writable overlay, tolerant runtime reload and restart", as
     assert.equal((await stat(rootBase)).uid, 0);
   }
   await assert.rejects(access(rootBase, 2));
-  await symlink(rootBase, path.join(home, "harness.yaml"));
+  await symlink(rootBase, path.join(home, "hayate-agent.yaml"));
   const originalBase = await readFile(rootBase, "utf8");
   const base = await loadConfig(home);
   const file = path.join(home, "settings.local.yaml");

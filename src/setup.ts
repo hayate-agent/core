@@ -2,6 +2,7 @@ import { mkdir, open, access, stat } from "node:fs/promises";
 import path from "node:path";
 import { stringify } from "yaml";
 import { defaultConfig, loadConfig } from "./config.js";
+import { configurationFile } from "./product-paths.js";
 
 export interface InitOptions {
   home?: string;
@@ -19,7 +20,7 @@ export async function initialize(opts: InitOptions): Promise<string[]> {
   await mkdir(home, { recursive: true, mode: 0o700 });
   const created: string[] = [];
   const files = {
-    "harness.yaml": stringify({
+    [path.basename(configurationFile(home))]: stringify({
       agent: config.agent,
       cwd,
       ...(config.model ? { model: config.model } : {}),
@@ -53,7 +54,7 @@ export async function diagnose(home?: string): Promise<{ ok: boolean; lines: str
   const config = await loadConfig(home);
   const lines = ["Hayate Agent diagnostics", `Node: ${process.version}`, `Home: ${path.resolve(config.home)}`, `Workspace: ${config.cwd}`, `Agent: ${config.agent}`];
   let ok = true;
-  for (const [label, dest] of [["Workspace", config.cwd], ["Configuration", path.join(config.home, "harness.yaml")]] as const) {
+  for (const [label, dest] of [["Workspace", config.cwd], ["Configuration", configurationFile(config.home)]] as const) {
     try {
       const info = await stat(dest);
       if (label === "Workspace" ? !info.isDirectory() : !info.isFile()) throw new Error("wrong type");
