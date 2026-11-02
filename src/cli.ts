@@ -85,6 +85,7 @@ import { handoverWorktreeReview } from "./review-worktree.js";
 import { ReviewWorkers } from "./review-execution.js";
 import { ReviewSubagents } from "./review-subagents.js";
 import { capabilityContext } from "./capability-context.js";
+import { roleAwareReviewer, resolveModelRole } from "./model-roles.js";
 import { runtimeReviewer } from "./runtime/reviewer.js";
 import { boundaryAssessor } from "./builtin-plugins/boundary-assessor.js";
 import { pruneToolResults } from "./builtin-plugins/tool-result-projector.js";
@@ -222,13 +223,14 @@ async function main(argv: string[]): Promise<void> {
   const settings = new SettingsService(path.join(config.home, "settings.local.yaml"), {
     model: config.model, thinking: config.thinking,
     dispatcher: config.dispatcher,
+    modelRoles: config.modelRoles,
     reasoningEffortNoneModels: config.reasoningEffortNoneModels,
     gateways: config.gateways,
     memory: config.memory,
     skills: config.skills,
     contextMaintenance: contextPolicy(config.contextMaintenance),
     toolResultPruning: pruningPolicy(config.toolResultPruning),
-    review: { model: config.review?.model, thinking: config.review?.thinking ?? "medium" },
+    review: { model: config.reviewOverrides?.model, thinking: config.reviewOverrides?.thinking },
   }, message => log(`[settings] ${message}`));
   await settings.load();
   let reloadError: string | undefined;
@@ -260,6 +262,16 @@ async function main(argv: string[]): Promise<void> {
     reviewSettings.model = effectiveModels().reviewModel;
     reviewSettings.thinking = effectiveModels().reviewThinking;
   };
+  const legacyReview = () => {
+    const overlay = settings.snapshot().review;
+    return { model: overlay?.model ?? config.reviewOverrides?.model, thinking: overlay?.thinking ?? config.reviewOverrides?.thinking };
+  };
+  const codeReviewRequest = async (request: import("./builtin-plugins/review-executor.js").ReviewExecutionRequest) => {
+    const pair = await resolveModelRole(runtime, settings.effective().modelRoles, "reviewer", { model: request.model, thinking: request.thinking });
+    const explicit = legacyReview();
+    return { ...request, model: explicit.model ?? pair.model, thinking: explicit.thinking ?? pair.thinking ?? request.thinking };
+  };
+  const supervisorReviewer = () => roleAwareReviewer(runtime, () => settings.effective().modelRoles, runtimeReviewer(runtime, "supervisor"));
   const adaptiveSkills = config.skills.adaptive === true ? new AdaptiveSkills(config.home, config.cwd, skillCatalog) : undefined;
   const runtime = new PiRuntime({
     adaptiveSkills,
@@ -319,9 +331,9 @@ async function main(argv: string[]): Promise<void> {
   const reviewEngine = reviewModule ? await createPolicyEngine(reviewModule, { home: config.home, cwd: config.cwd, config: reviewSettings,
     reviewExecution: {
       dispatcherEnabled: () => dispatchPolicy.enabled,
-      dispatcherWorker: request => reviewWorkers.review(request),
-      handoverWorktree: request => handoverWorktreeReview(runtime, request),
-      subagent: request => reviewSubagents.review(request),
+      dispatcherWorker: async request => reviewWorkers.review(await codeReviewRequest(request)),
+      handoverWorktree: async request => handoverWorktreeReview(runtime, await codeReviewRequest(request)),
+      subagent: async request => reviewSubagents.review(await codeReviewRequest(request)),
     },
     backend: runtimeReviewer(runtime), notify: async (sessionKey, message, origin) => {
       log(`[review] ${message}`);
@@ -389,7 +401,7 @@ async function main(argv: string[]): Promise<void> {
     completionCheck: async (input, reply, signal, diagnostic) => {
       const grant = config.completionCheck?.authorizations[input.sessionKey] ??
         (input.completionAnchor ? { task: input.completionAnchor.task } : undefined);
-      return assessCompletion(runtimeReviewer(runtime), input, reply, grant, signal, effectiveModels().reviewModel, Date.now, completion.current, diagnostic);
+      return assessCompletion(supervisorReviewer(), input, reply, grant, signal, effectiveModels().reviewModel, Date.now, completion.current, diagnostic);
     },
     afterTurn: async (input, reply, session, options, signal) => {
       await reloadRuntimeSettings();
@@ -570,7 +582,7 @@ async function main(argv: string[]): Promise<void> {
     dispatchRuntime = new DispatcherRuntime(harness, executions, async () => {
       await reloadRuntimeSettings();
       return settings.effective().dispatcher?.rules;
-    });
+    }, () => ({ config: settings.effective().modelRoles, defaults: { model: effectiveModels().model, thinking: effectiveModels().thinking } }));
     harness.addChannel(dispatchRuntime.channel);
     const strategy = dispatchPolicy.strategy === "direct" ? dispatchRuntime.strategy : plugins.dispatchers.get(dispatchPolicy.strategy);
     if (!strategy) throw Error("Configured dispatcher strategy unavailable");
@@ -698,6 +710,7 @@ async function main(argv: string[]): Promise<void> {
       return reloadSkills();
     }, cron: () => scheduler.load() }),
     approvals,
+    modelRoles: { get: () => settings.effective().modelRoles, set: value => settings.setModelRoles(value) },
     modelSettings: {
       get: effectiveModels,
       source: (key) => {

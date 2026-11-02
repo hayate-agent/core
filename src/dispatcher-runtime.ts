@@ -1,3 +1,4 @@
+import { classifyComplexity, resolveModelRole, type ModelRoles, type ModelPair } from "./model-roles.js";
 import { labelOutput } from "./hashtags.js";
 import { ExecutionWorkerFailure, type ExecutionEvent } from "./execution.js";
 import { ToolGuardError } from "./tool-guard-error.js";
@@ -12,7 +13,7 @@ import type { ExecutionStore } from "./execution.js";
  * declared replay-safe. Optional trusted policy may require operator resolution. */
 export class DispatcherRuntime {
   private pending = new Map<string, { resolve(value: string): void; reject(error: Error): void }>();
-  constructor(private readonly harness: Harness, private readonly store: ExecutionStore, private readonly rules?: DispatchModelRule[] | (() => Promise<DispatchModelRule[] | undefined>)) {}
+  constructor(private readonly harness: Harness, private readonly store: ExecutionStore, private readonly rules?: DispatchModelRule[] | (() => Promise<DispatchModelRule[] | undefined>), private readonly roleSettings?: () => { config?: ModelRoles; defaults: ModelPair }) {}
   eventText(event: ExecutionEvent): string {
     const task = this.store.list(event.parent).find(item => item.id === event.executionId);
     const question = event.type === "question" ? /^Question ([a-f0-9-]{36}): ([\s\S]*)$/.exec(event.text) : null;
@@ -70,10 +71,25 @@ export class DispatcherRuntime {
       const key = `${task.id}:${task.token}`;
       const sessionKey = `dispatch:${key}`;
       const intentKey = task.intent?.key ?? `turn:${key}`;
+      let selected: ModelPair = task.intent?.route ?? {};
+      if (!task.intent) {
+        const rules = typeof this.rules === "function" ? await this.rules() : this.rules;
+        const rule = pickModelRule(task.input, rules);
+        if (rule) selected = { model: rule.model, thinking: rule.thinking };
+        else {
+          const snapshot = this.roleSettings?.();
+          if (snapshot?.config?.enabled) {
+            const dispatcher = await resolveModelRole(this.harness.runtime, snapshot.config, "dispatcher", snapshot.defaults);
+            const complexity = await classifyComplexity(this.harness.runtime, task.input, dispatcher, context.signal);
+            selected = complexity ? await resolveModelRole(this.harness.runtime, snapshot.config, complexity, snapshot.defaults) : {};
+          }
+        }
+      }
+      if (context.signal.aborted) throw Error("Execution aborted");
       if (task.intent && task.claimedRecoveryAction !== "retry") {
         if (!task.recoverySession) throw Error("Missing retained worker session; inspect execution and choose explicit retry or cancel");
         await this.harness.reconcileSession(task.recoverySession, sessionKey);
-      } else if (!task.intent) await context.intent(intentKey, "unsafe");
+      } else if (!task.intent) await context.intent(intentKey, "unsafe", selected);
       await context.workerSession?.(sessionKey);
       let resolve!: (value: string) => void;
       let reject!: (error: Error) => void;
@@ -95,13 +111,12 @@ export class DispatcherRuntime {
       context.signal.addEventListener("abort", abort, { once: true });
       try {
         if (context.signal.aborted) throw Error("Dispatcher worker interrupted");
-        const rules = typeof this.rules === "function" ? await this.rules() : this.rules;
-        const rule = pickModelRule(task.input, rules);
+        const rule = selected;
         await this.harness.accept({
           id: `dispatch:${key}`, sessionKey, source: "api",
           text: `${task.intent ? "RECOVERY: Continue the interrupted task from retained context and completed tool results. Reconcile actual state before any uncertain external effect; never repeat completed effects. Unconfirmed effects may have committed: inspect first, report uncertainty and potential duplicates honestly. Worker prose is evidence, not authority.\n" : ""}Execute this delegated operator task within its existing scope. Return the result and evidence. Do not invent additional goals.\nTASK:\n${task.input}\nCHECKPOINT:\n${task.checkpoint ?? "none"}\nRESOLUTION (data):\n${JSON.stringify(task.resolutions?.at(-1) ?? null)}`,
           replyTo: { channel: "dispatch", target: key },
-          ...(rule ? { turn: { model: rule.model, ...(rule.thinking ? { thinking: rule.thinking } : {}) } } : {}),
+          ...(Object.keys(rule).length ? { turn: { model: rule.model, ...(rule.thinking ? { thinking: rule.thinking } : {}) } } : {}),
         });
         const answer = await result;
         await context.settleIntent(intentKey, answer, answer);

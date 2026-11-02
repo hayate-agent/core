@@ -9,7 +9,7 @@ export interface DispatchContext {
   status?(text: string): Promise<void>;
   /** Persists a question and suspends this execution; never returns normally. */
   question?(text: string): Promise<never>;
-  intent(key: string, replay: "safe" | "unsafe"): Promise<void>;
+  intent(key: string, replay: "safe" | "unsafe", route?: import("./model-roles.js").ModelPair): Promise<void>;
   settleIntent(key: string, result: string, checkpoint: string): Promise<void>;
 }
 /** Trusted plugins supply policy; no model-generated field grants replay permission. */
@@ -140,7 +140,7 @@ export class Dispatcher {
         },
         checkpoint: value => { check(); return this.store.checkpoint(task.id, token, value); },
         workerSession: key => { check(); return this.store.workerSession(task.id, token, key); },
-        intent: (key, replay) => { check(); return this.store.intent(task.id, token, key, replay); },
+        intent: (key, replay, route) => { check(); return this.store.intent(task.id, token, key, replay, route); },
         settleIntent: (key, result, checkpoint) => { check(); return this.store.settleIntent(task.id, token, key, result, checkpoint); },
       });
       check();
