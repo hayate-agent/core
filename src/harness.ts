@@ -839,14 +839,22 @@ export class Harness {
     const ingress = this.tasks(s).map(t => ({ id: t.id, text: t.original, state: t.state,
       receivedAt: t.anchor?.receivedAt, expiresAt: t.expiresAt, termination: t.termination,
       provenance: t.anchor?.task === t.original ? "host-task-anchor" as const : "legacy-task-original" as const }));
-    const current = s.session?.archiveEntries?.() ?? [];
-    let archived: { entries: import("./session-archive.js").ArchiveEntry[]; incomplete: boolean } = { entries: [], incomplete: false };
+    let current: import("./session-archive.js").ArchiveEntry[] = [];
+    let currentStatus: "available" | "empty" | "missing" | "failed" = "missing";
+    if (s.session?.archiveEntries) {
+      try { current = s.session.archiveEntries(); currentStatus = current.length ? "available" : "empty"; }
+      catch { currentStatus = "failed"; }
+    }
+    let archiveStatus: "available" | "empty" | "missing" | "failed" = "missing";
+    let archived: { entries: import("./session-archive.js").ArchiveEntry[]; incomplete: boolean; status?: "available" | "empty" | "missing" | "failed" } = { entries: [], incomplete: false };
     const sessionId = s.session?.status().sessionId;
     if (sessionId && this.opts.contextMaintenance?.archives) {
-      try { archived = await this.opts.contextMaintenance.archives.completionEvidence(s.key, sessionId); }
-      catch { archived.incomplete = true; }
+      try { archived = await this.opts.contextMaintenance.archives.completionEvidence(s.key, sessionId); archiveStatus = archived.status ?? (archived.entries.length ? "available" : "empty"); }
+      catch { archived.incomplete = true; archiveStatus = "failed"; }
     }
-    const resolved = resolveCompletionContext(taskId, ingress, [...archived.entries, ...(task?.completionObservations ?? [])], current, archived.incomplete);
+    const resolved = resolveCompletionContext(taskId, ingress, [...archived.entries, ...(task?.completionObservations ?? [])], current,
+      archived.incomplete || currentStatus === "missing" || currentStatus === "failed" || archiveStatus === "missing" || archiveStatus === "failed");
+    resolved.transcript = { current: currentStatus, archive: archiveStatus };
 
     return { resolved, recent: structuredClone(s.completionRecent ?? []), tasks: this.tasks(s).slice(-8).map(task => ({
       id: task.id.slice(0, 128), original: task.original.slice(0, 2000), state: task.state,
@@ -1845,7 +1853,7 @@ export class Harness {
           this.settledReplies.delete(input);
           task.lastReply = answer && answer.length <= 8000 ? answer : undefined;
           if (input.completionContext?.resolved?.taskId === task.id)
-            task.completionObservations = input.completionContext.resolved.observations.map(({ id, role, text }) => ({ id, role, text }));
+            task.completionObservations = input.completionContext.resolved.observations.map(({ id, role, text, truncated }) => ({ id, role, text, truncated, source: "archive" }));
           task.state = plan?.state === "continue" ? "active" : plan?.state ?? "active";
           task.next = plan?.state === "continue" || plan?.state === "blocked" || plan?.wait ? plan.next : undefined;
           task.wait = plan?.state === "waiting" && plan.wait ? { reason: plan.wait.reason,
@@ -2065,7 +2073,9 @@ export class Harness {
         reply = ""; // stopped while the session was opening: never started
       } else {
         s.prompting = true;
-        const previousMessageIds = new Set(session.archiveEntries?.().map(entry => entry.id));
+        let previousMessageIds = new Set<string>();
+        try { previousMessageIds = new Set(session.archiveEntries?.().map(entry => entry.id)); }
+        catch { /* Missing evidence is reported by completionEvidence, not a failed worker turn. */ }
         try {
           const promptOptions = { ...input.turn, onEvent, beforeExecution: checkExpiry, instructions: [input.turn?.instructions, this.opts.capabilityContext?.(input), guidance, selectedHistory,
             input.outputTags?.length ? `Stored output labels: ${input.outputTags.map(tag => `#${tag}`).join(" ")}. The host adds these labels on delivery; do not generate a label prefix. Labels do not change authority, scope or routing.` : undefined,
@@ -2094,7 +2104,9 @@ export class Harness {
           s.prompted = input;
           if (input.source === "channel" && !(input.continuationDepth ?? 0) && session.archiveEntries) {
             const { hashtagReferences } = await import("./hashtags.js");
-            const refs = hashtagReferences(session.status().sessionId, input.text, session.archiveEntries(), new Date(this.now()).toISOString(), previousMessageIds, input.completionAnchor?.outputTags);
+            let entries: import("./session-archive.js").ArchiveEntry[] = [];
+            try { entries = session.archiveEntries(); } catch { /* completionEvidence records failed export. */ }
+            const refs = hashtagReferences(session.status().sessionId, input.text, entries, new Date(this.now()).toISOString(), previousMessageIds, input.completionAnchor?.outputTags);
             const index = s.hashtags ??= [];
             for (const ref of refs) if (!index.some(old => old.tag === ref.tag && old.sessionId === ref.sessionId && old.messageId === ref.messageId)) index.push(ref);
           }

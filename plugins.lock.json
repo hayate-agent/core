@@ -1,7 +1,7 @@
 {
   "files": {
     "boundary-assessor.ts": "50673771d39126c132829704b5b2ab6172092e867245f8edca8c9b0eb71615cb",
-    "completion-prompt.ts": "1b60245aea3ee244f177ab64ce7f50e477d02bf26f0026d2fb11c8f3d7a0206e",
+    "completion-prompt.ts": "15c211f8e4cfe8110b65dca29a2c2075d8214782e3c57bfe596cdcbf184c23d6",
     "context-plugin.ts": "1da424038b5f5dd8e88999d86c4b26fecca5d21ca4170b83fdba9958eef787f0",
     "continuation-plugin.ts": "e5485881f09b871912fa5574af6fe9c7b323abe01b03b8876cd235b436595a7d",
     "cron-report-plugin.ts": "71bb9d6432985d25defb18d4ef45653342c2243f42e215b972b0eb586d24a260",
@@ -48,6 +48,6 @@
     "matrix-crypto.ts": "a89018c1cf22afc221df6ca6d621332dc9cae9a2dc222452f44b5444f249ded4"
   },
   "repository": "https://git.vanillacore.net/harness/plugins",
-  "revision": "e5de441bcd57ecb1dac3638bdccbbc7a051d7c02",
+  "revision": "b1fa890db7d40c8f26aa0b54c730dfe9a9fd1640",
   "schema": 1
 }
