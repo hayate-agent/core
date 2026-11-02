@@ -1,5 +1,5 @@
 import type { ExecutionRecoveryPolicy } from "./execution-recovery.js";
-import { ExecutionClaimConflict, type Execution, type ExecutionEvent, type ExecutionStore } from "./execution.js";
+import { ExecutionClaimConflict, ExecutionWorkerFailure, type Execution, type ExecutionEvent, type ExecutionStore } from "./execution.js";
 
 export interface DispatchContext {
   readonly signal: AbortSignal;
@@ -148,7 +148,7 @@ export class Dispatcher {
     } catch (error) {
       // Preserve partial state, but do not automatically spin on a failing plugin.
       if (!this.stopped && this.store.list().find(item => item.id === task.id)?.status === "running") {
-        await this.store.control(task.id, "pause").catch(this.report);
+        await this.store.fail(task.id, token, error instanceof ExecutionWorkerFailure ? error.diagnosticCode : "runtime-failure").catch(this.report);
       }
       if (!abort.signal.aborted && !(error instanceof ExecutionClaimConflict)) this.report(error);
     } finally {

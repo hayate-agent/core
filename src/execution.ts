@@ -7,6 +7,12 @@ import { recoveryBlock, type RecoveryStrategy, type ExecutionRecoveryPolicy } fr
 /** Expected contention with a control or another claimant, not a storage failure. */
 export class ExecutionClaimConflict extends Error {}
 
+/** Closed host-owned causes; exception/worker text is never persisted here. */
+export type ExecutionDiagnosticCode = "runtime-failure" | "worker-failed" | "worker-cancelled" | "manual-pause";
+export class ExecutionWorkerFailure extends Error {
+  constructor(readonly diagnosticCode: "worker-failed" | "worker-cancelled") { super(diagnosticCode); }
+}
+
 export type ExecutionStatus = "ready" | "running" | "paused" | "blocked" | "completed" | "cancelled";
 export interface Execution {
   id: string;
@@ -23,6 +29,7 @@ export interface Execution {
   token?: string;
   restarts: number;
   recoveryReason?: string;
+  diagnosticCode?: ExecutionDiagnosticCode;
   /** Prior token-scoped transcript, never an ownership credential. */
   recoverySession?: string;
   resolutions?: Array<{ actor: string; action: "continue" | "retry"; evidence: string; at: number }>;
@@ -417,6 +424,17 @@ export class ExecutionStore {
       draft.events = draft.events.filter(event => event.parent !== parent);
     });
   }
+  /** Token fencing prevents a late failure from pausing a replacement claim. */
+  fail(id: string, token: string, code: ExecutionDiagnosticCode): Promise<void> {
+    return this.mutate(draft => {
+      const task = this.find(draft, id);
+      if (task.status !== "running" || task.token !== token) return;
+      task.status = task.intent ? "blocked" : "paused";
+      task.diagnosticCode = code;
+      delete task.token;
+      this.event(draft, task, "status", task.status);
+    });
+  }
   control(id: string, action: "pause" | "resume" | "cancel"): Promise<void> {
     return this.mutate(draft => {
       const task = this.find(draft, id);
@@ -424,11 +442,13 @@ export class ExecutionStore {
       if (action === "resume") {
         if (task.status !== "paused" || task.intent || (task.question && task.question.answer === undefined)) throw Error("Execution cannot resume without resolving its blocker");
         task.status = "ready";
+        delete task.diagnosticCode;
       } else if (action === "pause") {
         // Pause is not a blocker-resolution API. Revoking an in-flight effect
         // leaves its outcome ambiguous, even before startup recovery runs.
         if (task.status === "blocked") return;
         task.status = task.intent ? "blocked" : "paused";
+        task.diagnosticCode = "manual-pause";
       } else { task.status = "cancelled"; task.terminalAt = this.now(); }
       // Revoke the old worker before any replacement can claim the task.
       delete task.token;
