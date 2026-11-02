@@ -35,6 +35,25 @@ no global session search or cross-conversation index is added. In shared rooms
 this retains the existing room-level authorization boundary, not a new private
 per-sender history. Providers must retain referenced history for lookup to work.
 
+## Automatic semantic assignment
+
+When a fresh channel message has no explicit tags, CLI ingress asks the existing
+tool-free assessment backend with the configured review model (runtime model
+fallback) to generate 1–3 reusable semantic topic slugs. Up to 16 tagged retained
+tasks from this conversation supply bounded topic evidence (2,000 characters each;
+incoming text 8,000 characters). An unambiguous semantic match reuses all original
+umbrella tags and may add a specific tag. Candidate order is not topic ownership;
+ambiguous follow-ups are rejected rather than attached to the latest room topic.
+This selects labels only, never a mandate, permissions or continuation authority.
+
+The call is bounded to 10 seconds with advisory cancellation. Outage, malformed
+output and ambiguity produce an explicit admission error and diagnostic log;
+input is not acknowledged and can be retried. Explicit tags and control commands
+remain usable without the service. Accepted inbox replay and duplicate upstream
+IDs do not call the model again. Embedders must supply `topicLabeler` to opt in;
+with it, channel callers use async `accept`/`submit`, not synchronous `enqueue`.
+Legacy/scheduled/worker/API inputs are not classified or backfilled.
+
 ## Output labels
 
 Fresh operator channel turns capture normalized tags on their durable originating
@@ -46,26 +65,27 @@ Queued turns, task continuations and dispatcher executions retain their original
 labels through the existing inbox/assignment/execution state. Delivered Main
 replies retain label metadata in the durable outbox, including retries/restart.
 A late worker result uses its exact stored execution's originating labels, not
-the conversation's newer task. Untagged and legacy work remains untagged. Internal
+the conversation's newer task. Legacy work remains untagged. Internal
 worker transport keeps the raw result; user-facing delivery adds the prefix once.
 Returned `#other · …` prefixes cannot override a tagged assignment's host prefix.
 
-Only operator text is parsed. Generated labels are not new hashtag references and
-are not copied into operator transcripts or the reference index. API inputs,
+Only operator text is parsed. Automatically assigned host tags index the actual
+fresh operator transcript entry without rewriting its text. Rendered output labels
+are never parsed back into references. API inputs,
 worker prose and host result text do not create tags. Native and external session
 providers use the same Harness-owned durable metadata, scoped to the existing
 conversation/execution identities, without global session searches.
 
 ## Additional context before inference
 
-Fresh operator hashtags mechanically select existing conversation-scoped index
+Assigned operator hashtags mechanically select existing conversation-scoped index
 references at admission, before asynchronous prompt assembly. Unknown tags have
 no hits; no semantic aliases or special `#pr`/`#rollout` modes exist. Multiple tags
 form a deduplicated union, newest indexed first (index order breaks ties), capped
 at eight user messages. Each excerpt is at most 800 characters; exact session and
 message IDs identify its source. Missing retained history is marked unavailable.
 Only indexed user messages are read; there is no recursive tag expansion,
-automatic summary, background model call or historical backfill. `/hashtags`
+automatic summary or historical backfill in the reference reader. `/hashtags`
 lookup remains unchanged.
 
 The durable originating assignment stores the reference snapshot, not copied

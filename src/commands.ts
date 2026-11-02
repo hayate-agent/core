@@ -205,7 +205,7 @@ export const COMMANDS: Command[] = [
     run: async (_a, input, ctx) => {
       const last = ctx.harness.state(input.sessionKey).lastInput;
       if (!last) return "nothing to retry";
-      ctx.harness.enqueue({ ...last });
+      await ctx.harness.enqueueChannel({ ...last }, true);
     },
   },
   {
@@ -254,7 +254,7 @@ export const COMMANDS: Command[] = [
         s.queue.length = 0;
         return "queue cleared";
       }
-      ctx.harness.enqueue({ ...input, text: a });
+      await ctx.harness.enqueueChannel({ ...input, text: a });
       return s.running ? `queued (#${s.queue.length})` : undefined;
     },
   },
@@ -266,7 +266,7 @@ export const COMMANDS: Command[] = [
       const s = ctx.harness.state(input.sessionKey);
       if (!args.trim()) return "usage: /steer <text>";
       if (!s.running || !s.session) {
-        ctx.harness.enqueue({ ...input, text: args.trim() });
+        await ctx.harness.enqueueChannel({ ...input, text: args.trim() });
         return;
       }
       await s.session.steer(args.trim());
@@ -670,7 +670,7 @@ export function installCommands(ctx: CommandContext): void {
       await ctx.reloadSkills();
       const skill = ctx.skills().find((s) => s.name === parsed.name);
       if (!skill) return false;
-      ctx.harness.enqueue({ ...input, text: skillInvocationPrompt(skill, parsed.args) });
+      await ctx.harness.enqueueChannel({ ...input, text: skillInvocationPrompt(skill, parsed.args) });
       return true;
     }
     let out: string | void;

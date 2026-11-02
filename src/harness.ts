@@ -173,6 +173,8 @@ export interface HarnessOptions {
   turnCommitted?: (input: Inbound) => Promise<void>;
   /** May feed review findings back into the same serialized working turn. */
   afterTurn?: (input: Inbound, reply: string, session: RuntimeSession, promptOptions: PromptOptions, signal: AbortSignal) => Promise<string>;
+  /** Trusted ingress metadata classifier; never changes task authority. */
+  topicLabeler?: import("./topic-labels.js").TopicLabeler;
   /** Advisory fallback; production caller must supply independently authorized task scope. */
   completionCheck?: (input: Inbound, reply: string, signal: AbortSignal, diagnostic?: import("./completion-check.js").CompletionDiagnosticSink) => Promise<NonNullable<Inbound["continuation"]> | undefined>;
   /** Trusted host routing for child approval requests; never supplied by model input. */
@@ -1144,14 +1146,29 @@ export class Harness {
     return this.withForegroundWork(() => this.submitForeground(input, deferPump));
   }
 
+  private readonly labeledInputs = new WeakSet<Inbound>();
+
+  private async prepareTopic(input: Inbound): Promise<void> {
+    if (this.labeledInputs.has(input)) return;
+    const s = this.state(input.sessionKey);
+    let tags = parseHashtags(input.text);
+    // Control commands remain usable when the semantic service is down.
+    if (!tags.length && this.opts.topicLabeler && !input.text.trimStart().startsWith("/") && !naturalBudgetReset(input.text)) {
+      const candidates = this.tasks(s).filter(t => t.anchor?.outputTags?.length).slice(-16)
+        .map(t => ({ id: t.id, text: t.original.slice(0, 2000), tags: [...t.anchor!.outputTags!] }));
+      try { tags = await this.opts.topicLabeler(input.text, candidates); }
+      catch (error) { this.log("automatic topic labeling failed; channel input not accepted"); throw error; }
+    }
+    input.outputTags = tags;
+    input.completionAnchor = { id: randomUUID(), task: input.text, receivedAt: this.now(), outputTags: tags,
+      hashtagSelection: selectHashtagContext(s.key, tags, s.hashtags ?? []) };
+    this.labeledInputs.add(input);
+  }
+
   private async submitForeground(input: Inbound, deferPump = false): Promise<void> {
     if (this.budgetChanging) throw Error("Host control in progress; retry input");
     const s = this.state(input.sessionKey);
-    if (input.source === "channel") {
-      input.outputTags = parseHashtags(input.text);
-      input.completionAnchor = { id: randomUUID(), task: input.text, receivedAt: this.now(), outputTags: input.outputTags,
-        hashtagSelection: selectHashtagContext(s.key, input.outputTags, s.hashtags ?? []) };
-    }
+    if (input.source === "channel") await this.prepareTopic(input);
     // API runs answer to the run itself, never become the session's conversation address.
     if (input.replyTo && input.source !== "api" && input.source !== "host") s.replyTo = input.replyTo;
     s.lastActivity = this.now();
@@ -1307,10 +1324,18 @@ export class Harness {
    * Enqueue without command parsing (used by commands, cron, tick). Replayable inputs
    * (cron, API, …) only start once they are in the saved inbox; ticks are ephemeral.
    */
+  /** Host command expansion: assign metadata without parsing the expanded text as another command. */
+  async enqueueChannel(input: Inbound, retainAssignment = false): Promise<void> {
+    if (input.source === "channel" && retainAssignment) this.labeledInputs.add(input);
+    else if (input.source === "channel") await this.prepareTopic(input);
+    this.enqueue(input);
+  }
+
   enqueue(input: Inbound): void {
-    if (input.source === "channel") {
+    if (input.source === "channel" && !this.labeledInputs.has(input)) {
+      if (this.opts.topicLabeler) throw Error("Channel topic assignment requires async accept/submit");
       input.outputTags = parseHashtags(input.text);
-      input.completionAnchor ??= { id: randomUUID(), task: input.text, receivedAt: this.now(), outputTags: input.outputTags,
+      input.completionAnchor = { id: randomUUID(), task: input.text, receivedAt: this.now(), outputTags: input.outputTags,
         hashtagSelection: selectHashtagContext(input.sessionKey, input.outputTags, this.state(input.sessionKey).hashtags ?? []) };
     }
     if (this.updateFenced) throw Error("update admission; retry input");
@@ -2007,7 +2032,7 @@ export class Harness {
           s.prompted = input;
           if (input.source === "channel" && !(input.continuationDepth ?? 0) && session.archiveEntries) {
             const { hashtagReferences } = await import("./hashtags.js");
-            const refs = hashtagReferences(session.status().sessionId, input.text, session.archiveEntries(), new Date(this.now()).toISOString(), previousMessageIds);
+            const refs = hashtagReferences(session.status().sessionId, input.text, session.archiveEntries(), new Date(this.now()).toISOString(), previousMessageIds, input.completionAnchor?.outputTags);
             const index = s.hashtags ??= [];
             for (const ref of refs) if (!index.some(old => old.tag === ref.tag && old.sessionId === ref.sessionId && old.messageId === ref.messageId)) index.push(ref);
           }
