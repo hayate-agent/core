@@ -1,5 +1,7 @@
 import type { AssessmentBackend } from "./assessment-backend.js";
 
+export class AmbiguousTopicError extends Error {}
+
 export interface TopicCandidate { id: string; text: string; tags: string[] }
 export type TopicLabeler = (text: string, candidates: TopicCandidate[]) => Promise<string[]>;
 
@@ -20,7 +22,7 @@ ${JSON.stringify({ incoming: text.slice(0, 8000), candidates })}`;
       ]);
       if (raw.length > 2000) throw Error("invalid response");
       const result = JSON.parse(raw);
-      if (result?.ambiguous === true) throw Error("ambiguous topic");
+      if (result?.ambiguous === true) throw new AmbiguousTopicError("ambiguous topic");
       const selected = candidates.find(c => c.id === result?.topic);
       if (result?.topic !== null && !selected) throw Error("invalid topic");
       if (!Array.isArray(result.tags) || result.tags.length > 3 ||
@@ -29,10 +31,11 @@ ${JSON.stringify({ incoming: text.slice(0, 8000), candidates })}`;
       if (!tags.length) throw Error("empty tags");
       return tags;
     } catch (error) {
+      if (error instanceof AmbiguousTopicError) throw error;
       // Do not disclose provider output/errors, which can contain private data.
       const reason = error instanceof Error && ["timeout", "ambiguous topic", "invalid topic", "invalid tags", "empty tags", "invalid response"].includes(error.message)
         ? error.message : "service unavailable or invalid response";
-      throw Error(`Automatic topic labels: ${reason}; input not accepted, retry required`);
+      throw Error(`Automatic topic labels: ${reason}; automatic retry pending`);
     } finally { clearTimeout(timer); }
   };
 }

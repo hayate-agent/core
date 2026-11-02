@@ -43,14 +43,17 @@ fallback) to generate 1–3 reusable semantic topic slugs. Up to 16 tagged retai
 tasks from this conversation supply bounded topic evidence (2,000 characters each;
 incoming text 8,000 characters). An unambiguous semantic match reuses all original
 umbrella tags and may add a specific tag. Candidate order is not topic ownership;
-ambiguous follow-ups are rejected rather than attached to the latest room topic.
+ambiguous follow-ups receive a narrow clarification question rather than being
+attached to the latest room topic. They are not executed or retried as outages.
 This selects labels only, never a mandate, permissions or continuation authority.
 
-The call is bounded to 10 seconds with advisory cancellation. Outage, malformed
-output and ambiguity produce an explicit admission error and diagnostic log;
-input is not acknowledged and can be retried. Explicit tags and control commands
-remain usable without the service. Accepted inbox replay and duplicate upstream
-IDs do not call the model again. Embedders must supply `topicLabeler` to opt in;
+The message and stable identity enter the durable inbox before the call, which is
+bounded to 10 seconds with advisory cancellation. Outage or malformed output holds
+the work without executing it unlabeled. The existing inbox tick retries with
+persisted exponential backoff (15 seconds to 5 minutes), including after restart;
+no operator resend is required. A successful assignment is saved before execution
+and reused on replay; duplicate upstream IDs never create another assignment.
+Explicit tags and control commands remain usable without the service. Embedders must supply `topicLabeler` to opt in;
 with it, channel callers use async `accept`/`submit`, not synchronous `enqueue`.
 Legacy/scheduled/worker/API inputs are not classified or backfilled.
 
