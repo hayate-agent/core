@@ -178,6 +178,8 @@ export interface AgentRuntime {
   /** Local availability/capability check only; never a provider prompt. */
   modelPreflight?(ref: string, thinking?: string): Promise<{ available: boolean; thinkingSupported: boolean }>;
   /** Isolated bounded HTTP classifier; no agent session or productive-worker replay. */
+  forReviewWorktree?(cwd: string): AgentRuntime;
+  reviewCodeHttp?(prompt: string, assessment: import("./builtin-plugins/review-executor.js").ReviewHttpContext, executionId: string, signal: AbortSignal): Promise<string>;
   classifyComplexityHttp?(assessment: import("./classifier-http.js").ClassifierAssessment): Promise<import("./model-roles.js").Complexity | undefined>;
   readonly name: string;
   open(sessionKey: string, options?: OpenSessionOptions): Promise<RuntimeSession>;

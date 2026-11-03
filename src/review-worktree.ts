@@ -55,10 +55,13 @@ export async function handoverWorktreeReview(runtime: AgentRuntime, request: Rev
     // Caller still owns final changeset revalidation; reject obvious snapshot drift.
     if ((await git(["rev-parse", "HEAD"])).trim() !== head || await git(["diff", "--binary", "HEAD"]) !== diff) throw Error("Candidate changed during handover");
     const id = `review-handover:${randomUUID()}`;
-    const session = await runtime.open(id, { ephemeral: true });
+    if (!runtime.forReviewWorktree) throw Error("Runtime cannot isolate review worktree");
+    const isolated = runtime.forReviewWorktree(worktree);
+    const session = await isolated.open(id, { ephemeral: true });
+    const controller = new AbortController();
     let timedOut = false;
     let aborting: Promise<void> | undefined;
-    const abort = () => { aborting ??= Promise.resolve().then(() => session.abort()).catch(() => {}); };
+    const abort = () => { controller.abort(); aborting ??= Promise.resolve().then(() => session.abort()).catch(() => {}); };
     const timer = setTimeout(() => { timedOut = true; abort(); }, 120000);
     timer.unref?.();
     request.signal?.addEventListener("abort", abort, { once: true });
@@ -66,7 +69,12 @@ export async function handoverWorktreeReview(runtime: AgentRuntime, request: Rev
       if (!session.seedHandover) throw Error("Runtime cannot seed dedicated review handover");
       await session.seedHandover(`Dedicated read-only review. Fresh isolated candidate snapshot: ${worktree}. Original parent: ${request.sessionKey}. Candidate fingerprint: ${request.fingerprint}. No working tools, no new authority, no budget reset. Review the supplied changeset, not prior self-assessments.`);
       if (request.signal?.aborted) throw Error("Review cancelled");
-      const result = await session.prompt(request.prompt, { model: request.model, thinking: request.thinking });
+      const result = request.httpAssessment
+        ? await (async () => {
+          if (!isolated.reviewCodeHttp) throw Error("Dedicated HTTP review unavailable");
+          return isolated.reviewCodeHttp(request.prompt, request.httpAssessment!, id, controller.signal);
+        })()
+        : await session.prompt(request.prompt, { model: request.model, thinking: request.thinking });
       if (request.signal?.aborted || timedOut) throw Error("Review cancelled or timed out");
       return { kind: "handover-worktree", executionId: id, isolated: true, fingerprint: request.fingerprint, result };
     } finally {
