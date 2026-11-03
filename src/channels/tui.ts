@@ -48,6 +48,7 @@ export class HarnessTuiChannel implements Channel {
   private partial = "";
   private working = false;
   private execution?: ExecutionMetadata;
+  private classifiers = new Map<string, { target: string; label: string }>();
   private pendingSubmissions = 0;
   private startedAt = 0;
   private finishedAt = 0;
@@ -318,12 +319,22 @@ export class HarnessTuiChannel implements Channel {
         panelLines.push(...lines.slice(0, 4 - panelLines.length).map((s) => s.slice(0, 500).replace(/[\x00-\x1f\x7f-\x9f]/g, " ")));
       } catch { panelLines.push(`[${panel.name}] panel unavailable`); }
     }
+    panelLines.push(...[...this.classifiers.values()].filter(row => row.target === this.address.target).slice(-2).map(row => row.label));
     this.panelText.setText(panelLines.join("\n"));
     this.header.setText(`Hayate Agent · ${this.opts.agent}\n${this.opts.status()}${this.opts.sessions?.current ? `\nSession: ${this.opts.sessions.current.id} · ${this.opts.sessions.current.title} · ${this.opts.sessions.workspace}` : ""}`);
     // Stream into the scrollable conversation, leaving the status area compact.
     this.transcript.setEntries([...this.lines, ...(this.partial ? [{ kind: "assistant" as const, text: this.partial }] : [])], this.color);
     if (!this.dialog) this.activity.setText(tint(this.routineStatus || this.activityLabel(), this.outcome === "failed" || this.failedTools ? "31" : this.working || this.opts.workState?.().running || this.outcome === "cancelled" ? "33" : this.startedAt ? "32" : "2", this.color));
     this.tui.requestRender();
+  }
+
+  taskActivity(to: Address, event: import("../activity.js").ActivityEvent): void {
+    if (this.opts.sessions && to.target !== this.sessionKey) return;
+    const s = event.snapshot;
+    if (s.role !== "dispatcher-classifier") return;
+    this.classifiers.set(s.id, { target: to.target, label: `Dispatcher classifier · ${s.parent ?? "task"} · ${s.phase} · ${executionLabel(s.execution)}` });
+    while (this.classifiers.size > 16) this.classifiers.delete(this.classifiers.keys().next().value!);
+    this.render();
   }
 
   turnEvent(_to: Address, event: TurnEvent): void {

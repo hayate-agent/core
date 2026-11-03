@@ -16,7 +16,7 @@ test("selection display is bounded, plain and explicitly unknown", () => {
 });
 
 test("Main and Worker activity retain selection independently of usage and stop after finish", () => {
-  for (const role of ["main", "worker"] as const) {
+  for (const role of ["main", "worker", "dispatcher-classifier"] as const) {
     const events: ActivityEvent[] = [];
     const activity = new TurnActivity({ id: role, role, context: "operator" }, e => events.push(e));
     assert.equal(events[0].snapshot.execution, undefined);
@@ -37,14 +37,19 @@ test("worker observation persists on restart, is token scoped, and a new claim c
     const task = await store.submit("parent", "request", "task", "direct");
     const running = await store.claim(task.id);
     await store.observeExecution(task.id, running.token!, { model: "p/b", thinking: "off" });
+    await store.observeClassifier(task.id, running.token!, { model: "p/wanted", thinking: "high" }, { model: "p/inherited", thinking: "off" });
+    await assert.rejects(store.observeClassifier(task.id, "stale", { model: "bad" }));
     await assert.rejects(store.observeExecution(task.id, "stale", { model: "bad" }));
     const fresh = new ExecutionStore(file); await fresh.load();
     assert.deepEqual(fresh.list("parent")[0].execution, { model: "p/b", thinking: "off" });
+    assert.deepEqual(fresh.list()[0].classifier, { requested: { model: "p/wanted", thinking: "high" }, actual: { model: "p/inherited", thinking: "off" } });
     await fresh.control(task.id, "pause");
+    await assert.rejects(fresh.observeClassifier(task.id, running.token!, { model: "bad" }));
     await assert.rejects(fresh.observeExecution(task.id, running.token!, { model: "bad" }));
     await fresh.control(task.id, "resume");
     const next = await fresh.claim(task.id);
     assert.equal(next.execution, undefined);
+    assert.equal(next.classifier, undefined);
     await assert.rejects(fresh.observeExecution(task.id, running.token!, { model: "bad" }));
   } finally { await rm(dir, { recursive: true, force: true }); }
 });

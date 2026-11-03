@@ -1,4 +1,5 @@
 import { classifyComplexity, resolveModelRole, type ModelRoles, type ModelPair } from "./model-roles.js";
+import { TurnActivity } from "./activity.js";
 import { labelOutput } from "./hashtags.js";
 import { ExecutionWorkerFailure, type ExecutionEvent } from "./execution.js";
 import { ToolGuardError } from "./tool-guard-error.js";
@@ -80,7 +81,27 @@ export class DispatcherRuntime {
           const snapshot = this.roleSettings?.();
           if (snapshot?.config?.enabled) {
             const dispatcher = await resolveModelRole(this.harness.runtime, snapshot.config, "dispatcher", snapshot.defaults);
-            const complexity = await classifyComplexity(this.harness.runtime, task.input, dispatcher, context.signal);
+            const requested = snapshot.config.roles?.dispatcher ?? snapshot.defaults;
+            await this.store.observeClassifier(task.id, task.token!, requested);
+            const parent = this.harness.sessions.get(task.parent);
+            const target = parent?.replyTo ?? this.harness.home;
+            const activity = new TurnActivity({ id: `classifier-${task.id}-${task.token}`, role: "dispatcher-classifier",
+              parent: `task-${task.id.slice(0, 8)}`, context: "host", outputTags: task.dependency?.anchor?.outputTags }, event => {
+              if (target) this.harness.channels.get(target.channel)?.taskActivity?.(target, event, {
+                sessionKey: task.parent, source: "host", text: "", replyTo: target,
+              });
+            });
+            let observed = Promise.resolve();
+            let complexity: Awaited<ReturnType<typeof classifyComplexity>> = undefined;
+            try {
+              complexity = await classifyComplexity(this.harness.runtime, task.input, dispatcher, context.signal, 15000, event => {
+                activity.event(event);
+                if (event.type === "execution") observed = observed.then(() => this.store.observeClassifier(task.id, task.token!, requested, event.selection)).catch(() => {});
+              });
+            } finally {
+              await observed;
+              activity.finish(context.signal.aborted ? "cancelled" : complexity ? "completed" : "failed");
+            }
             selected = complexity ? await resolveModelRole(this.harness.runtime, snapshot.config, complexity, snapshot.defaults) : {};
           }
         }
