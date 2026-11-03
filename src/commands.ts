@@ -2,6 +2,7 @@
  * Hermes-compatible slash commands (gateway-relevant subset; TUI-only commands are left out).
  * Names and aliases follow hermes_cli/commands.py so operators can keep their habits.
  */
+import { validateModelRoles } from "./model-roles.js";
 import type { PluginCommand, PluginUI } from "./plugins.js";
 import { developmentGuide } from "./development.js";
 import { randomUUID } from "node:crypto";
@@ -21,6 +22,7 @@ export interface CommandContext {
     source?: (key: import("./model-settings.js").ModelSetting) => string;
     set: (key: import("./model-settings.js").ModelSetting, value?: string) => Promise<void>;
   };
+  modelRoles?: { get(): import("./model-roles.js").ModelRoles | undefined; set(value: import("./model-roles.js").ModelRoles | undefined): Promise<void> };
   scheduler?: Scheduler;
   updater?: import("./update.js").OverlayUpdater;
   /** Mutable approval settings shared with the runtime. */
@@ -128,6 +130,28 @@ function recurringCommand(kind: "heartbeat" | "loop"): Command["run"] {
 }
 
 export const COMMANDS: Command[] = [
+  {
+    name: "model-roles", admin: true, help: "Inspect or configure persistent model roles",
+    run: async (args, input, ctx) => {
+      // Unlike historical openAdmin commands, this surface is never public.
+      if (input.source !== "channel" || !(input.replyTo?.channel === "console" || (!!input.sender && ctx.admins.includes(input.sender)))) return "⛔ authenticated admin only";
+      if (!ctx.modelRoles) throw Error("Model roles unavailable");
+      const { modelRoleNames } = await import("./model-roles.js");
+      const parts = args.trim().split(/\s+/);
+      const [op, role, model, thinking] = parts;
+      if (!args.trim() || op === "show") return JSON.stringify(ctx.modelRoles.get() ?? { enabled: false });
+      let value = structuredClone(ctx.modelRoles.get() ?? { enabled: false });
+      if ((op === "enable" || op === "disable") && parts.length === 1) value.enabled = op === "enable";
+      else if (op === "reset" && parts.length === 1) { await ctx.modelRoles.set(undefined); return "model roles reset (next route)"; }
+      else if (op === "set" && (parts.length === 3 || parts.length === 4) && modelRoleNames.includes(role as any)) {
+        value.roles ??= {}; value.roles[role as import("./model-roles.js").ModelRole] = { model, ...(thinking ? { thinking } : {}) };
+      } else if (op === "reset" && parts.length === 2 && modelRoleNames.includes(role as any)) delete value.roles?.[role as import("./model-roles.js").ModelRole];
+      else return "usage: /model-roles [show|enable|disable|set <role> <provider/model> [thinking]|reset [role]]";
+      validateModelRoles(value);
+      await ctx.modelRoles.set(value);
+      return "model roles saved (next route; active turns unchanged)";
+    },
+  },
   {
     name: "task-budget", admin: true,
     help: "inspect|reset|resume|reset-resume <session-key> <task-id> [<token> <request-id>] (authenticated operator only)",

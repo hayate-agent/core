@@ -43,7 +43,7 @@ export interface Execution {
   question?: { id: string; text: string; answer?: string };
   /** Parent stop permanently revokes result delivery as well as execution. */
   parentStopped?: boolean;
-  intent?: { key: string; replay: "safe" | "unsafe"; result?: string };
+  intent?: { key: string; replay: "safe" | "unsafe"; result?: string; route?: import("./model-roles.js").ModelPair };
   /** Last committed effect outcome, retained across the completion commit gap. */
   settledEffect?: { key: string; result: string };
 }
@@ -353,12 +353,15 @@ export class ExecutionStore {
       task.recoverySession = key;
     });
   }
-  intent(id: string, token: string, key: string, replay: "safe" | "unsafe"): Promise<void> {
+  intent(id: string, token: string, key: string, replay: "safe" | "unsafe", route?: import("./model-roles.js").ModelPair): Promise<void> {
+    if (route !== undefined && (!route || typeof route !== "object" || Array.isArray(route) || Object.keys(route).some(k => !["model", "thinking"].includes(k)) ||
+        (route.model !== undefined && (typeof route.model !== "string" || route.model.length > 200)) ||
+        (route.thinking !== undefined && (typeof route.thinking !== "string" || route.thinking.length > 40)))) throw Error("Invalid selected route");
     return this.mutate(draft => {
       if (typeof key !== "string" || !key.trim() || !["safe", "unsafe"].includes(replay)) throw Error("Invalid effect intent");
       const task = this.owned(draft, id, token);
       if (task.intent) throw Error("Resolve previous effect intent first");
-      task.intent = { key, replay };
+      task.intent = { key, replay, ...(route ? { route: structuredClone(route) } : {}) };
     });
   }
   settleIntent(id: string, token: string, key: string, result: string, checkpoint: string): Promise<void> {

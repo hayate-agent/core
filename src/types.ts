@@ -160,6 +160,8 @@ export interface RuntimeSession {
 export interface OpenSessionOptions {
   /** Ephemeral reviewer session: no persisted transcript or third-party resources. */
   ephemeral?: boolean;
+  /** Host enum only, never task-supplied instructions. Requires ephemeral. */
+  assessmentPurpose?: "code-review" | "supervisor" | "dispatch-complexity";
   /** Start a fresh conversation instead of resuming the stored one. */
   fresh?: boolean;
   sessionId?: string;
@@ -173,6 +175,8 @@ export interface LoginUI {
 
 /** Agent runtime (currently PI). */
 export interface AgentRuntime {
+  /** Local availability/capability check only; never a provider prompt. */
+  modelPreflight?(ref: string, thinking?: string): Promise<{ available: boolean; thinkingSupported: boolean }>;
   readonly name: string;
   open(sessionKey: string, options?: OpenSessionOptions): Promise<RuntimeSession>;
   /** Model refs ("provider/model") usable for per-turn overrides. */
