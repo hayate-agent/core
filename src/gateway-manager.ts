@@ -12,6 +12,20 @@ export class GatewayManager {
   private readonly pending = new Map<string, { instance?: GatewayInstance; label: string; spec?: GatewayOverride }>();
   private readonly errors = new Map<string, string>();
   private changing = false;
+  private preparing = 0;
+  private readonly supported = new WeakSet<GatewayInstance>();
+  // replaceGateway can restore the old channel after failed candidate cleanup.
+  // Its rejection cannot prove that all candidate resources have stopped.
+  private uncertainCleanup = false;
+  updateBlockers(): string[] {
+    const blockers: string[] = [];
+    if (this.uncertainCleanup) blockers.push("gateway cleanup unverified; runtime owner reconciliation required");
+    if (this.preparing || this.changing || this.pending.size) blockers.push("gateway transition");
+    for (const [name, instance] of this.active) {
+      if (!this.supported.has(instance)) blockers.push(`unsupported update owner: gateway ${name}`);
+    }
+    return blockers;
+  }
   private adoptedHome?: import("./types.js").Address;
   /** Only replace a default we adopted ourselves; explicit operator routes win. */
   private reconcileHome(): void {
@@ -35,6 +49,7 @@ export class GatewayManager {
     if (module?.apiVersion !== 1 || typeof module.create !== "function") throw Error("Unsupported gateway module");
     const instance = await module.create(this.context);
     if (instance && (instance.channel?.name !== name || typeof instance.channel.start !== "function" || typeof instance.channel.stop !== "function" || typeof instance.channel.send !== "function")) throw Error("Invalid gateway instance");
+    if (instance && (!override?.module || module.updateAdmission === "foreground-owned")) this.supported.add(instance);
     return instance;
   }
   async load(): Promise<void> {
@@ -54,6 +69,7 @@ export class GatewayManager {
     this.errors.delete(name);
     // Prepare without touching the running adapter. Modules must not start receiving in create().
     let instance: GatewayInstance | undefined;
+    this.preparing++;
     try {
       instance = await this.prepare(name);
     } catch (error) {
@@ -61,7 +77,7 @@ export class GatewayManager {
         this.errors.set(name, "Preparation failed; running gateway unchanged by this request");
       }
       throw error;
-    }
+    } finally { this.preparing--; }
     if (this.generations.get(name) !== generation) return;
     this.pending.set(name, { instance, label: spec?.module ?? "baseline", spec });
   }
@@ -88,6 +104,7 @@ export class GatewayManager {
         } catch (err) {
           const message = (err as Error).message;
           if (message.includes("idle turn boundary")) continue;
+          this.uncertainCleanup = true;
           if (this.pending.get(name) === change) this.pending.delete(name);
           if (this.generations.get(name) === generation) {
             this.errors.set(name, "Activation failed; inspect local logs and previous gateway health");

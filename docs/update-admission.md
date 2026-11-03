@@ -51,7 +51,30 @@ startup PluginModule owners may explicitly declare
 turns/tools or ingress; remaining resources must have ordered `onStop` cleanup.
 This is a trusted-owner assertion, not a sandbox or inferred safety guarantee.
 Legacy external plugins remain usable but make update admission unavailable with
-an owner reason. Independently loaded custom gateway/policy/extension/reloadable
-tool modules currently lack that contract and return explicit unavailable reasons;
-this does not disable supported core-only admission. No live configuration or
+an owner reason. Trusted custom gateway factories may likewise declare
+`updateAdmission: "foreground-owned"` on their GatewayModule. Construction must
+be inert, every producer/delivery must use host-owned ingress/outbox work, and
+Channel.stop must abort and drain remaining sync/retry/crypto resources. The host
+tracks the actual active instance (not desired settings); preparation and pending
+or running replacement block admission. A failed activation after attempted
+replacement leaves an irreversible process-local cleanup uncertainty blocker:
+restoring an old channel does not prove candidate resources were stopped. No
+settings change clears this blocker; runtime-owner reconciliation is required.
+Legacy factories remain unsupported.
+This assertion is not an audit or a sandbox. Policy/extension/reloadable tool
+modules still lack this contract and return explicit unavailable reasons;
+this does not disable supported core-only admission.
+
+The shipped `docs/gateways/matrix-recovery.mjs` is the managed version of the
+20261026 recovery gateway. It preserves both bounded Matrix429 retry/backoff and
+review audit-summary compaction; it inherits native Matrix stop/ingress/outbox
+ownership. Use its absolute installed path `/opt/hayate-agent/docs/gateways/matrix-recovery.mjs`
+in gatewayPlugins.matrix.module through the normal reviewed configuration owner.
+Do not copy it into an old install to claim old-process admission: old CLI code
+unconditionally rejects any custom gateway. Its closure cannot be hot-patched by
+reloading a module. Transitioning such an original process requires the existing
+runtime owner's separately authorized bootstrap/maintenance route; a release or
+GET idle is not permission to stop. Never remove the custom gateway simply to
+manufacture admission. This change supplies the contract for the next boot, not
+an override endpoint or an old-process lease. No live configuration or
 credentials are changed by this feature.

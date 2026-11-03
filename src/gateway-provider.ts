@@ -15,6 +15,9 @@ export interface GatewayFactoryContext {
 }
 export interface GatewayModule {
   apiVersion: 1;
+  /** Trusted assertion: create is inert, all work is host-owned ingress/delivery,
+   * and Channel.stop drains every remaining resource. Not a sandbox. */
+  updateAdmission?: "foreground-owned";
   create(context: GatewayFactoryContext): Promise<GatewayInstance | undefined>;
 }
 export interface GatewayOverride { module?: string; disabled?: boolean }
