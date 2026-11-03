@@ -1,3 +1,4 @@
+import { executionMetadata } from "../builtin-plugins/execution-metadata.js";
 /**
  * PI runtime adapter. The only module that imports the PI SDK.
  */
@@ -264,6 +265,11 @@ export class PiSession implements RuntimeSession {
       // Aborted while setting up: nothing has run yet, so nothing runs.
       if (turn.aborted) return "";
       options.beforeExecution?.();
+      // Observe PI after override + SDK clamp, never requested options or restored defaults.
+      try { onEvent?.({ type: "execution", selection: executionMetadata({
+        model: this.session.model ? `${this.session.model.provider}/${this.session.model.id}` : undefined,
+        thinking: this.session.thinkingLevel,
+      }) }); } catch { /* Telemetry cannot fail execution. */ }
       await this.session.prompt(text, { source: "rpc" });
       await this.session.waitForIdle();
     } finally {

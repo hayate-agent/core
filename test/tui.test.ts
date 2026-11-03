@@ -23,6 +23,21 @@ function terminal() {
   return { t, type: (s: string) => { for (const ch of s) input(ch); }, send: (s: string) => input(s), output: () => output };
 }
 
+test("TUI shows observed selection rather than configured defaults and resets next turn", async () => {
+  const term = terminal(); term.t.columns = 220;
+  const channel = new HarnessTuiChannel({ agent: "test", status: () => "running", model: () => "configured/default", quit: () => {}, terminal: term.t });
+  await channel.start(async () => {});
+  try {
+    await channel.typing({ channel: "tui", target: "main" }, true);
+    assert.match((channel as any).activityLabel(), /unknown\/pending/);
+    channel.turnEvent({ channel: "tui", target: "main" }, { type: "execution", selection: { model: "actual/worker", thinking: "off" } });
+    assert.match((channel as any).activityLabel(), /model actual\/worker · reasoning off/);
+    await channel.typing({ channel: "tui", target: "main" }, true);
+    assert.match((channel as any).activityLabel(), /unknown\/pending/);
+    assert.doesNotMatch((channel as any).activityLabel(), /actual\/worker/);
+  } finally { await channel.stop(); }
+});
+
 test("plugin UI supports input, selection, custom keyboard widgets and abort", async () => {
   const term = terminal();
   const channel = new HarnessTuiChannel({ agent: "test", status: () => "running", quit: () => {}, terminal: term.t });

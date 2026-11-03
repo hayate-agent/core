@@ -118,6 +118,13 @@ export class DispatcherRuntime {
   };
   readonly channel: Channel = {
     name: "dispatch", start: async () => {}, stop: async () => {},
+    turnEvent: (to, event, input) => {
+      if (event.type !== "execution" || input?.sessionKey !== `dispatch:${to.target}`) return;
+      const task = this.taskForSession(input.sessionKey);
+      if (task?.status === "running" && task.token && !task.parentStopped) {
+        void this.store.observeExecution(task.id, task.token, event.selection).catch(() => {});
+      }
+    },
     taskActivity: (to, event, input) => {
       const sessionKey = `dispatch:${to.target}`;
       const task = this.taskForSession(sessionKey);

@@ -1,4 +1,5 @@
 import { Editor, Input, SelectList, ProcessTerminal, Text, TuiAltScreen, VStack, ScrollView, matchesKey, truncateToWidth, type Component, type Terminal } from "@earendil-works/pi-tui";
+import { executionLabel, executionMetadata, type ExecutionMetadata } from "../builtin-plugins/execution-metadata.js";
 import { ConversationTranscript } from "./transcript.js";
 import { tint, type TranscriptEntry, type MessageKind } from "./presentation.js";
 import type { LocalSessions } from "../local-sessions.js";
@@ -46,6 +47,7 @@ export class HarnessTuiChannel implements Channel {
   private get color(): boolean { return this.opts.color ?? (process.env.NO_COLOR === undefined && process.env.TERM !== "dumb"); }
   private partial = "";
   private working = false;
+  private execution?: ExecutionMetadata;
   private pendingSubmissions = 0;
   private startedAt = 0;
   private finishedAt = 0;
@@ -258,6 +260,7 @@ export class HarnessTuiChannel implements Channel {
   private resetActivity(): void {
     this.routineStatus = "";
     this.partial = "";
+    this.execution = undefined;
     this.working = false;
     this.startedAt = 0;
     this.finishedAt = 0;
@@ -297,7 +300,7 @@ export class HarnessTuiChannel implements Channel {
       const tools = [...this.activeTools].map(([name, count]) => `${name}${count > 1 ? ` ×${count}` : ""}`);
       const phase = tools.length ? `Running: ${tools.slice(0, 2).join(", ")}${tools.length > 2 ? ` (+${tools.length - 2})` : ""}`
         : this.partial ? "Writing response" : "Working · waiting for model/SDK";
-      return `${spinner} ${phase} · ${elapsed}s${counts}${queue} · /stop`;
+      return `${spinner} ${phase} · ${elapsed}s${counts}${queue} · ${executionLabel(this.execution)} · /stop`;
     }
     if (this.pendingSubmissions || queued) return `◌ Processing input${queue}`;
     if (this.startedAt) return `${this.outcome === "failed" ? "✕ Failed" : this.outcome === "cancelled" ? "■ Cancelled" : this.failedTools ? "⚠ Completed with tool errors" : "✓ Done"} · ${elapsed}s${counts}`;
@@ -325,6 +328,7 @@ export class HarnessTuiChannel implements Channel {
 
   turnEvent(_to: Address, event: TurnEvent): void {
     if (this.opts.sessions && _to.target !== this.sessionKey) return;
+    if (event.type === "execution") this.execution = executionMetadata(event.selection);
     if (event.type === "text") this.partial += event.delta;
     if (event.type === "tool") {
       const count = this.activeTools.get(event.name) ?? 0;
