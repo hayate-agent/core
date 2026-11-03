@@ -42,8 +42,11 @@ If unset, they do not mask inherited YAML settings.
 - MATRIX_PROGRESS=off: typing indicator only.
 - MATRIX_PROGRESS=reduced: tool starts/ends without arguments/results; active tools
   emit a truthful elapsed-time heartbeat every 15 seconds, including long reviews.
-- MATRIX_PROGRESS=full: tool starts/ends, bounded arguments/results. No private
-  model reasoning is exported. Final assistant text uses the normal durable reply.
+- MATRIX_PROGRESS=full: tool starts/ends, bounded arguments/results. Direct MCP
+  server tools (`mcp__*`) and MCP resource helpers never include arguments/results;
+  only their names and status are shown. This does not inspect nested calls through
+  general-purpose tools such as codemode; use reduced mode to hide all tool payloads.
+  No private model reasoning is exported. Final assistant text uses the normal durable reply.
 - MATRIX_STATUS_REACTIONS=true: 📥 after durable receipt (including queued messages), 👀 at turn start; ✅ when processing completes,
   ❌ on failure, ⏹️ on cancellation. Default false. For batched inputs each original
   message is annotated. Obsolete receipt/start reactions are redacted when the
