@@ -160,7 +160,13 @@ test('unassessed twentieth proposal is blocked and cannot masquerade as host bud
     assert.equal(status.task.depth, 20);
     assert.equal(status.task.termination, 'productive_budget_exhausted');
     const reset = h.controlTaskBudget(key, 'a', 'reset', status.token, 'twenty', 'owner');
-    await assert.rejects(reset, /not host budget-blocked/);
+    if (state === 'continue') await assert.rejects(reset, /not host budget-blocked/);
+    else {
+      // An unassessed model blocker is no longer terminal proof. The host,
+      // not that self-claim, seals the actually exhausted repetition budget.
+      await reset;
+      assert.equal(h.taskBudgetStatus(key, 'a').task.original, 'work');
+    }
   }
 });
 
