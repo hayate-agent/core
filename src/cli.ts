@@ -351,6 +351,7 @@ async function main(argv: string[]): Promise<void> {
   plugins.policies.require(reviewEngine.required);
   for (const policy of reviewEngine.policies) plugins.policies.register(policy);
   let improvement: ImprovementController | undefined;
+  let gatewayManager: GatewayManager | undefined;
 
   harness = new Harness({
     updateBlockers: () => {
@@ -362,7 +363,7 @@ async function main(argv: string[]): Promise<void> {
       if (config.reloadableToolPlugins?.length) blockers.push("unsupported update owner: reloadable tool modules");
       if (Object.values(effective.extensionPlugins ?? {}).some(spec => spec.module && !spec.disabled)) blockers.push("unsupported update owner: runtime extension modules");
       if (Object.values(effective.policyPlugins ?? {}).some(spec => spec.module && !spec.disabled)) blockers.push("unsupported update owner: policy modules");
-      if (Object.values(effective.gatewayPlugins ?? {}).some(spec => spec.module && !spec.disabled)) blockers.push("unsupported update owner: custom gateway modules");
+      blockers.push(...(gatewayManager?.updateBlockers() ?? ["gateway startup"]));
       return blockers;
     },
     runtime,
@@ -428,7 +429,7 @@ async function main(argv: string[]): Promise<void> {
       appendFileDurable(path.join(config.home, "outbox-deadletter.jsonl"), `${JSON.stringify({ at: new Date().toISOString(), error, ...entry })}\n`),
   });
   harness.home = config.home_address;
-  const gatewayManager = new GatewayManager(harness, settings, {
+  gatewayManager = new GatewayManager(harness, settings, {
     home: config.home, agent: config.agent, approvers: config.approvers, admins: config.admins,
   }, bundledGatewayModules());
   await gatewayManager.load();
