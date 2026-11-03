@@ -60,13 +60,15 @@ export interface DurableTask {
   supervisorDecision?: { proposal?: "continue" | "waiting" | "blocked" | "completed";
     verdict: "continue" | "waiting" | "blocked" | "completed" | "unresolved";
     diagnostic?: import("./completion-check.js").CompletionDiagnostic;
-    /** Mechanical, non-executable reconciliation receipt. Never an admission. */
+    /** One-shot assessment receipt. Only recoveryAdmission grants execution. */
     dependencyHold?: { evidence: string; reason: "assessment-claimed" | "global-hold" | "independent-next-proposed";
       next?: string } };
   /** Bounded untrusted task evidence, persisted independently of recent chat. */
   completionObservations?: import("./session-archive.js").ArchiveEntry[];
   /** Persisted host admission; inference dedup is not an execution permit. */
-  recoveryAdmission?: { id: string; depth: number; next: string; original: string; expiresAt?: number };
+  recoveryAdmission?: { id: string; depth: number; next: string; original: string; expiresAt?: number;
+    /** Scheduler permission for this parent step only, never worker replay authority. */
+    independent?: { evidence: string; taskId: string; sessionKey: string } };
   recoveryAttentionId?: string;
   /** Persist before inference; legacy claims without retry metadata remain fail-closed. */
   recoveryAssessment?: "claimed" | "decided";
@@ -724,8 +726,21 @@ export class Harness {
 
   private hasPendingDependency(key: string, taskId?: string): boolean {
     const store = this.opts.executionStore;
-    return !!store?.list(key).some(e => !["completed", "cancelled"].includes(e.status) &&
-      (!taskId || !e.dependency?.taskId || e.dependency.taskId === taskId));
+    const pending = store?.list(key).filter(e => !["completed", "cancelled"].includes(e.status) &&
+      (!taskId || !e.dependency?.taskId || e.dependency.taskId === taskId)) ?? [];
+    if (!pending.length) return false;
+    const s = this.sessions.get(key);
+    const task = taskId && s ? this.tasks(s).find(t => t.id === taskId) : undefined;
+    const admission = task?.recoveryAdmission;
+    const receipt = admission?.independent;
+    return !(task && admission && receipt && receipt.taskId === task.id && receipt.sessionKey === key &&
+      task.state === "active" && admission.id === this.taskQueueId(task, task.depth + 1) &&
+      admission.depth === task.depth + 1 && admission.next === task.next && admission.original === task.original &&
+      admission.expiresAt === task.expiresAt && !task.termination &&
+      (!task.expiresAt || task.expiresAt > this.now()) &&
+      pending.every(e => e.status === "blocked" && !e.parentStopped && e.dependency?.taskId === task.id &&
+        e.dependency.original === task.original && !(e.question && !e.question.answer)) &&
+      receipt.evidence === createHash("sha256").update(JSON.stringify(pending)).digest("hex"));
   }
 
   /** Synchronous claim: queue and checkpoint are saved together before execution. */
@@ -774,6 +789,14 @@ export class Harness {
   /** Runtime pre-execution guard: model prose is not proof of a pure wait. */
   async guardWaitTool(key: string, tool: string, args: unknown): Promise<void> {
     const input = this.sessions.get(key)?.current;
+    const independentTask = input?.taskId ? this.tasks(this.sessions.get(key)!).find(t => t.id === input.taskId) : undefined;
+    if (independentTask?.recoveryAdmission?.independent) {
+      if (!input || input.id !== independentTask.recoveryAdmission.id || this.hasPendingDependency(key, independentTask.id) ||
+          this.paused || this.stopping || independentTask.state !== "active")
+        throw new ToolGuardError("authority_revoked", "Independent parent admission no longer matches host authority");
+      if (["plugin_dispatch", "plugin_worker_tasks", "plugin_subagent", "plugin_loop"].includes(tool))
+        throw new ToolGuardError("worker_orchestration_denied", "Independent parent step cannot replay or control blocked workers");
+    }
     if (!input?.waitCheck) return;
     const assertAuthorized = () => {
       const at = this.now();
@@ -1465,7 +1488,7 @@ export class Harness {
       await this.reconcileBlockedDependency(s, task);
       const assessed = !task.recoveryAdmission;
       if (assessed) await this.assessStartupTask(s, task);
-      if (!this.tasks(s).includes(task) || (assessed && this.paused) || this.stopping || task.state !== "active" || !task.next?.trim() || !Number.isSafeInteger(task.depth) || task.depth < 0 || repetitions(task) >= 20 ||
+      if (!this.tasks(s).includes(task) || (this.paused && (assessed || task.recoveryAdmission?.independent)) || this.stopping || task.state !== "active" || !task.next?.trim() || !Number.isSafeInteger(task.depth) || task.depth < 0 || repetitions(task) >= 20 ||
           (task.expiresAt !== undefined && (!Number.isSafeInteger(task.expiresAt) || task.expiresAt <= this.now())) ||
           s.current || s.queue.length || s.key === "improvement:nightly" || this.hasPendingDependency(s.key, task.id)) continue;
       const admission = task.recoveryAdmission;
@@ -1489,10 +1512,9 @@ export class Harness {
   }
 
   /** A blocked worker is not running work, but its effects are still uncertain.
-   * Permit only the existing tool-free assessor to inspect host evidence. Never
-   * convert its proposal into a productive admission while the dependency holds.
-   * The durable claim bounds this checkpoint to once per retained mandate, even
-   * after a crash or provider outage. An operator must resolve the child itself.
+   * The tool-free supervisor can admit one independent parent step against an
+   * exact child snapshot. This does not grant worker replay permission. Persist
+   * the one-shot claim before inference, then admission before queue release.
    */
   private async reconcileBlockedDependency(s: SessionState, task: DurableTask): Promise<void> {
     const children = () => this.opts.executionStore?.list(s.key).filter(e =>
@@ -1501,7 +1523,7 @@ export class Harness {
     const eligible = () => this.tasks(s).includes(task) && ["active", "waiting", "blocked"].includes(task.state) &&
       !!task.id && !!task.original.trim() && task.original.length <= 8000 &&
       (!task.anchor || task.anchor.task === task.original) &&
-      Number.isSafeInteger(task.depth) && task.depth >= 0 && repetitions(task) < 20 &&
+      Number.isSafeInteger(task.depth) && task.depth >= 0 && repetitions(task) < 20 && !task.termination &&
       (task.expiresAt === undefined || (Number.isSafeInteger(task.expiresAt) && task.expiresAt > this.now())) &&
       !s.current && !s.queue.length && !s.running && !this.paused && !this.stopping && !this.gatewayChanging && !this.updateFenced &&
       s.key !== "improvement:nightly" && !this.stoppingHostParents.has(s.key) &&
@@ -1527,8 +1549,8 @@ export class Harness {
       let diagnostic: import("./completion-check.js").CompletionDiagnostic | undefined;
       try {
         plan = await this.opts.completionCheck(input, JSON.stringify({
-          dependencyReconciliation: "Decision checkpoint only. These blocked children remain execution-fenced. Assess whether the original mandate must globally wait or has an independent next step. A next step is a proposal, NOT permission to execute or replay. No worktree inspection has occurred; do not claim otherwise.",
-          executions: pending.map(e => ({ id: e.id, status: e.status, dependency: e.dependency,
+          dependencyReconciliation: "These blocked children remain execution-fenced: do not retry, resume, cancel, resolve or replay their tools or effects. Assess the full original mandate and recent host evidence. Return continue only with a concrete DIFFERENT independent parent step within that original authority and deadline, not work assigned to the blocked child. A valid continue admits that step once. Return blocked/waiting for a true global hold. No worktree inspection has occurred; do not claim otherwise.",
+          executions: pending.map(e => ({ id: e.id, status: e.status, input: e.input?.slice(0, 8000), dependency: e.dependency,
             recoveryReason: e.recoveryReason, diagnosticCode: e.diagnosticCode,
             intent: e.intent && { key: e.intent.key, replay: e.intent.replay, settled: e.intent.result !== undefined },
             settledEffect: e.settledEffect && { key: e.settledEffect.key }, parentStopped: e.parentStopped }))
@@ -1536,11 +1558,29 @@ export class Harness {
       } catch { diagnostic = "technical"; }
       if (!unchanged()) return;
       const next = !diagnostic && plan?.state === "continue" && typeof plan.next === "string" &&
-        plan.next.trim() && plan.next.length <= 4000 ? plan.next.trim() : undefined;
-      task.supervisorDecision = { verdict: "blocked", diagnostic,
+        plan.next.trim() && plan.next.length <= 4000 &&
+        (plan.expiresAt === undefined || (Number.isSafeInteger(plan.expiresAt) && plan.expiresAt > this.now() &&
+          (task.expiresAt === undefined || plan.expiresAt <= task.expiresAt))) ? plan.next.trim() : undefined;
+      task.supervisorDecision = { verdict: next ? "continue" : "blocked", diagnostic,
         dependencyHold: { evidence, reason: next ? "independent-next-proposed" : "global-hold", ...(next ? { next } : {}) } };
-      // Deliberately leave task state, admissions, budget and child records intact.
-      await this.onStateChange();
+      if (next) {
+        task.state = "active";
+        task.next = next;
+        task.wait = undefined;
+        task.explicitBlocked = false;
+        if (plan?.expiresAt !== undefined) task.expiresAt = plan.expiresAt;
+        task.recoveryAdmission = { id: this.taskQueueId(task, task.depth + 1), depth: task.depth + 1,
+          next, original: task.original, expiresAt: task.expiresAt,
+          independent: { evidence, taskId: task.id, sessionKey: s.key } };
+      } else this.recoveryAttention(s, task, diagnostic === "technical" ? "unavailable" : "inconclusive");
+      try { await this.onStateChange(); }
+      catch (error) {
+        // Keep the durable assessment claim, but never release an unsaved permit.
+        task.recoveryAdmission = undefined;
+        task.state = "blocked";
+        task.supervisorDecision = { verdict: "unresolved", dependencyHold: { evidence, reason: "assessment-claimed" } };
+        throw error;
+      }
     } finally { this.recoveringTasks.delete(task); }
   }
 
@@ -1690,7 +1730,7 @@ export class Harness {
   releaseRestored(): void {
     this.inbox.restored.clear();
     this.outbox.held = false;
-    for (const s of this.sessions.values()) if (s.queue.length || s.outbox.length) void this.pump(s);
+    for (const s of this.sessions.values()) if (s.queue.length || s.outbox.length || s.unsaved) void this.pump(s);
   }
 
   /** Undelivered replies, persisted with the state. */
@@ -1914,6 +1954,9 @@ export class Harness {
           input.continuation?.taskId !== undefined ? task?.wait?.deadline ?? Infinity : Infinity,
           input.continuation?.expiresAt ?? Infinity);
         if (task && task.state !== "stopped" && (task.state !== "completed" || this.settledReplies.has(input))) {
+          const independent = task.recoveryAdmission?.independent;
+          const independentValid = !!independent && !this.hasPendingDependency(s.key, task.id);
+          const dependencyDecision = task.supervisorDecision?.dependencyHold;
           task.recoveryAdmission = undefined;
           const plan = input.continuation;
           const retainedNext = task.next;
@@ -1944,9 +1987,12 @@ export class Harness {
           if (repetitions(task) >= 20 && task.state === "blocked") this.budgetAttention(s, task);
           const diagnostic = this.completionDiagnostics.get(input);
           task.supervisorDecision = this.supervisorDecisions.get(input);
+          if (dependencyDecision) task.supervisorDecision = {
+            ...(task.supervisorDecision ?? { verdict: "unresolved" }), dependencyHold: dependencyDecision };
           if (plan?.state === "continue" && task.next && task.state === "active")
             task.recoveryAdmission = { id: this.taskQueueId(task, task.depth + 1), depth: task.depth + 1,
-              next: task.next, original: task.original, expiresAt: task.expiresAt };
+              next: task.next, original: task.original, expiresAt: task.expiresAt,
+              ...(independentValid ? { independent } : {}) };
           if (!plan && task.state === "active" && (diagnostic === "inconclusive" || diagnostic === "unavailable") &&
               (task.expiresAt === undefined || task.expiresAt > this.now()) &&
               !this.paused && !this.stopping && !s.queue.length && !this.hasPendingDependency(s.key, task.id)) {
@@ -1955,7 +2001,7 @@ export class Harness {
           }
         }
         this.completionDiagnostics.delete(input);
-        if ((input.source !== "host" || this.resultMandate(input)) && input.continuation?.state === "continue" && input.continuation.next && repetitions(task ?? { depth: input.continuationDepth ?? 0 }) < 20 && input.source !== "api" && s.key !== "improvement:nightly" && !s.queue.length && !this.stopping && !this.hasPendingDependency(s.key)) {
+        if ((input.source !== "host" || this.resultMandate(input)) && input.continuation?.state === "continue" && input.continuation.next && repetitions(task ?? { depth: input.continuationDepth ?? 0 }) < 20 && input.source !== "api" && s.key !== "improvement:nightly" && !s.queue.length && !this.stopping && !this.hasPendingDependency(s.key, input.taskId)) {
           s.queue.push({ id: task?.recoveryAdmission?.id ?? randomUUID(), sessionKey: s.key, source: "cron", replyTo: input.replyTo ?? s.replyTo,
             text: `Continue the explicitly authorized task with this recorded next step. Recheck blockers and authorization; do not repeat completed side effects.\n${input.continuation.next}`,
             taskId: targetId,
@@ -2243,8 +2289,14 @@ export class Harness {
           assessmentInput.continuationExpiresAt = Math.min(target.expiresAt ?? Infinity, target.wait?.deadline ?? Infinity);
           if (assessmentInput.continuationExpiresAt === Infinity) assessmentInput.continuationExpiresAt = undefined;
         }
+        const parentAdmission = this.tasks(s).find(t => t.id === input.taskId)?.recoveryAdmission;
+        const dependencyEvidence = parentAdmission?.independent ? JSON.stringify({
+          independentParentStep: "Continue only with a DIFFERENT independent step of the original mandate. Blocked child effects must not be replayed or controlled. A model wait/blocked proposal alone is not a global hold.",
+          executions: this.opts.executionStore?.list(s.key).filter(e => e.dependency?.taskId === input.taskId)
+        }) : "";
         const assessed = await this.opts.completionCheck(assessmentInput,
-          checkpoint ? `${reply}\nProposed continuation (untrusted, not admission): ${JSON.stringify(checkpoint)}` : reply,
+          (checkpoint ? `${reply}\nProposed continuation (untrusted, not admission): ${JSON.stringify(checkpoint)}` : reply) +
+            (dependencyEvidence ? `\n${dependencyEvidence}` : ""),
           assessmentAbort.signal, diagnostic => {
           if (assessmentEligible() && !assessmentAbort.signal.aborted) this.completionDiagnostics.set(input, diagnostic);
         });
