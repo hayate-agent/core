@@ -80,6 +80,9 @@ export class DispatcherRuntime {
         else {
           const snapshot = this.roleSettings?.();
           if (snapshot?.config?.enabled) {
+            if (task.classifierReceipt && task.classifierReceipt.phase !== "observed") {
+              throw Error("Classifier HTTP outcome unknown; reconcile retained receipt before continuing");
+            }
             const dispatcher = await resolveModelRole(this.harness.runtime, snapshot.config, "dispatcher", snapshot.defaults);
             const requested = snapshot.config.roles?.dispatcher ?? snapshot.defaults;
             await this.store.observeClassifier(task.id, task.token!, requested);
@@ -94,7 +97,29 @@ export class DispatcherRuntime {
             let observed = Promise.resolve();
             let complexity: Awaited<ReturnType<typeof classifyComplexity>> = undefined;
             try {
-              complexity = await classifyComplexity(this.harness.runtime, task.input, dispatcher, context.signal, 15000, event => {
+              if (task.classifierReceipt?.phase === "observed") {
+                complexity = task.classifierReceipt.complexity;
+                await this.store.observeClassifier(task.id, task.token!, requested, task.classifierReceipt.actual);
+              }
+              else if (this.harness.runtime.classifyComplexityHttp) {
+                const signal = AbortSignal.any([context.signal, AbortSignal.timeout(15000)]);
+                complexity = await this.harness.runtime.classifyComplexityHttp({
+                  task: task.input, requested: dispatcher, defaults: snapshot.defaults, signal,
+                  authorize: () => {
+                    const current = this.store.list(task.parent).find(item => item.id === task.id);
+                    if (!current || current.token !== task.token || current.status !== "running" || current.parentStopped ||
+                        (current.dependency?.expiresAt !== undefined && current.dependency.expiresAt <= Date.now())) {
+                      throw Error("Classifier ownership lost");
+                    }
+                  },
+                  persist: receipt => this.store.classifierAssessment(task.id, task.token!, receipt),
+                  observe: actual => {
+                    const event = { type: "execution" as const, selection: actual };
+                    activity.event(event);
+                    observed = observed.then(() => this.store.observeClassifier(task.id, task.token!, requested, actual));
+                  },
+                });
+              } else complexity = await classifyComplexity(this.harness.runtime, task.input, dispatcher, context.signal, 15000, event => {
                 activity.event(event);
                 if (event.type === "execution") observed = observed.then(() => this.store.observeClassifier(task.id, task.token!, requested, event.selection)).catch(() => {});
               });

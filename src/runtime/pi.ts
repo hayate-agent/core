@@ -477,6 +477,11 @@ export class PiRuntime implements AgentRuntime {
       updated: s.modified.toISOString(), revision: 0, format: "pi-session-v1" }));
   }
 
+  async classifyComplexityHttp(assessment: import("../classifier-http.js").ClassifierAssessment) {
+    const { classifyHttp } = await import("../classifier-http.js");
+    return classifyHttp(await this.modelRuntime(), assessment);
+  }
+
   async modelPreflight(ref: string, thinking?: string): Promise<{ available: boolean; thinkingSupported: boolean }> {
     const runtime = await this.modelRuntime();
     const model = (await runtime.getAvailable()).find(m => `${m.provider}/${m.id}` === ref);
