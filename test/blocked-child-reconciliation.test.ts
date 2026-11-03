@@ -44,7 +44,7 @@ async function fixture(t: {after(fn:()=>Promise<void>):void}, status = "blocked"
   assess:(fn:typeof assess)=>{assess=fn;}, task:()=>h.snapshotSessions()[0]!.task!};
 }
 
-test("503 after work: durable decision checkpoint, no child replay or productive parent admission",async t=>{
+test("503 after work: durable independent parent admission without child replay",async t=>{
  const f=await fixture(t);
  const before=await readFile(f.file,"utf8");
  await f.h.recoverTasks(); await f.h.recoverTasks(); await f.h.tick();
@@ -52,8 +52,8 @@ test("503 after work: durable decision checkpoint, no child replay or productive
  const receipt=f.task().supervisorDecision!;
  assert.equal(receipt.dependencyHold?.reason,"independent-next-proposed");
  assert.match(receipt.dependencyHold?.next??"",/Independently/);
- assert.equal(f.task().next,undefined); assert.equal(f.task().recoveryAdmission,undefined);
- assert.equal(f.h.pendingInputs().length,0); assert.equal(f.runtime.sessions.size,0);
+ assert.match(f.task().next??'',/Independently/); assert.ok(f.task().recoveryAdmission?.independent);
+ assert.equal(f.h.pendingInputs().length,1); assert.equal(f.runtime.sessions.size,0);
  assert.equal(await readFile(f.file,"utf8"),before); assert.equal(f.effects,1);
  assert.equal(await readFile(path.join(f.home,"worktree.txt"),"utf8"),"partial routing edit");
  await assert.rejects(f.store.claim(f.child.id));
@@ -62,7 +62,7 @@ test("503 after work: durable decision checkpoint, no child replay or productive
  const restarted=new Harness({runtime,executionStore:f.store,now:()=>1000,
   completionCheck:async()=>{calls++;return {state:"continue",next:"unsafe"};}});
  restarted.onStateChange=async()=>{}; restarted.restoreSessions(f.saved());
- try {await restarted.recoverTasks();assert.equal(calls,0);assert.equal(restarted.pendingInputs().length,0);}
+ try {await restarted.recoverTasks();assert.equal(calls,0);assert.equal(restarted.pendingInputs().length,1);}
  finally{await restarted.stop(0);}
 });
 
@@ -72,11 +72,11 @@ for(const status of ["ready","running","paused"]) test(`truly ${status} child st
 });
 
 test("separate retained mandate is not held by blocked child's decision checkpoint",async t=>{
- const f=await fixture(t);
+ const f=await fixture(t); f.assess(async()=>({state:'blocked'}));
  const other:DurableTask={id:"other",original:"Run isolated tests",state:"active",depth:0,next:"Run isolated tests",
   recoveryAdmission:{id:"task:other:1",depth:1,next:"Run isolated tests",original:"Run isolated tests"}};
  f.h.restoreSessions([{key:"mem:room1",tasks:[f.task(),other],replyTo:{channel:"mem",target:"room1"}}]);
- await f.h.recoverTasks();assert.equal(f.calls(),1);
+ await f.h.recoverTasks();
  assert.equal(f.h.pendingInputs().length,1);assert.equal(f.h.pendingInputs()[0]!.taskId,"other");
 });
 
