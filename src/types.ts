@@ -52,7 +52,7 @@ export interface Inbound {
   /** Trusted numeric authorization boundary inherited by generated work. */
   continuationExpiresAt?: number;
   /** Core-captured original chat input; inherited by generated follow-ups, never reply text. */
-  completionAnchor?: { id: string; task: string; receivedAt: number; outputTags?: string[]; hashtagSelection?: import("./hashtags.js").HashtagSelection };
+  completionAnchor?: { id: string; task: string; receivedAt: number; replyTo?: Address; outputTags?: string[]; hashtagSelection?: import("./hashtags.js").HashtagSelection };
   /** Host-captured assignment labels, persisted with the inbox; never model authority. */
   outputTags?: string[];
   /** Durable semantic metadata retry; the existing inbox tick resumes it after restart. */

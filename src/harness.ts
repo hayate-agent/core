@@ -1198,7 +1198,7 @@ export class Harness {
       tags = await this.opts.topicLabeler(input.text, candidates, structuredClone(s.completionRecent ?? []));
     }
     input.outputTags = tags;
-    input.completionAnchor = { id: randomUUID(), task: input.text, receivedAt: this.now(), outputTags: tags,
+    input.completionAnchor = { id: randomUUID(), task: input.text, receivedAt: this.now(), replyTo: structuredClone(input.replyTo), outputTags: tags,
       hashtagSelection: selectHashtagContext(s.key, tags, s.hashtags ?? []) };
     this.labeledInputs.add(input);
   }
@@ -1246,7 +1246,9 @@ export class Harness {
       if (s.current && this.beforeMaintenance.has(s.key)) this.yieldedMaintenance.add(s.current);
     }
     const background = s.current && s.current.source !== "channel" && s.current.source !== "api";
-    const yieldToOperator = foreground && !!background;
+    // Host results are independent task turns, not a generic background prompt.
+    // Never consume a new operator topic inside the old result's reply/context.
+    const yieldToOperator = foreground && !!background && s.current?.source !== "host";
     // One API run = one prompt/result/terminal delivery, including its own turn
     // overrides and progress. Never merge it into another prompt, nor steer or
     // interrupt another input into an API prompt and consume that input with the
@@ -1387,7 +1389,7 @@ export class Harness {
     if (input.source === "channel" && !this.labeledInputs.has(input)) {
       if (this.opts.topicLabeler) throw Error("Channel topic assignment requires async accept/submit");
       input.outputTags = parseHashtags(input.text);
-      input.completionAnchor = { id: randomUUID(), task: input.text, receivedAt: this.now(), outputTags: input.outputTags,
+      input.completionAnchor = { id: randomUUID(), task: input.text, receivedAt: this.now(), replyTo: structuredClone(input.replyTo), outputTags: input.outputTags,
         hashtagSelection: selectHashtagContext(input.sessionKey, input.outputTags, this.state(input.sessionKey).hashtags ?? []) };
     }
     if (this.updateFenced) throw Error("update admission; retry input");
@@ -1699,6 +1701,10 @@ export class Harness {
         if (input.source === "channel") this.rememberCompletion(s, "user", input.text);
         s.current = input;
         if (input.source === "host") {
+          // Routing is execution provenance, independent of current parent authority.
+          // Legacy records fall back to home, never the latest conversation topic.
+          const execution = this.opts.executionStore?.list(s.key).find(e => e.id === input.hostEvent?.executionId);
+          input.replyTo = structuredClone(execution?.dependency?.anchor?.replyTo ?? this.home);
           const mandate = this.resultMandate(input);
           input.taskId = mandate?.taskId;
           input.completionAnchor = structuredClone(mandate?.anchor);
@@ -1942,7 +1948,7 @@ export class Harness {
     this.assessedProgress.delete(input);
     let reply: string;
     let outcome: TurnOutcome | undefined;
-    const to = input.replyTo ?? (input.source === "cron" ? undefined : s.replyTo);
+    const to = input.replyTo ?? (input.source === "cron" || input.source === "host" ? undefined : s.replyTo);
     const typingCh = to ? this.channels.get(to.channel) : undefined;
     const activity = new TurnActivity({ id: input.waitRecheck ? `wait:${s.key}:${input.taskId}` : input.executionTurnId ?? input.id ?? randomUUID(),
       role: s.key.startsWith("dispatch:") ? "worker" : "main", outputTags: structuredClone(input.outputTags),
@@ -2290,7 +2296,7 @@ export class Harness {
     if (s.key.startsWith("cron-followup:")) return; // Internal result analysis never falls back to home.
     // A background turn may finish by answering an operator steer. Its answer
     // belongs to the question, not an edit of an older host-result status bubble.
-    const foregroundReply = input.source !== "channel" && input.source !== "api"
+    const foregroundReply = input.source !== "channel" && input.source !== "api" && input.source !== "host"
       ? s.steered?.findLast(item => item.source === "channel") : undefined;
     const replyInput = foregroundReply ?? input;
     // An API run always gets its result (even empty): that is how the run finishes.
@@ -2307,7 +2313,7 @@ export class Harness {
       this.log(`[${s.key}] ${reply.slice(0, 500)}`); // deliver: local
       return;
     }
-    const dest = replyInput.replyTo ?? s.replyTo ?? this.home;
+    const dest = replyInput.source === "host" ? replyInput.replyTo ?? this.home : replyInput.replyTo ?? s.replyTo ?? this.home;
     if (!dest) {
       this.log(`no address for reply, handled locally: ${reply.slice(0, 80)}`);
       return;
