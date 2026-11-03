@@ -35,6 +35,28 @@ test("semantic classifier generates, reuses exact umbrella tags, retains uncerta
   await assert.rejects(timeout("work", []), /timeout/); assert.equal(signal?.aborted, true);
 });
 
+test("selected umbrellas do not consume the bounded new-tag allowance", async () => {
+  const tags = ["hashtag-management", "conversation-context", "result-routing"];
+  let raw = JSON.stringify({ topic: "selected", tags: [...tags, "dispatcher-context"] });
+  const label = semanticTopicLabeler({ review: async () => raw }, () => undefined);
+  const candidates = [{ id: "selected", text: "topic", tags }];
+  assert.deepEqual(await label("repair routing", candidates), [...tags, "dispatcher-context"]);
+  raw = JSON.stringify({ topic: "selected", tags: ["dispatcher-context"] });
+  assert.deepEqual(await label("repair routing", candidates), [...tags, "dispatcher-context"], "host preserves omitted umbrellas");
+  raw = JSON.stringify({ topic: "selected", tags: [...tags, "one", "two", "three"] });
+  assert.deepEqual(await label("repair routing", candidates), [...tags, "one", "two", "three"]);
+  for (const invalid of [
+    { topic: "selected", tags: ["one", "two", "three", "four"] },
+    { topic: "selected", tags: [...tags, "one", "two", "three", "four"] },
+    { topic: null, tags: [...tags, "dispatcher-context"] },
+    { topic: "selected", tags: Array(7).fill(tags[0]) },
+    { topic: "selected", tags: [...tags, "#invalid"] },
+  ]) {
+    raw = JSON.stringify(invalid);
+    await assert.rejects(label("repair routing", candidates), /invalid tags/);
+  }
+});
+
 test("automatic ingress anchor reaches real dispatcher, worker opening/tool activity, final result and durable retry", async t => {
   const home = await mkdtemp(path.join(os.tmpdir(), "auto-topic-"));
   const file = path.join(home, "executions.json");
@@ -114,9 +136,10 @@ for (const failure of ["outage", "timeout"]) test(`${failure}: durable ingress s
   t.after(() => rm(home, { recursive: true, force: true }));
   const { writeFile, readFile } = await import("node:fs/promises");
   const file = path.join(home, "inbox.json");
-  let at = 1000, calls = 0, turns = 0;
+  let at = 1000, calls = 0, turns = 0, available = false;
   const h = new Harness({ runtime: new FakeRuntime(() => { turns++; return "answer"; }), now: () => at, tickMs: 60000,
     topicLabeler: semanticTopicLabeler({ review: async () => {
+      if (available) return '{"topic":null,"tags":["status"]}';
       calls++; if (failure === "timeout") return new Promise(() => {}); throw Error("offline");
     } }, () => undefined, 5) });
   h.onStateChange = async () => writeFile(file, JSON.stringify({ pending: h.pendingInputs(), seen: h.seenIds() }));
@@ -130,6 +153,13 @@ for (const failure of ["outage", "timeout"]) test(`${failure}: durable ingress s
   await h.accept({ ...msg("independent work #explicit"), id: "explicit-during-outage" });
   await until(() => channel.texts().includes("#explicit · answer"));
   assert.equal(turns, 1); assert.equal(calls, 1);
+  // A failed metadata head must not starve an unrelated untagged operator input.
+  available = true;
+  await h.accept({ ...msg("Independent Status: untouched original text"), id: "status-during-outage" });
+  await until(() => channel.texts().includes("#status · answer"));
+  assert.equal(turns, 2);
+  assert.equal(h.pendingInputs()[0]?.text, "work");
+  available = false;
   h.commandHandler = async () => true; await h.accept(msg("/stop"));
   await h.stop(1000);
   const saved = JSON.parse(await readFile(file, "utf8"));
@@ -143,7 +173,7 @@ for (const failure of ["outage", "timeout"]) test(`${failure}: durable ingress s
   await restored.tick(); assert.equal(recoveredCalls, 0, "persisted backoff survives restart");
   at += 15000; await restored.tick(); await until(() => restored.isDrained());
   await restored.accept({ ...msg("work"), id: "stable-message" }); await restored.tick();
-  assert.equal(recoveredCalls, 1); assert.equal(turns, 2);
+  assert.equal(recoveredCalls, 1); assert.equal(turns, 3);
   assert.deepEqual(output.texts(), ["#recovery · answer"]);
   await restored.stop(1000);
 });

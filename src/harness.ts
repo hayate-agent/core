@@ -1663,7 +1663,7 @@ export class Harness {
         if (!s.queue.length || this.paused) break;
         // Stable foreground priority also applies to restored inboxes and saved
         // wait/continuation turns. The durability gate below still applies.
-        const ready = (input: Inbound) => !input.topicPending;
+        const ready = (input: Inbound) => !input.topicPending || input.topicPending.nextAt <= this.now();
         let foregroundIndex = s.queue.findIndex(input => ready(input) && (input.source === "channel" || input.source === "api"));
         if (foregroundIndex < 0) foregroundIndex = s.queue.findIndex(ready);
         if (foregroundIndex > 0) s.queue.unshift(s.queue.splice(foregroundIndex, 1)[0]!);
