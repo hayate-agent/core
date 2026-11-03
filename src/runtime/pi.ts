@@ -439,6 +439,11 @@ export class PiRuntime implements AgentRuntime {
 
   constructor(private readonly opts: PiRuntimeOptions) {}
 
+  forReviewWorktree(cwd: string): AgentRuntime {
+    return new PiRuntime({ ...this.opts, cwd, tools: [], skillPaths: [],
+      sessionProvider: undefined, legacySessionProvider: undefined });
+  }
+
   private async modelRuntime(): Promise<ModelRuntime> {
     this.modelsRuntime ??= await ModelRuntime.create();
     return this.modelsRuntime;
@@ -475,6 +480,11 @@ export class PiRuntime implements AgentRuntime {
     return rows.slice(offset, offset + 20).map((s) => ({ id: s.id, key,
       title: s.name ?? (s.firstMessage.replace(/\s+/g, " ").slice(0, 90) || "New conversation"),
       updated: s.modified.toISOString(), revision: 0, format: "pi-session-v1" }));
+  }
+
+  async reviewCodeHttp(prompt: string, assessment: import("../builtin-plugins/review-executor.js").ReviewHttpContext, executionId: string, signal: AbortSignal) {
+    const { reviewHttp } = await import("../reviewer-http.js");
+    return reviewHttp(await this.modelRuntime(), prompt, assessment, executionId, signal);
   }
 
   async classifyComplexityHttp(assessment: import("../classifier-http.js").ClassifierAssessment) {

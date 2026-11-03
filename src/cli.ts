@@ -267,6 +267,7 @@ async function main(argv: string[]): Promise<void> {
     return { model: overlay?.model ?? config.reviewOverrides?.model, thinking: overlay?.thinking ?? config.reviewOverrides?.thinking };
   };
   const codeReviewRequest = async (request: import("./builtin-plugins/review-executor.js").ReviewExecutionRequest) => {
+    if (request.httpAssessment) return { ...request, ...request.httpAssessment.requested, thinking: request.httpAssessment.requested.thinking ?? request.thinking };
     const pair = await resolveModelRole(runtime, settings.effective().modelRoles, "reviewer", { model: request.model, thinking: request.thinking });
     const explicit = legacyReview();
     return { ...request, model: explicit.model ?? pair.model, thinking: explicit.thinking ?? pair.thinking ?? request.thinking };
@@ -331,6 +332,14 @@ async function main(argv: string[]): Promise<void> {
   const reviewEngine = reviewModule ? await createPolicyEngine(reviewModule, { home: config.home, cwd: config.cwd, config: reviewSettings,
     reviewExecution: {
       dispatcherEnabled: () => dispatchPolicy.enabled,
+      httpSelection: async (model, thinking) => {
+        if (!settings.effective().modelRoles?.enabled) return undefined;
+        const pair = await resolveModelRole(runtime, settings.effective().modelRoles, "reviewer", { model, thinking });
+        const explicit = legacyReview();
+        const defaults = effectiveModels();
+        return { requested: { model: explicit.model ?? pair.model, thinking: explicit.thinking ?? pair.thinking ?? thinking },
+          defaults: { model: defaults.model, thinking: defaults.thinking } };
+      },
       dispatcherWorker: async request => reviewWorkers.review(await codeReviewRequest(request)),
       handoverWorktree: async request => handoverWorktreeReview(runtime, await codeReviewRequest(request)),
       subagent: async request => reviewSubagents.review(await codeReviewRequest(request)),
