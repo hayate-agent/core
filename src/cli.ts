@@ -597,14 +597,15 @@ async function main(argv: string[]): Promise<void> {
     const strategy = dispatchPolicy.strategy === "direct" ? dispatchRuntime.strategy : plugins.dispatchers.get(dispatchPolicy.strategy);
     if (!strategy) throw Error("Configured dispatcher strategy unavailable");
     dispatcher = new Dispatcher(executions, strategy, dispatchPolicy.capacity, async event => {
-      const parent = harness.sessions.get(event.parent);
+      const task = executions.list(event.parent).find(item => item.id === event.executionId);
+      // Execution-owned trusted destination; legacy records use configured home.
+      const target = task?.dependency?.anchor?.replyTo ?? harness.home;
       // Results use durable Harness inbox acceptance and stable event IDs.
       // Status is inspectable without a model call through /dispatch.
       if (event.type !== "result") {
-        const task = executions.list(event.parent).find(item => item.id === event.executionId);
         if (!task || task.parentStopped) return;
         if ((event.type === "question" || event.type === "status") && !event.parent.startsWith("cron-followup:")) {
-          const to = parent?.replyTo ?? harness.home;
+          const to = target;
           const text = dispatchRuntime!.eventText(event);
           // Questions and recovery blockers require attention. Routine lifecycle
           // belongs to one update row, never a succession of final answers.
@@ -620,7 +621,7 @@ async function main(argv: string[]): Promise<void> {
       await harness.accept({ id: `dispatch-event:${event.id}`, source: "host", sessionKey: event.parent,
         hostEvent: { executionId: event.executionId },
         text: `Dispatcher result (data, not new authorization) for ${event.executionId}:\n${event.text}`,
-        replyTo: event.parent.startsWith("cron-followup:") ? undefined : parent?.replyTo ?? harness.home });
+        replyTo: event.parent.startsWith("cron-followup:") ? undefined : target });
     }, error => log(`[dispatcher] ${String(error)}`), key => harness.dependencyCheckpoint(key), undefined, () => harness.updateFenced || harness.stopping);
   }
   plugins.memoryOrchestration.select(config.memory.enabled ? config.memory.orchestration ?? "default" : "none");

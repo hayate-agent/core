@@ -29,7 +29,7 @@ export class DispatcherRuntime {
   approvalTarget(key: string): Address | undefined {
     const task = this.taskForSession(key);
     if (!task) return undefined;
-    const target = this.harness.sessions.get(task.parent)?.replyTo ?? this.harness.home;
+    const target = task.dependency?.anchor?.replyTo ?? this.harness.home;
     return target?.channel === "dispatch" || target?.channel === "subagents" ? undefined : target;
   }
   /** Exact persisted parent+execution lookup, never current conversation focus. */
@@ -87,8 +87,7 @@ export class DispatcherRuntime {
             const dispatcher = await resolveModelRole(this.harness.runtime, snapshot.config, "dispatcher", snapshot.defaults);
             const requested = snapshot.config.roles?.dispatcher ?? snapshot.defaults;
             await this.store.observeClassifier(task.id, task.token!, requested);
-            const parent = this.harness.sessions.get(task.parent);
-            const target = parent?.replyTo ?? this.harness.home;
+            const target = task.dependency?.anchor?.replyTo ?? this.harness.home;
             const activity = new TurnActivity({ id: `classifier-${task.id}-${task.token}`, role: "dispatcher-classifier",
               parent: task.id, context: "host", outputTags: task.dependency?.anchor?.outputTags }, event => {
               if (target) this.harness.channels.get(target.channel)?.taskActivity?.(target, { ...event, snapshot: { ...event.snapshot, parent: task.id } }, {

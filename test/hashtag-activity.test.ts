@@ -55,7 +55,7 @@ test("stored worker origin overrides spoofed snapshot labels; lifecycle and ques
   t.after(() => rm(home, { recursive: true, force: true }));
   let store = new ExecutionStore(path.join(home, "executions.json")); await store.load();
   const task = await store.submit("mem:room1", "a", "A", "direct", 1, {
-    key: "a", scope: "severus", checkpoint: { at: 1 }, anchor: { id: "anchor-a", task: "A", receivedAt: 1, outputTags: ["alpha"] },
+    key: "a", scope: "severus", checkpoint: { at: 1 }, anchor: { id: "anchor-a", task: "A", receivedAt: 1, replyTo: ROOM, outputTags: ["alpha"] },
   });
   const claimed = await store.claim(task.id);
   store = new ExecutionStore(path.join(home, "executions.json")); await store.load();

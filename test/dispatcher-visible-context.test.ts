@@ -15,8 +15,8 @@ test("parallel original task contexts survive queued/worker/classifier/status/re
   t.after(() => rm(home, {recursive: true, force: true}));
   const file = path.join(home, "executions.json");
   let store = new ExecutionStore(file); await store.load();
-  const a = await store.submit("parent", "a", "SECRET APPOINTMENT", "direct", 1, {key: "a", scope: "s", checkpoint: {at: 1}, anchor: {id: "a", task: "SECRET APPOINTMENT", receivedAt: 1, outputTags: ["appointment"]}});
-  const b = await store.submit("parent", "b", "SECRET SECURITY", "direct", 1, {key: "b", scope: "s", checkpoint: {at: 1}, anchor: {id: "b", task: "SECRET SECURITY", receivedAt: 1, outputTags: ["security"]}});
+  const a = await store.submit("parent", "a", "SECRET APPOINTMENT", "direct", 1, {key: "a", scope: "s", checkpoint: {at: 1}, anchor: {id: "a", task: "SECRET APPOINTMENT", receivedAt: 1, replyTo: ROOM, outputTags: ["appointment"]}});
+  const b = await store.submit("parent", "b", "SECRET SECURITY", "direct", 1, {key: "b", scope: "s", checkpoint: {at: 1}, anchor: {id: "b", task: "SECRET SECURITY", receivedAt: 1, replyTo: ROOM, outputTags: ["security"]}});
   const ca = await store.claim(a.id), cb = await store.claim(b.id);
   store = new ExecutionStore(file); await store.load();
   const h = new Harness({runtime: new FakeRuntime()}); h.state("parent").replyTo = ROOM;

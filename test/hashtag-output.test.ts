@@ -52,24 +52,27 @@ test("queued Main assignment survives restart, and late host result uses executi
     const file = path.join(home, "executions.json");
     let store = new ExecutionStore(file); await store.load();
     const execution = await store.submit("mem:room1", "r", "worker #untrusted", "direct", 1,
-      { taskId: "original", original: "work", depth: 0, anchor: { id: "a", task: "work", receivedAt: 1, outputTags: ["old"] } });
+      { taskId: "original", original: "work", depth: 0, anchor: { id: "a", task: "work", receivedAt: 1, replyTo: { ...ROOM, thread: "original-thread" }, outputTags: ["old"] } });
     const claim = await store.claim(execution.id); await store.complete(execution.id, claim.token!, "worker #spoof");
     store = new ExecutionStore(file); await store.load();
     const channel = new MemoryChannel();
     h = new Harness({ runtime: new FakeRuntime(() => "answer"), executionStore: store, hostEventAllowed: () => true, tickMs: 60000 });
-    h.restorePending(JSON.parse(JSON.stringify([{ ...msg("queued #new"), outputTags: ["new"], completionAnchor: { id: "b", task: "queued #new", receivedAt: 2, outputTags: ["new"] } }])));
+    h.restorePending(JSON.parse(JSON.stringify([{ ...msg("queued #new"), replyTo: { ...ROOM, thread: "new-thread" }, outputTags: ["new"], completionAnchor: { id: "b", task: "queued #new", receivedAt: 2, outputTags: ["new"] } }])));
     h.addChannel(channel); await h.start(); h.releaseRestored(); await idle(h);
     assert.equal(channel.texts().at(-1), "#new · answer");
     const bridge = new DispatcherRuntime(h, store);
+    assert.deepEqual(store.list()[0]!.dependency!.anchor!.replyTo, { ...ROOM, thread: "original-thread" });
     for (const type of ["question", "status", "result"] as const) {
       const event = { id: type, parent: "mem:room1", executionId: execution.id, type, text: "#spoof · payload", delivered: false };
       assert.equal(bridge.labelEvent(event, "#spoof · payload"), "#old · payload");
       assert.equal(bridge.labelEvent({ ...event, parent: "other-room" }, "payload"), "payload");
-      await h.deliver(ROOM, bridge.labelEvent(event, "payload"));
+      await h.deliver(store.list()[0]!.dependency!.anchor!.replyTo!, bridge.labelEvent(event, "payload"));
+      assert.deepEqual(channel.sent.at(-1)!.to, { ...ROOM, thread: "original-thread" });
       assert.equal(channel.texts().at(-1), "#old · payload");
     }
     await h.accept({ sessionKey: "mem:room1", source: "host", hostEvent: { executionId: execution.id }, text: "worker #spoof", replyTo: ROOM }); await idle(h);
     assert.equal(channel.texts().at(-1), "#old · answer");
+    assert.deepEqual(channel.sent.at(-1)!.to, { ...ROOM, thread: "original-thread" });
     await h.accept(msg("next unrelated")); await idle(h);
     assert.equal(channel.texts().at(-1), "answer");
   } finally { await h?.stop(1000); await rm(home, { recursive: true, force: true }); }

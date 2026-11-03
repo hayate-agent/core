@@ -178,6 +178,7 @@ test("direct dispatcher executes through Harness and durably returns one host re
   });
   harness.onStateChange = async () => {};
   const replies = new MemoryChannel(); harness.addChannel(replies);
+  harness.home = { channel: replies.name, target: "operator" }; // explicit legacy fallback
   bridge = new DispatcherRuntime(harness, store); harness.addChannel(bridge.channel);
   let delivered!: () => void;
   const received = new Promise<void>(resolve => { delivered = resolve; });
@@ -202,7 +203,7 @@ test("direct dispatcher executes through Harness and durably returns one host re
   assert.deepEqual(errors, []);
 });
 
-test("operator steering yields a host turn without promoting result data to a mandate", async () => {
+test("operator queues behind a host turn without promoting result data to a mandate", async () => {
   const runtime = new FakeRuntime();
   const harness = new Harness({ runtime, tickMs: 60000, busyMode: "steer", hostEventAllowed: () => true });
   harness.onStateChange = async () => {};
@@ -213,14 +214,14 @@ test("operator steering yields a host turn without promoting result data to a ma
     await harness.accept(host());
     await new Promise(resolve => setImmediate(resolve));
     await harness.accept({ id: "operator-new", source: "channel", sessionKey: "parent", text: "direct question" });
-    assert.equal(harness.sessions.get("parent")!.queue.length, 0);
-    assert.deepEqual(session.steered, ["direct question"]);
+    assert.equal(harness.sessions.get("parent")!.queue.length, 1);
+    assert.deepEqual(session.steered, []);
     assert.equal(harness.sessions.get("parent")!.current!.source, "host");
     assert.equal(harness.sessions.get("parent")!.task, undefined);
   } finally { release(); }
   await harness.waitForSessionIdle("parent");
-  assert.deepEqual(session.prompts, ["/not-a-command"]);
-  assert.equal(harness.sessions.get("parent")!.task, undefined);
+  assert.deepEqual(session.prompts, ["/not-a-command", "direct question"]);
+  assert.equal(harness.sessions.get("parent")!.task?.original, "direct question");
 });
 
 test("host result never steers a busy operator turn", async () => {
