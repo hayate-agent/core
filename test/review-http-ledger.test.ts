@@ -24,7 +24,7 @@ async function fixture(t: { after(fn: () => Promise<unknown>): void }) {
     { review: async () => { throw Error("general backend forbidden"); } }, async () => {}, execution);
   return { home, root, ledger, service };
 }
-for (const boundary of ["reservation", "initial", "fallback", "observed"] as const) {
+for (const boundary of ["reservation", "initial", "fallback", "observed", "validated", "finalize"] as const) {
   for (const renamed of [false, true]) {
     test(`durable ${boundary} save failure renamed=${renamed} never replays`, async t => {
       const f = await fixture(t); let sends = 0; let handovers = 0;
@@ -43,7 +43,8 @@ for (const boundary of ["reservation", "initial", "fallback", "observed"] as con
       const save = mutable.save.bind(service);
       mutable.save = async state => {
         const a = state.rounds.at(-1)?.httpAssessment;
-        if (a && (a.receipt?.phase ?? "reservation") === boundary) {
+        const stage = state.rounds.at(-1)?.findings ? "finalize" : a?.executionValidated ? "validated" : a?.receipt?.phase ?? "reservation";
+        if (a && stage === boundary) {
           if (renamed) await save(state);
           throw Error("injected durable save failure");
         }
@@ -59,9 +60,9 @@ for (const boundary of ["reservation", "initial", "fallback", "observed"] as con
         }).run(f.root, "parent");
         assert.equal(sends, before); assert.equal(handovers, 0);
         assert.equal(resumed.rounds.length, 1);
-        assert.equal(resumed.status, "pending");
+        assert.equal(resumed.status, boundary === "finalize" || (boundary === "validated" && renamed) ? "passed" : "pending");
       }
-      assert.equal(before, boundary === "observed" ? 2 : boundary === "fallback" ? 1 : 0);
+      assert.equal(before, ["observed", "validated", "finalize"].includes(boundary) ? 2 : boundary === "fallback" ? 1 : 0);
     });
   }
 }
