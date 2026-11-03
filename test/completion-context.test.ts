@@ -38,7 +38,7 @@ test("child wait and child dependency do not suppress independent parent assessm
     completionCheck: async input => {
       checks++;
       return input.taskId === "parent" ? input.source === "heartbeat"
-        ? { state: "continue", next: "test unrelated architecture contract" } : { state: "completed" } : undefined;
+        ? { state: "continue", next: "test unrelated architecture contract" } : { state: "completed" } : { state: "waiting" };
     } });
   h.addChannel(new MemoryChannel()); h.onStateChange = async () => {};
   h.restoreSessions([{ key: "mem:room1", tasks: [{ id: "parent", original: "Implement architecture contracts", state: "active", depth: 0,

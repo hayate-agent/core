@@ -1,3 +1,4 @@
+import { confirmNonproductive } from "./fakes.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { Harness } from "../src/harness.js";
@@ -9,7 +10,7 @@ import { FakeRuntime, MemoryChannel, msg } from "./fakes.js";
 
 function setup() {
   const runtime = new FakeRuntime();
-  const h = new Harness({ runtime, tickMs: 60000 });
+  const h = new Harness({ completionCheck: confirmNonproductive, runtime, tickMs: 60000 });
   h.addChannel(new MemoryChannel()); h.onStateChange = async () => {};
   h.restoreSessions([{ key: "mem:room1", task: { id: "development", original: "Implement provider lifecycle", state: "active", next: "Test provider drain", depth: 2, recoveryAdmission: { id: "task:development:3", depth: 3, next: "Test provider drain", original: "Implement provider lifecycle" } }, replyTo: { channel: "mem", target: "room1" } }]);
   return { h, runtime };
@@ -37,7 +38,7 @@ test("retained task survives a question with no continuation declaration and ser
   await h.accept(msg("Which version?"));
   const snapshot = JSON.parse(JSON.stringify({ sessions: h.snapshotSessions(), pending: h.pendingInputs() }));
   await h.stop(0);
-  const next = new Harness({ runtime, tickMs: 60000 }); next.addChannel(new MemoryChannel()); next.onStateChange = async () => {};
+  const next = new Harness({ completionCheck: confirmNonproductive, runtime, tickMs: 60000 }); next.addChannel(new MemoryChannel()); next.onStateChange = async () => {};
   runtime.answer = (_text, key) => { next.planContinuation(key, { state: "completed" }); return "done"; };
   try {
     next.restoreSessions(snapshot.sessions); next.restorePending(snapshot.pending);
@@ -71,7 +72,7 @@ test("running worker prevents duplicate work; result keeps original mandate acro
   const home = await mkdtemp(path.join(os.tmpdir(), "task-worker-"));
   const store = new ExecutionStore(path.join(home, "executions.json")); await store.load();
   const runtime = new FakeRuntime();
-  const h = new Harness({ runtime, executionStore: store, tickMs: 60000, hostEventAllowed: () => true });
+  const h = new Harness({ completionCheck: confirmNonproductive, runtime, executionStore: store, tickMs: 60000, hostEventAllowed: () => true });
   h.onStateChange = async () => {}; h.addChannel(new MemoryChannel());
   h.restoreSessions([{ key: "mem:room1", task: { id: "development", original: "Implement feature", state: "active", depth: 2, next: "Verify worker result" } }]);
   const execution = await store.submit("mem:room1", "worker", "implement", "direct", 1,
@@ -92,7 +93,7 @@ test("running worker prevents duplicate work; result keeps original mandate acro
 });
 
 test("queued question prevents unassessed proposal execution but preserves proposed next", async () => {
-  const runtime = new FakeRuntime(); const h = new Harness({ runtime, tickMs: 60000, busyMode: "queue" });
+  const runtime = new FakeRuntime(); const h = new Harness({ completionCheck: confirmNonproductive, runtime, tickMs: 60000, busyMode: "queue" });
   h.addChannel(new MemoryChannel()); h.onStateChange = async () => {};
   runtime.answer = (text, key) => {
     h.planContinuation(key, text === "Implement feature" ? { state: "continue", next: "Run original regression" } : { state: "completed" });

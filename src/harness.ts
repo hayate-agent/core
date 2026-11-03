@@ -56,6 +56,10 @@ export interface DurableTask {
   anchor?: Inbound["completionAnchor"];
   /** Settled answer for this task, never a neighbouring conversation turn. */
   lastReply?: string;
+  /** Closed host receipt only: no provider output, prompt, or tool payloads. */
+  supervisorDecision?: { proposal?: "continue" | "waiting" | "blocked" | "completed";
+    verdict: "continue" | "waiting" | "blocked" | "completed" | "unresolved";
+    diagnostic?: import("./completion-check.js").CompletionDiagnostic };
   /** Bounded untrusted task evidence, persisted independently of recent chat. */
   completionObservations?: import("./session-archive.js").ArchiveEntry[];
   /** Persisted host admission; inference dedup is not an execution permit. */
@@ -1873,6 +1877,7 @@ export class Harness {
           }
           if (repetitions(task) >= 20 && task.state === "blocked") this.budgetAttention(s, task);
           const diagnostic = this.completionDiagnostics.get(input);
+          task.supervisorDecision = this.supervisorDecisions.get(input);
           if (plan?.state === "continue" && task.next && task.state === "active")
             task.recoveryAdmission = { id: this.taskQueueId(task, task.depth + 1), depth: task.depth + 1,
               next: task.next, original: task.original, expiresAt: task.expiresAt };
@@ -1928,10 +1933,12 @@ export class Harness {
   }
 
   private readonly completionDiagnostics = new WeakMap<Inbound, import("./completion-check.js").CompletionDiagnostic>();
+  private readonly supervisorDecisions = new WeakMap<Inbound, NonNullable<DurableTask["supervisorDecision"]>>();
   private readonly assessedProgress = new WeakMap<Inbound, { fingerprint?: string; advanced?: boolean; normal?: boolean; receipt?: string }>();
 
   private async runTurn(s: SessionState, input: Inbound, selectedHistory = ""): Promise<void> {
     this.completionDiagnostics.delete(input);
+    this.supervisorDecisions.delete(input);
     this.assessedProgress.delete(input);
     let reply: string;
     let outcome: TurnOutcome | undefined;
@@ -2156,6 +2163,7 @@ export class Harness {
       if (autonomous && checkpoint?.state === "continue" && input.continuation === checkpoint)
         input.continuation = { ...checkpoint, state: "blocked" };
     };
+    let independentlyResolved = false;
     if (finalStatus !== "completed") input.continuation = undefined;
     else if ((input.source !== "host" || this.resultMandate(input)) && assessmentEligible() && this.opts.completionCheck && !this.paused && !this.stopping && !s.queue.length &&
         input.source !== "api" && s.key !== "improvement:nightly" && repetitions(this.tasks(s).find(t => t.id === input.taskId) ?? { depth: input.taskId ? 20 : input.continuationDepth ?? 0 }) < 20 && !assessmentAbort.signal.aborted) {
@@ -2183,22 +2191,35 @@ export class Harness {
             plan?.state === "continue" && typeof plan.next === "string" && plan.next.trim() && plan.next.length <= 4000) {
           // An explicit progress verdict keeps PR185's milestone/replay semantics.
           independentlyContinued = !plan.progress;
+          independentlyResolved = true;
           input.continuation = plan;
         }
         // Supervisor verdict overrides the proposal; only a matching waiting
         // verdict retains the nonproductive timer. Dependencies still gate work.
-        else if ((input.source !== "host" || this.resultMandate(input)) && plan && ["completed", "waiting", "blocked"].includes(plan.state) && reply && reply !== NO_REPLY &&
+        else if ((input.source !== "host" || this.resultMandate(input)) && plan && ["completed", "waiting", "blocked"].includes(plan.state) && (checkpoint?.state === "waiting" && plan.state === "waiting" || reply && reply !== NO_REPLY) &&
             assessmentEligible() && !this.paused && !this.stopping && !s.queue.length &&
-            !assessmentAbort.signal.aborted && s.cancelling !== input)
+            !assessmentAbort.signal.aborted && s.cancelling !== input) {
+          independentlyResolved = true;
           input.continuation = checkpoint?.state === "waiting" && plan.state === "waiting" ? checkpoint :
             { state: plan.state, ...(checkpoint?.next ? { next: checkpoint.next } : {}), ...(checkpoint?.taskId !== undefined ? { taskId: checkpoint.taskId } : {}) };
-      } catch { this.log("completion assessment failed; no automatic follow-up"); }
-      // An unavailable assessor cannot seal unsupported completion. Retain the
-      // mandate for independent recovery assessment, never a working fallback.
-      if ((checkpoint?.state === "completed" || checkpoint?.state === "blocked") &&
-          (input.continuationDepth ?? 0) === 0 && assessmentEligible() && !this.paused && !this.stopping && !s.queue.length &&
-          !assessmentAbort.signal.aborted && s.cancelling !== input)
-        input.continuation = undefined;
+        }
+      } catch {
+        this.completionDiagnostics.set(input, "technical");
+        this.log("completion assessment failed; no automatic follow-up");
+      }
+    }
+    // At every depth, absent/failed assessment cannot ratify a terminal or wait
+    // self-report. Retain the mandate for existing bounded recovery, not work.
+    if (autonomous && (input.source !== "host" || this.resultMandate(input)) && !independentlyResolved &&
+        repetitions(this.tasks(s).find(task => task.id === input.taskId) ?? { depth: input.taskId ? 20 : input.continuationDepth ?? 0 }) < 20 &&
+        (checkpoint?.state === "completed" || checkpoint?.state === "blocked" || checkpoint?.state === "waiting") &&
+        assessmentEligible() && !this.paused && !this.stopping && !s.queue.length &&
+        !assessmentAbort.signal.aborted && s.cancelling !== input)
+      input.continuation = undefined;
+    if (autonomous && checkpoint && finalStatus === "completed") {
+      const diagnostic = this.completionDiagnostics.get(input) ?? (!this.opts.completionCheck ? "unavailable" : undefined);
+      this.supervisorDecisions.set(input, { proposal: checkpoint.state,
+        verdict: independentlyResolved ? input.continuation!.state : "unresolved", ...(diagnostic ? { diagnostic } : {}) });
     }
     denyProposal();
     if (s.cancelling === input) {

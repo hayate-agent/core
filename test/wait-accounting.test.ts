@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { confirmNonproductive } from "./fakes.js";
 import { Harness, type DurableTask } from "../src/harness.js";
 import { FakeRuntime, MemoryChannel } from "./fakes.js";
 
@@ -14,7 +15,7 @@ function setup(depth: number, work: (h: Harness) => Promise<void>, completionChe
     return session;
   };
   const channel = new MemoryChannel();
-  const h = new Harness({ runtime, now: () => now, completionCheck }); h.addChannel(channel);
+  const h = new Harness({ runtime, now: () => now, completionCheck: completionCheck ?? confirmNonproductive }); h.addChannel(channel);
   h.onStateChange = async () => {};
   const task: DurableTask = { id: "task", original: "Deliver feature", state: "waiting", next: "Check dispatcher delivery",
     depth, wait: { reason: "delivery running", nextAt: now, deadline: 10000000 } };
