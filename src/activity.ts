@@ -5,7 +5,7 @@ import { executionMetadata, type ExecutionMetadata } from "./builtin-plugins/exe
 /** Host evidence only. No model text, arguments, results or authorization are accepted. */
 export interface ActivitySnapshot {
   id: string;
-  role: "main" | "worker";
+  role: "main" | "worker" | "dispatcher-classifier";
   parent?: string;
   /** Captured by the host from the exact originating assignment, never runtime events. */
   outputTags?: string[];
@@ -40,7 +40,7 @@ export class TurnActivity {
   private readonly interval: number;
   private readonly maxAlive: number;
   private readonly enabled: boolean;
-  constructor(private readonly input: { id: string; role: "main" | "worker"; parent?: string; outputTags?: string[]; context: ActivitySnapshot["context"] },
+  constructor(private readonly input: { id: string; role: "main" | "worker" | "dispatcher-classifier"; parent?: string; outputTags?: string[]; context: ActivitySnapshot["context"] },
     private readonly emit: (event: ActivityEvent) => void, policy: ActivityPolicy = {}, private readonly now = Date.now) {
     this.enabled = policy.enabled !== false;
     this.started = this.last = this.lastEmitted = now();

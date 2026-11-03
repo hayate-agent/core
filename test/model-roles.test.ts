@@ -7,6 +7,10 @@ import { classifyComplexity, parseComplexity, resolveModelRole, roleAwareReviewe
 import { SettingsService } from "../src/settings.js";
 import { COMMANDS, type CommandContext } from "../src/commands.js";
 import { runtimeReviewer } from "../src/runtime/reviewer.js";
+import { PiSession } from "../src/runtime/pi.js";
+import { dispatcherPlugin } from "../src/builtin-plugins/dispatcher-plugin.js";
+import { HarnessTuiChannel } from "../src/channels/tui.js";
+import { NativeActivityDelivery } from "../src/builtin-plugins/native-activity.js";
 import { PiRuntime } from "../src/runtime/pi.js";
 import { Harness } from "../src/harness.js";
 import { Dispatcher } from "../src/dispatcher.js";
@@ -82,7 +86,8 @@ test("stop before inference cannot publish intent or launch worker; invalid infe
   let effects = 0; let intents = 0; let bridge!: DispatcherRuntime;
   const task = { id: "id", token: "token", input: "work" } as never;
   const harness = { runtime, accept: async (input: Inbound) => { effects++; assert.equal(input.turn, undefined); await bridge.channel.send!({ channel: "dispatch", target: "id:token" }, "done"); }, stopSession: async () => {}, waitForSessionIdle: async () => {} };
-  bridge = new DispatcherRuntime(harness as never, {} as never, undefined, () => ({ config: fixture, defaults }));
+  Object.assign(harness, { sessions: new Map(), channels: new Map() });
+  bridge = new DispatcherRuntime(harness as never, { observeClassifier: async () => {} } as never, undefined, () => ({ config: fixture, defaults }));
   const abort = new AbortController(); abort.abort();
   const ctx = { signal: abort.signal, checkpoint: async () => {}, intent: async () => { intents++; }, settleIntent: async () => {} };
   await assert.rejects(bridge.strategy.execute(task, ctx), /aborted/);
@@ -145,10 +150,12 @@ test("authenticated persisted slash -> reload -> classifier -> durable intent ->
   let accepted: Inbound | undefined;
   let bridge: DispatcherRuntime;
   const harness = { runtime, accept: async (value: Inbound) => { accepted = value; await bridge.channel.send!({ channel: "dispatch", target: `${claimed.id}:${claimed.token}` }, "done"); }, stopSession: async () => {}, waitForSessionIdle: async () => {}, reconcileSession: async () => {} };
+  Object.assign(harness, { sessions: new Map(), channels: new Map() });
   bridge = new DispatcherRuntime(harness as never, store, undefined, () => ({ config: restored.effective().modelRoles, defaults }));
   const context = { signal: new AbortController().signal, checkpoint: async () => {}, intent: (key: string, replay: "safe" | "unsafe", route?: any) => store.intent(claimed.id, claimed.token!, key, replay, route), settleIntent: async () => {} };
   assert.equal(await bridge.strategy.execute(claimed, context), "done");
   assert.deepEqual(accepted?.turn, fixture.roles!.simple); assert.equal(seen.length, 1);
+  assert.deepEqual(store.list()[0].classifier, { requested: fixture.roles!.dispatcher });
   const reloaded = new ExecutionStore(path.join(home, "executions.json")); await reloaded.load();
   const retained = reloaded.list("parent")[0]; assert.deepEqual(retained.intent?.route, fixture.roles!.simple);
   // Uncertain retained work must not reclassify even after config changes.
@@ -159,4 +166,91 @@ test("authenticated persisted slash -> reload -> classifier -> durable intent ->
   assert.equal(await legacy.strategy.execute({ ...claimed, id: claimed.id }, { ...context, intent: async () => {} }), "done");
   assert.equal(seen.length, 1); assert.deepEqual(accepted?.turn, { model: "legacy/route", thinking: "off" });
   await writeFile(file, 'modelRoles:\n  enabled: false\n'); await restored.reload(); assert.equal(restored.effective().modelRoles?.enabled, false);
+});
+
+
+test("admin roles -> actual ephemeral PI clamp -> separate durable classifier/status/TUI/Matrix", async t => {
+  const home = await mkdtemp(path.join(os.tmpdir(), "classifier-display-"));
+  t.after(() => rm(home, { recursive: true, force: true }));
+  const file = path.join(home, "settings.yaml");
+  const settings = new SettingsService(file, {}); await settings.load();
+  const ctx = { admins: ["owner"], modelRoles: { get: () => settings.effective().modelRoles, set: (v: ModelRoles | undefined) => settings.setModelRoles(v) } } as CommandContext;
+  const input = { ...msg(""), sender: "owner", source: "channel" as const };
+  const command = COMMANDS.find(c => c.name === "model-roles")!;
+  await command.run("set dispatcher p/b high", input, ctx);
+  await command.run("enable", input, ctx);
+  const restored = new SettingsService(file, {}); await restored.load();
+  const store = new ExecutionStore(path.join(home, "executions.json")); await store.load();
+  const A = { provider: "p", id: "a" }, B = { provider: "p", id: "b" };
+  const agents: any[] = []; let opens = 0;
+  const runtime = { modelPreflight: async () => ({ available: true, thinkingSupported: true }), models: async () => [{ ref: "p/a" }, { ref: "p/b" }], async open(_key: string, options: any) {
+    opens++; assert.equal(options.ephemeral, true); assert.equal(options.assessmentPurpose, "dispatch-complexity");
+    const agent: any = { model: A, thinkingLevel: "medium", messages: [],
+      setModel: async (m: any) => { agent.model = m; agent.thinkingLevel = m === B ? "off" : "medium"; },
+      setThinkingLevel: (v: string) => { agent.thinkingLevel = agent.model === B ? "off" : v; },
+      subscribe: () => () => {}, prompt: async () => {}, waitForIdle: async () => {},
+      getLastAssistantText: () => '{"complexity":"simple"}', abort: async () => {}, dispose: () => { agent.disposed = true; } };
+    agents.push(agent);
+    return new PiSession(agent, { getModel: (_p: string, id: string) => id === "b" ? B : A } as never, {});
+  } } as unknown as AgentRuntime;
+  const matrix: string[] = [];
+  const delivery = new NativeActivityDelivery(path.join(home, "activity.json"), async (_to, _id, text) => { matrix.push(text); }, 10000);
+  t.after(() => delivery.stop());
+  // Exercise the real channel handler without starting a terminal.
+  const tui = Object.create(HarnessTuiChannel.prototype) as any;
+  Object.assign(tui, { opts: {}, classifiers: new Map(), render: () => {} });
+  const events: any[] = [];
+  const harness = { runtime, sessions: new Map(), home: { channel: "matrix", target: "room" }, channels: new Map([["matrix", {
+    taskActivity: (to: any, e: any) => { events.push(e); tui.taskActivity(to, e); delivery.event(to, e); }
+  }]]), async accept(input: Inbound) { await bridge.channel.send({ channel: "dispatch", target: input.replyTo!.target }, "done"); } };
+  const bridge = new DispatcherRuntime(harness as never, store, undefined, () => ({ config: restored.effective().modelRoles, defaults: { model: "p/a", thinking: "medium" } }));
+  await Promise.all(["one", "two"].map(async request => {
+    const task = await store.submit("parent", request, "SECRET PROMPT", "direct");
+    const claimed = await store.claim(task.id);
+    await bridge.strategy.execute(claimed, { signal: new AbortController().signal, intent: async () => {}, settleIntent: async () => {} } as never);
+  }));
+  await delivery.flush();
+  assert.equal(opens, 2);
+  assert.ok(agents.every(a => a.disposed && a.model === A && a.thinkingLevel === "medium"));
+  const fresh = new ExecutionStore(path.join(home, "executions.json")); await fresh.load();
+  for (const row of fresh.list()) {
+    assert.deepEqual(row.classifier, { requested: { model: "p/b", thinking: "high" }, actual: { model: "p/b", thinking: "off" } });
+    assert.equal(row.execution, undefined);
+  }
+  assert.equal(new Set(events.map(e => e.snapshot.id)).size, 2);
+  assert.ok(events.every(e => e.snapshot.role === "dispatcher-classifier"));
+  assert.match([...tui.classifiers.values()].map((r: any) => r.label).join("\n"), /Dispatcher classifier.*p\/b.*off/);
+  assert.match(matrix.join("\n"), /Dispatcher classifier.*p\/b.*off/);
+  let tool: any; dispatcherPlugin(() => ({ store }) as never).activate({ registerTool: (v: any) => { tool = v; }, registerCommand: () => {} } as never);
+  const status = JSON.parse(await tool.execute({ action: "status" }, { sessionKey: "parent" }));
+  assert.equal(status.dispatcher.kind, "host-scheduler");
+  assert.match(status.tasks[0].classifier.actual, /p\/b.*off/);
+  assert.match(status.tasks[0].workerExecution, /unknown/);
+  assert.doesNotMatch(JSON.stringify(status.tasks.map((r: any) => r.classifier)) + JSON.stringify(events) + matrix.join(""), /SECRET PROMPT/);
+  runtime.modelPreflight = async () => ({ available: false, thinkingSupported: false });
+  const fallback = await store.submit("parent", "unavailable", "task", "direct");
+  await bridge.strategy.execute(await store.claim(fallback.id), { signal: new AbortController().signal, intent: async () => {}, settleIntent: async () => {} } as never);
+  assert.deepEqual(store.list().find(r => r.id === fallback.id)!.classifier, {
+    requested: { model: "p/b", thinking: "high" }, actual: { model: "p/a", thinking: "medium" },
+  });
+});
+
+
+test("classifier observation is callback-only, filtered and closed after cancellation/setup failure", async () => {
+  let promptOptions: PromptOptions | undefined; let release!: () => void; let disposed = 0;
+  const gate = new Promise<string>(r => { release = () => r('{"complexity":"simple"}'); });
+  const runtime = { open: async () => ({ prompt: async (_text: string, options: PromptOptions) => { promptOptions = options; return gate; }, abort: async () => {}, dispose: async () => { disposed++; } }) } as unknown as AgentRuntime;
+  const signal = new AbortController(); const events: any[] = [];
+  const work = classifyComplexity(runtime, "secret", {}, signal.signal, 1000, e => events.push(e));
+  await new Promise(r => setImmediate(r));
+  promptOptions!.onEvent!({ type: "text", delta: "secret" });
+  promptOptions!.onEvent!({ type: "execution", selection: { model: "p/inherited", thinking: "low" } });
+  assert.equal(events.length, 1);
+  signal.abort(); assert.equal(await work, undefined);
+  promptOptions!.onEvent!({ type: "execution", selection: { model: "late" } });
+  assert.equal(events.length, 1); assert.throws(() => promptOptions!.beforeExecution!());
+  release(); await new Promise(r => setImmediate(r)); assert.equal(disposed, 1);
+  const failed = { open: async () => ({ prompt: async () => { throw Error("private provider error"); }, dispose: async () => {} }) } as unknown as AgentRuntime;
+  assert.equal(await classifyComplexity(failed, "secret", {}, new AbortController().signal, 1000, e => events.push(e)), undefined);
+  assert.equal(events.length, 1);
 });

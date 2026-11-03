@@ -26,6 +26,7 @@ export interface Execution {
   strategyVersion: number;
   status: ExecutionStatus;
   execution?: ExecutionMetadata;
+  classifier?: { requested: ExecutionMetadata; actual?: ExecutionMetadata };
   checkpoint?: string;
   result?: string;
   token?: string;
@@ -329,6 +330,7 @@ export class ExecutionStore {
       const claimedRecoveryAction = task.recoveryGrant?.restarts === task.restarts ? task.recoveryGrant.action : undefined;
       delete task.recoveryGrant;
       delete task.execution; // A new attempt has no observed selection yet.
+      delete task.classifier;
       task.token = randomUUID();
       task.status = "running";
       this.event(draft, task, "status", "Ausführung gestartet");
@@ -337,6 +339,11 @@ export class ExecutionStore {
   }
   observeExecution(id: string, token: string, selection: ExecutionMetadata): Promise<void> {
     return this.mutate(draft => { this.owned(draft, id, token).execution = executionMetadata(selection); });
+  }
+  observeClassifier(id: string, token: string, requested: ExecutionMetadata, actual?: ExecutionMetadata): Promise<void> {
+    return this.mutate(draft => { this.owned(draft, id, token).classifier = {
+      requested: executionMetadata(requested), ...(actual ? { actual: executionMetadata(actual) } : {}),
+    }; });
   }
   checkpoint(id: string, token: string, checkpoint: string): Promise<void> {
     return this.mutate(draft => {
