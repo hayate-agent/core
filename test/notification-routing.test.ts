@@ -1,3 +1,4 @@
+import { confirmNonproductive } from "./fakes.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Harness } from "../src/harness.js";
@@ -24,7 +25,7 @@ test("routing is structured: unchanged wait only; direct question, host result, 
 test("unchanged timer replies display one deduplicated status, survive restart; direct question still answers", async () => {
   const runtime = new FakeRuntime(() => { h.planContinuation("mem:room1", plan); return "worker still running, no result"; });
   const channel = new MemoryChannel(); Object.assign(channel, { editableProgress: true });
-  let h = new Harness({ runtime, tickMs: 60000, now: () => 1000 }); h.addChannel(channel); h.onStateChange = async () => {};
+  let h = new Harness({ completionCheck: confirmNonproductive, runtime, tickMs: 60000, now: () => 1000 }); h.addChannel(channel); h.onStateChange = async () => {};
   try {
     await h.submit(poll()); await h.drained();
     await h.submit(poll()); await h.drained();
@@ -32,7 +33,7 @@ test("unchanged timer replies display one deduplicated status, survive restart; 
     assert.equal(channel.sent[0].meta?.presentation, "progress");
     assert.match(channel.sent[0].meta?.progressId ?? "", /^native:status:/);
     const saved = h.snapshotSessions(); await h.stop(0);
-    h = new Harness({ runtime, tickMs: 60000, now: () => 1000 }); h.addChannel(channel); h.onStateChange = async () => {};
+    h = new Harness({ completionCheck: confirmNonproductive, runtime, tickMs: 60000, now: () => 1000 }); h.addChannel(channel); h.onStateChange = async () => {};
     h.restoreSessions(saved);
     await h.submit(poll()); await h.drained(); assert.equal(channel.sent.length, 1);
     await h.submit(msg("Is the worker still running?")); await h.drained();
@@ -53,7 +54,7 @@ test("started/recovery progress shares a row; legacy channels receive explicit f
 test("actual results and important blockers retain normal durable delivery", async () => {
   for (const state of ["completed", "blocked"] as const) {
     const channel = new MemoryChannel();
-    const h = new Harness({ runtime: new FakeRuntime(() => { h.planContinuation("mem:room1", { state }); return `${state}: evidence`; }), tickMs: 60000 });
+    const h = new Harness({ completionCheck: confirmNonproductive, runtime: new FakeRuntime(() => { h.planContinuation("mem:room1", { state }); return `${state}: evidence`; }), tickMs: 60000 });
     h.addChannel(channel); h.onStateChange = async () => {};
     try {
       await h.submit({ ...poll(), continuation: { state } }); await h.drained();

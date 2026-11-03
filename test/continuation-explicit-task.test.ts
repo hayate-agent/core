@@ -57,7 +57,7 @@ test('registered tool: explicit fleet wait, own-ID question completion, reload, 
   }) as unknown as (text: string) => string);
   const assessed: Array<{ id?: string; original?: string }> = [];
   h = new Harness({ runtime, now: () => now, tickMs: 60000,
-    completionCheck: async input => { assessed.push({ id: input.taskId, original: input.completionAnchor?.task }); return input.taskId === 'readonly-question' ? { state: 'completed' } : undefined; } });
+    completionCheck: async input => { assessed.push({ id: input.taskId, original: input.completionAnchor?.task }); return input.taskId === 'readonly-question' ? { state: 'completed' } : input.taskId === 'fleet' ? { state: 'waiting' } : undefined; } });
   h.restoreSessions([{ key, tasks: [fleet()] }]);
   let saved: ReturnType<Harness['snapshotSessions']> = [];
   h.onStateChange = async () => { saved = clone(h.snapshotSessions()); };
@@ -89,7 +89,7 @@ test('registered tool: explicit fleet wait, own-ID question completion, reload, 
   });
   restarted = new Harness({ runtime: followRuntime, now: () => now, tickMs: 60000,
     // This fixture's separate registration question is answered, not fleet work.
-    completionCheck: async input => input.taskId === 'retry-question' ? { state: 'completed' } : undefined });
+    completionCheck: async () => ({ state: 'completed' }) });
   restarted.restoreSessions(snapshot!);
   let persisted = false;
   restarted.onStateChange = async () => { persisted = true; };
