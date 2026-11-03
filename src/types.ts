@@ -177,6 +177,8 @@ export interface LoginUI {
 export interface AgentRuntime {
   /** Local availability/capability check only; never a provider prompt. */
   modelPreflight?(ref: string, thinking?: string): Promise<{ available: boolean; thinkingSupported: boolean }>;
+  /** Isolated bounded HTTP classifier; no agent session or productive-worker replay. */
+  classifyComplexityHttp?(assessment: import("./classifier-http.js").ClassifierAssessment): Promise<import("./model-roles.js").Complexity | undefined>;
   readonly name: string;
   open(sessionKey: string, options?: OpenSessionOptions): Promise<RuntimeSession>;
   /** Model refs ("provider/model") usable for per-turn overrides. */

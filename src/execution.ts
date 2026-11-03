@@ -27,6 +27,8 @@ export interface Execution {
   status: ExecutionStatus;
   execution?: ExecutionMetadata;
   classifier?: { requested: ExecutionMetadata; actual?: ExecutionMetadata };
+  /** Retained across claims. Unknown sends require explicit reconciliation, never replay. */
+  classifierReceipt?: import("./classifier-http.js").ClassifierReceipt & { token: string };
   checkpoint?: string;
   result?: string;
   token?: string;
@@ -138,6 +140,14 @@ export class ExecutionStore {
             !["safe", "unsafe"].includes(item.intent.replay))) throw Error("Invalid execution intent");
         if (item.settledEffect !== undefined && (!item.settledEffect || typeof item.settledEffect.key !== "string" || !item.settledEffect.key.trim() ||
             typeof item.settledEffect.result !== "string" || item.settledEffect.result.length > 64000)) throw Error("Invalid settled effect");
+        if (item.classifierReceipt !== undefined) {
+          const receipt = item.classifierReceipt;
+          if (!receipt || !["initial", "fallback", "observed"].includes(receipt.phase) ||
+              typeof receipt.token !== "string" || !receipt.token || !receipt.actual ||
+              typeof receipt.actual.model !== "string" || typeof receipt.actual.thinking !== "string" ||
+              (receipt.complexity !== undefined && (receipt.phase !== "observed" ||
+                !["simple", "medium", "high"].includes(receipt.complexity)))) throw Error("Invalid classifier receipt");
+        }
         if (item.claimedRecoveryAction !== undefined) throw Error("Invalid persisted claim-only recovery action");
         if (item.recoveryGrant !== undefined && (!item.recoveryGrant ||
             !["continue", "retry"].includes(item.recoveryGrant.action) ||
@@ -345,6 +355,17 @@ export class ExecutionStore {
       requested: executionMetadata(requested), ...(actual ? { actual: executionMetadata(actual) } : {}),
     }; });
   }
+  classifierAssessment(id: string, token: string, receipt: import("./classifier-http.js").ClassifierReceipt): Promise<void> {
+    return this.mutate(draft => {
+      const task = this.owned(draft, id, token);
+      const previous = task.classifierReceipt;
+      if (receipt.phase === "initial" ? !!previous : !previous || previous.token !== token ||
+          previous.phase === "observed" || (receipt.phase === "fallback" && previous.phase !== "initial")) {
+        throw Error("Classifier receipt cannot be replayed");
+      }
+      task.classifierReceipt = { ...receipt, token };
+    });
+  }
   checkpoint(id: string, token: string, checkpoint: string): Promise<void> {
     return this.mutate(draft => {
       if (typeof checkpoint !== "string" || checkpoint.length > 64000) throw Error("Invalid checkpoint");
@@ -502,7 +523,9 @@ export class ExecutionStore {
         delete task.token;
         const reason = restartLimit !== undefined && task.restarts >= restartLimit
           ? `Recovery restart limit ${restartLimit} reached; inspect evidence and resolve before retrying.`
-          : recoveryBlock(task, strategy, policy);
+          : task.classifierReceipt && task.classifierReceipt.phase !== "observed"
+            ? "Classifier HTTP outcome unknown; retained receipt forbids automatic replay."
+            : recoveryBlock(task, strategy, policy);
         if (reason) {
           task.recoveryReason = reason;
           task.status = "blocked";
