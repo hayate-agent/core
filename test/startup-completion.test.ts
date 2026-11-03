@@ -59,7 +59,10 @@ test("startup fences states, expiry, depth, absent mandate and accepted children
     if (fence === "cancelled-parent") await h.stopConversation("mem:room1");
     try {
       await h.recoverTasks(); await h.recoverTasks(); h.releaseRestored(); await h.drained();
-      assert.equal(checks, 0, fence); assert.equal(runtime.sessions.size, 0, fence);
+      // Blocked children allow only the new non-executable decision checkpoint.
+      assert.equal(checks, fence === "blocked-child" ? 1 : 0, fence);
+      assert.equal(h.pendingInputs().length, 0, fence); assert.equal(runtime.sessions.size, 0, fence);
+      if (fence === "blocked-child") assert.equal(h.state("mem:room1").task?.supervisorDecision?.dependencyHold?.reason, "independent-next-proposed");
     } finally { await h.stop(1000); }
   }
 });
