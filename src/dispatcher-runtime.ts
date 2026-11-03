@@ -1,4 +1,5 @@
 import { classifyComplexity, resolveModelRole, type ModelRoles, type ModelPair } from "./model-roles.js";
+import { taskContextLabel } from "./builtin-plugins/execution-metadata.js";
 import { TurnActivity } from "./activity.js";
 import { labelOutput } from "./hashtags.js";
 import { ExecutionWorkerFailure, type ExecutionEvent } from "./execution.js";
@@ -20,7 +21,7 @@ export class DispatcherRuntime {
     const question = event.type === "question" ? /^Question ([a-f0-9-]{36}): ([\s\S]*)$/.exec(event.text) : null;
     // Retained events can outlive a newer question on the same execution.
     const questionId = question?.[1] ?? task?.question?.id;
-    return this.labelEvent(event, `Dispatcher — ${question?.[2] ?? event.text}${event.type === "question" ? `\n/dispatch answer ${event.executionId} ${questionId} <Antwort>` : ""}`);
+    return `${taskContextLabel(event.executionId, task?.dependency?.anchor?.outputTags, !!task?.dependency?.anchor)} · Dispatcher — ${question?.[2] ?? event.text}${event.type === "question" ? `\n/dispatch answer ${event.executionId} ${questionId} <Antwort>` : ""}`;
   }
   private taskForSession(key: string) {
     return this.store.list().find(task => key === `dispatch:${task.id}:${task.token}`);
@@ -89,8 +90,8 @@ export class DispatcherRuntime {
             const parent = this.harness.sessions.get(task.parent);
             const target = parent?.replyTo ?? this.harness.home;
             const activity = new TurnActivity({ id: `classifier-${task.id}-${task.token}`, role: "dispatcher-classifier",
-              parent: `task-${task.id.slice(0, 8)}`, context: "host", outputTags: task.dependency?.anchor?.outputTags }, event => {
-              if (target) this.harness.channels.get(target.channel)?.taskActivity?.(target, event, {
+              parent: task.id, context: "host", outputTags: task.dependency?.anchor?.outputTags }, event => {
+              if (target) this.harness.channels.get(target.channel)?.taskActivity?.(target, { ...event, snapshot: { ...event.snapshot, parent: task.id } }, {
                 sessionKey: task.parent, source: "host", text: "", replyTo: target,
               });
             });
@@ -194,7 +195,7 @@ export class DispatcherRuntime {
       if (!target) return;
       // Do not forward worker input/prose as parent input or authority. Preserve
       // only host activity and a synthetic routing envelope.
-      const routed = { ...event, snapshot: { ...event.snapshot, outputTags: structuredClone(task.dependency?.anchor?.outputTags), parent: `task-${task.id.slice(0, 8)}` } };
+      const routed = { ...event, snapshot: { ...event.snapshot, outputTags: structuredClone(task.dependency?.anchor?.outputTags), parent: task.id } };
       try {
         this.harness.channels.get(target.channel)?.taskActivity?.(target, routed, {
           sessionKey: task.parent, source: "host", text: "", replyTo: target,

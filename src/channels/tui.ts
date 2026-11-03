@@ -1,5 +1,5 @@
 import { Editor, Input, SelectList, ProcessTerminal, Text, TuiAltScreen, VStack, ScrollView, matchesKey, truncateToWidth, type Component, type Terminal } from "@earendil-works/pi-tui";
-import { executionLabel, executionMetadata, type ExecutionMetadata } from "../builtin-plugins/execution-metadata.js";
+import { taskContextLabel, executionLabel, executionMetadata, type ExecutionMetadata } from "../builtin-plugins/execution-metadata.js";
 import { ConversationTranscript } from "./transcript.js";
 import { tint, type TranscriptEntry, type MessageKind } from "./presentation.js";
 import type { LocalSessions } from "../local-sessions.js";
@@ -331,8 +331,7 @@ export class HarnessTuiChannel implements Channel {
   taskActivity(to: Address, event: import("../activity.js").ActivityEvent): void {
     if (this.opts.sessions && to.target !== this.sessionKey) return;
     const s = event.snapshot;
-    if (s.role !== "dispatcher-classifier") return;
-    this.classifiers.set(s.id, { target: to.target, label: `Dispatcher classifier · ${s.parent ?? "task"} · ${s.phase} · ${executionLabel(s.execution)}` });
+    this.classifiers.set(s.id, { target: to.target, label: `${s.role === "dispatcher-classifier" ? "Dispatcher classifier" : s.role === "worker" ? "Worker" : "Main"} · ${taskContextLabel(s.parent ?? s.id, s.outputTags)} · ${s.phase} · ${executionLabel(s.execution)}` });
     while (this.classifiers.size > 16) this.classifiers.delete(this.classifiers.keys().next().value!);
     this.render();
   }

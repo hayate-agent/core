@@ -7,7 +7,7 @@
     "cron-report-plugin.ts": "71bb9d6432985d25defb18d4ef45653342c2243f42e215b972b0eb586d24a260",
     "cron-report-processing.ts": "4e40d3f4c9801d87af1bdd8e2624a12f21e02ad49378a504abaea7a1bb49856f",
     "cron-reports.ts": "0bbf04e0c3ce1c8a499cdcc2e3bba1d27c88aacd71218f1b4027002591947991",
-    "dispatcher-plugin.ts": "94bcccb42d3174f152eae5895eeaf5497026bddab26aa10a8fd91e5dd0da21b2",
+    "dispatcher-plugin.ts": "71319afefb4051fa9ff575c5c393b2d8321ad1a41509b613e378317f7aa309cb",
     "extension-manager-plugin.ts": "51ea7b167e2683b180f510a005305975afabb22819e02aa03aafbc434061200c",
     "gateway-baselines.ts": "7e4422bfef1e74ad4e767d4c88947b88082c45aeccb9b3da2193ccbff9baaa1c",
     "gateway-manager-plugin.ts": "520465902c186b429fde132b2a4120b0ff6bd8e68439c6ed35c1049e852a316a",
@@ -21,7 +21,7 @@
     "memory-orchestration-plugin.ts": "c796ff18def036016ac47095d18a490fab0d15ff8eaff342e463babc16bf78ea",
     "memory-plugin.ts": "d253236ebdda0f6914532afcef299939e98d0f4dab17dcfa178ce39628e1eee5",
     "memory-service.ts": "04cbbfd77a4a03021c15ddb1039314facf2bbf9f6839afdd49db47d52f8cbd7d",
-    "native-activity.ts": "f503b282acfc5944f97c0c2b621e8c0cc15fc0d6ab6b0445480f9c01b773ba44",
+    "native-activity.ts": "5e215c780b855864c00aa94aa40391d60d44e84f70aeb3d3854419a6cc36757a",
     "nightly-default.ts": "d807ad49e01dcb867f97fc748362e73e877c3540892755538eb2cc1840da2736",
     "policy-manager-plugin.ts": "ef61d6f32c3fadd75f16bec3732763f15e0fa131a12a7af30240a0599a44ef44",
     "protected-content-plugin.ts": "1340a07212f5b30001478d1b761ef4e8c3c8e367fbfc36c02ccb80894b4fe9d0",
@@ -46,9 +46,9 @@
     "compaction-strategy-plugin.ts": "8dadb434b15443524827b302af9c98c22ce40e892e0c0c2bc60e558dae33c932",
     "review-executor.ts": "17ed437772939a2d9df266180017e29eb1df243f91fbf763440eec418c5d12f4",
     "matrix-crypto.ts": "a89018c1cf22afc221df6ca6d621332dc9cae9a2dc222452f44b5444f249ded4",
-    "execution-metadata.ts": "0e1dd78ec93f090e23a0d14baaa1cd8c9972741d957d9d11c8d77b328021d4f4"
+    "execution-metadata.ts": "e18a287755cbe518195498a5c17680c675aea2d1cd927a63c3e58651cfdfb101"
   },
   "repository": "https://git.vanillacore.net/harness/plugins",
-  "revision": "a8b09836fba3517ab97b39b15441b22bfb2316db",
+  "revision": "1b07370600a4d71d26a0b45ae5076cc29459b0cf",
   "schema": 1
 }

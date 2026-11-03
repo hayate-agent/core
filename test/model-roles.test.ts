@@ -205,7 +205,7 @@ test("admin roles -> actual ephemeral PI clamp -> separate durable classifier/st
   }]]), async accept(input: Inbound) { await bridge.channel.send({ channel: "dispatch", target: input.replyTo!.target }, "done"); } };
   const bridge = new DispatcherRuntime(harness as never, store, undefined, () => ({ config: restored.effective().modelRoles, defaults: { model: "p/a", thinking: "medium" } }));
   await Promise.all(["one", "two"].map(async request => {
-    const task = await store.submit("parent", request, "SECRET PROMPT", "direct");
+    const task = await store.submit("parent", request, "SECRET PROMPT", "direct", 1, { key: request, scope: "s", checkpoint: { at: 1 }, anchor: { id: request, task: "SECRET PROMPT", receivedAt: 1, outputTags: [request === "one" ? "appointment" : "security"] } });
     const claimed = await store.claim(task.id);
     await bridge.strategy.execute(claimed, { signal: new AbortController().signal, intent: async () => {}, settleIntent: async () => {} } as never);
   }));
@@ -219,6 +219,12 @@ test("admin roles -> actual ephemeral PI clamp -> separate durable classifier/st
   }
   assert.equal(new Set(events.map(e => e.snapshot.id)).size, 2);
   assert.ok(events.every(e => e.snapshot.role === "dispatcher-classifier"));
+  for (const row of fresh.list()) {
+    const tag = row.requestId === "one" ? "appointment" : "security";
+    assert.ok(events.filter(e => e.snapshot.parent === row.id).every(e => e.snapshot.outputTags[0] === tag));
+    assert.ok(matrix.some(text => text.startsWith(`task ${row.id} · #${tag} · Dispatcher classifier`)), JSON.stringify(matrix));
+    assert.ok([...tui.classifiers.values()].some((r: any) => r.label.includes(`task ${row.id} · #${tag}`)));
+  }
   assert.match([...tui.classifiers.values()].map((r: any) => r.label).join("\n"), /Dispatcher classifier.*p\/b.*off/);
   assert.match(matrix.join("\n"), /Dispatcher classifier.*p\/b.*off/);
   let tool: any; dispatcherPlugin(() => ({ store }) as never).activate({ registerTool: (v: any) => { tool = v; }, registerCommand: () => {} } as never);

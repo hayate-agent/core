@@ -35,7 +35,7 @@ test("worker activity uses current claim and synthetic parent envelope without p
   emit();
   assert.equal(seen.length, 1);
   assert.equal(seen[0].input.text, ""); assert.equal(seen[0].input.sessionKey, "parent");
-  assert.equal(seen[0].event.snapshot.parent, `task-${task.id.slice(0, 8)}`);
+  assert.equal(seen[0].event.snapshot.parent, task.id);
   assert.equal(event.snapshot.parent, undefined);
   assert.equal(runtime.opened.length, 0); assert.equal(harness.pendingInputs().length, 0);
   emit(`${task.id}:obsolete`); emit(key, { ...input, sessionKey: "other" });
