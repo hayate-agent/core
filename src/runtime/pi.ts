@@ -199,6 +199,7 @@ export function updatePersonaPrompt(session: AgentSession, appendSystemPrompt: s
 }
 
 export class PiSession implements RuntimeSession {
+  readonly executionObservation = true;
   /** The prompt in progress; abort() during its setup (before generation) cancels it. */
   private turn?: { aborted: boolean };
   /** Per-turn overrides could not be undone: restore before the next turn runs. */

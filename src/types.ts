@@ -139,6 +139,8 @@ export interface RuntimeSessionStatus {
 
 /** One live conversation inside an agent runtime. */
 export interface RuntimeSession {
+  /** Emits a per-prompt execution observation after setup, before productive execution. */
+  readonly executionObservation?: boolean;
   readonly busy: boolean;
   /** Run one turn to completion (including tool calls) and return the final assistant text. */
   prompt(text: string, options?: PromptOptions): Promise<string>;

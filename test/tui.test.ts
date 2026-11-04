@@ -29,11 +29,11 @@ test("TUI shows observed selection rather than configured defaults and resets ne
   await channel.start(async () => {});
   try {
     await channel.typing({ channel: "tui", target: "main" }, true);
-    assert.match((channel as any).activityLabel(), /unknown\/pending/);
+    assert.match((channel as any).activityLabel(), /preparing model selection/);
     channel.turnEvent({ channel: "tui", target: "main" }, { type: "execution", selection: { model: "actual/worker", thinking: "off" } });
     assert.match((channel as any).activityLabel(), /model actual\/worker · reasoning off/);
     await channel.typing({ channel: "tui", target: "main" }, true);
-    assert.match((channel as any).activityLabel(), /unknown\/pending/);
+    assert.match((channel as any).activityLabel(), /preparing model selection/);
     assert.doesNotMatch((channel as any).activityLabel(), /actual\/worker/);
   } finally { await channel.stop(); }
 });
