@@ -1716,7 +1716,9 @@ export class Harness {
     if (task.recoveryAttentionId) return;
     const id = task.recoveryAttentionId = `task-recovery:${s.key}:${task.id}${task.budgetEpoch ? `:${task.budgetEpoch}` : ""}`;
     const to = s.replyTo ?? this.home;
-    if (to) {
+    // Filter only this host-generated diagnostic, before the shared outbox.
+    // Keep the blocked task, diagnostic marker, persistence and log even when silent.
+    if (to && gatewaySettings(this.opts.gateways, to.channel).recoveryDiagnostics) {
       const text = `⚠️ Recovery angehalten: ${reasons[reason]}\nAuftrag: ${task.original}\n` +
         `Verifizierter Stand: Auftrag und Fortsetzungstiefe ${task.depth} sind gespeichert. ` +
         `Der Abschluss ist nicht unabhängig bestätigt; das belegt nicht, dass der Auftrag unerledigt ist. ` +

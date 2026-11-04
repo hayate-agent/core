@@ -24,7 +24,7 @@ test("gateway command persists and live applies settings, invalid changes have n
   const ctx = { sessionKey: "test" };
   await command.run("progress reduced", ctx);
   await command.run("reactions on", ctx);
-  assert.deepEqual(seen.at(-1), { progress: "reduced", statusReactions: true });
+  assert.deepEqual(seen.at(-1), { progress: "reduced", statusReactions: true, recoveryDiagnostics: false });
   await assert.rejects(command.run("reactions perhaps", ctx));
   const restored = new SettingsService(file, {}); await restored.load();
   assert.equal(restored.effective().gateways?.progress, "reduced");
