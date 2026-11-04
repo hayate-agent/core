@@ -6,6 +6,7 @@ Configure global defaults and optional per-gateway overrides in hayate-agent.yam
 gateways:
   progress: reduced
   statusReactions: true
+  recoveryDiagnostics: false # default; opt in to host recovery diagnostics
   overrides:
     matrix:
       progress: full
@@ -27,13 +28,30 @@ objects do not reset existing values. Existing per-channel and explicit
 Matrix environment overrides retain precedence. Active progress collectors adopt
 changed progress mode on the next turn; reaction settings apply immediately.
 
-Defaults: progress off, statusReactions false. Each omitted override field
+Defaults: progress off, statusReactions false, recoveryDiagnostics false. Each omitted override field
 inherits the global setting. Explicit off/false disables an inherited setting.
 Names are channel names, including plugin gateways. This does not install an
 adapter or add capabilities it does not implement. The Harness applies the
 resolved policy through optional configureGateway before channel startup;
 plugins can implement this hook with turnEvent/turnStatus. Existing TUI/API
 streaming is unchanged by gateway notification policy.
+
+## Technical recovery diagnostics
+
+`gateways.recoveryDiagnostics: true` opts in to host-generated “Recovery
+angehalten” diagnostics. The same boolean may be set under
+`gateways.overrides.<channel>.recoveryDiagnostics`; an explicit false overrides a
+global true. Configure it in `hayate-agent.yaml`, `settings.local.yaml`, or a managed
+`settings.d/*.yaml` drop-in (normal settings precedence). There is no diagnostic
+chat command or environment override. File changes take effect on the next start.
+
+Default-off suppresses only newly generated recovery-assessment notices before the
+shared durable outbox, for every channel (including plugin gateways and TUI/API
+addresses). It does not filter assistant replies, results, genuine blockers,
+operator decisions, approval requests, or task-budget escalation notices. Already
+persisted outbox entries are not deleted. Blocked tasks, recovery markers, logs
+and task status remain durable; no completion, retry, authority, depth, budget or
+deadline is changed. Opting in later does not replay previously silent notices.
 
 Matrix environment variables are optional explicit overrides. Precedence:
 environment > per-gateway YAML > global YAML > defaults.
