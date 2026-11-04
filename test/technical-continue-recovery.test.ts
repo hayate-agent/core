@@ -35,6 +35,9 @@ for(const restart of [true,false]) test(`technical continue recovers with real p
   healthy=true;await h.tick();assert.equal(checks,1);assert.equal(effects,0);
   now+=60001;await h.tick();
   for(const evidence of ['ORIGINAL_SENTINEL','SAVED_NEXT_SENTINEL','PRIOR_RESULT_SENTINEL','technical','attempts'])assert.match(prompt,new RegExp(evidence));
+  const data=JSON.parse(prompt.split('\nDATA: ')[1]);
+  assert.equal(data.context.retained.technical.retryDiagnostic,'technical');
+  assert.equal(data.context.retained.technical.attempts,2);
   assert.doesNotMatch(prompt,/SECRET_PROVIDER_TOKEN/);
   h.releaseRestored();await h.drained();
   assert.equal(effects,1);assert.equal(worker.sessions.get(key)?.prompts.filter(p=>p===original).length,1);

@@ -1627,7 +1627,8 @@ export class Harness {
     if (retry && this.now() < retry.nextAt) return;
     // Reserve and save before inference. A crash consumes this attempt, not authority.
     // A usable decision releases the reservation and ends this failure sequence.
-    task.recoveryRetry = { attempts: (retry?.attempts ?? 0) + 1, nextAt: this.now() + 60000 };
+    task.recoveryRetry = { attempts: (retry?.attempts ?? 0) + 1, nextAt: this.now() + 60000,
+      ...(retry?.diagnostic ? { diagnostic: retry.diagnostic } : {}) };
     task.recoveryAssessment = "claimed";
     const claimedAuthority = JSON.stringify(task);
     await this.onStateChange?.();
