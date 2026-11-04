@@ -1,5 +1,5 @@
 import { Editor, Input, SelectList, ProcessTerminal, Text, TuiAltScreen, VStack, ScrollView, matchesKey, truncateToWidth, type Component, type Terminal } from "@earendil-works/pi-tui";
-import { taskContextLabel, executionLabel, executionMetadata, type ExecutionMetadata } from "../builtin-plugins/execution-metadata.js";
+import { taskContextLabel, activityExecutionLabel, executionMetadata, type ExecutionMetadata } from "../builtin-plugins/execution-metadata.js";
 import { ConversationTranscript } from "./transcript.js";
 import { tint, type TranscriptEntry, type MessageKind } from "./presentation.js";
 import type { LocalSessions } from "../local-sessions.js";
@@ -48,6 +48,7 @@ export class HarnessTuiChannel implements Channel {
   private partial = "";
   private working = false;
   private execution?: ExecutionMetadata;
+  private executionState: "pending" | "observed" | "unavailable" = "pending";
   private classifiers = new Map<string, { target: string; label: string }>();
   private pendingSubmissions = 0;
   private startedAt = 0;
@@ -262,6 +263,7 @@ export class HarnessTuiChannel implements Channel {
     this.routineStatus = "";
     this.partial = "";
     this.execution = undefined;
+    this.executionState = "pending";
     this.working = false;
     this.startedAt = 0;
     this.finishedAt = 0;
@@ -301,7 +303,7 @@ export class HarnessTuiChannel implements Channel {
       const tools = [...this.activeTools].map(([name, count]) => `${name}${count > 1 ? ` ×${count}` : ""}`);
       const phase = tools.length ? `Running: ${tools.slice(0, 2).join(", ")}${tools.length > 2 ? ` (+${tools.length - 2})` : ""}`
         : this.partial ? "Writing response" : "Working · waiting for model/SDK";
-      return `${spinner} ${phase} · ${elapsed}s${counts}${queue} · ${executionLabel(this.execution)} · /stop`;
+      return `${spinner} ${phase} · ${elapsed}s${counts}${queue} · ${activityExecutionLabel(this.execution, this.executionState)} · /stop`;
     }
     if (this.pendingSubmissions || queued) return `◌ Processing input${queue}`;
     if (this.startedAt) return `${this.outcome === "failed" ? "✕ Failed" : this.outcome === "cancelled" ? "■ Cancelled" : this.failedTools ? "⚠ Completed with tool errors" : "✓ Done"} · ${elapsed}s${counts}`;
@@ -331,14 +333,22 @@ export class HarnessTuiChannel implements Channel {
   taskActivity(to: Address, event: import("../activity.js").ActivityEvent): void {
     if (this.opts.sessions && to.target !== this.sessionKey) return;
     const s = event.snapshot;
-    this.classifiers.set(s.id, { target: to.target, label: `${s.role === "dispatcher-classifier" ? "Dispatcher classifier" : s.role === "worker" ? "Worker" : "Main"} · ${taskContextLabel(s.parent ?? s.id, s.outputTags)} · ${s.phase} · ${executionLabel(s.execution)}` });
+    const executionState = s.executionState ?? (s.phase === "starting" ? "pending" : "unavailable");
+    if (s.role === "main") {
+      this.execution = s.execution;
+      this.executionState = executionState;
+    }
+    this.classifiers.set(s.id, { target: to.target, label: `${s.role === "dispatcher-classifier" ? "Dispatcher classifier" : s.role === "worker" ? "Worker" : "Main"} · ${taskContextLabel(s.parent ?? s.id, s.outputTags)} · ${s.phase} · ${activityExecutionLabel(s.execution, executionState)}` });
     while (this.classifiers.size > 16) this.classifiers.delete(this.classifiers.keys().next().value!);
     this.render();
   }
 
   turnEvent(_to: Address, event: TurnEvent): void {
     if (this.opts.sessions && _to.target !== this.sessionKey) return;
-    if (event.type === "execution") this.execution = executionMetadata(event.selection);
+    if (event.type === "execution") {
+      this.execution = executionMetadata(event.selection);
+      this.executionState = this.execution.model && this.execution.thinking ? "observed" : "unavailable";
+    } else if (this.executionState === "pending" && ["text", "tool", "usage"].includes(event.type)) this.executionState = "unavailable";
     if (event.type === "text") this.partial += event.delta;
     if (event.type === "tool") {
       const count = this.activeTools.get(event.name) ?? 0;
