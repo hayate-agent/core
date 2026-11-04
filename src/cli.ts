@@ -627,7 +627,9 @@ async function main(argv: string[]): Promise<void> {
         hostEvent: { executionId: event.executionId },
         text: `Dispatcher result (data, not new authorization) for ${event.executionId}:\n${event.text}`,
         replyTo: event.parent.startsWith("cron-followup:") ? undefined : target });
-    }, error => log(`[dispatcher] ${String(error)}`), key => harness.dependencyCheckpoint(key), undefined, () => harness.updateFenced || harness.stopping);
+    }, error => log(`[dispatcher] ${String(error)}`), key => harness.dependencyCheckpoint(key), undefined, () => harness.updateFenced || harness.stopping,
+    // Built-ins stay registered so tasks queued before a strategy switch are not stranded.
+    [dispatchRuntime.strategy, dispatchRuntime.sequential]);
   }
   plugins.memoryOrchestration.select(config.memory.enabled ? config.memory.orchestration ?? "default" : "none");
   const memoryProvider = new MemoryProviderLifecycle(async () => {

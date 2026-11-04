@@ -47,9 +47,19 @@ export class Dispatcher {
     private readonly checkpoint?: (parent: string) => Execution["dependency"],
     private readonly recoveryPolicy?: ExecutionRecoveryPolicy,
     private readonly admissionFenced: () => boolean = () => false,
+    /** Trusted strategies that only continue existing tasks after a strategy switch; new work uses `strategy`. */
+    retained: readonly DispatcherStrategy[] = [],
   ) {
     if (!Number.isSafeInteger(capacity) || capacity < 1) throw Error("Invalid dispatcher capacity");
-    if (!strategy.name.trim() || !Number.isSafeInteger(strategy.version) || strategy.version < 1) throw Error("Invalid dispatcher strategy");
+    for (const item of [strategy, ...retained])
+      if (!item.name.trim() || !Number.isSafeInteger(item.version) || item.version < 1) throw Error("Invalid dispatcher strategy");
+    for (const item of retained) if (item.name !== strategy.name) this.strategies.set(item.name, item);
+    this.strategies.set(strategy.name, strategy);
+  }
+  private readonly strategies = new Map<string, DispatcherStrategy>();
+  private strategyFor(task: Execution): DispatcherStrategy | undefined {
+    const strategy = this.strategies.get(task.strategy);
+    return strategy?.version === task.strategyVersion ? strategy : undefined;
   }
   get ready(): boolean { return this.recovered && !this.stopped; }
   /** Includes durable runnable tasks and claim/delivery windows, not just worker slots. */
@@ -61,7 +71,7 @@ export class Dispatcher {
   async start(): Promise<void> {
     if (this.initialized) throw Error("Dispatcher already started");
     this.initialized = true;
-    await this.store.recover(new Map([[this.strategy.name, this.strategy]]), undefined, this.recoveryPolicy);
+    await this.store.recover(this.strategies, undefined, this.recoveryPolicy);
     this.recovered = true;
     await this.kick();
   }
@@ -109,11 +119,12 @@ export class Dispatcher {
     for (const task of this.store.list()) {
       if (this.stopped || this.active.size >= this.capacity) break;
       if (task.status !== "ready" || this.active.has(task.id)) continue;
-      if (task.strategy !== this.strategy.name || task.strategyVersion !== this.strategy.version) continue;
+      const strategy = this.strategyFor(task);
+      if (!strategy) continue;
       let claimed: Execution;
       try {
         claimed = await this.store.claim(task.id, {
-          strategy: this.strategy.name, version: this.strategy.version, replaySafe: this.strategy.replaySafe, reconcile: this.strategy.reconcile,
+          strategy: strategy.name, version: strategy.version, replaySafe: strategy.replaySafe, reconcile: strategy.reconcile,
         }, this.recoveryPolicy);
       } catch (error) {
         if (error instanceof ExecutionClaimConflict) continue;
@@ -124,11 +135,11 @@ export class Dispatcher {
       const current = this.store.list().find(item => item.id === claimed.id);
       if (current?.status !== "running" || current.token !== claimed.token) continue;
       const abort = new AbortController();
-      const done = Promise.resolve().then(() => this.run(claimed, abort));
+      const done = Promise.resolve().then(() => this.run(claimed, abort, strategy));
       this.active.set(task.id, { abort, done });
     }
   }
-  private async run(task: Execution, abort: AbortController): Promise<void> {
+  private async run(task: Execution, abort: AbortController, strategy: DispatcherStrategy): Promise<void> {
     const token = task.token!;
     const check = (): void => {
       const current = this.store.list().find(item => item.id === task.id);
@@ -137,7 +148,7 @@ export class Dispatcher {
     };
     try {
       check();
-      const result = await this.strategy.execute(task, {
+      const result = await strategy.execute(task, {
         signal: abort.signal,
         status: async text => { check(); await this.store.report(task.id, token, text); await this.flushEvents(); },
         question: async text => {
@@ -169,7 +180,7 @@ export class Dispatcher {
   async resolve(parent: string, id: string, actor: string, action: "continue" | "retry", evidence: string): Promise<void> {
     const task = this.store.list(parent).find(task => task.id === id);
     if (!task) throw Error("Unknown execution in this conversation");
-    if (action === "continue" && task.intent && !this.strategy.reconcile) throw Error("Strategy has no reconciliation support; choose explicit retry or cancel");
+    if (action === "continue" && task.intent && !this.strategyFor(task)?.reconcile) throw Error("Strategy has no reconciliation support; choose explicit retry or cancel");
     await this.store.resolve(parent, id, actor, action, evidence);
     await this.kick();
   }
