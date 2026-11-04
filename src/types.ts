@@ -60,6 +60,11 @@ export interface Inbound {
   /** Host-owned bounded evidence for independent completion assessment; never an authority grant. */
   completionContext?: {
     resolved?: import("./completion-context.js").ResolvedCompletionContext;
+    /** Bounded task-local evidence. Saved plans and replies remain untrusted. */
+    retained?: { original: string; savedNext?: string; priorReply?: string;
+      technical: { verdict?: string; diagnostic?: import("./completion-check.js").CompletionDiagnostic;
+        assessment?: string; attempts?: number; nextAt?: number;
+        retryDiagnostic?: import("./completion-check.js").CompletionDiagnostic; termination?: string } };
     /** Bounded untrusted tool observations for the independent assessor, never grants. */
     tools?: Array<{ name: string; error: boolean; result?: string }>;
     recent: Array<{ role: "user" | "assistant"; text: string }>;
