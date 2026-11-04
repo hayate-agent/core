@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile, rename, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { Harness } from '../src/harness.js';
@@ -18,13 +18,22 @@ test('independently assessed analysis continues beyond 20 without Git, including
   try {
     const file = path.join(home, 'sessions.json');
     const first = new Harness(options); first.addChannel(new MemoryChannel());
-    first.onStateChange = async () => {
-      await writeFile(file, JSON.stringify(first.snapshotSessions()));
-      if (checks === 25) first.paused = true;
+    // Serialize the test persistence adapter: background saveSoon callbacks may
+    // overlap awaited writes. A paused turn alone is not a persistence barrier.
+    let writes = Promise.resolve();
+    first.onStateChange = () => {
+      const snapshot = JSON.stringify(first.snapshotSessions());
+      writes = writes.then(async () => {
+        await writeFile(file + '.next', snapshot);
+        await rename(file + '.next', file);
+        if (checks === 25) first.paused = true;
+      });
+      return writes;
     };
     await first.accept(msg('Analyze original scope'));
     for (let i = 0; i < 1000 && !first.paused; i++) await new Promise(resolve => setTimeout(resolve, 1));
     assert.equal(first.paused, true);
+    await writes;
     assert.equal(turns, 25); assert.equal(checks, 25);
     const snapshot = JSON.parse(await readFile(file, 'utf8'));
     assert.equal(snapshot[0].tasks[0].state, 'active');
