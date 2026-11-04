@@ -1088,6 +1088,36 @@ export class Harness {
     return s.session;
   }
 
+  /** Read-only, content-free inventory; resetting context never transfers ownership. */
+  remainingWorkNotice(key: string): string {
+    const safe = (value: string) => value.replace(/[\x00-\x1f\x7f-\x9f]/g, "?").slice(0, 100);
+    const rows: string[] = [];
+    const s = this.sessions.get(key);
+    if (s) {
+      for (const task of this.tasks(s)) {
+        if (task.state === "completed" || task.state === "stopped") continue;
+        rows.push(`continuation ${safe(task.id)}: ${task.state}${task.wait ? "; wait timer retained" : ""}`);
+      }
+      for (const name of ["loop", "heartbeat", "goal"] as const) {
+        const source = s[name];
+        if (source) rows.push(`${name}: ${source.paused ? "paused" : "active"}`);
+      }
+    }
+    let unavailable = false;
+    try {
+      if (!this.opts.executionStore) unavailable = true;
+      else for (const execution of this.opts.executionStore.list(key)) {
+        if (execution.status !== "completed" && execution.status !== "cancelled")
+          rows.push(`dispatcher ${safe(execution.id)}: ${execution.status}`);
+      }
+    } catch { unavailable = true; }
+    if (!rows.length && !unavailable) return "No remaining work in this conversation's task/dispatcher/recurring inventory.";
+    const details = rows.slice(0, 12);
+    if (rows.length > details.length) details.push(`… ${rows.length - details.length} more`);
+    if (unavailable) details.push("Dispatcher inventory unavailable; remaining work cannot be ruled out.");
+    return `Remaining work stays owned by conversation ${safe(key)}:\n${details.join("\n")}\nContext reset does not cancel this work or recurring sources. Use /stop in the owning conversation to revoke its tasks; manage recurring sources separately.`;
+  }
+
   async resetSession(key: string): Promise<void> {
     if (this.budgetChanging) throw Error("Host control in progress; retry reset");
     const s = this.state(key);
