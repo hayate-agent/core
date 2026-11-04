@@ -70,6 +70,8 @@ export interface DurableTask {
     /** Scheduler permission for this parent step only, never worker replay authority. */
     independent?: { evidence: string; taskId: string; sessionKey: string } };
   recoveryAttentionId?: string;
+  /** Delivered blocker for children without task provenance (shared per session snapshot). */
+  dependencyAttentionId?: string;
   /** Persist before inference; legacy claims without retry metadata remain fail-closed. */
   recoveryAssessment?: "claimed" | "decided";
   /** Consecutive technical failures, including an in-flight crash reservation.
@@ -1533,8 +1535,25 @@ export class Harness {
       !s.current && !s.queue.length && !s.running && !this.paused && !this.stopping && !this.gatewayChanging && !this.updateFenced &&
       s.key !== "improvement:nightly" && !this.stoppingHostParents.has(s.key) &&
       !this.opts.externallyRecoveredSession?.(s.key);
-    if (!this.onStateChange || !this.opts.completionCheck || !eligible() ||
-        task.supervisorDecision?.dependencyHold || this.recoveringTasks.has(task)) return;
+    const previous = task.supervisorDecision;
+    const technicalRetry = previous?.dependencyHold?.reason === "global-hold" && previous.diagnostic === "technical";
+    if (!this.onStateChange || !eligible() || this.recoveringTasks.has(task)) return;
+    // Children without task provenance can never satisfy independent admission.
+    // Do not ask for (or keep) an unusable permit; surface one actionable blocker.
+    const unscoped = children();
+    if (unscoped.some(e => !e.dependency?.taskId && e.status === "blocked" && !(e.question && !e.question.answer)))
+      return this.unscopedDependencyBlocker(s, task, unscoped);
+    if (!this.opts.completionCheck || (previous?.dependencyHold && !technicalRetry)) return;
+    // A technical hold that already consumed its budget is terminal, not silently parked.
+    if (technicalRetry && Number.isSafeInteger(task.recoveryRetry?.attempts) && task.recoveryRetry!.attempts >= 3) {
+      this.recoveryAttention(s, task, "exhausted");
+      await this.onStateChange();
+      return;
+    }
+    // Retry only read-only inference, never a worker's uncertain effects.
+    if (technicalRetry && task.recoveryRetry && (!Number.isSafeInteger(task.recoveryRetry.attempts) ||
+        task.recoveryRetry.attempts < 1 ||
+        !Number.isSafeInteger(task.recoveryRetry.nextAt) || task.recoveryRetry.nextAt > this.now())) return;
     const pending = children();
     if (!pending.length || pending.some(e => e.status !== "blocked" || e.question && !e.question.answer)) return;
     this.recoveringTasks.add(task);
@@ -1542,6 +1561,7 @@ export class Harness {
       const executions = snapshot();
       const evidence = createHash("sha256").update(executions).digest("hex");
       task.supervisorDecision = { verdict: "unresolved", dependencyHold: { evidence, reason: "assessment-claimed" } };
+      task.recoveryRetry = { attempts: (task.recoveryRetry?.attempts ?? 0) + 1, nextAt: this.now() + 60000 };
       const authority = JSON.stringify(task);
       await this.onStateChange(); // no inference before the durable one-shot claim
       const unchanged = () => eligible() && JSON.stringify(task) === authority && snapshot() === executions;
@@ -1568,6 +1588,8 @@ export class Harness {
           (task.expiresAt === undefined || plan.expiresAt <= task.expiresAt))) ? plan.next.trim() : undefined;
       task.supervisorDecision = { verdict: next ? "continue" : "blocked", diagnostic,
         dependencyHold: { evidence, reason: next ? "independent-next-proposed" : "global-hold", ...(next ? { next } : {}) } };
+      if (diagnostic === "technical") task.recoveryRetry!.diagnostic = diagnostic;
+      else task.recoveryRetry = undefined;
       if (next) {
         task.state = "active";
         task.next = next;
@@ -1577,7 +1599,8 @@ export class Harness {
         task.recoveryAdmission = { id: this.taskQueueId(task, task.depth + 1), depth: task.depth + 1,
           next, original: task.original, expiresAt: task.expiresAt,
           independent: { evidence, taskId: task.id, sessionKey: s.key } };
-      } else this.recoveryAttention(s, task, diagnostic === "technical" ? "unavailable" : "inconclusive");
+      } else if (diagnostic === "technical" && task.recoveryRetry!.attempts >= 3) this.recoveryAttention(s, task, "exhausted");
+      else this.recoveryAttention(s, task, diagnostic === "technical" ? "technical" : diagnostic === "unavailable" ? "unavailable" : "inconclusive");
       try { await this.onStateChange(); }
       catch (error) {
         // Keep the durable assessment claim, but never release an unsaved permit.
@@ -1590,6 +1613,28 @@ export class Harness {
   }
 
   private readonly recoveringTasks = new Set<DurableTask>();
+
+  /** Unknown-effects blocker: children are left untouched; no assessment, no permit. */
+  private async unscopedDependencyBlocker(s: SessionState, task: DurableTask, pending: import("./execution.js").Execution[]): Promise<void> {
+    const ids = pending.filter(e => !e.dependency?.taskId).map(e => e.id).sort();
+    const id = `task-dependency-unscoped:${s.key}:${createHash("sha256").update(JSON.stringify(ids)).digest("hex").slice(0, 16)}`;
+    if (task.dependencyAttentionId === id && task.state !== "active" && !task.recoveryAdmission) return;
+    task.state = task.state === "active" ? "blocked" : task.state;
+    task.recoveryAdmission = undefined;
+    task.dependencyAttentionId = id;
+    const to = s.replyTo ?? this.home;
+    if (to && !s.outbox.some(e => e.id === id) && !this.tasks(s).some(t => t !== task && t.dependencyAttentionId === id)) {
+      const rows = pending.filter(e => !e.dependency?.taskId).map(e => `- ${e.id} (request ${e.requestId}, Status ${e.status}${e.intent ? ", Effekt-Intent offen" : ""})`);
+      s.outbox.push({ ...this.outbox.create(s.key, to,
+        `⚠️ Blockiert: ${rows.length} Worker-Ausführung(en) ohne Aufgabenzuordnung; ihre Effekte sind unbekannt.\n${rows.join("\n")}\n` +
+        `Solange sie offen sind, bleiben die Aufgaben dieser Unterhaltung blockiert. Es wird nichts automatisch fortgesetzt, wiederholt oder abgebrochen.\n` +
+        `Nötig: tatsächliche Effekte anhand /dispatch status prüfen, dann je Ausführung ausdrücklich /dispatch cancel <id> ` +
+        `(Abbruch belegt keine Effektfreiheit). Danach ist keine Abhängigkeit mehr offen; fortgesetzt wird nur auf ausdrückliche Anweisung.`), id });
+    }
+    s.unsaved = true;
+    this.log(`task ${task.id}: blocked by ${ids.length} unscoped execution(s); unknown effects`);
+    await this.onStateChange?.();
+  }
 
   private async assessStartupTask(s: SessionState, task: DurableTask, betweenTurns = false): Promise<void> {
     if (this.recoveringTasks.has(task)) return;
@@ -1692,7 +1737,7 @@ export class Harness {
   }
 
   private recoveryAttention(s: SessionState, task: DurableTask,
-    reason: "interrupted" | "unavailable" | "inconclusive" | "mismatched" | "invalid" | "exhausted"): void {
+    reason: "interrupted" | "unavailable" | "technical" | "inconclusive" | "mismatched" | "invalid" | "exhausted"): void {
     const diagnostics = {
       technical: "Die Recovery-Bewertung ist technisch fehlgeschlagen; die technische Ursache ist hier nicht verifiziert.",
       invalid_response: "Die Recovery-Bewertung lieferte eine ungültige Antwort.",
@@ -1704,17 +1749,21 @@ export class Harness {
       "Ein verwertbares Bewertungsergebnis ist nicht gesichert.";
     const reasons = {
       invalid: "Der gespeicherte Recovery-Retryzustand ist ungültig; daraus folgt keine verlässliche Aussage über verbrauchte Bewertungsversuche.",
-      exhausted: `Die drei Recovery-Bewertungsversuche sind ausgeschöpft. ${detail}`,
+      exhausted: `Die drei Recovery-Bewertungsversuche sind ausgeschöpft. ${detail} ` +
+        `Neue Bewertungsversuche nur nach ausdrücklichem Budget-Reset durch einen authentifizierten Administrator („Setze das Budget zurück für Aufgabe ${task.id} und fahre fort“); Frist und Worker bleiben unverändert.`,
       interrupted: "Die gespeicherte Recovery-Bewertung wurde begonnen, aber ihr Ergebnis nicht dauerhaft gesichert (unterbrochen).",
-      unavailable: "Eine Completion-Bewertung ist nicht konfiguriert; ein nächster Schritt ist nicht dauerhaft festgelegt.",
+      unavailable: "Die Completion-Bewertung ist nicht verfügbar; ein nächster Schritt ist nicht dauerhaft festgelegt.",
+      technical: "Die unabhängige Bewertung ist technisch fehlgeschlagen; die genaue Backend-Ursache ist nicht verifiziert. Nur die Bewertung wird begrenzt erneut versucht, keine Worker-Aktion.",
       inconclusive: "Die unabhängige Bewertung ist semantisch unentschieden; dies ist kein technischer Fehler und keine Bestätigung eines fachlichen Blockers.",
       mismatched: "Die gespeicherte Recovery-Freigabe passt nicht mehr zum gespeicherten Auftrag oder nächsten Schritt.",
     };
     task.state = "blocked";
     if ((reason === "exhausted" || reason === "interrupted") && (task.recoveryRetry?.attempts ?? 0) >= 3)
       task.termination = "recovery_assessment_failed";
-    if (task.recoveryAttentionId) return;
-    const id = task.recoveryAttentionId = `task-recovery:${s.key}:${task.id}${task.budgetEpoch ? `:${task.budgetEpoch}` : ""}`;
+    // Terminal exhaustion is distinct from an earlier per-epoch diagnostic notice.
+    const id = `task-recovery${reason === "exhausted" ? "-exhausted" : ""}:${s.key}:${task.id}${task.budgetEpoch ? `:${task.budgetEpoch}` : ""}`;
+    if (task.recoveryAttentionId && (reason !== "exhausted" || task.recoveryAttentionId === id)) return;
+    task.recoveryAttentionId = id;
     const to = s.replyTo ?? this.home;
     // Filter only this host-generated diagnostic, before the shared outbox.
     // Keep the blocked task, diagnostic marker, persistence and log even when silent.
