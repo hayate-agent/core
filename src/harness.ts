@@ -1687,7 +1687,6 @@ export class Harness {
     task.recoveryAssessment = "decided";
     task.state = "blocked";
     task.explicitBlocked = false;
-    task.termination = "recovery_assessment_failed";
     task.next ??= "Independent supervisor admission unavailable; retained task requires assessment before productive continuation.";
   }
 

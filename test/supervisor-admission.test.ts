@@ -37,8 +37,15 @@ for (const verdict of ["blocked", "waiting", "completed", "replace", "exception"
         assert.doesNotMatch(runtime.sessions.get("mem:room1")!.prompts[1], /MODEL proposal/);
       } else {
         const task = h.snapshotSessions()[0].tasks![0];
-        assert.equal(task.state, ["waiting", "completed"].includes(verdict) ? verdict : "blocked");
-        if (task.state === "blocked") assert.equal(task.next, "MODEL proposal");
+        const technical = ["exception", "invalid", "disabled", "missing"].includes(verdict);
+        assert.equal(task.state, technical ? "active" : ["waiting", "completed"].includes(verdict) ? verdict : "blocked");
+        if (technical) {
+          assert.equal(task.explicitBlocked, false);
+          assert.equal(task.supervisorDecision?.verdict, "unresolved");
+          assert.equal(task.recoveryRetry?.attempts, 1);
+          assert.equal(task.recoveryAdmission, undefined);
+        }
+        if (task.state === "blocked" || technical) assert.equal(task.next, "MODEL proposal");
       }
     } finally { await h.stop(0); }
   });
