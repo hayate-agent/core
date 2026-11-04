@@ -749,13 +749,16 @@ export class Harness {
       admission.depth === task.depth + 1 && admission.next === task.next && admission.original === task.original &&
       admission.expiresAt === task.expiresAt && !task.termination &&
       (!task.expiresAt || task.expiresAt > this.now()) &&
-      pending.every(e => e.status === "blocked" && !e.parentStopped && e.dependency?.taskId === task.id &&
-        e.dependency.original === task.original && !(e.question && !e.question.answer)) &&
+      pending.every(e => e.status === "blocked" && !e.parentStopped &&
+        (!e.dependency?.taskId || (e.dependency.taskId === task.id && e.dependency.original === task.original)) &&
+        !(e.question && !e.question.answer)) &&
       receipt.evidence === createHash("sha256").update(JSON.stringify(pending)).digest("hex"));
   }
 
   /** Provenance only: a scoped child belongs to its task; an unscoped one may belong
    * to any task except one created after it was already outstanding. */
+  private readonly restoredTaskInputs = new WeakSet<Inbound>();
+
   private mayDependOn(e: import("./execution.js").Execution, taskId: string, task?: DurableTask): boolean {
     if (e.dependency?.taskId) return e.dependency.taskId === taskId;
     const preexisting = task?.preexistingUnscoped;
@@ -1386,7 +1389,8 @@ export class Harness {
             const tasks = this.tasks(s);
             if (!tasks.some(task => task.id === input.taskId)) {
               tasks.push({ id: input.taskId, original: input.text,
-                state: "active", depth: 0, anchor: structuredClone(input.completionAnchor), ...this.preexistingUnscoped(s.key) });
+                state: "active", depth: 0, anchor: structuredClone(input.completionAnchor),
+                ...(!this.restoredTaskInputs.has(input) ? this.preexistingUnscoped(s.key) : {}) });
               s.tasks = tasks;
             }
           }
@@ -1562,6 +1566,7 @@ export class Harness {
       }
       s.queue.push(input);
       this.inbox.restored.add(input);
+      this.restoredTaskInputs.add(input);
     }
   }
 
@@ -1617,12 +1622,19 @@ export class Harness {
     const previous = task.supervisorDecision;
     const technicalRetry = previous?.dependencyHold?.reason === "global-hold" && previous.diagnostic === "technical";
     if (!this.onStateChange || !eligible() || this.recoveringTasks.has(task)) return;
-    // Children without task provenance can never satisfy independent admission.
-    // Do not ask for (or keep) an unusable permit; surface one actionable blocker.
+    // Missing legacy provenance is not permission to replay a child, but must
+    // not prevent the existing read-only assessment of an independent step.
     const unscoped = children();
-    if (unscoped.some(e => !e.dependency?.taskId && e.status === "blocked" && !(e.question && !e.question.answer)))
-      return this.unscopedDependencyBlocker(s, task, unscoped);
-    if (!this.opts.completionCheck || (previous?.dependencyHold && !technicalRetry)) return;
+    const legacyHold = unscoped.some(e => !e.dependency?.taskId && e.status === "blocked");
+    if (!this.opts.completionCheck) {
+      if (legacyHold) await this.unscopedDependencyBlocker(s, task, unscoped);
+      return;
+    }
+    if (previous?.dependencyHold && !technicalRetry && !legacyHold) return;
+    if (legacyHold && previous?.dependencyHold && !technicalRetry) {
+      const evidence = createHash("sha256").update(snapshot()).digest("hex");
+      if (previous.dependencyHold.evidence === evidence) return;
+    }
     // A technical hold that already consumed its budget is terminal, not silently parked.
     if (technicalRetry && Number.isSafeInteger(task.recoveryRetry?.attempts) && task.recoveryRetry!.attempts >= 3) {
       this.recoveryAttention(s, task, "exhausted");
@@ -1679,6 +1691,7 @@ export class Harness {
           next, original: task.original, expiresAt: task.expiresAt,
           independent: { evidence, taskId: task.id, sessionKey: s.key } };
       } else if (diagnostic === "technical" && task.recoveryRetry!.attempts >= 3) this.recoveryAttention(s, task, "exhausted");
+      else if (legacyHold && diagnostic !== "technical") await this.unscopedDependencyBlocker(s, task, children());
       else this.recoveryAttention(s, task, diagnostic === "technical" ? "technical" : diagnostic === "unavailable" ? "unavailable" : "inconclusive");
       try { await this.onStateChange(); }
       catch (error) {
@@ -1968,7 +1981,9 @@ export class Harness {
           const existing = this.tasks(s).find(task => task.id === input.taskId);
           s.tasks = this.tasks(s);
           s.task = existing ?? { id: input.taskId, original: input.text, state: "active", depth: 0, anchor: input.completionAnchor,
-            ...this.preexistingUnscoped(s.key) };
+            // A restored input without a retained task cannot establish which
+            // executions predated its original acceptance. Keep that case fenced.
+            ...(!this.restoredTaskInputs.has(input) ? this.preexistingUnscoped(s.key) : {}) };
         }
         if (this.opts.executionStore) input.executionTurnId ??= randomUUID();
         if (replayable(input)) {

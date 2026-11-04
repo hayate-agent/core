@@ -178,3 +178,17 @@ test("malformed persisted preexisting set fails closed", async t => {
   assert.equal(f.runtime.opened.length, 0);
   assert.equal(f.h.snapshotSessions()[0]!.tasks![0]!.state, "blocked");
 });
+
+
+test("restored channel input without task provenance never captures old workers as unrelated", async t => {
+  const {store,before}=await fixture(t); const clock={now:1000};
+  const f=harness(store,clock,(h)=>{h.planContinuation(key,{state:"continue",next:"Repeat potentially related work"});return "partial";},()=>({state:"blocked",reason:"Relationship unknown"}));
+  t.after(()=>f.h.stop(0));
+  f.h.restoreSessions([{key,replyTo:to,tasks:[]}]);
+  f.h.restorePending([{...msg("Retained old task", "@owner:x",key),id:"restored-old"}]);
+  await f.h.start();f.h.releaseRestored();await f.h.drained();await f.h.tick();await f.h.drained();
+  const task=f.h.snapshotSessions()[0]!.tasks!.find(x=>x.id==="restored-old")!;
+  assert.equal(task.preexistingUnscoped,undefined);
+  assert.equal(f.h.pendingInputs().length,0);
+  assert.equal(JSON.stringify(store.list(key)),before);
+});
