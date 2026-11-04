@@ -219,6 +219,9 @@ test("final result requires complete step evidence", async t => {
   assert.equal(state(task.checkpoint).outcomes.length, 0);
   assert.equal(stepStatus("x\nSTEP-STATUS: blocked: no creds"), "blocked");
   assert.equal(stepStatus("STEP-STATUS: complete\ntrailing"), undefined);
+  assert.equal(stepStatus("STEP-STATUS: complete: verification failed"), undefined);
+  assert.equal(stepStatus("STEP-STATUS: complete-but-unverified"), undefined);
+  assert.equal(stepStatus("STEP-STATUS: complete"), "complete");
 });
 
 test("one bounded escalation only for effect-free inadequacy; otherwise visible limit", async t => {

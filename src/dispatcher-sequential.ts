@@ -91,8 +91,8 @@ function readState(task: Readonly<Execution>): SequentialState | undefined | "in
 /** Worker contract line. Missing or unknown status is incomplete evidence, never success. */
 export function stepStatus(text: string): "complete" | "blocked" | "inadequate" | undefined {
   const line = text.trimEnd().split("\n").at(-1)?.trim() ?? "";
-  const match = /^STEP-STATUS:\s*(complete|blocked|inadequate)\b/i.exec(line);
-  return match?.[1]?.toLowerCase() as never;
+  const match = /^STEP-STATUS:\s*(?:(complete|inadequate)|(blocked)(?::.*)?)$/i.exec(line);
+  return (match?.[1] ?? match?.[2])?.toLowerCase() as never;
 }
 
 function finalResult(state: SequentialState): string {
