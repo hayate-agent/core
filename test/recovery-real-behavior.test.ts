@@ -71,8 +71,11 @@ for (const [output, category] of [[new Error("PRIVATE failure"), "technisch"], [
     try {
       await h.submit(msg("Deliver existing PR through GitOps")); await h.drained();
       for (let i = 1; i <= 3; i++) { await h.recoverTasks(); assert.equal(h.state(key).task!.recoveryRetry!.attempts, i); now += 60001; }
-      assert.equal(h.outboxEntries().length, 0);
+      // Exhaustion is terminal and actionable even with default-off diagnostics.
+      assert.equal(h.outboxEntries().length, 1);
+      assert.match(h.outboxEntries()[0]!.id, /^task-recovery-exhausted:/);
       const task = h.state(key).task!;
+      assert.equal(task.termination, "recovery_assessment_failed");
       assert.equal(task.state, "blocked"); assert.match(task.next!, /Independent supervisor admission unavailable/);
       assert.equal(task.recoveryAdmission, undefined); assert.equal(h.pendingInputs().length, 0);
       assert.match(task.lastReply!, /registry authentication missing/i);
@@ -81,7 +84,7 @@ for (const [output, category] of [[new Error("PRIVATE failure"), "technisch"], [
       const snapshot = h.snapshotSessions();
       const restored = new Harness({ runtime: new FakeRuntime(() => { restored.planContinuation(key, { state: "blocked", next: "Registry authentication missing" }); return "Registry authentication missing"; }), tickMs: 60000 }); restored.addChannel(ch);
       restored.restoreSessions(snapshot); restored.restoreOutbox(h.outboxEntries()); restored.onStateChange = async () => {};
-      try { await restored.recoverTasks(); restored.releaseRestored(); await restored.drained(); await restored.tick(); await restored.drained(); assert.equal(ch.texts().filter(t => t.includes("Recovery angehalten")).length, 0); assert.equal(restored.state(key).task!.state, "blocked"); }
+      try { await restored.recoverTasks(); restored.releaseRestored(); await restored.drained(); await restored.tick(); await restored.drained(); assert.equal(ch.texts().filter(t => t.includes("Recovery angehalten")).length, 1); assert.equal(restored.outboxEntries().length, 0); assert.equal(restored.state(key).task!.state, "blocked"); }
       finally { await restored.stop(0); }
     } finally { await h.stop(0); }
   });
