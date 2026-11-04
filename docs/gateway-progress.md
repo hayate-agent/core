@@ -48,7 +48,9 @@ chat command or environment override. File changes take effect on the next start
 Default-off suppresses only newly generated recovery-assessment notices before the
 shared durable outbox, for every channel (including plugin gateways and TUI/API
 addresses). It does not filter assistant replies, results, genuine blockers,
-operator decisions, approval requests, or task-budget escalation notices. Already
+operator decisions, approval requests, task-budget escalation notices, or the
+one terminal notice after three failed recovery assessments (it persists
+`recovery_assessment_failed` and names the supported budget reset). Already
 persisted outbox entries are not deleted. Blocked tasks, recovery markers, logs
 and task status remain durable; no completion, retry, authority, depth, budget or
 deadline is changed. Opting in later does not replay previously silent notices.

@@ -49,15 +49,17 @@ for(const restart of [true,false]) test(`technical continue recovers with real p
 test('technical retry budget and backoff survive repeated JSON restores and exhaust distinctly',async()=>{
  let now=1000,checks=0;let h:Harness;
  const make=()=>setup({runtime:new FakeRuntime(),now:()=>now,completionCheck:async()=>{checks++;throw Error('SECRET');}});
- h=make();h.restoreSessions([{key,tasks:[{id:'p',original,state:'active',next,depth:0,lastReply:reply}]}]);
+ h=make();h.restoreSessions([{key,replyTo:{channel:'mem',target:'room1'},tasks:[{id:'p',original,state:'active',next,depth:0,lastReply:reply}]}]);
  try{
   for(let attempt=1;attempt<=3;attempt++){
    await h.recoverTasks();assert.equal(checks,attempt);assert.equal(h.state(key).tasks![0].recoveryRetry?.attempts,attempt);
-   const saved=json(h.snapshotSessions());await h.stop(0);h=make();h.restoreSessions(saved);
+   const saved=json(h.snapshotSessions()),out=json(h.outboxEntries());await h.stop(0);h=make();h.restoreSessions(saved);h.restoreOutbox(out);
    await h.tick();assert.equal(checks,attempt);now+=60001;
   }
   await h.tick();await h.recoverTasks();assert.equal(checks,3);
-  const t=h.state(key).tasks![0];assert.equal(t.state,'blocked');assert.notEqual(t.explicitBlocked,true);assert.equal(t.termination,undefined);assert.equal(t.recoveryRetry?.diagnostic,'technical');assert.equal(t.next,next);assert.equal(t.recoveryRetry?.attempts,3);assert.equal(h.pendingInputs().length,0);
+  // Restore again: terminal state and its single notice are not regenerated.
+  {const saved=json(h.snapshotSessions()),out=h.outboxEntries();await h.stop(0);h=make();h.restoreSessions(saved);h.restoreOutbox(out);await h.recoverTasks();now+=60001;await h.recoverTasks();assert.equal(checks,3);assert.equal(h.outboxEntries().length,1);}
+  const t=h.state(key).tasks![0];assert.equal(t.state,'blocked');assert.notEqual(t.explicitBlocked,true);assert.equal(t.termination,'recovery_assessment_failed');assert.match(String(t.recoveryAttentionId),/^task-recovery-exhausted:/);assert.equal(h.outboxEntries().length,1);assert.equal(t.recoveryRetry?.diagnostic,'technical');assert.equal(t.next,next);assert.equal(t.recoveryRetry?.attempts,3);assert.equal(h.pendingInputs().length,0);
  }finally{await h.stop(0);}
 });
 

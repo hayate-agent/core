@@ -1721,8 +1721,16 @@ export class Harness {
       await this.outbox.barrier();
       return;
     }
-    if (!this.opts.completionCheck || (task.recoveryAssessment && !retry) || (retry && retry.attempts >= 3)) {
-      // Assessor outage/exhaustion consumes assessment attempts, not the mandate.
+    if (retry && retry.attempts >= 3) {
+      // Exhausted assessment budget is terminal: persist the reason and one
+      // operator notice so the supported budget reset applies. No work starts.
+      this.reconcileUnassessedTask(task, true);
+      this.recoveryAttention(s, task, "exhausted");
+      await this.outbox.barrier();
+      return;
+    }
+    if (!this.opts.completionCheck || (task.recoveryAssessment && !retry)) {
+      // Assessor outage consumes assessment attempts, not the mandate.
       // Retain the proposal for diagnosis; no productive fallback on outage.
       this.reconcileUnassessedTask(task, true);
       await this.outbox.barrier();
@@ -1782,7 +1790,10 @@ export class Harness {
       task.recoveryRetry = undefined;
     } else {
       task.recoveryRetry.diagnostic ??= "invalid_response";
-      if (task.recoveryRetry.attempts >= 3) this.reconcileUnassessedTask(task, true);
+      if (task.recoveryRetry.attempts >= 3) {
+        this.reconcileUnassessedTask(task, true);
+        this.recoveryAttention(s, task, "exhausted");
+      }
     }
     await this.outbox.barrier();
   }
@@ -1826,7 +1837,10 @@ export class Harness {
     const to = s.replyTo ?? this.home;
     // Filter only this host-generated diagnostic, before the shared outbox.
     // Keep the blocked task, diagnostic marker, persistence and log even when silent.
-    if (to && gatewaySettings(this.opts.gateways, to.channel).recoveryDiagnostics) {
+    // Terminal exhaustion needs an operator reset decision; like task-budget
+    // escalation it is not an optional technical diagnostic.
+    if (to && (reason === "exhausted" && task.termination === "recovery_assessment_failed" ||
+        gatewaySettings(this.opts.gateways, to.channel).recoveryDiagnostics)) {
       const text = `⚠️ Recovery angehalten: ${reasons[reason]}\nAuftrag: ${task.original}\n` +
         `Verifizierter Stand: Auftrag und Fortsetzungstiefe ${task.depth} sind gespeichert. ` +
         `Der Abschluss ist nicht unabhängig bestätigt; das belegt nicht, dass der Auftrag unerledigt ist. ` +
