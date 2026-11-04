@@ -118,6 +118,8 @@ export interface SessionState {
   replyTo?: Address;
   heartbeat?: Recurring;
   heartbeatDisabled?: boolean;
+  /** Interrupted stop must finish child revocation before startup admission. */
+  stopPending?: boolean;
   loop?: Recurring;
   goal?: Goal;
   /** Last user/channel input (for /retry). */
@@ -190,6 +192,8 @@ export interface HarnessOptions {
   completionCheck?: (input: Inbound, reply: string, signal: AbortSignal, diagnostic?: import("./completion-check.js").CompletionDiagnosticSink) => Promise<NonNullable<Inbound["continuation"]> | undefined>;
   /** Trusted host routing for child approval requests; never supplied by model input. */
   approvalTarget?: (sessionKey: string) => Address | undefined;
+  /** Persist child authority revocation; must not signal runtimes. */
+  conversationStopping?: (sessionKey: string) => Promise<void>;
   conversationStopped?: (sessionKey: string) => Promise<void>;
   /** Revalidate queued host data immediately before execution, including after restart. */
   hostEventAllowed?: (input: Inbound) => boolean;
@@ -1229,7 +1233,8 @@ export class Harness {
    * so an interrupted command is simply redelivered by the channel.
    */
   pendingInputs(): Inbound[] {
-    return this.inbox.snapshot(this.sessions.values());
+    const cancelled = new Set([...this.sessions.values()].flatMap(s => s.cancelling ? [s.cancelling] : []));
+    return this.inbox.snapshot(this.sessions.values()).filter(input => !cancelled.has(input));
   }
 
   /**
@@ -1387,18 +1392,26 @@ export class Harness {
     if (this.budgetChanging) throw Error("Host control in progress; retry stop");
     this.stoppingHostParents.add(sessionKey);
     const s = this.state(sessionKey);
+    s.stopPending = true;
     const dropped = s.queue.length;
     for (const input of s.queue) this.inbox.unsaved.delete(input);
     s.queue.length = 0;
+    s.steered = [];
     for (const task of this.tasks(s)) task.state = "stopped";
     if (s.current) {
       s.cancelling = s.current; s.current.continuation = undefined;
       if (s.current.executionTurnId) await this.opts.executionStore?.stopTurn(s.current.executionTurnId, sessionKey);
     }
+    // Revocation is durable before any parent or child runtime is interrupted.
+    // On save failure keep the local fence: retry /stop, never claim success or
+    // restore authority to a turn whose effects may already have happened.
+    await this.onStateChange?.();
+    await this.opts.conversationStopping?.(sessionKey);
+    await this.opts.conversationStopped?.(sessionKey);
     this.turnAbort.get(sessionKey)?.abort();
     this.opts.contextMaintenance?.interrupt?.(sessionKey);
     if (s.running) await s.session?.abort();
-    await this.opts.conversationStopped?.(sessionKey);
+    s.stopPending = undefined;
     await this.onStateChange?.();
     this.stoppingHostParents.delete(sessionKey);
     return dropped;
@@ -1833,10 +1846,10 @@ export class Harness {
   }
 
   private async pump(s: SessionState): Promise<void> {
-    if (s.running || this.gatewayChanging) return;
+    if (s.running || this.gatewayChanging || this.stoppingHostParents.has(s.key)) return;
     s.running = true;
     try {
-      while (!this.halting) {
+      while (!this.halting && !this.stoppingHostParents.has(s.key)) {
         // A finished turn's reply goes out only once its completion is durable.
         if (s.unsaved) {
           try {
@@ -2627,7 +2640,7 @@ export class Harness {
     }
     if (this.paused || this.stopping || this.gatewayChanging || this.activeDeliveries || this.outbox.held) return;
     for (const s of this.sessions.values()) {
-      if (s.running || s.queue.length || s.outbox.length || s.unsaved) continue;
+      if (s.running || s.queue.length || s.outbox.length || s.unsaved || this.stoppingHostParents.has(s.key)) continue;
       for (const task of this.tasks(s)) {
       // Reconcile pre-upgrade exhausted checkpoints without a model nudge.
       if ((task.state === "blocked" || task.state === "active") && repetitions(task) >= 20 && !task.budgetAttentionId) {
@@ -2706,8 +2719,8 @@ export class Harness {
   snapshotSessions(): PersistedSession[] {
     const out: PersistedSession[] = [];
     for (const s of this.sessions.values()) {
-      if (!s.hashtags?.length && !this.tasks(s).length && !s.heartbeat && !s.heartbeatDisabled && !s.loop && !s.goal && !s.replyTo) continue;
-      out.push({ hashtags: structuredClone(s.hashtags), operatorBudgetGrants: structuredClone(s.operatorBudgetGrants), key: s.key, task: s.task ? structuredClone(s.task) : undefined, tasks: structuredClone(this.tasks(s)), completionRecent: structuredClone(s.completionRecent), statusDelivered: structuredClone(s.statusDelivered), replyTo: s.replyTo, heartbeat: s.heartbeat, heartbeatDisabled: s.heartbeatDisabled, loop: s.loop, goal: s.goal });
+      if (!s.stopPending && !s.hashtags?.length && !this.tasks(s).length && !s.heartbeat && !s.heartbeatDisabled && !s.loop && !s.goal && !s.replyTo) continue;
+      out.push({ stopPending: s.stopPending, hashtags: structuredClone(s.hashtags), operatorBudgetGrants: structuredClone(s.operatorBudgetGrants), key: s.key, task: s.task ? structuredClone(s.task) : undefined, tasks: structuredClone(this.tasks(s)), completionRecent: structuredClone(s.completionRecent), statusDelivered: structuredClone(s.statusDelivered), replyTo: s.replyTo, heartbeat: s.heartbeat, heartbeatDisabled: s.heartbeatDisabled, loop: s.loop, goal: s.goal });
     }
     return out;
   }
@@ -2724,6 +2737,7 @@ export class Harness {
       s.replyTo = p.replyTo;
       s.heartbeat = p.heartbeat;
       s.heartbeatDisabled = p.heartbeatDisabled;
+      s.stopPending = p.stopPending;
       s.loop = p.loop;
       s.goal = p.goal;
     }

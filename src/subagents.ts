@@ -64,7 +64,18 @@ export class Subagents {
     timer.unref();
     this.timers.set(record.id, timer);
   }
+  /** Revoke every child before interrupting the first runtime. */
+  async revokeChildren(parent: string): Promise<void> {
+    for (const record of this.list(parent)) {
+      if (["completed", "failed"].includes(record.state)) continue;
+      const current = this.records.get(record.id)!;
+      current.state = "cancelled";
+      current.result = "Cancellation requested; verify any external effects before retrying.";
+    }
+    await this.save();
+  }
   async cancelChildren(parent: string): Promise<void> {
+    await this.revokeChildren(parent);
     for (const record of this.list(parent)) await this.cancel(parent, record.id);
   }
   /** Never resubmit an orphaned start: its acceptance may already have had effects. */
@@ -127,14 +138,14 @@ export class Subagents {
   }
   async cancel(parent:string,id:string):Promise<void> {
     const record=this.get(parent,id);
-    if (["completed","failed","cancelled"].includes(record.state)) return;
-    await this.harness.stopConversation(record.sessionKey);
+    if (["completed","failed"].includes(record.state)) return;
     const current = this.records.get(id)!;
     current.state = "cancelled";
     current.result = "Cancellation requested; verify any external effects before retrying.";
     clearTimeout(this.timers.get(id));
     this.timers.delete(id);
     await this.save();
+    await this.harness.stopConversation(record.sessionKey);
   }
   readonly channel: Channel = {
     name:"subagents",start:async()=>{},stop:async()=>{for (const timer of this.timers.values()) clearTimeout(timer);this.timers.clear();},

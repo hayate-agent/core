@@ -121,6 +121,8 @@ export class Dispatcher {
       }
       // stop() can arrive while the durable claim is committing.
       if (this.stopped) return;
+      const current = this.store.list().find(item => item.id === claimed.id);
+      if (current?.status !== "running" || current.token !== claimed.token) continue;
       const abort = new AbortController();
       const done = Promise.resolve().then(() => this.run(claimed, abort));
       this.active.set(task.id, { abort, done });
@@ -128,8 +130,13 @@ export class Dispatcher {
   }
   private async run(task: Execution, abort: AbortController): Promise<void> {
     const token = task.token!;
-    const check = (): void => { if (abort.signal.aborted) throw Error("Dispatcher execution interrupted"); };
+    const check = (): void => {
+      const current = this.store.list().find(item => item.id === task.id);
+      if (abort.signal.aborted || current?.status !== "running" || current.token !== token)
+        throw new ExecutionClaimConflict("Dispatcher execution interrupted");
+    };
     try {
+      check();
       const result = await this.strategy.execute(task, {
         signal: abort.signal,
         status: async text => { check(); await this.store.report(task.id, token, text); await this.flushEvents(); },

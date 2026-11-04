@@ -260,10 +260,10 @@ export const COMMANDS: Command[] = [
   },
   {
     name: "stop",
-    help: "Stop the running turn and clear this session's queue",
+    help: "Revoke this conversation's turn, queue, continuations and children; recurring sources stay enabled",
     run: async (_a, input, ctx) => {
       const dropped = await ctx.harness.stopConversation(input.sessionKey);
-      return `⏹️ Stopped${dropped ? `, ${dropped} queued dropped` : ""}.`;
+      return `⏹️ Stopped${dropped ? `, ${dropped} queued dropped` : ""}. Recurring sources are unchanged: enabled loops, heartbeats, standing goals and cron schedules can create new work. External effects already performed are not rolled back.`;
     },
   },
   {
