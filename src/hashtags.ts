@@ -27,6 +27,8 @@ export function parseHashtags(text: string): string[] {
       continue;
     }
     if (block || /^(?: {4}|\t)|^\s*>/.test(line)) continue;
+    // Copied native activity envelopes are observations, not operator tag choices.
+    if (/^task [a-f0-9]{16} · .* · (?:Main|Worker|Review) · /.test(line)) continue;
     // Unbalanced quoting is ambiguous; ignore the remainder rather than infer intent.
     const plain = line.replace(/`[^`]*(?:`|$)|"[^"]*(?:"|$)|'[^']*(?:'|$)|\[[^\]]*\]\([^)]*\)/g, " ");
     for (const match of plain.matchAll(/(?:^|\s)#([a-zA-Z][a-zA-Z0-9]*(?:-[a-zA-Z0-9]+)*)(?=$|\s|[.,!?;:])/g)) tags.add(match[1].toLowerCase());

@@ -17,16 +17,16 @@ async function until(check: () => boolean) {
 }
 
 test("semantic classifier generates, reuses exact umbrella tags, retains uncertainty, rejects invalid responses and outage", async () => {
-  let raw = '{"topic":null,"tags":["hashtag-routing"]}';
+  let raw = '{"topic":null,"inherit":false,"tags":["hashtag-routing"]}';
   const label = semanticTopicLabeler({ review: async (_p, model, thinking) => {
     assert.equal(model, "configured/checker"); assert.equal(thinking, "off"); return raw;
   } }, () => "configured/checker");
   assert.deepEqual(await label("Implement automatic topic labels", []), ["hashtag-routing"]);
-  raw = '{"topic":"a","tags":["worker-activity"]}';
+  raw = '{"topic":"a","inherit":true,"tags":["worker-activity"]}';
   assert.deepEqual(await label("repair worker activity", [{ id: "a", text: "labels", tags: ["hashtags", "routing"] }]), ["hashtags", "routing", "worker-activity"]);
   raw = '{"ambiguous":true}';
   assert.deepEqual(await label("Weiter?", []), ["topic-clarification"]);
-  for (raw of [ '{"topic":"unknown","tags":["x"]}', '{"topic":null,"tags":[]}', '{"topic":null,"tags":["#spoof"]}', 'not json', 'null']) {
+  for (raw of [ '{"topic":"unknown","tags":["x"]}', '{"topic":null,"inherit":false,"tags":[]}', '{"topic":null,"inherit":false,"tags":["#spoof"]}', 'not json', 'null']) {
     await assert.rejects(label("Weiter?", []), /Automatic topic labels:/);
   }
   await assert.rejects(semanticTopicLabeler({ review: async () => { throw Error("SECRET"); } }, () => undefined)("work", []), error => !String(error).includes("SECRET"));
@@ -37,20 +37,20 @@ test("semantic classifier generates, reuses exact umbrella tags, retains uncerta
 
 test("selected umbrellas do not consume the bounded new-tag allowance", async () => {
   const tags = ["hashtag-management", "conversation-context", "result-routing"];
-  let raw = JSON.stringify({ topic: "selected", tags: [...tags, "dispatcher-context"] });
+  let raw = JSON.stringify({ topic: "selected", inherit: true, tags: [...tags, "dispatcher-context"] });
   const label = semanticTopicLabeler({ review: async () => raw }, () => undefined);
   const candidates = [{ id: "selected", text: "topic", tags }];
   assert.deepEqual(await label("repair routing", candidates), [...tags, "dispatcher-context"]);
-  raw = JSON.stringify({ topic: "selected", tags: ["dispatcher-context"] });
+  raw = JSON.stringify({ topic: "selected", inherit: true, tags: ["dispatcher-context"] });
   assert.deepEqual(await label("repair routing", candidates), [...tags, "dispatcher-context"], "host preserves omitted umbrellas");
-  raw = JSON.stringify({ topic: "selected", tags: [...tags, "one", "two", "three"] });
+  raw = JSON.stringify({ topic: "selected", inherit: true, tags: [...tags, "one", "two", "three"] });
   assert.deepEqual(await label("repair routing", candidates), [...tags, "one", "two", "three"]);
   for (const invalid of [
-    { topic: "selected", tags: ["one", "two", "three", "four"] },
-    { topic: "selected", tags: [...tags, "one", "two", "three", "four"] },
-    { topic: null, tags: [...tags, "dispatcher-context"] },
-    { topic: "selected", tags: Array(7).fill(tags[0]) },
-    { topic: "selected", tags: [...tags, "#invalid"] },
+    { topic: "selected", inherit: true, tags: ["one", "two", "three", "four"] },
+    { topic: "selected", inherit: true, tags: [...tags, "one", "two", "three", "four"] },
+    { topic: null, inherit: false, tags: [...tags, "dispatcher-context"] },
+    { topic: "selected", inherit: true, tags: Array(7).fill(tags[0]) },
+    { topic: "selected", inherit: true, tags: [...tags, "#invalid"] },
   ]) {
     raw = JSON.stringify(invalid);
     await assert.rejects(label("repair routing", candidates), /invalid tags/);
@@ -76,7 +76,7 @@ test("automatic ingress anchor reaches real dispatcher, worker opening/tool acti
   };
   let calls = 0;
   const h = new Harness({ runtime, tickMs: 60000, busyMode: "queue", executionStore: store,
-    topicLabeler: semanticTopicLabeler({ review: async () => { calls++; return '{"topic":null,"tags":["automatic-topics"]}'; } }, () => "checker") });
+    topicLabeler: semanticTopicLabeler({ review: async () => { calls++; return '{"topic":null,"inherit":false,"tags":["automatic-topics"]}'; } }, () => "checker") });
   const bridge = new DispatcherRuntime(h, store);
   dispatcher = new Dispatcher(store, bridge.strategy, 1, async () => {}, error => { throw error; }, key => h.dependencyCheckpoint(key));
   const events: ActivityEvent[] = [];
@@ -119,7 +119,7 @@ test("interleaved topics select semantic origin rather than latest topic; explic
       calls++;
       const data = JSON.parse(prompt.slice(prompt.lastIndexOf('\n') + 1));
       const candidate = data.candidates.find((c: { text: string }) => c.text.includes("database"));
-      return JSON.stringify({ topic: candidate.id, tags: ["connection-retry"] });
+      return JSON.stringify({ topic: candidate.id, inherit: true, tags: ["connection-retry"] });
     } }, () => undefined) });
   const channel = new MemoryChannel(); h.addChannel(channel); await h.start(); t.after(() => h.stop(1000));
   await h.accept(msg("repair database #storage")); await until(() => h.isDrained());
@@ -139,7 +139,7 @@ for (const failure of ["outage", "timeout"]) test(`${failure}: durable ingress s
   let at = 1000, calls = 0, turns = 0, available = false;
   const h = new Harness({ runtime: new FakeRuntime(() => { turns++; return "answer"; }), now: () => at, tickMs: 60000,
     topicLabeler: semanticTopicLabeler({ review: async () => {
-      if (available) return '{"topic":null,"tags":["status"]}';
+      if (available) return '{"topic":null,"inherit":false,"tags":["status"]}';
       calls++; if (failure === "timeout") return new Promise(() => {}); throw Error("offline");
     } }, () => undefined, 5) });
   h.onStateChange = async () => writeFile(file, JSON.stringify({ pending: h.pendingInputs(), seen: h.seenIds() }));
@@ -207,10 +207,10 @@ test("Harness supplies persisted adjacent conversation for interleaved follow-up
     if (data.incoming === "Ja, genau diese Retry-Erklärung.") {
       const topic = data.candidates.find((c: any) => c.tags.includes("hashtag-feature"));
       assert.ok(topic);
-      return JSON.stringify({ topic: topic.id, tags: [] });
+      return JSON.stringify({ topic: topic.id, inherit: true, tags: [] });
     }
-    if (data.incoming.includes("Welchem Thema")) return '{"topic":null,"tags":["hashtag-feature"]}';
-    return '{"topic":null,"tags":["garden-planning"]}';
+    if (data.incoming.includes("Welchem Thema")) return '{"topic":null,"inherit":false,"tags":["hashtag-feature"]}';
+    return '{"topic":null,"inherit":false,"tags":["garden-planning"]}';
   } }, () => undefined);
   const h = new Harness({ runtime: new FakeRuntime(t => t.includes("Datenbank") ? "Index erklärt." : "Retry bleibt dauerhaft erhalten."), tickMs: 60000, topicLabeler: labeler });
   h.addChannel(new MemoryChannel()); await h.start();
