@@ -7,32 +7,38 @@ import { DispatcherRuntime } from "../src/dispatcher-runtime.js";
 import { Dispatcher } from "../src/dispatcher.js";
 import { ExecutionStore, type ExecutionEvent } from "../src/execution.js";
 import { Harness } from "../src/harness.js";
-import { parsePlan, stepStatus, type SequentialState } from "../src/dispatcher-sequential.js";
+import { parsePlan, planPrompt, stepStatus, type SequentialState } from "../src/dispatcher-sequential.js";
 import { FakeRuntime } from "./fakes.js";
 import type { ModelRoles } from "../src/model-roles.js";
-import type { OpenSessionOptions, PromptOptions } from "../src/types.js";
+import type { AgentRuntime, OpenSessionOptions, PromptOptions } from "../src/types.js";
+import type { PlannerHttpOutcome, PlannerHttpRequest } from "../src/planner-http.js";
 
 const roles: ModelRoles = { enabled: true, roles: {
+  reviewer: { model: "p/review", thinking: "off" },
   dispatcher: { model: "p/disp", thinking: "low" }, simple: { model: "p/cheap", thinking: "off" },
   medium: { model: "p/mid", thinking: "medium" }, high: { model: "p/top", thinking: "high" },
 } };
 const defaults = { model: "p/default", thinking: "high" };
 const steps = (...list: Array<[string, string]>) => JSON.stringify({ steps: list.map(([task, role]) => ({ task, role, reason: `${role} suffices`, evidence: `evidence of ${task}` })) });
 
-interface Script { plan?: string | (() => string); worker?: (prompt: string, model?: string) => string; tools?: (prompt: string) => number }
+interface Script { verdict?: string; plan?: string | (() => string); worker?: (prompt: string, model?: string) => string; tools?: (prompt: string) => number }
 /** Real Harness, store and dispatcher; fake model runtime emitting observed selection and tool events. */
-async function setup(t: import("node:test").TestContext, script: Script, opts: { roles?: ModelRoles; unavailable?: string[]; home?: string; file?: string } = {}) {
+async function setup(t: import("node:test").TestContext, script: Script, opts: { roles?: ModelRoles; unavailable?: string[]; home?: string; file?: string;
+  http?: (request: PlannerHttpRequest) => Promise<PlannerHttpOutcome> } = {}) {
   const home = opts.home ?? await mkdtemp(path.join(os.tmpdir(), "seq-dispatch-"));
   const file = opts.file ?? path.join(home, "executions.json");
   const calls = { plan: [] as Array<{ options: OpenSessionOptions; model?: string }>, worker: [] as Array<{ prompt: string; model?: string; thinking?: string }> };
   const runtime = new FakeRuntime() as FakeRuntime & { modelPreflight: (ref: string) => Promise<{ available: boolean; thinkingSupported: boolean }> };
   runtime.modelPreflight = async ref => ({ available: !(opts.unavailable ?? []).includes(ref), thinkingSupported: true });
+  const http: PlannerHttpRequest[] = [];
+  if (opts.http) (runtime as AgentRuntime).planDispatchHttp = async request => { http.push(request); return opts.http!(request); };
   const open = runtime.open.bind(runtime);
   runtime.open = async (key: string, options: OpenSessionOptions = {}) => {
     const session = await open(key, options);
     const prompt = session.prompt.bind(session);
     session.prompt = async (text: string, o: PromptOptions = {}) => {
       o.onEvent?.({ type: "execution", selection: { model: o.model ?? "p/default", thinking: o.thinking ?? "high" } } as never);
+      if (options.assessmentPurpose === "supervisor") return script.verdict ?? '{"state":"completed"}';
       if (key.startsWith("plan:")) {
         calls.plan.push({ options, model: o.model });
         await prompt(text, o);
@@ -58,7 +64,7 @@ async function setup(t: import("node:test").TestContext, script: Script, opts: {
     if (event.type === "result" || (event.type === "status" && ["blocked", "paused"].includes(event.status ?? ""))) settle();
   }, () => {});
   t.after(async () => { await dispatcher.stop(); await harness.stop(1000); if (!opts.home) await rm(home, { recursive: true, force: true }); });
-  return { home, file, store, dispatcher, harness, bridge, runtime, calls, events,
+  return { home, file, store, dispatcher, harness, bridge, runtime, calls, events, http,
     async run(input: string, dependency?: { expiresAt?: number }) {
       settled = new Promise<void>(r => { settle = r; });
       await dispatcher.start();
@@ -154,6 +160,24 @@ test("interrupted step with unsafe intent and no evidence blocks on restart inst
   assert.equal(after.status, "blocked");
   assert.equal(env.calls.worker.length, 0); assert.equal(env.calls.plan.length, 0);
   assert.ok(after.intent);
+});
+
+test("worker STEP-STATUS cannot admit a successor without independent completion", async t => {
+  for (const verdict of ['{"state":"blocked"}', '{"state":"uncertain"}', 'invalid']) {
+    const env = await setup(t, { plan: steps(["first", "simple"], ["second", "simple"]), verdict });
+    const task = await env.run("two steps");
+    assert.equal(task.status, "paused");
+    assert.equal(env.calls.worker.length, 1);
+    assert.equal((JSON.parse(task.checkpoint!) as SequentialState).outcomes.length, 0);
+  }
+});
+
+test("missing independent reviewer blocks after worker proposal, without successor", async t => {
+  const env = await setup(t, { plan: steps(["first", "simple"], ["second", "simple"]) }, { unavailable: ["p/review"] });
+  const task = await env.run("two steps");
+  assert.ok(task.status === "paused" || task.status === "blocked");
+  assert.equal(env.calls.worker.length, 1);
+  assert.equal((JSON.parse(task.checkpoint!) as SequentialState).outcomes.length, 0);
 });
 
 test("missing cheap role blocks visibly instead of silently using the default model", async t => {
@@ -261,4 +285,72 @@ test("direct strategy remains the default and unchanged", async t => {
   assert.ok([...runtime.sessions.keys()].every(key => !key.startsWith("plan:")));
   const { dispatcherConfig } = await import("../src/dispatcher-config.js");
   assert.equal(dispatcherConfig().strategy, "direct");
+});
+
+test("HTTP planner capability: one tool-free request, same prompt and closed plan, no planner session", async t => {
+  const env = await setup(t, {}, { http: async request => {
+    request.observe?.({ model: "p/disp", thinking: "low" });
+    return { status: "ok", text: steps(["read file", "simple"], ["summarise", "medium"]) };
+  } });
+  const task = await env.run("read README and report its title");
+  assert.equal(task.status, "completed");
+  assert.equal(env.http.length, 1); assert.equal(env.calls.plan.length, 0);
+  assert.deepEqual(env.http[0]!.requested, { model: "p/disp", thinking: "low" });
+  assert.equal(env.http[0]!.prompt, planPrompt("read README and report its title"));
+  assert.deepEqual(env.calls.worker.map(c => c.model), ["p/cheap", "p/mid"]);
+  const s = state(task.checkpoint);
+  assert.deepEqual(s.planner, { requested: { model: "p/disp", thinking: "low" }, observed: { model: "p/disp", thinking: "low" } });
+  assert.ok([...env.runtime.sessions.keys()].every(key => !key.startsWith("plan:")));
+});
+
+test("HTTP planner output passes the same strict validation: malformed and oversize block without repair", async t => {
+  for (const text of ["not json", steps(["x", "expensive"]), JSON.stringify({ steps: [], extra: 1 }), " ".repeat(32001) + steps(["x", "simple"])]) {
+    const env = await setup(t, {}, { http: async () => ({ status: "ok", text }) });
+    const task = await env.run("read");
+    assert.equal(task.status, "paused");
+    assert.equal(env.http.length, 1); assert.equal(env.calls.plan.length, 0); assert.equal(env.calls.worker.length, 0);
+    assert.equal(task.checkpoint, undefined);
+    assert.ok(env.events.some(e => /keinen gültigen begrenzten Plan/.test(e.text)));
+  }
+});
+
+test("HTTP provider error, abort/timeout and unsupported role block explicitly without fallback", async t => {
+  const failed = await setup(t, {}, { http: async () => ({ status: "failed" }) });
+  assert.equal((await failed.run("read")).status, "paused");
+  assert.ok(failed.events.some(e => /technisch fehlgeschlagen; kein Modellwechsel/.test(e.text)));
+  const thrown = await setup(t, {}, { http: async () => { throw Error("Planning stopped"); } });
+  assert.equal((await thrown.run("read")).status, "paused");
+  assert.ok(thrown.events.some(e => /technisch fehlgeschlagen/.test(e.text)));
+  const unsupported = await setup(t, {}, { http: async () => ({ status: "unsupported" }) });
+  assert.equal((await unsupported.run("read")).status, "paused");
+  assert.ok(unsupported.events.some(e => /Planer-HTTP unterstützt die dispatcher-Rolle p\/disp\/low nicht/.test(e.text)));
+  for (const env of [failed, thrown, unsupported]) {
+    assert.equal(env.http.length, 1); assert.equal(env.calls.plan.length, 0); assert.equal(env.calls.worker.length, 0);
+  }
+});
+
+test("HTTP planner: missing dispatcher role blocks before any request; persisted plan is never replanned", async t => {
+  const missing = await setup(t, {}, { roles: { enabled: true, roles: { simple: roles.roles!.simple } }, http: async () => ({ status: "ok", text: steps(["x", "simple"]) }) });
+  assert.equal((await missing.run("read")).status, "paused");
+  assert.equal(missing.http.length, 0);
+  assert.ok(missing.events.some(e => /Model role dispatcher is not configured/.test(e.text)));
+  const home = await mkdtemp(path.join(os.tmpdir(), "seq-http-resume-"));
+  t.after(() => rm(home, { recursive: true, force: true }));
+  const file = path.join(home, "executions.json");
+  const first = await setup(t, { plan: steps(["one", "simple"], ["two", "simple"]),
+    worker: prompt => /STEP 1\/2/.test(prompt) ? "done one\nSTEP-STATUS: complete" : "partial" }, { home, file,
+    http: async () => ({ status: "ok", text: steps(["one", "simple"], ["two", "simple"]) }) });
+  const paused = await first.run("two steps");
+  assert.equal(paused.status, "paused");
+  assert.equal(first.http.length, 1);
+  await first.dispatcher.stop(); await first.harness.stop(1000);
+  const store = new ExecutionStore(file); await store.load();
+  await store.resolve("parent", paused.id, "operator", "retry", "resume");
+  const second = await setup(t, { worker: () => "done two\nSTEP-STATUS: complete" }, { home, file,
+    http: async () => ({ status: "ok", text: steps(["replanned", "high"]) }) });
+  await second.dispatcher.start();
+  while (second.store.list()[0]!.status !== "completed") await new Promise(r => setTimeout(r, 10));
+  assert.equal(second.http.length, 0); assert.equal(second.calls.plan.length, 0);
+  assert.deepEqual(second.calls.worker.map(c => c.model), ["p/cheap"]);
+  assert.match(second.calls.worker[0]!.prompt, /STEP 2\/2:\ntwo/);
 });

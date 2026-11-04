@@ -196,6 +196,8 @@ export interface AgentRuntime {
   forReviewWorktree?(cwd: string): AgentRuntime;
   reviewCodeHttp?(prompt: string, assessment: import("./builtin-plugins/review-executor.js").ReviewHttpContext, executionId: string, signal: AbortSignal): Promise<string>;
   classifyComplexityHttp?(assessment: import("./classifier-http.js").ClassifierAssessment): Promise<import("./model-roles.js").Complexity | undefined>;
+  /** Tool-free single-request sequential planner on the exact dispatcher role; no session, fallback or retry. */
+  planDispatchHttp?(request: import("./planner-http.js").PlannerHttpRequest): Promise<import("./planner-http.js").PlannerHttpOutcome>;
   readonly name: string;
   open(sessionKey: string, options?: OpenSessionOptions): Promise<RuntimeSession>;
   /** Model refs ("provider/model") usable for per-turn overrides. */
