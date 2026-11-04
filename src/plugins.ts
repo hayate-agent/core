@@ -195,7 +195,7 @@ export class PluginHost {
               if (!strategy || typeof strategy.name !== "string" || !/^[a-z][a-z0-9_-]*$/.test(strategy.name) ||
                   !Number.isSafeInteger(strategy.version) || strategy.version < 1 || typeof strategy.replaySafe !== "boolean" ||
                   typeof strategy.execute !== "function") throw new Error("Invalid dispatcher strategy");
-              if (strategy.name === "direct" || this.dispatchers.has(strategy.name)) throw new Error(`Dispatcher conflict: ${strategy.name}`);
+              if (strategy.name === "direct" || strategy.name === "sequential" || this.dispatchers.has(strategy.name)) throw new Error(`Dispatcher conflict: ${strategy.name}`);
               this.dispatchers.set(strategy.name, Object.freeze({
                 name: strategy.name, version: strategy.version, replaySafe: strategy.replaySafe,
                 execute: strategy.execute.bind(strategy),

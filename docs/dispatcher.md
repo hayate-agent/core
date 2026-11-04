@@ -44,6 +44,33 @@ authorize continuations. Approvals route to the trusted parent conversation.
 Plugins can supply other execution strategies; they are trusted process code,
 not sandboxed workers. Main cannot select replay policy in a tool call.
 
+`sequential` is an opt-in reserved built-in plan-and-execute strategy on the same
+scheduler, ledger and worker bridge. It requires enabled [model roles](model-roles.md):
+
+1. One tool-free ephemeral planner turn on the exact `dispatcher` role returns a
+   closed JSON plan of 1–6 steps, each with the lowest adequate role
+   (`simple`/`medium`/`high`), a reason and the evidence it must prove. A single
+   simple step is valid. Malformed output is a visible block, never repaired.
+2. Plan, step index and outcomes are persisted in the execution checkpoint before
+   any worker turn; each step saves an unsafe intent with its exact route first.
+3. Steps run sequentially as ordinary worker turns in the task-bound session with
+   the original task as authority. Deadline, parent stop and ownership are checked
+   before every step; approvals keep trusted parent routing. Prior outcomes are
+   passed as untrusted data.
+4. A step counts only with a final `STEP-STATUS: complete` line; anything else
+   pauses the task with a visible reason. The final result lists requested and
+   observed model per step and is produced only when every step completed.
+5. Roles are used exactly: an unconfigured or unavailable role blocks visibly
+   instead of silently using the default model. Technical planner failures never
+   switch models. A step reporting `STEP-STATUS: inadequate` without any tool call
+   is retried once one role higher; otherwise the limit is reported.
+6. Restart resumes from the persisted plan without replanning. An unresolved step
+   intent uses the existing transcript reconciliation; without retained evidence
+   it blocks for explicit operator resolution. Effects are never replayed blindly.
+
+Not yet included: parallel steps, replanning after failure, per-step operator
+approval of the plan, and plugin-visible plan inspection beyond `/dispatch` status.
+
 With an explicit nonempty model-tool allowlist, dispatcher mode adds
 `plugin_dispatch`. An empty allowlist still exposes no model tools.
 

@@ -176,7 +176,7 @@ export interface OpenSessionOptions {
   /** Ephemeral reviewer session: no persisted transcript or third-party resources. */
   ephemeral?: boolean;
   /** Host enum only, never task-supplied instructions. Requires ephemeral. */
-  assessmentPurpose?: "code-review" | "supervisor" | "dispatch-complexity";
+  assessmentPurpose?: "code-review" | "supervisor" | "dispatch-complexity" | "dispatch-plan";
   /** Start a fresh conversation instead of resuming the stored one. */
   fresh?: boolean;
   sessionId?: string;

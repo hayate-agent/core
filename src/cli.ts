@@ -599,7 +599,7 @@ async function main(argv: string[]): Promise<void> {
       return settings.effective().dispatcher?.rules;
     }, () => ({ config: settings.effective().modelRoles, defaults: { model: effectiveModels().model, thinking: effectiveModels().thinking } }));
     harness.addChannel(dispatchRuntime.channel);
-    const strategy = dispatchPolicy.strategy === "direct" ? dispatchRuntime.strategy : plugins.dispatchers.get(dispatchPolicy.strategy);
+    const strategy = dispatchPolicy.strategy === "direct" ? dispatchRuntime.strategy : dispatchPolicy.strategy === "sequential" ? dispatchRuntime.sequential : plugins.dispatchers.get(dispatchPolicy.strategy);
     if (!strategy) throw Error("Configured dispatcher strategy unavailable");
     dispatcher = new Dispatcher(executions, strategy, dispatchPolicy.capacity, async event => {
       const task = executions.list(event.parent).find(item => item.id === event.executionId);

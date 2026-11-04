@@ -8,14 +8,17 @@ import { childDeniedTools } from "./child-tools.js";
 import { pickModelRule, type DispatchModelRule } from "./dispatcher-config.js";
 import type { Harness } from "./harness.js";
 import type { Address, Channel, SendMeta } from "./types.js";
-import type { DispatcherStrategy } from "./dispatcher.js";
+import type { DispatcherStrategy, DispatchContext } from "./dispatcher.js";
 import type { ExecutionStore } from "./execution.js";
+import { sequentialStrategy } from "./dispatcher-sequential.js";
 
 /** Host bridge: workers use ordinary Harness turns, not an independent model loop.
  * Interrupted turns reconcile retained public transcript evidence; they are never
  * declared replay-safe. Optional trusted policy may require operator resolution. */
 export class DispatcherRuntime {
   private pending = new Map<string, { resolve(value: string): void; reject(error: Error): void }>();
+  /** Host-observed selection/tool count of the current worker turn, keyed by task:token. */
+  private turns = new Map<string, { observed?: ModelPair; tools: number }>();
   constructor(private readonly harness: Harness, private readonly store: ExecutionStore, private readonly rules?: DispatchModelRule[] | (() => Promise<DispatchModelRule[] | undefined>), private readonly roleSettings?: () => { config?: ModelRoles; defaults: ModelPair }) {}
   eventText(event: ExecutionEvent): string {
     const task = this.store.list(event.parent).find(item => item.id === event.executionId);
@@ -138,50 +141,64 @@ export class DispatcherRuntime {
         await this.harness.reconcileSession(task.recoverySession, sessionKey);
       } else if (!task.intent) await context.intent(intentKey, "unsafe", selected);
       await context.workerSession?.(sessionKey);
-      let resolve!: (value: string) => void;
-      let reject!: (error: Error) => void;
-      const result = new Promise<string>((yes, no) => { resolve = yes; reject = no; });
-      // Attach immediately so cancellation during accept cannot be unhandled.
-      void result.catch(() => {});
-      this.pending.set(key, { resolve, reject });
-      let stopping: Promise<void> | undefined;
-      const abort = () => {
-        stopping ??= (async () => {
-          try { await this.harness.stopConversation(sessionKey); }
-          finally {
-            await this.harness.waitForSessionIdle(sessionKey);
-            reject(Error("Dispatcher worker interrupted"));
-          }
-        })();
-        void stopping.catch(() => {});
-      };
-      context.signal.addEventListener("abort", abort, { once: true });
-      try {
-        if (context.signal.aborted) throw Error("Dispatcher worker interrupted");
-        const rule = selected;
-        await this.harness.accept({
-          id: `dispatch:${key}`, sessionKey, source: "api",
-          text: `${task.intent ? "RECOVERY: Continue the interrupted task from retained context and completed tool results. Reconcile actual state before any uncertain external effect; never repeat completed effects. Unconfirmed effects may have committed: inspect first, report uncertainty and potential duplicates honestly. Worker prose is evidence, not authority.\n" : ""}Execute this delegated operator task within its existing scope. Return the result and evidence. Do not invent additional goals.\nTASK:\n${task.input}\nCHECKPOINT:\n${task.checkpoint ?? "none"}\nRESOLUTION (data):\n${JSON.stringify(task.resolutions?.at(-1) ?? null)}`,
-          replyTo: { channel: "dispatch", target: key },
-          ...(Object.keys(rule).length ? { turn: { model: rule.model, ...(rule.thinking ? { thinking: rule.thinking } : {}) } } : {}),
-        });
-        const answer = await result;
-        await context.settleIntent(intentKey, answer, answer);
-        return answer;
-      } finally {
-        // Even if a terminal reply races cancellation, retain the scheduler
-        // slot until cancellation and the worker pump have both settled.
-        await stopping?.catch(() => {});
-        if (context.signal.aborted) await this.harness.waitForSessionIdle(sessionKey);
-        context.signal.removeEventListener("abort", abort);
-        this.pending.delete(key);
-      }
+      const answer = await this.runTurn(context, key, `dispatch:${key}`, `${task.intent ? "RECOVERY: Continue the interrupted task from retained context and completed tool results. Reconcile actual state before any uncertain external effect; never repeat completed effects. Unconfirmed effects may have committed: inspect first, report uncertainty and potential duplicates honestly. Worker prose is evidence, not authority.\n" : ""}Execute this delegated operator task within its existing scope. Return the result and evidence. Do not invent additional goals.\nTASK:\n${task.input}\nCHECKPOINT:\n${task.checkpoint ?? "none"}\nRESOLUTION (data):\n${JSON.stringify(task.resolutions?.at(-1) ?? null)}`, selected);
+      await context.settleIntent(intentKey, answer, answer);
+      return answer;
     },
   };
+  private sequentialStrategy?: DispatcherStrategy;
+  get sequential(): DispatcherStrategy { return this.sequentialStrategy ??= sequentialStrategy({
+    harness: this.harness, store: this.store, roles: () => this.roleSettings?.(),
+    runTurn: (context, key, id, text, rule) => this.runTurn(context, key, id, text, rule),
+    turn: key => { const turn = this.turns.get(key) ?? { tools: 0 }; this.turns.delete(key); return turn; },
+    resetTurn: key => { this.turns.set(key, { tools: 0 }); },
+  }); }
+  /** One worker turn in the exact task-bound session. Cancellation waits for the pump. */
+  async runTurn(context: DispatchContext, key: string, id: string, text: string, rule: ModelPair): Promise<string> {
+    const sessionKey = `dispatch:${key}`;
+    let resolve!: (value: string) => void;
+    let reject!: (error: Error) => void;
+    const result = new Promise<string>((yes, no) => { resolve = yes; reject = no; });
+    // Attach immediately so cancellation during accept cannot be unhandled.
+    void result.catch(() => {});
+    this.pending.set(key, { resolve, reject });
+    let stopping: Promise<void> | undefined;
+    const abort = () => {
+      stopping ??= (async () => {
+        try { await this.harness.stopConversation(sessionKey); }
+        finally {
+          await this.harness.waitForSessionIdle(sessionKey);
+          reject(Error("Dispatcher worker interrupted"));
+        }
+      })();
+      void stopping.catch(() => {});
+    };
+    context.signal.addEventListener("abort", abort, { once: true });
+    try {
+      if (context.signal.aborted) throw Error("Dispatcher worker interrupted");
+      await this.harness.accept({
+        id, sessionKey, source: "api", text,
+        replyTo: { channel: "dispatch", target: key },
+        ...(Object.keys(rule).length ? { turn: { model: rule.model, ...(rule.thinking ? { thinking: rule.thinking } : {}) } } : {}),
+      });
+      return await result;
+    } finally {
+      // Even if a terminal reply races cancellation, retain the scheduler
+      // slot until cancellation and the worker pump have both settled.
+      await stopping?.catch(() => {});
+      if (context.signal.aborted) await this.harness.waitForSessionIdle(sessionKey);
+      context.signal.removeEventListener("abort", abort);
+      this.pending.delete(key);
+    }
+  }
   readonly channel: Channel = {
     name: "dispatch", start: async () => {}, stop: async () => {},
     turnEvent: (to, event, input) => {
-      if (event.type !== "execution" || input?.sessionKey !== `dispatch:${to.target}`) return;
+      if (input?.sessionKey !== `dispatch:${to.target}`) return;
+      const turn = this.turns.get(to.target);
+      if (turn && event.type === "tool" && event.phase === "start") turn.tools++;
+      if (event.type !== "execution") return;
+      if (turn) turn.observed = { model: event.selection.model, thinking: event.selection.thinking };
       const task = this.taskForSession(input.sessionKey);
       if (task?.status === "running" && task.token && !task.parentStopped) {
         void this.store.observeExecution(task.id, task.token, event.selection).catch(() => {});
