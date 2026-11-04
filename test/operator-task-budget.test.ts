@@ -109,22 +109,96 @@ test('no resurrection of stopped/completed/expired/explicit blocked or paused ta
   await assert.rejects(f.h.controlTaskBudget(key, 'a', 'reset', f.token(), 'r', 'owner'));
 });
 
-test('three real recovery failures retain diagnostics but do not require operator budget reset', async () => {
-  const runtime = new FakeRuntime(); let now = 1000;
-  const h = new Harness({ runtime, now: () => now, completionCheck: async () => { throw Error('assessment failed'); } });
-  h.onStateChange = async () => {};
-  h.restoreSessions([{ key, tasks: [{ id: 'a', original: 'work', state: 'active', depth: 5 }] }]);
-  for (let i = 0; i < 3; i++) { await h.recoverTasks(); now += 61000; }
-  let status = h.taskBudgetStatus(key, 'a');
-  assert.equal(status.task.recoveryRetry?.attempts, 3);
-  assert.equal(status.task.termination, undefined);
-  assert.equal(status.task.explicitBlocked, false);
-  assert.equal(status.task.depth, 5);
-  assert.equal(status.task.state, 'blocked');
-  assert.match(status.task.next!, /supervisor admission unavailable/);
-  await assert.rejects(h.controlTaskBudget(key, 'a', 'reset', status.token, 'recovery', 'owner'), /not host budget-blocked/);
-  assert.equal(h.pendingInputs().length, 0);
+for (const failure of ['technical', 'invalid'] as const)
+test(`three ${failure} recovery assessment failures terminate once, notify by default and accept the supported reset after reload`, async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'exhausted-recovery-'));
+  const store = new StateStore(path.join(dir, 'state.json'));
+  let now = 1000, checks = 0, turns = 0;
+  const check = async () => { checks++; if (failure === 'technical') throw Error('assessment failed'); return undefined; };
+  const make = () => {
+    const runtime = new FakeRuntime(() => { turns++; return 'verified'; });
+    // Default gateway config: optional recovery diagnostics stay off.
+    const h = new Harness({ runtime, now: () => now, tickMs: 60000, completionCheck: check });
+    const ch = new MemoryChannel(); h.addChannel(ch);
+    h.onStateChange = () => store.save({ version: 1, paused: false, busyMode: 'queue', sessions: h.snapshotSessions(), pending: h.pendingInputs(), outbox: h.outboxEntries() });
+    return { h, ch, runtime };
+  };
+  let a = make();
+  try {
+    a.h.restoreSessions([{ key, replyTo: { channel: 'mem', target: 'room1' }, tasks: [{ id: 'a', original: 'work', state: 'active', depth: 5, expiresAt: 10_000_000 }] }]);
+    for (let i = 0; i < 3; i++) {
+      // Restart before each attempt: counter and backoff survive JSON reload.
+      const saved = await store.load();
+      if (saved) { await a.h.stop(0); a = make(); a.h.restoreSessions(saved.sessions); a.h.restoreOutbox(saved.outbox ?? []); }
+      await a.h.recoverTasks(); now += 61000;
+    }
+    assert.equal(checks, 3);
+    const loaded = (await store.load())!;
+    const saved = loaded.sessions[0]!.tasks![0]!;
+    assert.equal(saved.state, 'blocked');
+    assert.equal(saved.termination, 'recovery_assessment_failed');
+    assert.equal(saved.explicitBlocked, false);
+    assert.equal(saved.recoveryRetry?.attempts, 3);
+    assert.equal(saved.depth, 5);
+    assert.equal(saved.expiresAt, 10_000_000);
+    assert.match(String(saved.recoveryAttentionId), /^task-recovery-exhausted:/);
+    assert.equal(loaded.outbox?.length, 1);
+    assert.match(loaded.outbox![0]!.text, /ausgeschöpft/);
+    assert.equal(loaded.pending?.length ?? 0, 0);
+    // Restart: no fourth assessment, no duplicate notice, no worker turn; exactly one delivery.
+    await a.h.stop(0); a = make();
+    a.h.restoreSessions(loaded.sessions); a.h.restoreOutbox(loaded.outbox ?? []);
+    await a.h.recoverTasks(); now += 61000; await a.h.recoverTasks();
+    a.h.releaseRestored(); await a.h.drained(); await a.h.tick(); await a.h.drained();
+    assert.equal(checks, 3);
+    assert.equal(a.h.outboxEntries().filter(e => e.id !== loaded.outbox![0]!.id).length, 0);
+    assert.equal(a.ch.sent.filter(m => /ausgeschöpft/.test(m.text)).length, 1);
+    assert.equal(turns, 0);
+    assert.equal(a.h.pendingInputs().length, 0);
+    // The supported reset is now eligible; it does not extend the deadline.
+    const status = a.h.taskBudgetStatus(key, 'a');
+    assert.match(await a.h.controlTaskBudget(key, 'a', 'reset', status.token, 'recovery', 'owner'), /^Committed/);
+    assert.match(await a.h.controlTaskBudget(key, 'a', 'reset', status.token, 'recovery', 'owner'), /^Already committed/);
+    const reset = (await store.load())!.sessions[0]!.tasks![0]!;
+    assert.equal(reset.termination, 'operator_budget_reset');
+    assert.equal(reset.recoveryRetry, undefined);
+    assert.equal(reset.recoveryAttentionId, undefined);
+    assert.equal(reset.state, 'blocked');
+    assert.equal(reset.expiresAt, 10_000_000);
+    assert.equal(a.h.pendingInputs().length, 0);
+    assert.equal(turns, 0);
+  } finally { await a.h.stop(0); await rm(dir, { recursive: true, force: true }); }
+});
+
+test('exhaustion does not touch stopped, expired, paused, semantic-blocked or legacy silently blocked tasks', async () => {
+  let checks = 0;
+  const now = 1000;
+  const legacy: DurableTask = { id: 'legacy', original: 'old', state: 'blocked', depth: 0, explicitBlocked: false, recoveryAssessment: 'decided',
+    recoveryRetry: { attempts: 3, nextAt: 0, diagnostic: 'technical' }, next: 'Independent supervisor admission unavailable; retained task requires assessment before productive continuation.' };
+  const tasks: DurableTask[] = [
+    { id: 'stopped', original: 'x', state: 'stopped', depth: 0, recoveryRetry: { attempts: 3, nextAt: 0 } },
+    { id: 'expired', original: 'x', state: 'active', depth: 0, expiresAt: 999, recoveryRetry: { attempts: 3, nextAt: 0 } },
+    { id: 'semantic', original: 'x', state: 'blocked', depth: 0, explicitBlocked: true, next: 'Need operator choice', recoveryRetry: { attempts: 3, nextAt: 0 } },
+    legacy,
+  ];
+  const before = structuredClone(tasks);
+  const h = new Harness({ runtime: new FakeRuntime(), now: () => now, completionCheck: async () => { checks++; return undefined; } });
+  h.addChannel(new MemoryChannel()); h.onStateChange = async () => {};
+  h.restoreSessions([{ key, replyTo: { channel: 'mem', target: 'room1' }, tasks }]);
+  await h.recoverTasks();
+  assert.deepEqual(h.snapshotSessions()[0]!.tasks, before);
+  assert.equal(h.outboxEntries().length, 0);
+  assert.equal(checks, 0);
+  // Legacy silent blocks are not inferred terminal; the reset still rejects them.
+  await assert.rejects(h.controlTaskBudget(key, 'legacy', 'reset', h.taskBudgetStatus(key, 'legacy').token, 'r', 'owner'), /not host budget-blocked/);
   await h.stop(0);
+  const p = new Harness({ runtime: new FakeRuntime(), now: () => now, completionCheck: async () => { checks++; return undefined; } });
+  p.addChannel(new MemoryChannel()); p.onStateChange = async () => {}; p.paused = true;
+  p.restoreSessions([{ key, replyTo: { channel: 'mem', target: 'room1' }, tasks: [{ id: 'p', original: 'x', state: 'active', depth: 0, recoveryRetry: { attempts: 3, nextAt: 0 } }] }]);
+  await p.recoverTasks();
+  assert.equal(p.snapshotSessions()[0]!.tasks![0]!.termination, undefined);
+  assert.equal(p.outboxEntries().length, 0);
+  await p.stop(0);
 });
 
 
