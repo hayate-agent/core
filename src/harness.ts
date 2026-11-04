@@ -897,11 +897,27 @@ export class Harness {
       technical: { verdict: task.supervisorDecision?.verdict, diagnostic: task.supervisorDecision?.diagnostic,
         assessment: task.recoveryAssessment, attempts: task.recoveryRetry?.attempts, nextAt: task.recoveryRetry?.nextAt,
         retryDiagnostic: task.recoveryRetry?.diagnostic, termination: task.termination },
+      recentMessages: structuredClone(s.completionRecent ?? []),
+      workers: this.workerOutcomes(s.key, task.id),
     } } : {}), recent: structuredClone(s.completionRecent ?? []), tasks: this.tasks(s).slice(-8).map(task => ({
       id: task.id.slice(0, 128), original: task.original.slice(0, 2000), state: task.state,
       ...(task.next ? { next: task.next.slice(0, 1000) } : {}),
       ...(task.wait ? { wait: { reason: task.wait.reason.slice(0, 1000), deadline: task.wait.deadline } } : {}),
     })) };
+  }
+
+  /** Persisted execution outcomes deterministically bound by dependency.taskId.
+   * Unrelated executions are counted only; credentials and receipts never leave the store. */
+  private workerOutcomes(key: string, taskId: string): NonNullable<NonNullable<NonNullable<Inbound["completionContext"]>["retained"]>["workers"]> | undefined {
+    const store = this.opts.executionStore;
+    if (!store) return;
+    let all: import("./execution.js").Execution[];
+    try { all = store.list(key); } catch { return { provenance: "host-execution-store", items: [], omitted: 0, unassociated: 0 }; }
+    const bound = all.filter(e => e.dependency?.taskId === taskId);
+    const items = bound.slice(-8).map(e => ({ id: e.id, requestId: e.requestId.slice(0, 256), status: e.status, restarts: e.restarts,
+      ...(e.diagnosticCode ? { diagnosticCode: e.diagnosticCode } : {}), ...(e.parentStopped ? { parentStopped: true } : {}),
+      ...(e.result !== undefined ? { result: e.result.slice(0, 2000), resultChars: e.result.length, ...(e.result.length > 2000 ? { truncated: true as const } : {}) } : {}) }));
+    return { provenance: "host-execution-store", items, omitted: bound.length - items.length, unassociated: all.length - bound.length };
   }
 
   /** Install a host-configured scheduled mandate before submitting its worker.

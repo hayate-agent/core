@@ -82,6 +82,43 @@ export function renderCompletionPrompt(strategy: CompletionPrompt, input: Inboun
     if (best < 0) return false;
     apply(best); return true;
   };
+  // Task-bound state survives the budget fallback before transcript evidence:
+  // original mandate, saved next/technical state, worker outcomes, then recent
+  // messages (newest first). Shortened sections are named in `truncated`.
+  const retained = input.completionContext?.retained;
+  const kept = retained && { original: "", technical: retained.technical, truncated: [] as string[],
+    ...(retained.savedNext !== undefined ? { savedNext: "" } : {}),
+    recentMessages: [] as NonNullable<typeof retained.recentMessages>,
+    ...(retained.workers ? { workers: { ...retained.workers, items: [] as typeof retained.workers.items } } : {}) };
+  if (retained && kept) {
+    projected.completionContext!.retained = kept;
+    const mark = (section: string) => { if (!kept.truncated.includes(section)) kept.truncated.push(section); };
+    if (!fit(retained.original.length, size => { kept.original = prefix(retained.original, size); })) kept.original = "";
+    if (kept.original.length < retained.original.length) mark("original");
+    if (retained.savedNext !== undefined) {
+      if (!fit(retained.savedNext.length, size => { kept.savedNext = prefix(retained.savedNext!, size); })) kept.savedNext = "";
+      if (kept.savedNext!.length < retained.savedNext.length) mark("savedNext");
+    }
+    for (const item of retained.workers?.items ?? []) {
+      const { result, ...meta } = item;
+      const record: typeof item = { ...meta };
+      kept.workers!.items.push(record);
+      if (result === undefined) { if (!fitsCompletionPrompt(render(projected, response))) { kept.workers!.items.pop(); kept.workers!.omitted++; mark("workers"); } continue; }
+      if (!fit(Math.min(1000, result.length), size => { record.result = prefix(result, size); if (size < result.length) record.truncated = true; else delete record.truncated; })) {
+        kept.workers!.items.pop(); kept.workers!.omitted++; mark("workers");
+      } else if (record.truncated) mark("workers");
+    }
+    for (const message of [...retained.recentMessages ?? []].reverse()) {
+      const record: typeof message = { role: message.role, text: "" };
+      kept.recentMessages.unshift(record);
+      const total = message.totalChars ?? message.text.length;
+      if (!fit(Math.min(1000, message.text.length), size => { record.text = prefix(message.text, size);
+        if (size < message.text.length || message.truncated) { record.truncated = true; record.totalChars = total; } else { delete record.truncated; delete record.totalChars; } })) {
+        kept.recentMessages.shift(); mark("recentMessages");
+      } else if (record.truncated) mark("recentMessages");
+    }
+    if (retained.priorReply !== undefined) mark("priorReply");
+  }
   // Latest current branch first, then the latest settled reply, then archives.
   const target = projected.completionContext?.resolved;
   const addObservations = (source: "current" | "archive") => {
