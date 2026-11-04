@@ -16,7 +16,7 @@ test('numeric issue references are not explicit hashtags; semantic wrong selecti
     { id: 'appointment', text: 'Appointment 59968', tags: ['appointments'] },
     { id: 'security', text: 'Kernel mitigation 60612', tags: ['security', 'kernel-mitigation'] },
   ];
-  const labeler = semanticTopicLabeler({ review: async () => JSON.stringify({ topic: 'security', tags: ['incident-investigation'] }) }, () => undefined);
+  const labeler = semanticTopicLabeler({ review: async () => JSON.stringify({ topic: 'security', inherit: true, tags: ['incident-investigation'] }) }, () => undefined);
   // Deliberately incorrect meaning, syntactically valid. No real model called.
   assert.deepEqual(await labeler('Appointment 59968', candidates), ['security', 'kernel-mitigation', 'incident-investigation']);
 });
