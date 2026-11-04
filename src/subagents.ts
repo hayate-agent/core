@@ -1,4 +1,5 @@
 import { ToolGuardError } from "./tool-guard-error.js";
+import { childDeniedTools } from "./child-tools.js";
 import { randomUUID } from "node:crypto";
 import type { Harness } from "./harness.js";
 import type { Address, Channel, SendMeta } from "./types.js";
@@ -50,7 +51,7 @@ export class Subagents {
   }
   guardTool(key: string, tool: string): void {
     this.beforeTurn(key);
-    if (this.isChild(key) && ["plugin_subagent", "plugin_loop", "plugin_task_continuation", "plugin_improvement_evaluate"].includes(tool)) {
+    if (this.isChild(key) && childDeniedTools(key).includes(tool)) {
       throw new ToolGuardError("worker_orchestration_denied", "Subagent orchestration is disabled; return a result or blocker within this turn");
     }
   }

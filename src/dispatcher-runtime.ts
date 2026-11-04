@@ -4,6 +4,7 @@ import { TurnActivity } from "./activity.js";
 import { labelOutput } from "./hashtags.js";
 import { ExecutionWorkerFailure, type ExecutionEvent } from "./execution.js";
 import { ToolGuardError } from "./tool-guard-error.js";
+import { childDeniedTools } from "./child-tools.js";
 import { pickModelRule, type DispatchModelRule } from "./dispatcher-config.js";
 import type { Harness } from "./harness.js";
 import type { Address, Channel, SendMeta } from "./types.js";
@@ -57,7 +58,7 @@ export class DispatcherRuntime {
   }
   guardTool(key: string, tool: string): void {
     this.beforeTurn(key);
-    if (this.isWorker(key) && ["plugin_worker_tasks", "plugin_dispatch", "plugin_subagent", "plugin_loop", "plugin_task_continuation", "plugin_improvement_evaluate"].includes(tool)) {
+    if (this.isWorker(key) && childDeniedTools(key).includes(tool)) {
       throw new ToolGuardError("worker_orchestration_denied", "Dispatcher worker orchestration is disabled; return a result or blocker");
     }
   }
