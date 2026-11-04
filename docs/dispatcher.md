@@ -51,6 +51,17 @@ scheduler, ledger and worker bridge. It requires enabled [model roles](model-rol
    closed JSON plan of 1–6 steps, each with the lowest adequate role
    (`simple`/`medium`/`high`), a reason and the evidence it must prove. A single
    simple step is valid. Malformed output is a visible block, never repaired.
+   When the runtime offers the HTTP planner capability (PI runtime), planning is
+   one tool-free SDK request through the existing authenticated assessment
+   transport (no retries, no redirects, exactly one send) with the same prompt,
+   system prompt and strict plan validation. If the exact `dispatcher` role cannot
+   be served over HTTP (unsupported API, thinking level or missing auth), planning
+   blocks visibly; there is no session, default-model or complexity fallback.
+   Runtimes without the capability keep the ephemeral session planner.
+   A worker's `STEP-STATUS: complete` is only evidence: the host independently
+   checks the step and required evidence on the exact `reviewer` role before
+   persisting completion or admitting a successor. Missing, failed or inconclusive
+   validation blocks; it never triggers replanning or a model upgrade.
 2. Plan, step index and outcomes are persisted in the execution checkpoint before
    any worker turn; each step saves an unsafe intent with its exact route first.
 3. Steps run sequentially as ordinary worker turns in the task-bound session with
@@ -60,6 +71,9 @@ scheduler, ledger and worker bridge. It requires enabled [model roles](model-rol
 4. A step counts only with a final `STEP-STATUS: complete` line; anything else
    pauses the task with a visible reason. The final result lists requested and
    observed model per step and is produced only when every step completed.
+   `STEP-STATUS` is only the worker's step outcome signal inside the strategy; the
+   aggregated result is delivered to the parent as untrusted host data and still
+   passes the parent's independent completion/admission validation.
 5. Roles are used exactly: an unconfigured or unavailable role blocks visibly
    instead of silently using the default model. Technical planner failures never
    switch models. A step reporting `STEP-STATUS: inadequate` without any tool call
