@@ -6,6 +6,7 @@ import { getSupportedThinkingLevels } from "@earendil-works/pi-ai/compat";
 import { reasoningEffortNoneModels as reasoningEffortNoneModelsFromEnv } from "../product-paths.js";
 import type { AdaptiveSkills } from "../adaptive-skills.js";
 import { toolGuardDenialReason } from "../tool-guard-error.js";
+import { childDeniedTools } from "../child-tools.js";
 import { MaintenanceError, maintenanceStep, type MaintenanceStage } from "../context-maintenance.js";
 import type { PruningPolicy, ToolResultProjector } from "../tool-result-pruning.js";
 import { nativeCompaction, type CompactionStrategy } from "../compaction.js";
@@ -677,6 +678,9 @@ export class PiRuntime implements AgentRuntime {
       sessionManager,
       tools: options.ephemeral ? [] : this.opts.tools,
       noTools: options.ephemeral || this.opts.tools?.length === 0 ? "all" : undefined,
+      // Child sessions never see parent-owned orchestration tools; the host
+      // tool guard still enforces the same list if one is called anyway.
+      excludeTools: childDeniedTools(sessionKey).length ? [...childDeniedTools(sessionKey)] : undefined,
     });
     unownedSession = session;
     // The public next-turn hook precedes PI's prompt diff. Mutate the options
