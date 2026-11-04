@@ -372,6 +372,10 @@ async function main(argv: string[]): Promise<void> {
     contextMaintenance: maintenance,
     memory: plugins.memoryOrchestration,
     approvalTarget: key => dispatchRuntime?.isWorker(key) ? dispatchRuntime.approvalTarget(key) : subagents.approvalTarget(key),
+    conversationStopping: async key => {
+      await executions.cancelParent(key);
+      await subagents.revokeChildren(key);
+    },
     conversationStopped: async key => {
       await stopDispatcherParent(executions, key, dispatcher);
       await subagents.cancelChildren(key);
@@ -795,6 +799,16 @@ async function main(argv: string[]): Promise<void> {
 
   // Replay only after outbound channels are authenticated and ready. Entries remain in the
   // durable inbox until both their reply and the completion-state write succeed.
+  // A crash can land between the Harness snapshot and child-ledger saves.
+  // Finish retained conversation revocation before any child is admitted.
+  for (const session of harness.snapshotSessions()) {
+    if (!session.stopPending) continue;
+    await executions.cancelParent(session.key);
+    await subagents.revokeChildren(session.key);
+  }
+  for (const session of harness.snapshotSessions()) {
+    if (session.stopPending) await harness.stopConversation(session.key);
+  }
   await subagents.reconcile();
   await dispatcher?.start();
   await harness.recoverTasks();
