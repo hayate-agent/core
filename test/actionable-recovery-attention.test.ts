@@ -55,7 +55,7 @@ for (const mode of ["interrupted", "unavailable", "inconclusive", "failed", "mis
       task.recoveryAdmission = { id: "task:retained:3", depth: 3, next: "different", original: task.original };
     }
     const runtime = new FakeRuntime();
-    const h = new Harness({ runtime, tickMs: 60000, ...(mode === "unavailable" ? {} : { completionCheck: async (input, reply, signal, diagnostic) => {
+    const h = new Harness({ runtime, tickMs: 60000, gateways: { recoveryDiagnostics: true }, ...(mode === "unavailable" ? {} : { completionCheck: async (input, reply, signal, diagnostic) => {
       assert.notEqual(mode, "invalid"); assert.notEqual(mode, "exhausted");
       assert.notEqual(mode, "technical-saved"); assert.notEqual(mode, "parse-saved");
       if (mode === "technical" || mode === "parse") return assessCompletion({ review: async () => {
