@@ -104,14 +104,26 @@ export class ImprovementController {
   private evaluator?: ExperimentEvaluator;
   private evaluatorKey?: string;
   private cronJobs: Cron[] = [];
+  private lastSchedulerError = -Infinity;
+  private scheduledTick(start: boolean): Promise<void> {
+    return this.tick(start).catch((error: unknown) => {
+      const now = this.now();
+      if (now - this.lastSchedulerError < 300_000) return;
+      this.lastSchedulerError = now;
+      // Never log exception messages/stacks: policy/parser errors may contain secrets.
+      const kind = error instanceof SyntaxError ? "syntax" : error instanceof TypeError ? "type" : "failure";
+      console.error(`[improvement] scheduled tick failed (${kind}); retry on next scheduled tick`);
+    });
+  }
   async start(): Promise<void> {
     const p = await this.policy();
-    const run = () => { void this.tick(true).catch(() => undefined); };
+    const run = () => this.scheduledTick(true);
     this.cronJobs = [
       new Cron(`0 ${p.startHour} * * *`, { timezone: p.timezone }, run),
       new Cron(`0 ${p.endHour} * * *`, { timezone: p.timezone }, run),
-      // State-only recovery, not a periodic model nudge. Starts no fresh night.
-      new Cron("*/5 * * * *", { timezone: p.timezone }, () => { void this.tick(false).catch(() => undefined); }),
+      // Retry a missed start only inside the authorized window; retained night/budget
+      // and foreground/strategy guards still apply when start callbacks overlap.
+      new Cron("*/5 * * * *", { timezone: p.timezone }, run),
     ];
     // Catch up a missed start Cron after deployment/restart inside the window.
     // Persisted night identity and budget prevent resetting an existing run.
@@ -119,7 +131,7 @@ export class ImprovementController {
   }
   stop(): void { for (const job of this.cronJobs) job.stop(); this.cronJobs = []; }
   async committed(input: Inbound): Promise<void> {
-    if (input.sessionKey === KEY) setImmediate(() => { void this.tick(false).catch(() => undefined); });
+    if (input.sessionKey === KEY) setImmediate(() => { this.scheduledTick(false); });
   }
   constructor(private home: string, private harness: Harness, private timezone: string, private now: () => number, private readonly strategy: NightlyStrategy) {}
   private get file(): string { return path.join(this.home, "improvement", "state.json"); }
