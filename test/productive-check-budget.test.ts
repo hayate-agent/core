@@ -35,7 +35,9 @@ test('working-model progress field cannot grant credit without independent asses
   try {
     await h.submit(msg('Verify approved scope')); await h.drained();
     assert.equal(turns, 1, 'model progress cannot grant admission');
-    assert.equal(h.state('mem:room1').task?.state, 'blocked');
+    assert.equal(h.state('mem:room1').task?.state, 'active', 'missing assessor is technical unresolved, not semantic blocked');
+    assert.equal(h.state('mem:room1').task?.explicitBlocked, false);
+    assert.equal(h.state('mem:room1').task?.recoveryRetry?.diagnostic, 'unavailable');
     assert.equal(h.state('mem:room1').task?.recoveryAdmission, undefined);
     assert.equal(h.pendingInputs().length, 0);
   }

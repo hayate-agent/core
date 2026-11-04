@@ -118,6 +118,7 @@ test('three real recovery failures retain diagnostics but do not require operato
   let status = h.taskBudgetStatus(key, 'a');
   assert.equal(status.task.recoveryRetry?.attempts, 3);
   assert.equal(status.task.termination, undefined);
+  assert.equal(status.task.explicitBlocked, false);
   assert.equal(status.task.depth, 5);
   assert.equal(status.task.state, 'blocked');
   assert.match(status.task.next!, /supervisor admission unavailable/);

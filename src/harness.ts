@@ -886,7 +886,12 @@ export class Harness {
       archived.incomplete || currentStatus === "missing" || currentStatus === "failed" || archiveStatus === "missing" || archiveStatus === "failed");
     resolved.transcript = { current: currentStatus, archive: archiveStatus };
 
-    return { resolved, recent: structuredClone(s.completionRecent ?? []), tasks: this.tasks(s).slice(-8).map(task => ({
+    return { resolved, ...(task ? { retained: {
+      original: task.original.slice(0, 8000), savedNext: task.next?.slice(0, 4000), priorReply: task.lastReply?.slice(0, 8000),
+      technical: { verdict: task.supervisorDecision?.verdict, diagnostic: task.supervisorDecision?.diagnostic,
+        assessment: task.recoveryAssessment, attempts: task.recoveryRetry?.attempts, nextAt: task.recoveryRetry?.nextAt,
+        retryDiagnostic: task.recoveryRetry?.diagnostic, termination: task.termination },
+    } } : {}), recent: structuredClone(s.completionRecent ?? []), tasks: this.tasks(s).slice(-8).map(task => ({
       id: task.id.slice(0, 128), original: task.original.slice(0, 2000), state: task.state,
       ...(task.next ? { next: task.next.slice(0, 1000) } : {}),
       ...(task.wait ? { wait: { reason: task.wait.reason.slice(0, 1000), deadline: task.wait.deadline } } : {}),
@@ -1622,7 +1627,8 @@ export class Harness {
     if (retry && this.now() < retry.nextAt) return;
     // Reserve and save before inference. A crash consumes this attempt, not authority.
     // A usable decision releases the reservation and ends this failure sequence.
-    task.recoveryRetry = { attempts: (retry?.attempts ?? 0) + 1, nextAt: this.now() + 60000 };
+    task.recoveryRetry = { attempts: (retry?.attempts ?? 0) + 1, nextAt: this.now() + 60000,
+      ...(retry?.diagnostic ? { diagnostic: retry.diagnostic } : {}) };
     task.recoveryAssessment = "claimed";
     const claimedAuthority = JSON.stringify(task);
     await this.onStateChange?.();
@@ -1681,6 +1687,7 @@ export class Harness {
     if (!preserveRetry) task.recoveryRetry = undefined;
     task.recoveryAssessment = "decided";
     task.state = "blocked";
+    task.explicitBlocked = false;
     task.next ??= "Independent supervisor admission unavailable; retained task requires assessment before productive continuation.";
   }
 
@@ -1989,6 +1996,15 @@ export class Harness {
           if (repetitions(task) >= 20 && task.state === "blocked") this.budgetAttention(s, task);
           const diagnostic = this.completionDiagnostics.get(input);
           task.supervisorDecision = this.supervisorDecisions.get(input);
+          // Technical assessment failure is unresolved, not a semantic denial.
+          // Keep the proposal untrusted; only independent admission permits work.
+          if (repetitions(task) < 20 && task.supervisorDecision?.proposal === "continue" && task.supervisorDecision.verdict === "unresolved" &&
+              task.supervisorDecision.diagnostic) {
+            task.state = "active";
+            task.explicitBlocked = false;
+            task.recoveryAssessment = "claimed";
+            task.recoveryRetry = { attempts: 1, nextAt: this.now() + 60000, diagnostic: task.supervisorDecision.diagnostic };
+          }
           if (dependencyDecision) task.supervisorDecision = {
             ...(task.supervisorDecision ?? { verdict: "unresolved" }), dependencyHold: dependencyDecision };
           if (plan?.state === "continue" && task.next && task.state === "active")
@@ -2540,7 +2556,7 @@ export class Harness {
         if (s.unsaved) { void this.pump(s); break; }
       }
       await this.reconcileBlockedDependency(s, task);
-      if (task.state === "active" && !task.next) await this.assessStartupTask(s, task);
+      if (task.state === "active" && (!task.next || task.recoveryRetry)) await this.assessStartupTask(s, task);
       if (this.queueRunnableTask(s)) break;
       if (this.hasPendingDependency(s.key, task.id)) continue;
       if (task?.state === "waiting" && task.wait && (!Number.isSafeInteger(task.wait.nextAt) || !Number.isSafeInteger(task.wait.deadline) || at >= task.wait.nextAt || at >= task.wait.deadline || (task.expiresAt !== undefined && at >= task.expiresAt)) && this.onStateChange &&
