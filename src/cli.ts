@@ -481,6 +481,7 @@ async function main(argv: string[]): Promise<void> {
         const state = harness.sessions.get(localSessions?.current?.key ?? "console:local");
         return { running: !!state?.running, queued: state?.queue.length ?? 0 };
       },
+      remainingWorkNotice: () => harness.remainingWorkNotice(localSessions!.current!.key),
       canSwitchSession: () => {
         const key = localSessions?.current?.key;
         const state = key ? harness.sessions.get(key) : undefined;

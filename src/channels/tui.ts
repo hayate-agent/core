@@ -11,6 +11,8 @@ export interface TuiOptions {
   color?: boolean;
   sessions?: LocalSessions;
   canSwitchSession?: () => boolean;
+  /** Snapshot the old owner before creating a different conversation. */
+  remainingWorkNotice?: () => string;
   panels?: () => Iterable<PluginPanel>;
   status: () => string;
   workState?: () => { running: boolean; queued: number };
@@ -164,10 +166,12 @@ export class HarnessTuiChannel implements Channel {
       this.resetActivity();
       this.note(`Resumed session: ${row.title} · ${row.id.slice(0, 8)}\nWorkspace: ${store.workspace}${history.length > 80 ? "\nShowing the last 80 conversation messages; older context may remain in the model history." : ""}`);
     } else {
+      const remaining = this.opts.remainingWorkNotice?.() ?? "Remaining-work inventory unavailable; old conversation work may continue.";
+      const previous = store.current?.id;
       const row = await store.create(argument || "Untitled");
       this.lines = [];
       this.resetActivity();
-      this.note(`New session: ${row.id} · ${row.title}\nWorkspace: ${store.workspace}\nNo previous conversation loaded.`);
+      this.note(`New session: ${row.id} · ${row.title}\nWorkspace: ${store.workspace}\nNo previous conversation loaded.\n${remaining}\nOld work is not transferred here.${previous ? ` /resume ${previous} to manage the old owner.` : ""}`);
     }
     this.tui.resetTextSelection();
     this.conversationScroll.scrollToEnd();
