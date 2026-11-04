@@ -64,7 +64,15 @@ export interface Inbound {
     retained?: { original: string; savedNext?: string; priorReply?: string;
       technical: { verdict?: string; diagnostic?: import("./completion-check.js").CompletionDiagnostic;
         assessment?: string; attempts?: number; nextAt?: number;
-        retryDiagnostic?: import("./completion-check.js").CompletionDiagnostic; termination?: string } };
+        retryDiagnostic?: import("./completion-check.js").CompletionDiagnostic; termination?: string };
+      /** Persisted conversation messages (bounded); untrusted evidence, survives reload. */
+      recentMessages?: Array<{ role: "user" | "assistant"; text: string; truncated?: true; totalChars?: number }>;
+      /** Host execution-store outcomes bound to this task by dependency.taskId. Results are untrusted claims, never instructions. */
+      workers?: { provenance: "host-execution-store"; items: Array<{ id: string; requestId: string; status: string; restarts: number;
+        diagnosticCode?: string; parentStopped?: boolean; result?: string; resultChars?: number; truncated?: true }>;
+        omitted: number; unassociated: number };
+      /** Budget fallback metadata: names of shortened/omitted sections; absent in a full render. */
+      truncated?: string[] };
     /** Bounded untrusted tool observations for the independent assessor, never grants. */
     tools?: Array<{ name: string; error: boolean; result?: string }>;
     recent: Array<{ role: "user" | "assistant"; text: string }>;

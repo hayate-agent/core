@@ -7,6 +7,17 @@ and **56000 UTF-8 bytes**, including instructions, JSON escaping and metadata.
 model-token guarantee. Provider wrappers, tokenizer differences and output tokens
 are outside this string contract.
 
+For the selected task, `context.retained` carries host-collected sections, not
+model copies: the original mandate, saved `next` plus technical recovery state,
+the persisted recent conversation excerpts (`recentMessages`, survive reload)
+and `workers` — execution-store outcomes bound by `dependency.taskId` only
+(task/attempt IDs, status, restarts, diagnostic, bounded result marked as an
+untrusted claim; unrelated executions are only counted, tokens and receipts are
+never exported). When the full render exceeds the gate, the fallback keeps these
+sections before transcript observations, in that order, with fixed per-entry
+caps (worker result 1000, message 1000, newest first) and lists every shortened
+or omitted section in `retained.truncated`. A full render has no marker.
+
 The existing automatic collector remains authoritative for evidence selection.
 Projection preserves the full exact authorization and numeric deadline; optional
 payloads are selected mechanically: latest current transcript, settled reply,
