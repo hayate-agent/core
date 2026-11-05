@@ -52,12 +52,13 @@ test("interrupted assessment is durably reconciled once across restart", async (
     try {
       await h.recoverTasks();
       const saved = clone(h.snapshotSessions());
-      assert.equal(saved[0].task?.state, "active"); assert.match(saved[0].task?.next!, /never replay completed effects/);
+      assert.equal(saved[0].task?.state, "blocked"); assert.match(saved[0].task?.next!, /Independent supervisor admission unavailable/);
+      assert.equal(saved[0].task?.recoveryAdmission, undefined);
       assert.equal(channel.sent.length, 0);
       let turns = 0;
       const second = new Harness({ runtime: new FakeRuntime(() => { turns++; second.planContinuation(key, { state: "completed" }); return "Verified"; }), tickMs: 60000 });
       second.onStateChange = async () => {}; second.addChannel(channel); second.restoreSessions(saved);
-      try { await second.tick(); await second.drained(); await second.tick(); await second.drained(); assert.equal(turns, 1); assert.equal(second.state(key).task!.state, "completed"); }
+      try { await second.tick(); await second.drained(); await second.tick(); await second.drained(); assert.equal(turns, 0); assert.equal(second.state(key).task!.state, "blocked"); }
       finally { await second.stop(0); }
     } finally { await h.stop(0); }
   }

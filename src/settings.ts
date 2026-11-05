@@ -11,10 +11,12 @@ import { parse, stringify } from "yaml";
 import { writeFileDurable } from "./durable.js";
 import { pruningPolicy, type PruningPolicy } from "./tool-result-pruning.js";
 import { contextPolicy, type ContextPolicy } from "./context-maintenance.js";
+import { validateModelRoles, type ModelRoles } from "./model-roles.js";
 import { validateModelSetting, type ModelSetting } from "./model-settings.js";
 
 /** Explicit runtime-writable allowlist; security policy and secrets are deliberately excluded. */
 export interface LocalSettings {
+  modelRoles?: ModelRoles;
   dispatcher?: Partial<DispatcherConfig>;
   reasoningEffortNoneModels?: string[];
   gateways?: GatewayConfig;
@@ -40,7 +42,9 @@ function validate(value: unknown, defaults: Partial<ContextPolicy> = {}, pruning
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid local settings overlay");
   const data = value as Record<string, unknown>;
   for (const [key, item] of Object.entries(data)) {
-    if (key === "reasoningEffortNoneModels") {
+    if (key === "modelRoles") {
+      validateModelRoles(item);
+    } else if (key === "reasoningEffortNoneModels") {
       validateReasoningEffortNoneModels(item);
     } else if (key === "compactionStrategy") {
       if (typeof item !== "string" || !item.trim()) throw Error("Invalid compaction strategy selection");
@@ -145,7 +149,7 @@ export class SettingsService {
     const result: Record<string, any> = Object.assign(Object.create(null), live ? structuredClone(previous) : {});
     const check = (value: unknown) => validate(value, this.defaults.contextMaintenance, this.defaults.toolResultPruning, this.defaults.dispatcher);
     const object = (v: unknown): v is Record<string, any> => !!v && typeof v === "object" && !Array.isArray(v);
-    const livePath = (parts: string[]) => parts[0] === "reasoningEffortNoneModels" || ["model", "thinking", "review.model", "review.thinking", "dispatcher.rules"].includes(parts.join("."));
+    const livePath = (parts: string[]) => parts[0] === "modelRoles" || parts[0] === "reasoningEffortNoneModels" || ["model", "thinking", "review.model", "review.thinking", "dispatcher.rules"].includes(parts.join("."));
     if (live) {
       try { check(raw); } catch { this.diagnose("Ignored invalid local settings overlay; retaining previous settings."); return; }
     }
@@ -276,13 +280,15 @@ export class SettingsService {
     const before = mergeSettings(this.defaults, active);
     const after = mergeSettings(this.defaults, candidate);
     for (const key of new Set([...Object.keys(before), ...Object.keys(after)]) as Set<keyof LocalSettings>) {
-      if (["model", "thinking", "review", "reasoningEffortNoneModels"].includes(key)) continue;
+      if (["modelRoles", "model", "thinking", "review", "reasoningEffortNoneModels"].includes(key)) continue;
       if (key === "dispatcher") {
         const { rules: _a, ...a } = before.dispatcher ?? {};
         const { rules: _b, ...b } = after.dispatcher ?? {};
         if (!isDeepStrictEqual(a, b)) this.restartPending.push(key);
       } else if (!isDeepStrictEqual(before[key], after[key])) this.restartPending.push(key);
     }
+    if (candidate.modelRoles === undefined) delete active.modelRoles;
+    else active.modelRoles = structuredClone(candidate.modelRoles);
     if (candidate.reasoningEffortNoneModels === undefined) delete active.reasoningEffortNoneModels;
     else active.reasoningEffortNoneModels = candidate.reasoningEffortNoneModels;
     if (active.dispatcher || candidate.dispatcher?.rules !== undefined) {
@@ -415,6 +421,15 @@ export class SettingsService {
       updated.gatewayPlugins = { ...updated.gatewayPlugins };
       if (spec) updated.gatewayPlugins[name] = spec; else delete updated.gatewayPlugins[name];
       await this.saveLocal(updated, ["gatewayPlugins", name]);
+    });
+    this.writing = next;
+    return next;
+  }
+  setModelRoles(value: ModelRoles | undefined): Promise<void> {
+    const next = this.writing.catch(() => {}).then(async () => {
+      const updated = await this.localForMutation();
+      if (value === undefined) delete updated.modelRoles; else updated.modelRoles = structuredClone(value);
+      await this.saveLocal(updated, ["modelRoles"]);
     });
     this.writing = next;
     return next;

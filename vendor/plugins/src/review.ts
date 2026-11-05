@@ -1,5 +1,5 @@
 import { ToolGuardError } from "./tool-guard-error.js";
-import { createHash } from "node:crypto";
+import { randomUUID, createHash } from "node:crypto";
 import { mkdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { captureChangeset, git, resolveReviewBase, type Changeset } from "./changeset.js";
@@ -23,6 +23,13 @@ export interface ReviewRound {
   findings?: ReviewFinding[];
   error?: string;
   assessment: FindingAssessment[];
+  httpAssessment?: {
+    id: string; promptDigest: string; sessionKey: string;
+    requested: import("./review-executor.js").ReviewModelPair;
+    defaults: import("./review-executor.js").ReviewModelPair;
+    receipt?: import("./review-executor.js").ReviewHttpReceipt;
+    executionValidated?: true;
+  };
 }
 export interface ReviewBudgetGrant {
   id: string;
@@ -120,6 +127,29 @@ export class ReviewService {
       const state = JSON.parse(await readFile(this.file(root), "utf8")) as ReviewState;
       if (state.version !== 1 || state.root !== root || !/^[a-f0-9]{40,64}$/.test(state.base) || !Array.isArray(state.rounds) ||
           !["pending", "passed", "escalated"].includes(state.status)) throw new Error("Invalid review state; operator recovery required");
+      const pair = (p: unknown): p is import("./review-executor.js").ReviewModelPair => {
+        if (!p || typeof p !== "object") return false;
+        const v = p as import("./review-executor.js").ReviewModelPair;
+        return typeof v.model === "string" && /^[^/\s]+\/.+/.test(v.model) &&
+          typeof v.thinking === "string" && ["off", "minimal", "low", "medium", "high", "xhigh", "max"].includes(v.thinking);
+      };
+      for (const round of state.rounds) {
+        const a = round.httpAssessment;
+        if (a !== undefined && (!a || typeof a.id !== "string" || !a.id ||
+            !/^[a-f0-9]{64}$/.test(a.promptDigest) || typeof a.sessionKey !== "string" ||
+            !pair(a.requested) || !pair(a.defaults) || (a.receipt !== undefined &&
+              (!["initial", "fallback", "observed"].includes(a.receipt.phase) || !pair(a.receipt.actual) ||
+               ![a.requested, a.defaults].some(p => p.model === a.receipt!.actual.model && p.thinking === a.receipt!.actual.thinking) ||
+               (a.receipt.phase === "initial" && a.receipt.actual.model !== a.requested.model) ||
+               (a.receipt.phase === "fallback" && (a.receipt.initialRejected429 !== true || a.receipt.actual.model !== a.defaults.model || a.defaults.model === a.requested.model)) ||
+               (a.receipt.terminal !== undefined && !["rejected", "invalid"].includes(a.receipt.terminal)) ||
+               (a.receipt.result !== undefined && a.receipt.terminal !== undefined) ||
+               typeof a.receipt.executionId !== "string" || !a.receipt.executionId ||
+               (a.receipt.result !== undefined && (typeof a.receipt.result !== "string" || a.receipt.result.length > 64000)) ||
+               (a.receipt.phase !== "observed" && (a.receipt.result !== undefined || a.receipt.terminal !== undefined)))))) {
+          throw Error("Invalid review HTTP assessment; operator recovery required");
+        }
+      }
       return state;
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
@@ -240,6 +270,19 @@ export class ReviewService {
       if (!this.config.enabled) return state;
       const change = await captureChangeset(root, state.base);
       if (state.status === "passed" && state.approvedFingerprint === change.fingerprint) return state;
+      // Recover a closed result before considering budget or another inference.
+      const retained = state.rounds.at(-1);
+      if (retained?.httpAssessment && !retained.findings) {
+        const receipt = retained.httpAssessment.receipt;
+        if (!receipt || receipt.phase !== "observed") {
+          // Even a reserved assessment with no marker is not a replay grant.
+          return structuredClone(state);
+        }
+        if (retained.error || retained.httpAssessment.executionValidated !== true) return structuredClone(state);
+        await this.finalize(state, retained, receipt.result, change.fingerprint, signal);
+        await this.save(state);
+        return structuredClone(state);
+      }
       // A passed task may begin a new task, but unresolved tasks cannot reset their budget by editing.
       if (state.status === "passed") {
         state.history = [...(state.history ?? []), { base: state.base, approvedFingerprint: state.approvedFingerprint, rounds: structuredClone(state.rounds), budgetGrants: state.budgetGrants }];
@@ -263,13 +306,49 @@ export class ReviewService {
       const previous = state.rounds.at(-1);
       const blockers = previous?.findings?.filter(f => f.severity === "P0" || f.severity === "P1") ?? [];
       if (blockers.some(f => !previous!.assessment.some(a => a.id === f.id))) throw new Error("Critically assess previous P0/P1 findings before requesting another review");
-      const round: ReviewRound = { fingerprint: change.fingerprint, assessment: [] };
+      const prompt = reviewPrompt(change, state.rounds);
+      const selection = await this.execution?.httpSelection?.(this.config.model, this.config.thinking);
+      const round: ReviewRound = { fingerprint: change.fingerprint, assessment: [], ...(selection ? {
+        httpAssessment: { id: randomUUID(), promptDigest: createHash("sha256").update(prompt).digest("hex"),
+          sessionKey, ...structuredClone(selection) },
+      } : {}) };
       state.rounds.push(round);
       state.status = "pending";
       state.approvedFingerprint = undefined;
       await this.save(state); // reserve budget before any external model request
+      let poisoned = false;
       try {
-        const result = parseReview(await dedicatedReviewBackend(this.execution, { cwd: root, sessionKey, fingerprint: change.fingerprint }).review(reviewPrompt(change, state.rounds.slice(0, -1)), this.config.model, this.config.thinking, signal));
+        const a = round.httpAssessment;
+        const httpAssessment = a ? { ...a,
+          consumed: () => poisoned || a.receipt !== undefined,
+          closed: () => a.receipt ? structuredClone(a.receipt) : undefined,
+          persist: async (receipt: import("./review-executor.js").ReviewHttpReceipt) => {
+            if (poisoned || signal?.aborted) throw Error("Review assessment stopped");
+            const previous = a.receipt;
+            if ((previous && previous.executionId !== receipt.executionId) ||
+                (receipt.phase === "initial" ? !!previous : receipt.phase === "fallback" ? previous?.phase !== "initial"
+                  : !previous || previous.phase === "observed") ||
+                JSON.stringify(receipt.actual) !== JSON.stringify(receipt.phase === "initial" ? a.requested
+                  : receipt.phase === "fallback" ? a.defaults : previous?.actual) ||
+                (receipt.phase === "fallback" && (a.defaults.model === a.requested.model || receipt.initialRejected429 !== true)) ||
+                typeof receipt.executionId !== "string" || !receipt.executionId ||
+                (receipt.result !== undefined && (receipt.phase !== "observed" || receipt.result.length > 64000))) {
+              throw Error("Invalid review assessment transition");
+            }
+            const candidate = structuredClone(state);
+            candidate.rounds.at(-1)!.httpAssessment!.receipt = structuredClone(receipt);
+            try { await this.save(candidate); } catch (error) { poisoned = true; throw error; }
+            a.receipt = structuredClone(receipt);
+          },
+        } : undefined;
+        const raw = await dedicatedReviewBackend(this.execution, { cwd: root, sessionKey, fingerprint: change.fingerprint, httpAssessment }).review(prompt, a?.requested.model ?? this.config.model, a?.requested.thinking ?? this.config.thinking, signal);
+        if (a) {
+          const validated = structuredClone(state);
+          validated.rounds.at(-1)!.httpAssessment!.executionValidated = true;
+          try { await this.save(validated); } catch (error) { poisoned = true; throw error; }
+          a.executionValidated = true;
+        }
+        const result = parseReview(raw);
         if (signal?.aborted) throw new Error("Review cancelled");
         round.findings = result.findings;
         if (!result.findings.some((f) => f.severity === "P0" || f.severity === "P1")) {
@@ -280,12 +359,27 @@ export class ReviewService {
             state.approvedFingerprint = change.fingerprint;
           }
         }
-      } catch { round.error = "Reviewer failed, was cancelled, or returned invalid output; no approval granted"; }
+      } catch (error) {
+        // A failed durable write may already have renamed the file. Never overwrite
+        // that receipt with stale in-memory state or hand it to another execution.
+        if (poisoned) throw error;
+        round.error = "Reviewer failed, was cancelled, or returned invalid output; no approval granted";
+      }
       if (state.status !== "passed" && state.rounds.length >= limit) state.status = "escalated";
       await this.save(state);
       if (state.status === "escalated") await this.escalate(state.originSessionKey ?? sessionKey, `Review blocked after ${state.rounds.length} rounds. Operator decision required. Findings: ${round.findings?.length ?? 0}; P0/P1: ${round.findings?.filter(f => f.severity === "P0" || f.severity === "P1").length ?? 0}. Evidence retained in the local review ledger.`, state.origin);
       return structuredClone(state);
     });
+  }
+  private async finalize(state: ReviewState, round: ReviewRound, raw: string | undefined, fingerprint: string, signal?: AbortSignal): Promise<void> {
+    try {
+      if (signal?.aborted || raw === undefined) throw Error("Review unavailable");
+      round.findings = parseReview(raw).findings;
+      if (!blockingFindings(round).length && round.fingerprint === fingerprint) {
+        state.status = "passed";
+        state.approvedFingerprint = fingerprint;
+      }
+    } catch { round.error = "Reviewer failed, was cancelled, or returned invalid output; no approval granted"; }
   }
   async requireOperator(cwd: string, sessionKey: string, reason: string): Promise<void> {
     const root = (await git(cwd, ["rev-parse", "--show-toplevel"])).trim();

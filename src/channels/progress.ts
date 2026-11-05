@@ -1,5 +1,8 @@
 import type { TurnEvent } from "../types.js";
 
+// PI exposes resource helpers without the server-tool namespace prefix.
+const mcpResourceTools = new Set(["list_mcp_resources", "list_mcp_resource_templates", "read_mcp_resource"]);
+
 export type ProgressMode = "off" | "reduced" | "full";
 export function progressMode(value = "off"): ProgressMode {
   if (value === "off" || value === "reduced" || value === "full") return value;
@@ -49,7 +52,7 @@ export class GatewayProgress {
     if (this.mode === "reduced") {
       this.pending.push(event.phase === "start" ? `⏳ ${event.name} gestartet` : `${error ? "⚠" : "✓"} ${event.name} beendet`);
     } else {
-      this.pending.push(`${event.phase === "start" ? "⏳" : error ? "⚠" : "✓"} ${event.name}${event.detail ? `\n${event.detail.slice(0, 2000)}` : ""}`);
+      this.pending.push(`${event.phase === "start" ? "⏳" : error ? "⚠" : "✓"} ${event.name}${!event.name.startsWith("mcp__") && !mcpResourceTools.has(event.name) && event.detail ? `\n${event.detail.slice(0, 2000)}` : ""}`);
     }
     this.count++;
     if (!this.scheduled) this.scheduled = setTimeout(() => { this.scheduled = undefined; this.flush(); }, 1500);

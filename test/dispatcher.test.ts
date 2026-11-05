@@ -255,3 +255,34 @@ test("failed delivery retains the same event for explicit retry without spinning
   assert.deepEqual(store.events(), []);
   await dispatcher.stop();
 });
+
+test("strategy switch keeps retained built-in tasks runnable; new work uses the selected strategy", async t => {
+  const home = await mkdtemp(path.join(os.tmpdir(), "dispatcher-"));
+  const store = new ExecutionStore(path.join(home, "ledger.json"));
+  await store.load();
+  await store.submit("parent", "old", "queued before switch", "direct");
+  const ran: string[] = [];
+  const direct = { name: "direct", version: 1, replaySafe: false, execute: async () => { ran.push("direct"); return "old done"; } };
+  const sequential = { name: "sequential", version: 1, replaySafe: false, reconcile: true, execute: async () => { ran.push("sequential"); return "new done"; } };
+  const dispatcher = new Dispatcher(store, sequential, 1, async () => {}, () => {}, undefined, undefined, () => false, [direct, sequential]);
+  t.after(async () => { await dispatcher.stop(); await rm(home, { recursive: true, force: true }); });
+  await dispatcher.start();
+  await until(() => store.list()[0]!.status === "completed");
+  const task = await dispatcher.submit("parent", "new", "after switch");
+  assert.equal(task.strategy, "sequential");
+  await until(() => store.list().every(item => item.status === "completed"));
+  assert.deepEqual(ran, ["direct", "sequential"]);
+  assert.deepEqual(store.list().map(item => item.result), ["old done", "new done"]);
+});
+
+test("unregistered strategy still blocks visibly on recovery", async t => {
+  const home = await mkdtemp(path.join(os.tmpdir(), "dispatcher-"));
+  const store = new ExecutionStore(path.join(home, "ledger.json"));
+  await store.load();
+  await store.submit("parent", "old", "queued", "removed-plugin");
+  const dispatcher = new Dispatcher(store, { name: "direct", version: 1, replaySafe: false, execute: async () => assert.fail("must not run") }, 1, async () => {}, () => {});
+  t.after(async () => { await dispatcher.stop(); await rm(home, { recursive: true, force: true }); });
+  await dispatcher.start();
+  assert.equal(store.list()[0]!.status, "blocked");
+  assert.match(store.list()[0]!.recoveryReason ?? "", /removed-plugin@1 unavailable/);
+});

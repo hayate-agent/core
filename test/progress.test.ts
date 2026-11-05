@@ -18,6 +18,22 @@ test("off emits nothing; reduced summarizes tools without outputs", async () => 
     assert.deepEqual(sent, mode === "off" ? [] : ["⏳ bash gestartet\n\n✓ bash beendet\n\n⏳ bash gestartet"]);
   }
 });
+test("full progress never reads MCP arguments or results, but retains status", async () => {
+  const sent: string[] = [];
+  const p = new GatewayProgress("full", async text => { sent.push(text); });
+  for (const name of ["mcp__fritz_brain__brain_search", "list_mcp_resources", "list_mcp_resource_templates", "read_mcp_resource"]) {
+    for (const phase of ["start", "end"] as const) {
+      p.event({ type: "tool", phase, name, error: phase === "end",
+        get detail(): string { throw new Error("MCP payload must not be inspected"); } });
+    }
+  }
+  p.event({ type: "tool", phase: "end", name: "bash", detail: "ordinary output" });
+  await p.finish();
+  assert.match(sent.join("\n"), /⏳ mcp__fritz_brain__brain_search/);
+  assert.match(sent.join("\n"), /⚠ mcp__fritz_brain__brain_search/);
+  assert.match(sent.join("\n"), /ordinary output/);
+});
+
 test("heartbeats share the per-turn progress budget", async () => {
   const sent: string[] = [];
   const progress = new GatewayProgress("reduced", async (text) => { sent.push(text); }, 2);

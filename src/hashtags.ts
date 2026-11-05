@@ -27,6 +27,8 @@ export function parseHashtags(text: string): string[] {
       continue;
     }
     if (block || /^(?: {4}|\t)|^\s*>/.test(line)) continue;
+    // Copied native activity envelopes are observations, not operator tag choices.
+    if (/^task [a-f0-9]{16} · .* · (?:Main|Worker|Review) · /.test(line)) continue;
     // Unbalanced quoting is ambiguous; ignore the remainder rather than infer intent.
     const plain = line.replace(/`[^`]*(?:`|$)|"[^"]*(?:"|$)|'[^']*(?:'|$)|\[[^\]]*\]\([^)]*\)/g, " ");
     for (const match of plain.matchAll(/(?:^|\s)#([a-zA-Z][a-zA-Z0-9]*(?:-[a-zA-Z0-9]+)*)(?=$|\s|[.,!?;:])/g)) tags.add(match[1].toLowerCase());
@@ -42,8 +44,8 @@ export function labelOutput(text: string, tags?: readonly string[]): string {
   return prefix + text.replace(/^(?:#[a-zA-Z][a-zA-Z0-9]*(?:-[a-zA-Z0-9]+)*\s+)+·\s*/g, "");
 }
 
-export function hashtagReferences(sessionId: string, text: string, entries: ArchiveEntry[], date: string, previousIds: Set<string>): HashtagReference[] {
-  const tags = parseHashtags(text);
+export function hashtagReferences(sessionId: string, text: string, entries: ArchiveEntry[], date: string, previousIds: Set<string>, assignedTags?: readonly string[]): HashtagReference[] {
+  const tags = assignedTags ?? parseHashtags(text);
   if (!tags.length) return [];
   // Only a real user transcript entry can be referenced, never a tool observation.
   const message = entries.findLast(entry => !previousIds.has(entry.id) && entry.role === "user" && entry.text.includes(text));

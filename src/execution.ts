@@ -1,3 +1,4 @@
+import { executionMetadata, type ExecutionMetadata } from "./builtin-plugins/execution-metadata.js";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
@@ -6,6 +7,12 @@ import { recoveryBlock, type RecoveryStrategy, type ExecutionRecoveryPolicy } fr
 
 /** Expected contention with a control or another claimant, not a storage failure. */
 export class ExecutionClaimConflict extends Error {}
+
+/** Closed host-owned causes; exception/worker text is never persisted here. */
+export type ExecutionDiagnosticCode = "runtime-failure" | "worker-failed" | "worker-cancelled" | "manual-pause";
+export class ExecutionWorkerFailure extends Error {
+  constructor(readonly diagnosticCode: "worker-failed" | "worker-cancelled") { super(diagnosticCode); }
+}
 
 export type ExecutionStatus = "ready" | "running" | "paused" | "blocked" | "completed" | "cancelled";
 export interface Execution {
@@ -18,11 +25,16 @@ export interface Execution {
   strategy: string;
   strategyVersion: number;
   status: ExecutionStatus;
+  execution?: ExecutionMetadata;
+  classifier?: { requested: ExecutionMetadata; actual?: ExecutionMetadata };
+  /** Retained across claims. Unknown sends require explicit reconciliation, never replay. */
+  classifierReceipt?: import("./classifier-http.js").ClassifierReceipt & { token: string };
   checkpoint?: string;
   result?: string;
   token?: string;
   restarts: number;
   recoveryReason?: string;
+  diagnosticCode?: ExecutionDiagnosticCode;
   /** Prior token-scoped transcript, never an ownership credential. */
   recoverySession?: string;
   resolutions?: Array<{ actor: string; action: "continue" | "retry"; evidence: string; at: number }>;
@@ -34,7 +46,7 @@ export interface Execution {
   question?: { id: string; text: string; answer?: string };
   /** Parent stop permanently revokes result delivery as well as execution. */
   parentStopped?: boolean;
-  intent?: { key: string; replay: "safe" | "unsafe"; result?: string };
+  intent?: { key: string; replay: "safe" | "unsafe"; result?: string; route?: import("./model-roles.js").ModelPair };
   /** Last committed effect outcome, retained across the completion commit gap. */
   settledEffect?: { key: string; result: string };
 }
@@ -128,6 +140,14 @@ export class ExecutionStore {
             !["safe", "unsafe"].includes(item.intent.replay))) throw Error("Invalid execution intent");
         if (item.settledEffect !== undefined && (!item.settledEffect || typeof item.settledEffect.key !== "string" || !item.settledEffect.key.trim() ||
             typeof item.settledEffect.result !== "string" || item.settledEffect.result.length > 64000)) throw Error("Invalid settled effect");
+        if (item.classifierReceipt !== undefined) {
+          const receipt = item.classifierReceipt;
+          if (!receipt || !["initial", "fallback", "observed"].includes(receipt.phase) ||
+              typeof receipt.token !== "string" || !receipt.token || !receipt.actual ||
+              typeof receipt.actual.model !== "string" || typeof receipt.actual.thinking !== "string" ||
+              (receipt.complexity !== undefined && (receipt.phase !== "observed" ||
+                !["simple", "medium", "high"].includes(receipt.complexity)))) throw Error("Invalid classifier receipt");
+        }
         if (item.claimedRecoveryAction !== undefined) throw Error("Invalid persisted claim-only recovery action");
         if (item.recoveryGrant !== undefined && (!item.recoveryGrant ||
             !["continue", "retry"].includes(item.recoveryGrant.action) ||
@@ -268,6 +288,12 @@ export class ExecutionStore {
       turn.settlement = structuredClone(turn.stopped ? this.stoppedSettlement(settlement) : settlement);
     });
   }
+  /** Conversation-scoped durable lookup, including compacted terminal records. */
+  async findRequest(parent: string, requestId: string): Promise<Execution | undefined> {
+    const task = this.data.executions.find(item => item.parent === parent && item.requestId === requestId)
+      ?? await this.archived(parent, requestId);
+    return task ? structuredClone(task) : undefined;
+  }
   list(parent?: string): Execution[] {
     return structuredClone(this.data.executions.filter(item => parent === undefined || item.parent === parent));
   }
@@ -313,10 +339,31 @@ export class ExecutionStore {
       if (reason) throw Error(reason);
       const claimedRecoveryAction = task.recoveryGrant?.restarts === task.restarts ? task.recoveryGrant.action : undefined;
       delete task.recoveryGrant;
+      delete task.execution; // A new attempt has no observed selection yet.
+      delete task.classifier;
       task.token = randomUUID();
       task.status = "running";
       this.event(draft, task, "status", "Ausführung gestartet");
       return { ...task, claimedRecoveryAction };
+    });
+  }
+  observeExecution(id: string, token: string, selection: ExecutionMetadata): Promise<void> {
+    return this.mutate(draft => { this.owned(draft, id, token).execution = executionMetadata(selection); });
+  }
+  observeClassifier(id: string, token: string, requested: ExecutionMetadata, actual?: ExecutionMetadata): Promise<void> {
+    return this.mutate(draft => { this.owned(draft, id, token).classifier = {
+      requested: executionMetadata(requested), ...(actual ? { actual: executionMetadata(actual) } : {}),
+    }; });
+  }
+  classifierAssessment(id: string, token: string, receipt: import("./classifier-http.js").ClassifierReceipt): Promise<void> {
+    return this.mutate(draft => {
+      const task = this.owned(draft, id, token);
+      const previous = task.classifierReceipt;
+      if (receipt.phase === "initial" ? !!previous : !previous || previous.token !== token ||
+          previous.phase === "observed" || (receipt.phase === "fallback" && previous.phase !== "initial")) {
+        throw Error("Classifier receipt cannot be replayed");
+      }
+      task.classifierReceipt = { ...receipt, token };
     });
   }
   checkpoint(id: string, token: string, checkpoint: string): Promise<void> {
@@ -334,12 +381,15 @@ export class ExecutionStore {
       task.recoverySession = key;
     });
   }
-  intent(id: string, token: string, key: string, replay: "safe" | "unsafe"): Promise<void> {
+  intent(id: string, token: string, key: string, replay: "safe" | "unsafe", route?: import("./model-roles.js").ModelPair): Promise<void> {
+    if (route !== undefined && (!route || typeof route !== "object" || Array.isArray(route) || Object.keys(route).some(k => !["model", "thinking"].includes(k)) ||
+        (route.model !== undefined && (typeof route.model !== "string" || route.model.length > 200)) ||
+        (route.thinking !== undefined && (typeof route.thinking !== "string" || route.thinking.length > 40)))) throw Error("Invalid selected route");
     return this.mutate(draft => {
       if (typeof key !== "string" || !key.trim() || !["safe", "unsafe"].includes(replay)) throw Error("Invalid effect intent");
       const task = this.owned(draft, id, token);
       if (task.intent) throw Error("Resolve previous effect intent first");
-      task.intent = { key, replay };
+      task.intent = { key, replay, ...(route ? { route: structuredClone(route) } : {}) };
     });
   }
   settleIntent(id: string, token: string, key: string, result: string, checkpoint: string): Promise<void> {
@@ -411,6 +461,17 @@ export class ExecutionStore {
       draft.events = draft.events.filter(event => event.parent !== parent);
     });
   }
+  /** Token fencing prevents a late failure from pausing a replacement claim. */
+  fail(id: string, token: string, code: ExecutionDiagnosticCode): Promise<void> {
+    return this.mutate(draft => {
+      const task = this.find(draft, id);
+      if (task.status !== "running" || task.token !== token) return;
+      task.status = task.intent ? "blocked" : "paused";
+      task.diagnosticCode = code;
+      delete task.token;
+      this.event(draft, task, "status", task.status);
+    });
+  }
   control(id: string, action: "pause" | "resume" | "cancel"): Promise<void> {
     return this.mutate(draft => {
       const task = this.find(draft, id);
@@ -418,11 +479,13 @@ export class ExecutionStore {
       if (action === "resume") {
         if (task.status !== "paused" || task.intent || (task.question && task.question.answer === undefined)) throw Error("Execution cannot resume without resolving its blocker");
         task.status = "ready";
+        delete task.diagnosticCode;
       } else if (action === "pause") {
         // Pause is not a blocker-resolution API. Revoking an in-flight effect
         // leaves its outcome ambiguous, even before startup recovery runs.
         if (task.status === "blocked") return;
         task.status = task.intent ? "blocked" : "paused";
+        task.diagnosticCode = "manual-pause";
       } else { task.status = "cancelled"; task.terminalAt = this.now(); }
       // Revoke the old worker before any replacement can claim the task.
       delete task.token;
@@ -460,7 +523,9 @@ export class ExecutionStore {
         delete task.token;
         const reason = restartLimit !== undefined && task.restarts >= restartLimit
           ? `Recovery restart limit ${restartLimit} reached; inspect evidence and resolve before retrying.`
-          : recoveryBlock(task, strategy, policy);
+          : task.classifierReceipt && task.classifierReceipt.phase !== "observed"
+            ? "Classifier HTTP outcome unknown; retained receipt forbids automatic replay."
+            : recoveryBlock(task, strategy, policy);
         if (reason) {
           task.recoveryReason = reason;
           task.status = "blocked";

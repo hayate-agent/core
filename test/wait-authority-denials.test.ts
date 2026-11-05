@@ -8,7 +8,7 @@ import { Harness } from "../src/harness.js";
 import { toolGuardDenialReason } from "../src/tool-guard-error.js";
 import { FakeRuntime, MemoryChannel } from "./fakes.js";
 
-for (const reason of ["ownership", "cancelled", "deadline", "missing-task", "stopped-task", "sequence", "valid"] as const) {
+for (const reason of ["ownership", "cancelled", "deadline", "missing-task", "stopped-task", "sequence", "invalid-deadline", "valid"] as const) {
   test(`wait guard receipt: ${reason}`, async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "wait-denial-"));
     const file = path.join(dir, "executions.json");
@@ -28,6 +28,7 @@ for (const reason of ["ownership", "cancelled", "deadline", "missing-task", "sto
           if (reason === "ownership") s.current = { ...input };
           if (reason === "cancelled") s.cancelling = input;
           if (reason === "deadline") now = 301000;
+          if (reason === "invalid-deadline") input.continuationExpiresAt = undefined;
           if (reason === "missing-task") { s.tasks = []; s.task = undefined; }
           if (reason === "stopped-task") task.state = "stopped";
           if (reason === "sequence") task.waitChecks!++;
@@ -38,20 +39,23 @@ for (const reason of ["ownership", "cancelled", "deadline", "missing-task", "sto
           assert.equal(reason, "valid");
         } catch (error) {
           assert.notEqual(reason, "valid");
-          assert.match(toolGuardDenialReason(error)!, /^authority_revoked:/);
-          assert.doesNotMatch(toolGuardDenialReason(error)!, /SECRET|ownership|sequence/);
+          const code = reason === "ownership" || reason === "sequence" ? "ownership_lost" :
+            reason === "cancelled" || reason === "stopped-task" ? "execution_cancelled" :
+            reason === "deadline" ? "deadline_expired" : reason === "invalid-deadline" ? "authority_revoked" : "parent_mandate_missing";
+          assert.match(toolGuardDenialReason(error), new RegExp(`^${code}:`));
+          assert.doesNotMatch(toolGuardDenialReason(error), /SECRET|sequence/);
         }
         assert.equal(effects, reason === "valid" ? 1 : 0);
         const receipts = store.waitAuthorityDenials();
         assert.equal(receipts.length, reason === "valid" ? 0 : 1);
         if (reason !== "valid") {
-          assert.deepEqual(receipts[0], { reason, at: now, taskId: "task", waitSequence: 1,
+          assert.deepEqual(receipts[0], { reason: reason === "invalid-deadline" ? "deadline" : reason, at: now, taskId: "task", waitSequence: 1,
             taskWaitSequence: reason === "missing-task" ? undefined : reason === "sequence" ? 2 : 1,
             turnId: input.executionTurnId });
           // Even checkpoint/status exemptions must pass the authority gate.
           if (reason !== "ownership") for (const tool of ["plugin_task_continuation", "plugin_dispatch"]) {
             await assert.rejects(h.guardWaitTool("mem:room1", tool, { action: "status", text: "SECRET" }),
-              /revoked|expired or cancelled/);
+              /Wait task authority revoked/);
           }
         } else {
           await h.guardWaitTool("mem:room1", "plugin_task_continuation", {});

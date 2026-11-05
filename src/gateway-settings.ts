@@ -3,10 +3,13 @@ import { progressMode, type ProgressMode } from "./channels/progress.js";
 export interface GatewaySettings {
   progress: ProgressMode;
   statusReactions: boolean;
+  /** Opt-in host recovery diagnostics, never substantive replies or approvals. */
+  recoveryDiagnostics?: boolean;
 }
 export interface GatewayConfig {
   progress?: ProgressMode;
   statusReactions?: boolean;
+  recoveryDiagnostics?: boolean;
   overrides?: Record<string, Partial<GatewaySettings>>;
 }
 
@@ -18,8 +21,8 @@ export function validateGatewayConfig(value: unknown): asserts value is GatewayC
       if (key === "progress") {
         if (typeof val !== "string") throw new Error("gateways.progress must be off, reduced or full");
         progressMode(val);
-      } else if (key === "statusReactions") {
-        if (typeof val !== "boolean") throw new Error("gateways.statusReactions must be a boolean");
+      } else if (key === "statusReactions" || key === "recoveryDiagnostics") {
+        if (typeof val !== "boolean") throw new Error(`gateways.${key} must be a boolean`);
       } else if (key === "overrides" && root) {
         if (!val || typeof val !== "object" || Array.isArray(val)) throw new Error("gateways.overrides must be an object");
         for (const [name, settings] of Object.entries(val)) {
@@ -38,5 +41,6 @@ export function gatewaySettings(config: GatewayConfig | undefined, name: string)
   return {
     progress: override?.progress ?? config?.progress ?? "off",
     statusReactions: override?.statusReactions ?? config?.statusReactions ?? false,
+    recoveryDiagnostics: override?.recoveryDiagnostics ?? config?.recoveryDiagnostics ?? false,
   };
 }

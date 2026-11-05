@@ -57,8 +57,9 @@ for (const failure of ['undefined', 'error'] as const) test(`actual ${failure} r
       const saved = h.snapshotSessions()[0].tasks![0];
       assert.equal(saved.recoveryRetry?.attempts, attempt);
       assert.equal(saved.recoveryRetry?.nextAt, now + 60000);
-      assert.equal(saved.state, 'active');
-      if (attempt === 3) assert.match(saved.next!, /never replay completed effects/);
+      assert.equal(saved.state, attempt === 3 ? 'blocked' : 'active');
+      if (attempt === 3) assert.match(saved.next!, /supervisor admission unavailable/);
+      assert.equal(h.pendingInputs().length, 0);
       sessions = JSON.parse(JSON.stringify(h.snapshotSessions()));
     } finally { await h.stop(0); }
     now += 60000;
@@ -66,7 +67,7 @@ for (const failure of ['undefined', 'error'] as const) test(`actual ${failure} r
   const h = new Harness({ runtime: new FakeRuntime(), now: () => now,
     completionCheck: async () => { calls++; return { state: 'continue', next: 'not authorized by exhaustion' }; } });
   h.onStateChange = async () => {};
-  try { h.restoreSessions(sessions); await h.recoverTasks(); assert.equal(calls, 3); assert.equal(h.pendingInputs().length, 1); }
+  try { h.restoreSessions(sessions); await h.recoverTasks(); assert.equal(calls, 3); assert.equal(h.pendingInputs().length, 0); }
   finally { await h.stop(0); }
 });
 

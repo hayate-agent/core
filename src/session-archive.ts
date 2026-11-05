@@ -3,7 +3,7 @@ import { mkdir, readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { writeFileDurable } from "./durable.js";
 
-export interface ArchiveEntry { id: string; role: string; text: string }
+export interface ArchiveEntry { id: string; role: string; text: string; truncated?: boolean; source?: "archive" | "current" }
 export interface SessionArchive {
   version: 1;
   id: string;
@@ -43,11 +43,11 @@ export class SessionArchives {
   }
   /** Resolve only host-linked predecessors in this conversation. No transcript
    * path, archive ID or claimed user role can grant authority. */
-  async completionEvidence(key: string, sessionId: string): Promise<{ entries: ArchiveEntry[]; incomplete: boolean }> {
+  async completionEvidence(key: string, sessionId: string): Promise<{ entries: ArchiveEntry[]; incomplete: boolean; status?: "available" | "empty" | "missing" | "failed" }> {
     const dir = path.join(this.home, "session-archives", createHash("sha256").update(key).digest("hex"));
     let files: string[];
     try { files = await readdir(dir); }
-    catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return { entries: [], incomplete: false }; throw error; }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return { entries: [], incomplete: true, status: "missing" }; throw error; }
     const names = files.filter(file => /^[a-f0-9-]{36}\.json$/.test(file));
     let incomplete = names.length > 64;
     const archives: SessionArchive[] = [];
@@ -70,7 +70,7 @@ export class SessionArchives {
       target = archive.sourceSessionId;
       if (depth === 3 && archives.some(item => item.targetSessionId === target)) incomplete = true;
     }
-    return { entries, incomplete };
+    return { entries, incomplete, status: incomplete ? "failed" : entries.length ? "available" : "empty" };
   }
   async read(key: string, id: string, options: { query?: string; offset?: number; limit?: number; section?: string; charOffset?: number }): Promise<string> {
     const archive = await this.load(key, id);

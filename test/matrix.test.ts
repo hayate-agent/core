@@ -82,6 +82,8 @@ test("matrix progress and status reactions are optional and target original batc
   const input: Inbound = { id: "$one", parts: [{ id: "$one", text: "a" }, { id: "$two", text: "b" }], text: "a b", sessionKey: "matrix:test", source: "channel", replyTo: to };
   await ch.turnStatus(to, input, "started");
   ch.turnEvent(to, { type: "tool", phase: "start", name: "bash", detail: "echo hello" }, input);
+  ch.turnEvent(to, { type: "tool", phase: "start", name: "mcp__brain__search", detail: "PRIVATE_MCP_ARGS" }, input);
+  ch.turnEvent(to, { type: "tool", phase: "end", name: "mcp__brain__search", detail: "PRIVATE_MCP_RESULT", error: true }, input);
   await ch.turnStatus(to, input, "completed");
   await (ch as any).telemetry;
   const reactions = server.calls.filter((call) => call.path.includes("/send/m.reaction/"));
@@ -90,6 +92,8 @@ test("matrix progress and status reactions are optional and target original batc
   assert.deepEqual(reactions.filter((c) => c.body["m.relates_to"].key === "✅").map((c) => c.body["m.relates_to"].event_id), ["$one", "$two"]);
   const progress = server.calls.find((call) => call.path.includes("/send/m.room.message/") && call.body.body.includes("echo hello"));
   assert.ok(progress);
+  assert.match(progress.body.body, /mcp__brain__search/);
+  assert.ok(!JSON.stringify(server.calls).includes("PRIVATE_MCP_"), "MCP payloads never reach Matrix requests");
   assert.equal(progress.body.format, "org.matrix.custom.html");
   assert.match(progress.body.formatted_body, /^<em>[\s\S]*<\/em>$/);
   await ch.turnStatus(to, input, "completed");

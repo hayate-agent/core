@@ -1,11 +1,12 @@
 import { createHash } from "node:crypto";
 import type { ArchiveEntry } from "./session-archive.js";
+import { projectObservation } from "./completion-budget.js";
 
 export interface CompletionIngress {
   id: string; text: string; state: string; receivedAt?: number; expiresAt?: number;
   termination?: string; provenance: "host-task-anchor" | "legacy-task-original";
 }
-export interface CompletionObservation extends ArchiveEntry { digest: string; truncated?: boolean }
+export interface CompletionObservation extends ArchiveEntry { digest: string; totalChars?: number }
 export interface ResolvedCompletionContext {
   taskId?: string;
   /** Host captured ingress. Historical records explain scope; never grant executable authority. */
@@ -14,9 +15,11 @@ export interface ResolvedCompletionContext {
   observations: CompletionObservation[];
   incomplete: boolean;
   digest: string;
+  omittedObservations?: number;
+  transcript?: { current: "available" | "empty" | "missing" | "failed"; archive: "available" | "empty" | "missing" | "failed" };
 }
 
-/** Mechanical bounded packaging only. Semantic relevance belongs to the plugin.
+/** Mechanical bounded packaging only. Newest current evidence takes priority.
  * Never follow transcript paths or promote archive roles into trusted ingress. */
 export function resolveCompletionContext(taskId: string | undefined, ingress: CompletionIngress[],
   retained: ArchiveEntry[], current: ArchiveEntry[], unavailable = false): ResolvedCompletionContext {
@@ -44,10 +47,9 @@ export function resolveCompletionContext(taskId: string | undefined, ingress: Co
     if (seen.has(digest)) continue;
     seen.add(digest);
     if (budget <= 0 || evidence.length >= 48) { incomplete = true; continue; }
-    const text = entry.text.slice(0, Math.min(8000, budget));
-    const truncated = text.length !== entry.text.length;
-    if (truncated) incomplete = true;
-    evidence.push({ id: entry.id, role: entry.role, text, digest, ...(truncated ? { truncated: true } : {}) });
+    const { text, truncated, totalChars } = projectObservation(entry.text, entry.role, Math.min(8000, budget));
+    if (truncated || entry.truncated) incomplete = true;
+    evidence.push({ id: entry.id, role: entry.role, text, digest, totalChars, source: entry.source ?? (current.includes(entry) ? "current" : "archive"), ...(truncated || entry.truncated ? { truncated: true } : {}) });
     budget -= text.length;
   }
   evidence.reverse();

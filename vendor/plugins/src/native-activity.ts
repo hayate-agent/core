@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { writeFileDurable } from "./durable.js";
 import type { ActivityEvent } from "./activity.js";
 import type { Address } from "./types.js";
-import { labelOutput } from "./hashtags.js";
+import { activityExecutionLabel, taskContextLabel } from "./execution-metadata.js";
 
 /** Serialized, bounded latest-value delivery. No runtime payloads enter this adapter. */
 export class NativeActivityDelivery {
@@ -33,14 +33,14 @@ export class NativeActivityDelivery {
     if (terminal) {
       this.tools.delete(turn);
     } else if (this.tools.size < 128 || this.tools.has(turn)) this.tools.set(turn, active);
-    const prefix = `${s.role === "worker" ? "Worker" : "Main"} · ${Math.floor(s.elapsedMs / 1000)}s`;
+    const prefix = `${s.role === "dispatcher-classifier" ? "Dispatcher classifier" : s.role === "worker" ? "Worker" : "Main"} · ${Math.floor(s.elapsedMs / 1000)}s · ${activityExecutionLabel(s.execution, s.executionState ?? (s.phase === "starting" ? "pending" : "unavailable"))}`;
     const tool = event.tool;
     const detail = terminal ? s.phase
       : tool ? `Werkzeug ${tool.name}${active.size > 1 ? ` (+${active.size - 1} aktiv)` : ""}: ${tool.state}`
       : active.size ? `Werkzeug ${[...new Set(active.values())].join(", ")}: running`
       : `${s.phase} · ${s.activity}${event.kind === "alive" ? " · weiterhin aktiv (Host)" : ""}`;
     // One stable reference per turn: tool calls and host status replace each other.
-    this.queue(turn, to, labelOutput(`${prefix} · ${detail}`, (s as typeof s & { outputTags?: string[] }).outputTags));
+    this.queue(turn, to, `${taskContextLabel(s.parent ?? s.id, s.outputTags)} · ${prefix} · ${detail}`);
     if (tool?.state === "started") void this.flush().catch(() => undefined);
   }
   metadata(to: Address, id: string, state: string): void {

@@ -3,7 +3,10 @@ import { test } from "node:test";
 import { Harness, type DurableTask } from "../src/harness.js";
 import { assessCompletion } from "./completion-default.js";
 import { FakeRuntime, MemoryChannel, msg } from "./fakes.js";
-import type { ExecutionStore } from "../src/execution.js";
+import { mkdtemp, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { ExecutionStore } from "../src/execution.js";
 
 const original = "Implement update and verify its regression test";
 const task = (): DurableTask => ({ id: "retained", original, state: "active", depth: 2 });
@@ -40,11 +43,11 @@ test("startup missing next assesses retained mandate, executes resumed turn and 
   } finally { await h.stop(1000); }
 });
 
-test("startup fences states, expiry, depth, absent mandate and accepted children", async () => {
-  for (const fence of ["waiting", "blocked", "completed", "stopped", "expired", "depth", "missing", "ready", "running", "paused-child", "blocked-child", "cancelled-parent", "paused", "anchor-mismatch"] as const) {
+test("startup fences states, expiry, depth, absent mandate and accepted children", { timeout: 30000 }, async () => {
+  for (const fence of ["waiting", "blocked", "completed", "stopped", "expired", "depth", "missing", "ready", "running", "paused-child", "cancelled-parent", "paused", "anchor-mismatch"] as const) {
     let checks = 0;
     const runtime = new FakeRuntime();
-    const child = ["ready", "running", "paused-child", "blocked-child"].includes(fence);
+    const child = ["ready", "running", "paused-child"].includes(fence);
     const executionStore = child ? { list: () => [{ id: "accepted", status: fence.replace("-child", "") }] } as unknown as ExecutionStore : undefined;
     const h = new Harness({ runtime, tickMs: 60000, now: () => 1000, executionStore,
       completionCheck: async () => { checks++; return { state: "continue", next: "duplicate work" }; } });
@@ -59,9 +62,39 @@ test("startup fences states, expiry, depth, absent mandate and accepted children
     if (fence === "cancelled-parent") await h.stopConversation("mem:room1");
     try {
       await h.recoverTasks(); await h.recoverTasks(); h.releaseRestored(); await h.drained();
-      assert.equal(checks, 0, fence); assert.equal(runtime.sessions.size, 0, fence);
+      assert.equal(checks, 0, fence);
+      assert.equal(h.pendingInputs().length, 0, fence); assert.equal(runtime.sessions.size, 0, fence);
     } finally { await h.stop(1000); }
   }
+});
+
+test("startup blocked child without task provenance admits one independent assessed step without replaying the child", { timeout: 30000 }, async t => {
+  const home = await mkdtemp(path.join(os.tmpdir(), "startup-blocked-child-"));
+  t.after(() => rm(home, { recursive: true, force: true }));
+  const store = new ExecutionStore(path.join(home, "executions.json")); await store.load();
+  const e = await store.submit("mem:room1", "accepted", "Old unscoped worker", "direct", 1);
+  const c = await store.claim(e.id);
+  await store.intent(e.id, c.token!, "unknown-effect", "unsafe");
+  await store.fail(e.id, c.token!, "Interrupted");
+  const before = JSON.stringify(store.list());
+  let checks = 0, turns = 0;
+  const runtime = new FakeRuntime(() => { turns++; return "Independent verification done"; });
+  const h = new Harness({ runtime, tickMs: 60000, now: () => 1000, executionStore: store,
+    completionCheck: async (_input, evidence) => {
+      checks++;
+      if (checks === 1) { assert.match(evidence, /dependencyReconciliation/); return { state: "continue", next: "Verify independently without repeating the old worker" }; }
+      return { state: "completed" };
+    } });
+  h.addChannel(new MemoryChannel()); h.onStateChange = async () => {};
+  // Registered after the tempdir removal hook so the harness stops first (LIFO).
+  t.after(() => h.stop(1000));
+  h.restoreSessions([{ key: "mem:room1", task: task() }]);
+  await h.recoverTasks(); await h.recoverTasks();
+  assert.equal(checks, 1); assert.equal(h.pendingInputs().length, 1);
+  h.releaseRestored(); await h.drained();
+  assert.equal(turns, 1); assert.equal(checks, 2);
+  assert.equal(h.state("mem:room1").task?.state, "completed");
+  assert.equal(JSON.stringify(store.list()), before);
 });
 
 test("startup claim survives interrupted assessment and stop/new-input races fence decisions", async () => {
@@ -82,11 +115,11 @@ test("startup claim survives interrupted assessment and stop/new-input races fen
     try {
       await h.recoverTasks(); await h.recoverTasks();
       assert.equal(checks, mode === "interrupted" ? 0 : 1, mode);
-      assert.equal(h.pendingInputs().filter(i => i.taskId === "retained").length, mode === "interrupted" ? 1 : 0, mode);
+      assert.equal(h.pendingInputs().filter(i => i.taskId === "retained").length, 0, mode);
       const next = new Harness({ runtime: new FakeRuntime(), tickMs: 60000, now: () => now,
         completionCheck: async () => { throw Error("must not reassess"); } });
       next.onStateChange = async () => {};
-      try { next.restoreSessions(JSON.parse(JSON.stringify(h.snapshotSessions()))); await next.recoverTasks(); assert.equal(next.pendingInputs().length, mode === "interrupted" ? 1 : 0); }
+      try { next.restoreSessions(JSON.parse(JSON.stringify(h.snapshotSessions()))); await next.recoverTasks(); assert.equal(next.pendingInputs().length, 0); }
       finally { await next.stop(1000); }
     } finally { await h.stop(1000); }
   }

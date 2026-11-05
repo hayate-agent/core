@@ -182,5 +182,11 @@ night session cannot use another conversation's archives/memory implicitly; only
 explicitly authorized sources exposed by existing providers can be read.
 
 Enabling the file only activates a version that contains this controller. Publishing,
-merging and building do not update running installations. The five-minute work
-heartbeat is separate from this controller and not a structured task/run watchdog.
+merging and building do not update running installations. The controller's five-minute calendar tick retries a missed nightly start only
+inside the configured window. It retains the same night ID, turn budget, pause,
+foreground and strategy guards; completion callbacks remain state-only. Scheduled
+tick failures log only a fixed error class (never exception text/stack), at most
+once per five minutes per controller, and the next tick can retry.
+
+The five-minute work heartbeat is separate from this controller and not a
+structured task/run watchdog.

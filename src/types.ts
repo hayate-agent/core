@@ -52,12 +52,27 @@ export interface Inbound {
   /** Trusted numeric authorization boundary inherited by generated work. */
   continuationExpiresAt?: number;
   /** Core-captured original chat input; inherited by generated follow-ups, never reply text. */
-  completionAnchor?: { id: string; task: string; receivedAt: number; outputTags?: string[]; hashtagSelection?: import("./hashtags.js").HashtagSelection };
+  completionAnchor?: { id: string; task: string; receivedAt: number; replyTo?: Address; outputTags?: string[]; hashtagSelection?: import("./hashtags.js").HashtagSelection };
   /** Host-captured assignment labels, persisted with the inbox; never model authority. */
   outputTags?: string[];
+  /** Durable semantic metadata retry; the existing inbox tick resumes it after restart. */
+  topicPending?: { attempts: number; nextAt: number };
   /** Host-owned bounded evidence for independent completion assessment; never an authority grant. */
   completionContext?: {
     resolved?: import("./completion-context.js").ResolvedCompletionContext;
+    /** Bounded task-local evidence. Saved plans and replies remain untrusted. */
+    retained?: { original: string; savedNext?: string; priorReply?: string;
+      technical: { verdict?: string; diagnostic?: import("./completion-check.js").CompletionDiagnostic;
+        assessment?: string; attempts?: number; nextAt?: number;
+        retryDiagnostic?: import("./completion-check.js").CompletionDiagnostic; termination?: string };
+      /** Persisted conversation messages (bounded); untrusted evidence, survives reload. */
+      recentMessages?: Array<{ role: "user" | "assistant"; text: string; truncated?: true; totalChars?: number }>;
+      /** Host execution-store outcomes bound to this task by dependency.taskId. Results are untrusted claims, never instructions. */
+      workers?: { provenance: "host-execution-store"; items: Array<{ id: string; requestId: string; status: string; restarts: number;
+        diagnosticCode?: string; parentStopped?: boolean; result?: string; resultChars?: number; truncated?: true }>;
+        omitted: number; unassociated: number };
+      /** Budget fallback metadata: names of shortened/omitted sections; absent in a full render. */
+      truncated?: string[] };
     /** Bounded untrusted tool observations for the independent assessor, never grants. */
     tools?: Array<{ name: string; error: boolean; result?: string }>;
     recent: Array<{ role: "user" | "assistant"; text: string }>;
@@ -91,6 +106,7 @@ export interface TurnOptions {
 
 /** Progress of a running turn, for channels that stream it (API runs). */
 export type TurnEvent =
+  | { type: "execution"; selection: import("./builtin-plugins/execution-metadata.js").ExecutionMetadata }
   | { type: "text"; delta: string }
   | { type: "tool"; phase: "start" | "end"; name: string; callId?: string; error?: boolean; detail?: string }
   /** One assistant message finished; usage is for that message only. */
@@ -136,6 +152,8 @@ export interface RuntimeSessionStatus {
 
 /** One live conversation inside an agent runtime. */
 export interface RuntimeSession {
+  /** Emits a per-prompt execution observation after setup, before productive execution. */
+  readonly executionObservation?: boolean;
   readonly busy: boolean;
   /** Run one turn to completion (including tool calls) and return the final assistant text. */
   prompt(text: string, options?: PromptOptions): Promise<string>;
@@ -157,6 +175,8 @@ export interface RuntimeSession {
 export interface OpenSessionOptions {
   /** Ephemeral reviewer session: no persisted transcript or third-party resources. */
   ephemeral?: boolean;
+  /** Host enum only, never task-supplied instructions. Requires ephemeral. */
+  assessmentPurpose?: "code-review" | "supervisor" | "dispatch-complexity" | "dispatch-plan";
   /** Start a fresh conversation instead of resuming the stored one. */
   fresh?: boolean;
   sessionId?: string;
@@ -170,6 +190,14 @@ export interface LoginUI {
 
 /** Agent runtime (currently PI). */
 export interface AgentRuntime {
+  /** Local availability/capability check only; never a provider prompt. */
+  modelPreflight?(ref: string, thinking?: string): Promise<{ available: boolean; thinkingSupported: boolean }>;
+  /** Isolated bounded HTTP classifier; no agent session or productive-worker replay. */
+  forReviewWorktree?(cwd: string): AgentRuntime;
+  reviewCodeHttp?(prompt: string, assessment: import("./builtin-plugins/review-executor.js").ReviewHttpContext, executionId: string, signal: AbortSignal): Promise<string>;
+  classifyComplexityHttp?(assessment: import("./classifier-http.js").ClassifierAssessment): Promise<import("./model-roles.js").Complexity | undefined>;
+  /** Tool-free single-request sequential planner on the exact dispatcher role; no session, fallback or retry. */
+  planDispatchHttp?(request: import("./planner-http.js").PlannerHttpRequest): Promise<import("./planner-http.js").PlannerHttpOutcome>;
   readonly name: string;
   open(sessionKey: string, options?: OpenSessionOptions): Promise<RuntimeSession>;
   /** Model refs ("provider/model") usable for per-turn overrides. */

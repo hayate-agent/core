@@ -1,17 +1,20 @@
 import { createHash } from "node:crypto";
 import type { TurnEvent } from "./types.js";
+import { executionMetadata, type ExecutionMetadata } from "./builtin-plugins/execution-metadata.js";
 
 /** Host evidence only. No model text, arguments, results or authorization are accepted. */
 export interface ActivitySnapshot {
   id: string;
-  role: "main" | "worker";
+  role: "main" | "worker" | "dispatcher-classifier";
   parent?: string;
   /** Captured by the host from the exact originating assignment, never runtime events. */
   outputTags?: string[];
   context: "operator" | "host" | "scheduled" | "worker";
   phase: "starting" | "running" | "tool" | "completed" | "failed" | "cancelled";
-  activity: "opening session" | "runtime active" | "tool running" | "tool settled" | "turn settled";
+  activity: "opening session" | "selecting model" | "runtime active" | "tool running" | "tool settled" | "turn settled";
   tools: Array<{ callId: string; name: string }>;
+  execution?: ExecutionMetadata;
+  executionState?: "pending" | "observed" | "unavailable";
   elapsedMs: number;
   inactiveMs: number;
 }
@@ -32,12 +35,14 @@ export class TurnActivity {
   private timer?: ReturnType<typeof setInterval>;
   private tools = new Map<string, { callId: string; name: string }>();
   private legacy = 0;
+  private execution?: ExecutionMetadata;
+  private executionState: "pending" | "observed" | "unavailable" = "pending";
   private phase: ActivitySnapshot["phase"] = "starting";
   private activity: ActivitySnapshot["activity"] = "opening session";
   private readonly interval: number;
   private readonly maxAlive: number;
   private readonly enabled: boolean;
-  constructor(private readonly input: { id: string; role: "main" | "worker"; parent?: string; outputTags?: string[]; context: ActivitySnapshot["context"] },
+  constructor(private readonly input: { id: string; role: "main" | "worker" | "dispatcher-classifier"; parent?: string; outputTags?: string[]; context: ActivitySnapshot["context"] },
     private readonly emit: (event: ActivityEvent) => void, policy: ActivityPolicy = {}, private readonly now = Date.now) {
     this.enabled = policy.enabled !== false;
     this.started = this.last = this.lastEmitted = now();
@@ -52,6 +57,7 @@ export class TurnActivity {
   snapshot(): ActivitySnapshot {
     const now = this.now();
     return { ...this.input, id: `turn-${identity(this.input.id)}`, parent: this.input.parent ? `context-${identity(this.input.parent)}` : undefined,
+      execution: this.execution ? { ...this.execution } : undefined, executionState: this.executionState,
       phase: this.phase, activity: this.activity, tools: [...this.tools.values()], elapsedMs: Math.max(0, now - this.started), inactiveMs: Math.max(0, now - this.last) };
   }
   private publish(kind: ActivityEvent["kind"], tool?: ActivityEvent["tool"]): void {
@@ -59,14 +65,34 @@ export class TurnActivity {
     this.lastEmitted = this.now();
     try { this.emit({ type: "activity", kind, snapshot: this.snapshot(), ...(tool ? { tool } : {}) }); } catch { /* Telemetry cannot fail execution. */ }
   }
-  running(): void {
+  running(observationExpected = false): void {
     if (this.closed) return;
-    this.phase = "running"; this.activity = "runtime active"; this.last = this.now(); this.publish("progress");
+    if (observationExpected && this.executionState === "pending") {
+      this.phase = "starting"; this.activity = "selecting model";
+    } else {
+      if (this.executionState === "pending") this.executionState = "unavailable";
+      this.phase = "running"; this.activity = "runtime active";
+    }
+    this.last = this.now(); this.publish("progress");
   }
   event(event: TurnEvent): void {
     if (this.closed) return;
     // Text/usage indicate real activity, but their content is never exported.
     this.last = this.now();
+    if (event.type === "execution") {
+      this.execution = executionMetadata(event.selection);
+      this.executionState = this.execution.model && this.execution.thinking ? "observed" : "unavailable";
+      this.phase = this.tools.size ? "tool" : "running";
+      this.activity = this.tools.size ? "tool running" : "runtime active";
+      this.publish("progress");
+      return;
+    }
+    // Productive events without the promised observation must not remain pending forever.
+    if (this.executionState === "pending" && (event.type === "tool" || event.type === "text" || event.type === "usage")) {
+      this.executionState = "unavailable";
+      this.phase = "running"; this.activity = "runtime active";
+      this.publish("progress");
+    }
     if (event.type !== "tool") return;
     const name = safeName(event.name);
     const key = event.callId ?? (event.phase === "start" ? `legacy-${++this.legacy}` : [...this.tools].find(([, tool]) => tool.name === name)?.[0]);
@@ -89,6 +115,7 @@ export class TurnActivity {
   finish(outcome: "completed" | "failed" | "cancelled"): void {
     if (this.closed) return;
     this.closed = true; clearInterval(this.timer); this.tools.clear();
+    if (this.executionState === "pending") this.executionState = "unavailable";
     this.phase = outcome; this.activity = "turn settled"; this.last = this.now(); this.publish("progress");
   }
 }

@@ -2,6 +2,7 @@
  * Hermes-compatible slash commands (gateway-relevant subset; TUI-only commands are left out).
  * Names and aliases follow hermes_cli/commands.py so operators can keep their habits.
  */
+import { validateModelRoles } from "./model-roles.js";
 import type { PluginCommand, PluginUI } from "./plugins.js";
 import { developmentGuide } from "./development.js";
 import { randomUUID } from "node:crypto";
@@ -21,6 +22,7 @@ export interface CommandContext {
     source?: (key: import("./model-settings.js").ModelSetting) => string;
     set: (key: import("./model-settings.js").ModelSetting, value?: string) => Promise<void>;
   };
+  modelRoles?: { get(): import("./model-roles.js").ModelRoles | undefined; set(value: import("./model-roles.js").ModelRoles | undefined): Promise<void> };
   scheduler?: Scheduler;
   updater?: import("./update.js").OverlayUpdater;
   /** Mutable approval settings shared with the runtime. */
@@ -129,6 +131,28 @@ function recurringCommand(kind: "heartbeat" | "loop"): Command["run"] {
 
 export const COMMANDS: Command[] = [
   {
+    name: "model-roles", admin: true, help: "Inspect or configure persistent model roles",
+    run: async (args, input, ctx) => {
+      // Unlike historical openAdmin commands, this surface is never public.
+      if (input.source !== "channel" || !(input.replyTo?.channel === "console" || (!!input.sender && ctx.admins.includes(input.sender)))) return "⛔ authenticated admin only";
+      if (!ctx.modelRoles) throw Error("Model roles unavailable");
+      const { modelRoleNames } = await import("./model-roles.js");
+      const parts = args.trim().split(/\s+/);
+      const [op, role, model, thinking] = parts;
+      if (!args.trim() || op === "show") return JSON.stringify(ctx.modelRoles.get() ?? { enabled: false });
+      let value = structuredClone(ctx.modelRoles.get() ?? { enabled: false });
+      if ((op === "enable" || op === "disable") && parts.length === 1) value.enabled = op === "enable";
+      else if (op === "reset" && parts.length === 1) { await ctx.modelRoles.set(undefined); return "model roles reset (next route)"; }
+      else if (op === "set" && (parts.length === 3 || parts.length === 4) && modelRoleNames.includes(role as any)) {
+        value.roles ??= {}; value.roles[role as import("./model-roles.js").ModelRole] = { model, ...(thinking ? { thinking } : {}) };
+      } else if (op === "reset" && parts.length === 2 && modelRoleNames.includes(role as any)) delete value.roles?.[role as import("./model-roles.js").ModelRole];
+      else return "usage: /model-roles [show|enable|disable|set <role> <provider/model> [thinking]|reset [role]]";
+      validateModelRoles(value);
+      await ctx.modelRoles.set(value);
+      return "model roles saved (next route; active turns unchanged)";
+    },
+  },
+  {
     name: "task-budget", admin: true,
     help: "inspect|reset|resume|reset-resume <session-key> <task-id> [<token> <request-id>] (authenticated operator only)",
     run: async (args, input, ctx) => {
@@ -193,10 +217,10 @@ export const COMMANDS: Command[] = [
   {
     name: "new",
     aliases: ["reset"],
-    help: "Start a new session (fresh history)",
+    help: "Fresh context; abort parent turn/drop parent queue, not durable tasks or recurring sources",
     run: async (_a, input, ctx) => {
       await ctx.harness.resetSession(input.sessionKey);
-      return "🆕 New session.";
+      return `🆕 Fresh context in the same conversation; parent turn aborted if running and parent queue discarded.\n${ctx.harness.remainingWorkNotice(input.sessionKey)}`;
     },
   },
   {
@@ -205,7 +229,7 @@ export const COMMANDS: Command[] = [
     run: async (_a, input, ctx) => {
       const last = ctx.harness.state(input.sessionKey).lastInput;
       if (!last) return "nothing to retry";
-      ctx.harness.enqueue({ ...last });
+      await ctx.harness.enqueueChannel({ ...last }, true);
     },
   },
   {
@@ -236,10 +260,10 @@ export const COMMANDS: Command[] = [
   },
   {
     name: "stop",
-    help: "Stop the running turn and clear this session's queue",
+    help: "Revoke this conversation's turn, queue, continuations and children; recurring sources stay enabled",
     run: async (_a, input, ctx) => {
       const dropped = await ctx.harness.stopConversation(input.sessionKey);
-      return `⏹️ Stopped${dropped ? `, ${dropped} queued dropped` : ""}.`;
+      return `⏹️ Stopped${dropped ? `, ${dropped} queued dropped` : ""}. Recurring sources are unchanged: enabled loops, heartbeats, standing goals and cron schedules can create new work. External effects already performed are not rolled back.`;
     },
   },
   {
@@ -254,7 +278,7 @@ export const COMMANDS: Command[] = [
         s.queue.length = 0;
         return "queue cleared";
       }
-      ctx.harness.enqueue({ ...input, text: a });
+      await ctx.harness.enqueueChannel({ ...input, text: a });
       return s.running ? `queued (#${s.queue.length})` : undefined;
     },
   },
@@ -266,7 +290,7 @@ export const COMMANDS: Command[] = [
       const s = ctx.harness.state(input.sessionKey);
       if (!args.trim()) return "usage: /steer <text>";
       if (!s.running || !s.session) {
-        ctx.harness.enqueue({ ...input, text: args.trim() });
+        await ctx.harness.enqueueChannel({ ...input, text: args.trim() });
         return;
       }
       await s.session.steer(args.trim());
@@ -670,7 +694,7 @@ export function installCommands(ctx: CommandContext): void {
       await ctx.reloadSkills();
       const skill = ctx.skills().find((s) => s.name === parsed.name);
       if (!skill) return false;
-      ctx.harness.enqueue({ ...input, text: skillInvocationPrompt(skill, parsed.args) });
+      await ctx.harness.enqueueChannel({ ...input, text: skillInvocationPrompt(skill, parsed.args) });
       return true;
     }
     let out: string | void;
