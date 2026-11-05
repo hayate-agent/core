@@ -1,5 +1,5 @@
 import type { AgentRuntime } from "./types.js";
-import { assessCompletion } from "./completion-check.js";
+import { assessCompletion, type CompletionDiagnostic } from "./completion-check.js";
 import { runtimeReviewer } from "./runtime/reviewer.js";
 import { completionPrompt } from "./builtin-plugins/completion-prompt.js";
 import type { DispatchContext, DispatcherStrategy } from "./dispatcher.js";
@@ -21,12 +21,15 @@ export interface SequentialState {
   /** Role for the current step after one evidenced, effect-free inadequacy. */
   escalation?: { index: number; from: StepRole; to: StepRole };
   /** Last non-complete attempt of the current step; reconciled, never replayed blindly. */
-  prior?: { index: number; result: string };
+  prior?: { index: number; result: string; validation?: { diagnostic: CompletionDiagnostic; timeoutMs: number } };
 }
 export const MAX_STEPS = 6;
 const STEP_RESULT_LIMIT = 8000;
 /** Bounded validator-requested continuations of the same unfinished step. */
 const STEP_CONTINUATIONS = 2;
+/** Step validation judges a full worker report; observed reviewer latency for
+ * real steps (520/377) was 10-18s, so the 10s chat-turn default is too short. */
+const STEP_VALIDATION_TIMEOUT_MS = 120000;
 
 /** Strict closed schema. Anything else is malformed, never repaired or defaulted. */
 export function parsePlan(text: string): PlanStep[] | undefined {
@@ -211,6 +214,7 @@ export function sequentialStrategy(deps: SequentialDeps): DispatcherStrategy {
         let { observed, tools } = deps.turn(key);
         let status = stepStatus(reply);
         let verdictState: string | undefined;
+        let validation: CompletionDiagnostic | undefined;
         // Worker prose is only a proposal. Independently validate the exact step
         // before persisting completion or admitting any successor. A validator
         // "continue" means unfinished work of THIS step: resume it in the same
@@ -223,7 +227,7 @@ export function sequentialStrategy(deps: SequentialDeps): DispatcherStrategy {
             backend.review(text, reviewer.model!, reviewer.thinking ?? "off", signal) }, {
             id: `validate:${task.id}:${index}`, sessionKey, source: "host", text: prompt,
           }, reply, { task: `Original mandate (scope and limits):\n${task.input}\nValidate ONLY step ${index + 1}:\n${step.task}\nRequired evidence:\n${step.evidence}` },
-          context.signal, reviewer.model, Date.now, completionPrompt);
+          context.signal, reviewer.model, Date.now, completionPrompt, value => { validation = value; }, STEP_VALIDATION_TIMEOUT_MS);
           await authorize();
           verdictState = verdict?.state ?? "technical";
           if (verdict?.state === "completed") break;
@@ -250,7 +254,7 @@ End your reply with exactly one final line: "STEP-STATUS: complete" only if the 
           next.outcomes.push({ role, requested: route, ...(observed ? { observed } : {}), result, ...(role !== step.role ? { escalatedFrom: step.role } : {}) });
           delete next.escalation;
         } else {
-          next.prior = { index, result };
+          next.prior = { index, result, ...(verdictState === "technical" ? { validation: { diagnostic: validation ?? "technical", timeoutMs: STEP_VALIDATION_TIMEOUT_MS } } : {}) };
           const higher = stepRoles[stepRoles.indexOf(role) + 1];
           // Bounded: one level, only on explicit inadequacy with no tool call (no possible effect).
           if (status === "inadequate" && tools === 0 && higher && role === step.role) next.escalation = { index, from: role, to: higher };
@@ -259,7 +263,7 @@ End your reply with exactly one final line: "STEP-STATUS: complete" only if the 
             : verdictState === "blocked" || verdictState === "waiting"
               ? `Schritt ${index + 1}: unabhängige Prüfung meldet ${verdictState === "blocked" ? "externe Blockade" : "Warten auf externe Abhängigkeit"}; kein Abschluss.`
               : verdictState === "technical"
-                ? `Schritt ${index + 1}: unabhängige Prüfung technisch fehlgeschlagen oder unklar; kein Abschluss, keine automatische Wiederholung.`
+                ? `Schritt ${index + 1}: unabhängige Prüfung technisch fehlgeschlagen oder unklar (${validation ?? "technical"}); kein Abschluss, keine automatische Wiederholung.`
                 : verdictState === "continue"
                   ? `Schritt ${index + 1}: nach ${STEP_CONTINUATIONS} Fortsetzungen weiterhin unvollständig; kein Abschluss.`
                   : `Schritt ${index + 1} ohne vollständigen Nachweis (${status ?? "kein STEP-STATUS"}); kein Abschluss.`;

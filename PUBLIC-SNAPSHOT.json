@@ -1,5 +1,5 @@
 {
-  "contentDigest": "f905f6a5525e1436c56159eb59bcaf92f536f4fba7df9317130905f54c842ebd",
+  "contentDigest": "e32b41bc541dc4980e154e2c61b6d1dc9376dbc8e7631c4a5c29e497bcfa74af",
   "files": [
     {
       "mode": "100644",
@@ -494,7 +494,7 @@
     {
       "mode": "100644",
       "path": "src/completion-check.ts",
-      "sha256": "679ccd75d23569010081fe8594357ddc67e6248e015c8713493970022e137479"
+      "sha256": "72eca8ffe1b00ecbd0ddf06a4aeb7c10fc6f48735b7666ee8d328f8e6de23be6"
     },
     {
       "mode": "100644",
@@ -559,7 +559,7 @@
     {
       "mode": "100644",
       "path": "src/dispatcher-sequential.ts",
-      "sha256": "d252d8f34f816f92ef55f8c1246c4a41b75f81732d4a64ba64aabfb5ef1350b0"
+      "sha256": "26ea0d597cebd7ca8da12e7d59a8bf872c7b188dd6f13bdc94257ed06dd544fe"
     },
     {
       "mode": "100644",
@@ -1354,7 +1354,7 @@
     {
       "mode": "100644",
       "path": "test/dispatcher-sequential.test.ts",
-      "sha256": "bf2c484adb66edccd8bd711174d1de73377da1a283b7b86f89523c96e864dc72"
+      "sha256": "cbb84b08831870030b8f5307edf66082a18112e866329daab62529db96af51c2"
     },
     {
       "mode": "100644",
@@ -2680,5 +2680,5 @@
   "historyPolicy": "fresh-root; no source commits, tags, refs or deleted blobs",
   "pluginSHA": "77ae4430058d9d8fd2e910e1bcb10d47032c792e",
   "schema": 1,
-  "sourceSHA": "3fd8b419f08b0771ec8cbf2ab2df6b63ac04d83c"
+  "sourceSHA": "63ba2b65ba7edf06ab85a8e259c25d849604b4d0"
 }

@@ -19,7 +19,7 @@ export type CompletionPrompt = (input: Inbound, reply: string, authorization: Co
  */
 export async function assessCompletion(backend: ReviewBackend, input: Inbound, reply: string,
   authorization: CompletionAuthorization | undefined, signal: AbortSignal,
-  model: string | undefined = undefined, now = Date.now, promptStrategy?: CompletionPrompt, diagnostic?: CompletionDiagnosticSink): Promise<NonNullable<Inbound["continuation"]> | undefined> {
+  model: string | undefined = undefined, now = Date.now, promptStrategy?: CompletionPrompt, diagnostic?: CompletionDiagnosticSink, timeoutMs = 10000): Promise<NonNullable<Inbound["continuation"]> | undefined> {
   if (!promptStrategy) { diagnostic?.("unavailable"); return; }
   const checkpoint = input.continuation;
   if (input.source === "api" || input.sessionKey === "improvement:nightly" ||
@@ -30,7 +30,7 @@ export async function assessCompletion(backend: ReviewBackend, input: Inbound, r
   const abort = () => controller.abort(); signal.addEventListener("abort", abort, { once: true });
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => { controller.abort(); reject(Error("Completion assessment timed out")); }, 10000);
+    timer = setTimeout(() => { controller.abort(); reject(Error("Completion assessment timed out")); }, timeoutMs);
   });
   let failure: CompletionDiagnostic = "technical";
   try {
