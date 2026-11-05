@@ -201,6 +201,63 @@ test("validator continue is bounded; blocked and technical failures are distingu
   }
 });
 
+// A worker "STEP-STATUS: blocked" is a proposal like "complete": independently assessed.
+// Historical cause of earlier 520/377 pauses is an UNKNOWN limitation (diagnostics were missing);
+// it is neither treated as blocked-proof nor as success.
+const blockedWorker = (prompt: string) => /^CONTINUE STEP|STEP 2\/2/.test(prompt)
+  ? "did it\nSTEP-STATUS: complete" : "cannot proceed\nSTEP-STATUS: blocked: stuck";
+
+test("worker blocked claim with reviewer continue runs the next same-step turn, then completes", async t => {
+  const verdicts = ['{"state":"continue","next":"run the pending check"}', '{"state":"completed"}'];
+  const env = await setup(t, { plan: steps(["first", "simple"], ["second", "simple"]), worker: blockedWorker,
+    verdict: () => verdicts.shift() ?? '{"state":"completed"}' });
+  const task = await env.run("two steps");
+  assert.equal(task.status, "completed");
+  assert.match(env.calls.worker[1]!.prompt, /^CONTINUE STEP 1\/2/);
+  assert.match(env.calls.worker[1]!.prompt, /run the pending check/);
+  assert.equal(env.calls.worker[1]!.model, "p/cheap");
+  assert.match(env.calls.worker[2]!.prompt, /STEP 2\/2:\nsecond/);
+  assert.equal(state(task.checkpoint).outcomes.length, 2);
+});
+
+test("true external blocked holds: no continuation, no successor; invalid/uncertain assessment grants no execution", async t => {
+  for (const [verdict, text] of [['{"state":"blocked"}', /externe Blockade/], ['{"state":"waiting"}', /Warten auf externe/],
+    ['{"state":"completed"}', /ohne vollständigen Nachweis \(blocked\)/], ['invalid', /technisch fehlgeschlagen/], ['{"state":"uncertain"}', /technisch fehlgeschlagen/]] as const) {
+    const env = await setup(t, { plan: steps(["first", "simple"], ["second", "simple"]), worker: blockedWorker, verdict });
+    const task = await env.run("two steps");
+    assert.equal(task.status, "paused", verdict);
+    assert.equal(env.calls.worker.length, 1, verdict);
+    assert.equal(state(task.checkpoint).outcomes.length, 0, verdict);
+    assert.ok(env.events.some(e => text.test(JSON.stringify(e))), verdict);
+  }
+});
+
+test("blocked claim continuation is bounded and never completes without independent completion", async t => {
+  const env = await setup(t, { plan: steps(["first", "simple"], ["second", "simple"]), worker: () => "still stuck\nSTEP-STATUS: blocked: stuck",
+    verdict: '{"state":"continue","next":"more"}' });
+  const task = await env.run("two steps");
+  assert.equal(task.status, "paused");
+  assert.equal(env.calls.worker.length, 3);
+  assert.equal(state(task.checkpoint).outcomes.length, 0);
+  assert.ok(env.events.some(e => /weiterhin unvollständig/.test(JSON.stringify(e))));
+});
+
+test("blocked claim: parent stop and expired deadline preserved", async t => {
+  const expired = await setup(t, { worker: blockedWorker, verdict: '{"state":"continue","next":"x"}' });
+  const task = await expired.run("read", { expiresAt: Date.now() - 1 });
+  assert.equal(task.status, "paused");
+  assert.equal(expired.calls.worker.length, 0);
+  let env!: Awaited<ReturnType<typeof setup>>;
+  env = await setup(t, { plan: steps(["one", "simple"]), verdict: '{"state":"continue","next":"x"}',
+    worker: () => { void env.store.cancelParent("parent"); return "no\nSTEP-STATUS: blocked: stuck"; } });
+  await env.dispatcher.start();
+  await env.dispatcher.submit("parent", "req", "one");
+  while (["ready", "running"].includes(env.store.list()[0]!.status)) await new Promise(r => setTimeout(r, 10));
+  await new Promise(r => setTimeout(r, 30));
+  assert.equal(env.calls.worker.length, 1);
+  assert.ok(!env.events.some(e => e.type === "result"));
+});
+
 // 520/377: retained step prompts took 10.2s/17.7s at the real reviewer (HTTP 200,
 // valid completed verdict) but the validator aborted at 10s -> technical pause.
 test("step validator tolerates a slow but valid reviewer instead of a 10s technical abort", async t => {
@@ -417,4 +474,37 @@ test("planner chooses lowest sufficient capability without operational-risk infl
   assert.doesNotMatch(prompt, /by operational risk and consequence|not by how much thought|genuinely hard or risky/);
   assert.match(prompt, /one coherent change with its own tests and verification is ONE step/);
   assert.ok(prompt.endsWith(JSON.stringify({ task: "x" })));
+});
+
+test("multi-step: completed step survives a technical validator pause and restart continues the bounded step", async t => {
+  // Step 1 completes with an independent validator "completed". Step 2's validator returns a
+  // technical (invalid) answer, so the strategy pauses without a successor. After restart the
+  // host owner continues only step 2 in its retained session; step 1 is never re-executed.
+  let verdicts = 0;
+  const verdict = () => { verdicts++; return verdicts === 1 ? '{"state":"completed"}' : "not json"; };
+  const env = await setup(t, { plan: steps(["first", "simple"], ["second", "simple"]), verdict });
+  const task = await env.run("two steps");
+  assert.equal(task.status, "paused");
+  const before = state(task.checkpoint);
+  assert.equal(before.outcomes.length, 1, "step 1 completed and persisted");
+  assert.equal(before.prior?.index, 1, "pause is at step 2");
+  assert.equal(before.prior?.validation?.diagnostic, "invalid_response");
+  const workerTurnsBefore = env.calls.worker.length;
+  // Restart: new store, new host, same file. Only the supervision owner may act.
+  const store2 = new ExecutionStore(env.file); await store2.load();
+  const { Harness: H2 } = await import("../src/harness.js");
+  const { FakeRuntime: FR, MemoryChannel: MC } = await import("./fakes.js");
+  let assessments = 0;
+  const h2 = new H2({ runtime: new FR(), executionStore: store2, now: () => 10_000, tickMs: 60000,
+    completionCheck: async () => { assessments++; return { state: "blocked" }; } });
+  h2.addChannel(new MC()); h2.onStateChange = async () => {};
+  h2.restoreSessions([{ key: "parent", task: { id: "parent", original: "two steps", state: "waiting", depth: 0, next: "await dispatcher",
+    wait: { reason: "dispatcher owns the rollout", nextAt: 1_000, deadline: 1_793_995_200_000 } }, replyTo: undefined }] as never);
+  t.after(() => h2.stop(0));
+  await h2.recoverTasks(); await h2.tick();
+  assert.equal(assessments, 1, "technical pause gets exactly one bounded owner assessment");
+  const after = store2.list().find(item => item.id === task.id)!;
+  assert.equal(after.status, "paused", "no silent auto-resume; owner assessment only");
+  assert.equal(state(after.checkpoint).outcomes.length, 1, "completed step 1 not repeated");
+  assert.equal(env.calls.worker.length, workerTurnsBefore, "no worker turn replayed by restart");
 });

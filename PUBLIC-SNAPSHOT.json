@@ -1,5 +1,5 @@
 {
-  "contentDigest": "e32b41bc541dc4980e154e2c61b6d1dc9376dbc8e7631c4a5c29e497bcfa74af",
+  "contentDigest": "5e7ce82e73b7f7e044a2d56e5d476261188248cc37014526c3b4036b5df78e95",
   "files": [
     {
       "mode": "100644",
@@ -99,7 +99,7 @@
     {
       "mode": "100644",
       "path": "docs/development.md",
-      "sha256": "a2ffcf7503d8c36b659012ec363cc0c6563677925377ee86f5d58f2d38c29bb4"
+      "sha256": "1d0c81237184e5a641ccabb8da2ce32a05ad48cd7814fee7da0e62b022f155ef"
     },
     {
       "mode": "100644",
@@ -184,7 +184,7 @@
     {
       "mode": "100644",
       "path": "docs/memory.md",
-      "sha256": "5fb472fc7dc5027cc23a74a994a5eefc31d439980086c3e8747ea98b8e51f33b"
+      "sha256": "cc1a883dfd28c4dfa54d009ac2cd3246aed1d5ffd57f73ab2cc809e73a8b8fe5"
     },
     {
       "mode": "100644",
@@ -359,7 +359,7 @@
     {
       "mode": "100644",
       "path": "package.json",
-      "sha256": "760c3f8a3a99188ee237456b865babc9a71529595914823457f6814229608241"
+      "sha256": "51aa8f4272cd16b28ea5f57927c2ee0fb97a37fb67e587bf0b1dca77f16bdecb"
     },
     {
       "mode": "100644",
@@ -380,6 +380,11 @@
       "mode": "100644",
       "path": "scripts/test-targeted.mjs",
       "sha256": "25964c3342a0cb3dc7384ef18d33d464e152770ea74df7f83000737617ec979f"
+    },
+    {
+      "mode": "100644",
+      "path": "scripts/test.mjs",
+      "sha256": "a3a3e000e46f6bf970590029a189b6638b13475871a090bb9e69e6760e338332"
     },
     {
       "mode": "100644",
@@ -429,7 +434,7 @@
     {
       "mode": "100644",
       "path": "src/capability-context.ts",
-      "sha256": "fa9e9363eeedb3024e3e02eae9bd0ad2b09ae3b1c76d3a6a1638afabdf3bd039"
+      "sha256": "9fdcc746168fde8c7c8a48bcd0b76837b3d8fba89c1def1ef23abe0f7d0428a4"
     },
     {
       "mode": "100644",
@@ -559,7 +564,7 @@
     {
       "mode": "100644",
       "path": "src/dispatcher-sequential.ts",
-      "sha256": "26ea0d597cebd7ca8da12e7d59a8bf872c7b188dd6f13bdc94257ed06dd544fe"
+      "sha256": "77ae28148f881f56d58749d2b3d8190a4f2217b0a7c3c101ea9e050473037913"
     },
     {
       "mode": "100644",
@@ -609,7 +614,7 @@
     {
       "mode": "100644",
       "path": "src/harness.ts",
-      "sha256": "53a7f854d0dac305abd5d7e4923d25b7aa381ac20bf655e41eabfc10442aa5e5"
+      "sha256": "ab84809405e6eaf780a48030e248517743dcfa6d5abb09399d44a0d4c8cc7062"
     },
     {
       "mode": "100644",
@@ -654,7 +659,7 @@
     {
       "mode": "100644",
       "path": "src/memory-local.ts",
-      "sha256": "7648b6c0e09ec95fb6ba95a635f2ef0c115033edd433fa406e8a73e6f060c3f2"
+      "sha256": "19e386a5e608b29e065b2a12216fe07cdf833857fcd8e47bcfc888bf414f3df1"
     },
     {
       "mode": "100644",
@@ -829,7 +834,7 @@
     {
       "mode": "100644",
       "path": "src/session-observer.ts",
-      "sha256": "1170d7649c7a4c4ebeeac66aa50ad41011f2f5a990c6ba9062bcf5c66d4c6e58"
+      "sha256": "2fbf4f104a9c7e9e397855ea0988c3074d3720dd0c8a5883eb4dccb697dd03be"
     },
     {
       "mode": "100644",
@@ -1024,7 +1029,7 @@
     {
       "mode": "100644",
       "path": "test/capability-context.test.ts",
-      "sha256": "7b77d7e7329991e357b5ec110fcaafffbdf141906b748c39b1963262c0c42199"
+      "sha256": "f8d6b56994d629b9d79698f3f2928a41927425190cff48578cdd042cf46c05d3"
     },
     {
       "mode": "100644",
@@ -1354,7 +1359,7 @@
     {
       "mode": "100644",
       "path": "test/dispatcher-sequential.test.ts",
-      "sha256": "cbb84b08831870030b8f5307edf66082a18112e866329daab62529db96af51c2"
+      "sha256": "e5201b6c7d5f44936b1840177eb7f06aeb232e24e707e36c48ae4ff5a8d61555"
     },
     {
       "mode": "100644",
@@ -1449,7 +1454,7 @@
     {
       "mode": "100644",
       "path": "test/fixtures/scheduler-deadline-probe.ts",
-      "sha256": "d60ee91e9aafc680b272351ee36263843d5a79f11c5a39452f805f740ccf085f"
+      "sha256": "da48a5ad9ace3ce743fb7218f2931cc6a4d7de207a8e9203f44c9691544455fe"
     },
     {
       "mode": "100644",
@@ -1789,7 +1794,7 @@
     {
       "mode": "100644",
       "path": "test/nongit-continuation.test.ts",
-      "sha256": "8b3c66b5d4ceb8894377e1d5979ff01b7b6c8ce5d7fca952f612a96d85f26ee4"
+      "sha256": "360ca0e6e55dd3c0c724783f7c2d56e14e39e2a7df5d6bde922d77db3eacc3da"
     },
     {
       "mode": "100644",
@@ -1830,6 +1835,16 @@
       "mode": "100644",
       "path": "test/overlay-contract.test.ts",
       "sha256": "c1dd793539a2195ec77e9c95e5417e3f85b1cc0e35b8a890de699321f565575a"
+    },
+    {
+      "mode": "100644",
+      "path": "test/paused-child-foreground-starvation.test.ts",
+      "sha256": "3b4cbc316e00e0f75f14cc98336ab91c6d2bee1943b5d5a5c5a60c4a6434754f"
+    },
+    {
+      "mode": "100644",
+      "path": "test/paused-child-supervision.test.ts",
+      "sha256": "acafd5c7f7964f6e4644e4719b4d2bb385c24f77d5ad5504196d364b3ea3c1e1"
     },
     {
       "mode": "100644",
@@ -2109,7 +2124,7 @@
     {
       "mode": "100644",
       "path": "test/scheduler-timeout.test.ts",
-      "sha256": "036e5ae0213e4ac29c862f1267b9d8ef087decb55e7395fc2b7b0e05f0ba0149"
+      "sha256": "7243a5a7183a157d12aa4fe3beaf2e6976a5003dd7373e254aa769e70dc61cf1"
     },
     {
       "mode": "100644",
@@ -2354,7 +2369,7 @@
     {
       "mode": "100644",
       "path": "test/vertical-kiss.test.ts",
-      "sha256": "bc7f654bf8675bbeb002f64943f76d710e3fee9132bacb05acc9af8bba93c56a"
+      "sha256": "85dd1570cebd522b25d01e8e2b94b25328e37b66cd1148c864a982d1d8a11bfe"
     },
     {
       "mode": "100644",
@@ -2680,5 +2695,5 @@
   "historyPolicy": "fresh-root; no source commits, tags, refs or deleted blobs",
   "pluginSHA": "77ae4430058d9d8fd2e910e1bcb10d47032c792e",
   "schema": 1,
-  "sourceSHA": "63ba2b65ba7edf06ab85a8e259c25d849604b4d0"
+  "sourceSHA": "7edb348ea6ab29562406097716426ab6db7c55a8"
 }

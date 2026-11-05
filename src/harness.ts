@@ -749,7 +749,7 @@ export class Harness {
       admission.depth === task.depth + 1 && admission.next === task.next && admission.original === task.original &&
       admission.expiresAt === task.expiresAt && !task.termination &&
       (!task.expiresAt || task.expiresAt > this.now()) &&
-      pending.every(e => e.status === "blocked" && !e.parentStopped &&
+      pending.every(e => this.supervisable(e) && !e.parentStopped &&
         (!e.dependency?.taskId || (e.dependency.taskId === task.id && e.dependency.original === task.original)) &&
         !(e.question && !e.question.answer)) &&
       receipt.evidence === createHash("sha256").update(JSON.stringify(pending)).digest("hex"));
@@ -758,6 +758,14 @@ export class Harness {
   /** Provenance only: a scoped child belongs to its task; an unscoped one may belong
    * to any task except one created after it was already outstanding. */
   private readonly restoredTaskInputs = new WeakSet<Inbound>();
+
+  /** Blocked children, plus a child paused only by an internal failure with settled effects
+   * (e.g. validator-continuation limit). Manual pause, questions, unresolved intents and
+   * operator stop stay binding. Assessment is read-only: it neither resumes nor replays the child. */
+  private supervisable(e: import("./execution.js").Execution): boolean {
+    return e.status === "blocked" ||
+      (e.status === "paused" && e.diagnosticCode === "runtime-failure" && !e.intent && !e.question && !e.parentStopped);
+  }
 
   private mayDependOn(e: import("./execution.js").Execution, taskId: string, task?: DurableTask): boolean {
     if (e.dependency?.taskId) return e.dependency.taskId === taskId;
@@ -1607,7 +1615,7 @@ export class Harness {
    * exact child snapshot. This does not grant worker replay permission. Persist
    * the one-shot claim before inference, then admission before queue release.
    */
-  private async reconcileBlockedDependency(s: SessionState, task: DurableTask): Promise<void> {
+  private async reconcileBlockedDependency(s: SessionState, task: DurableTask, betweenTurns = false): Promise<void> {
     const children = () => this.opts.executionStore?.list(s.key).filter(e =>
       !["completed", "cancelled"].includes(e.status) && this.mayDependOn(e, task.id, task)) ?? [];
     const snapshot = () => JSON.stringify(children());
@@ -1615,8 +1623,10 @@ export class Harness {
       !!task.id && !!task.original.trim() && task.original.length <= 8000 &&
       (!task.anchor || task.anchor.task === task.original) &&
       Number.isSafeInteger(task.depth) && task.depth >= 0 && repetitions(task) < 20 && !task.termination &&
+      !(betweenTurns && (task.recoveryRetry?.attempts ?? 0) >= 3) &&
       (task.expiresAt === undefined || (Number.isSafeInteger(task.expiresAt) && task.expiresAt > this.now())) &&
-      !s.current && !s.queue.length && !s.running && !this.paused && !this.stopping && !this.gatewayChanging && !this.updateFenced &&
+      !s.current && (betweenTurns ? s.running && s.queue.every(input => input.taskId !== task.id) : !s.queue.length && !s.running) &&
+      !this.paused && !this.stopping && !this.gatewayChanging && !this.updateFenced &&
       s.key !== "improvement:nightly" && !this.stoppingHostParents.has(s.key) &&
       !this.opts.externallyRecoveredSession?.(s.key);
     const previous = task.supervisorDecision;
@@ -1646,7 +1656,7 @@ export class Harness {
         task.recoveryRetry.attempts < 1 ||
         !Number.isSafeInteger(task.recoveryRetry.nextAt) || task.recoveryRetry.nextAt > this.now())) return;
     const pending = children();
-    if (!pending.length || pending.some(e => e.status !== "blocked" || e.question && !e.question.answer)) return;
+    if (!pending.length || pending.some(e => !this.supervisable(e) || e.question && !e.question.answer)) return;
     this.recoveringTasks.add(task);
     try {
       const executions = snapshot();
@@ -2190,6 +2200,16 @@ export class Harness {
           // A child checkpoint must not hide other retained, independently authorized work.
           for (const retained of this.tasks(s)) {
             if (retained.id !== input.taskId && retained.id !== targetId && !retained.next?.trim()) await this.assessStartupTask(s, retained, true);
+          }
+          // The pump still owns the session: assess at most one retained parent
+          // before starting the next unrelated queued turn, never concurrently.
+          if (input.source === "channel" || input.source === "api") {
+            for (const retained of this.tasks(s)) {
+              if (retained.id === input.taskId || retained.id === targetId) continue;
+              const before = retained.supervisorDecision;
+              await this.reconcileBlockedDependency(s, retained, true);
+              if (retained.supervisorDecision !== before) break;
+            }
           }
           await this.onStateChange?.();
           s.unsaved = false;
