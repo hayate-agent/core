@@ -355,12 +355,17 @@ test("HTTP planner: missing dispatcher role blocks before any request; persisted
   assert.match(second.calls.worker[0]!.prompt, /STEP 2\/2:\ntwo/);
 });
 
-test("planner tier criteria are operational risk, lowest adequate role, not reasoning depth", () => {
+test("planner chooses lowest sufficient capability without operational-risk inflation", () => {
   const prompt = planPrompt("x");
-  assert.match(prompt, /LOWEST adequate role by operational risk/);
-  assert.match(prompt, /"simple" \(factual answers, read-only inspection, deterministic mechanical edits/);
+  assert.match(prompt, /LOWEST sufficient capability for the reasoning and task complexity/);
+  assert.match(prompt, /"simple" \(factual answers, read-only inspection, deterministic mechanical edits and execution of a known runbook\)/);
   assert.match(prompt, /"medium" \(bounded implementation or fix in known code, including its tests\)/);
-  assert.match(prompt, /"high" \(genuinely hard or risky: .*security or credentials, production or irreversible effects/);
+  assert.match(prompt, /"high" \(genuinely complex reasoning beyond medium: ambiguous root-cause investigation, difficult concurrency\/recovery reasoning or architecture\)/);
+  assert.match(prompt, /production labels, credentials, deployment or irreversible effects alone do NOT require high/);
+  assert.match(prompt, /Routine authorized credential rotation with a known runbook and production read-only checks can be simple/);
+  assert.match(prompt, /authorization, safety and verification gates still apply at every role/);
+  assert.match(prompt, /choosing a role grants no permission and bypasses no gate/);
+  assert.doesNotMatch(prompt, /by operational risk and consequence|not by how much thought|genuinely hard or risky/);
   assert.match(prompt, /one coherent change with its own tests and verification is ONE step/);
   assert.ok(prompt.endsWith(JSON.stringify({ task: "x" })));
 });
