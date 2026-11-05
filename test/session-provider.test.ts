@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -25,6 +25,29 @@ test("filesystem provider persists bindings, revisions, pagination and conversat
     const reopened = new FilesystemSessionProvider(dir);
     assert.equal((await reopened.list("a/b"))[0].title, "Readable subject");
     assert.equal((await reopened.list("a/b", 1)).length, 0);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test("filesystem provider rejects a binding to another conversation without losing state", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "session-provider-"));
+  try {
+    const own = "matrix:!räum/𝔘:x", other = "matrix:!räum/𝔘:y";
+    const provider = new FilesystemSessionProvider(dir);
+    const first = await provider.create(own, "fixture", [{ text: "Grüße" }]);
+    const second = await provider.create(own, "fixture", [{ text: "答え" }]);
+    const foreign = await provider.create(other, "fixture", []);
+    await provider.bind(own, first.id);
+    const [file] = (await readdir(dir)).filter((f) => f.startsWith("binding-"));
+    const corrupt = JSON.stringify({ id: foreign.id });
+    await writeFile(path.join(dir, file), corrupt);
+    for (const p of [provider, new FilesystemSessionProvider(dir)]) await assert.rejects(p.active(own), /different conversation/);
+    assert.equal(await readFile(path.join(dir, file), "utf8"), corrupt);
+    assert.deepEqual(await provider.load(foreign.id), foreign);
+    for (const row of [second, first]) {
+      await provider.bind(own, row.id);
+      assert.equal(await new FilesystemSessionProvider(dir).active(own), row.id);
+    }
+    assert.equal(await provider.active(other), undefined);
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
 
