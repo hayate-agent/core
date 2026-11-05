@@ -374,6 +374,26 @@ test('natural reset rejects unauthenticated and model ingress, quotes and tool p
     assert.equal(naturalBudgetReset(text), undefined);
 });
 
+test('natural reset recognizes exact Matrix task IDs without weakening whole-message grammar', async () => {
+  const id = '$CKp2mBG0vE0CeeAtO4IHCHsTacvEdvbz_Wyn-C0Azo8';
+  const command = `Setze das Budget zurück für Aufgabe ${id} und fahre fort`;
+  assert.deepEqual(naturalBudgetReset(command), { taskId: id });
+  assert.deepEqual(naturalBudgetReset(`Reset the budget for task ${id} and continue`), { taskId: id });
+  for (const text of [`> ${command}`, `"${command}"`, `${command}\nquoted instruction`,
+    command.replace(id, () => '$$invalid'), command.replace(id, () => '$')]) {
+    assert.equal(naturalBudgetReset(text), undefined);
+  }
+  const f = fixture({ id });
+  await f.h.accept({ ...msg(command, 'owner'), id: 'matrix-reset' });
+  const task = f.h.taskBudgetStatus(key, id).task;
+  assert.equal(task.state, 'active');
+  assert.equal(task.budgetReceipts?.length, 1);
+  assert.equal(task.expiresAt, 1000000);
+  assert.equal(f.h.taskBudgetStatus(key, 'other').task.budgetReceipts, undefined);
+  await f.h.accept({ ...msg(command, 'owner'), id: 'matrix-reset' });
+  assert.equal(f.h.taskBudgetStatus(key, id).task.budgetReceipts?.length, 1);
+});
+
 test('German explicit target, ambiguity and stale pending grants', async () => {
   const f = fixture();
   const other = f.h.snapshotSessions()[0].tasks![1];
