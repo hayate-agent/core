@@ -33,7 +33,7 @@ export class LocalMemory implements MemoryProvider {
     const ext = import.meta.url.endsWith(".ts") ? "ts" : "js";
     // Lock an inherited descriptor before exec: works with both BSD and Linux flock,
     // without a wrapper process retaining the lock after the worker exits.
-    const child = spawn("sh", ["-c", 'exec 9>"$1"; flock --nonblock 9 || exit 1; shift; exec "$@"',
+    const child = spawn("sh", ["-c", 'exec 9>"$1"; flock -n 9 || exit 1; shift; exec "$@"',
       "memory-worker", path.join(dir, "writer.lock"), process.execPath,
       ...(ext === "ts" ? ["--import", "tsx"] : []), fileURLToPath(new URL(`./memory-worker.${ext}`, import.meta.url))], {
       stdio: ["ignore", "ignore", "ignore", "ipc"], env: { ...process.env },
