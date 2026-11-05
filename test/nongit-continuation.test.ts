@@ -8,52 +8,50 @@ import { accountRepetition, repetitions } from '../src/repetition-budget.js';
 import { FakeRuntime, MemoryChannel, msg } from './fakes.js';
 
 test('independently assessed analysis continues beyond 20 without Git, including durable restart', async () => {
-  let turns = 0; let checks = 0;
+  let turns = 0; let checks = 0; let first: Harness | undefined; let restored: Harness | undefined;
+  let writes = Promise.resolve();
   const runtime = new FakeRuntime(() => { turns++; return 'analysis checkpoint'; });
   const options = { runtime, now: () => 1000, completionCheck: async () => {
     checks++;
     return checks === 45 ? { state: 'completed' as const } : { state: 'continue' as const, next: 'Continue original analysis' };
   }};
   const home = await mkdtemp(path.join(os.tmpdir(), 'nongit-continuation-'));
-  const first = new Harness(options); first.addChannel(new MemoryChannel());
-  let writes = Promise.resolve();
   try {
     const file = path.join(home, 'sessions.json');
-    // Deterministic barrier (not a 1000x1ms wallclock poll, which expires under load).
-    let reachedPause!: () => void;
-    const pausedAt = new Promise<void>(resolve => { reachedPause = resolve; });
+    first = new Harness(options); first.addChannel(new MemoryChannel());
     // Serialize the test persistence adapter: background saveSoon callbacks may
     // overlap awaited writes. A paused turn alone is not a persistence barrier.
+    let pauseReached!: () => void;
+    const paused = new Promise<void>(resolve => { pauseReached = resolve; });
     first.onStateChange = () => {
-      const snapshot = JSON.stringify(first.snapshotSessions());
+      const snapshot = JSON.stringify(first!.snapshotSessions());
+      if (checks === 25) { first!.paused = true; pauseReached(); }
       writes = writes.then(async () => {
         await writeFile(file + '.next', snapshot);
         await rename(file + '.next', file);
-        if (checks === 25) { first.paused = true; reachedPause(); }
       });
       return writes;
     };
     await first.accept(msg('Analyze original scope'));
-    let bound: NodeJS.Timeout | undefined;
-    await Promise.race([pausedAt, new Promise<void>(resolve => { bound = setTimeout(resolve, 30_000); })]);
-    clearTimeout(bound);
+    let checkpointTimer: NodeJS.Timeout | undefined;
+    try {
+      await Promise.race([paused, new Promise<never>((_resolve, reject) => {
+        checkpointTimer = setTimeout(() => reject(Error('Continuation checkpoint not reached within 10 seconds')), 10000);
+      })]);
+    } finally { clearTimeout(checkpointTimer); }
     assert.equal(first.paused, true);
     await writes;
     assert.equal(turns, 25); assert.equal(checks, 25);
     const snapshot = JSON.parse(await readFile(file, 'utf8'));
     assert.equal(snapshot[0].tasks[0].state, 'active');
     assert.equal(snapshot[0].tasks[0].repetition.repetitions, 0);
-    const restored = new Harness(options); restored.addChannel(new MemoryChannel()); restored.onStateChange = async () => {};
+    restored = new Harness(options); restored.addChannel(new MemoryChannel()); restored.onStateChange = async () => {};
     restored.restoreSessions(snapshot); await restored.tick(); await restored.drained();
     assert.equal(turns, 45); assert.equal(checks, 45);
     assert.equal(restored.snapshotSessions()[0]!.tasks![0]!.state, 'completed');
     assert.equal(repetitions(restored.snapshotSessions()[0]!.tasks![0]!), 1); // terminal turn, not a continue
   } finally {
-    // Teardown lifecycle: fence the first harness and settle its serialized writes
-    // before removing the directory, so no background save races the rm.
-    first.paused = true;
-    await first.stop(0);
-    for (let prev; prev !== writes;) { prev = writes; await writes.catch(() => undefined); }
+    await first?.stop(0); await restored?.stop(0); await writes;
     await rm(home, { recursive: true, force: true });
   }
 });

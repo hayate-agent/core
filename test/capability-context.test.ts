@@ -15,7 +15,18 @@ test("configured, ready, exposed and session-allowed are separate host facts", (
   assert.equal(data(capabilityContext({...facts,sessionKey:"dispatch:child"})).dispatcher.sessionAllowed, false);
   assert.equal(data(capabilityContext({...facts,dispatcherEnabled:false})).delegationPolicy, "dedicated-subagent");
 });
-test("mandatory instructions and fresh capability facts reach working turns without skill context", async () => {
+test("Core adds no unconditional review or approval rule when no review engine supplies one", () => {
+  for (const sessionKey of ["mem:room1", "dispatch:child", "subagent:child"]) {
+    const text = capabilityContext({...facts, sessionKey, reviewInstructions: ""});
+    assert.match(text, /ALWAYS vertical slices\. ALWAYS KISS\./);
+    assert.doesNotMatch(text, /required review|review is mandatory/i);
+    assert.match(text, /Preserve safety and authorization; never perform an unauthorized activation\./);
+    assert.equal(data(text).review.registered, true);
+  }
+  assert.match(capabilityContext(facts), /Dedicated review is mandatory/);
+});
+
+test("selected review instructions and fresh capability facts reach working turns without skill context", async () => {
   const runtime = new FakeRuntime(); let revision = 1;
   const h = new Harness({runtime,tickMs:60000,capabilityContext: input => capabilityContext({...facts,sessionKey:input.sessionKey,revision})});
   h.addChannel(new MemoryChannel());h.onStateChange=async()=>{};

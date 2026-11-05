@@ -22,7 +22,7 @@ export async function* observeSessionChanges(owner: SessionObserver, key: string
       yield snapshot;
     }
     if (signal.aborted) return;
-    try { await setTimeout(intervalMs, undefined, { signal, ref: false }); }
+    try { await setTimeout(intervalMs, undefined, { signal }); }
     catch (error) { if (signal.aborted) return; throw error; }
   }
 }

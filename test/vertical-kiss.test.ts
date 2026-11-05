@@ -20,7 +20,8 @@ const check = (text: string) => {
   assert.match(text, /persistence, restart, continuation and activation when relevant/);
   assert.match(text, /No speculative abstractions, additional state machines or approval loops/);
   assert.match(text, /Tests, merge and image builds are intermediate evidence, not live completion/);
-  assert.match(text, /Preserve safety, authorization and required review/);
+  assert.match(text, /Preserve safety and authorization/);
+  assert.doesNotMatch(text, /Preserve safety, authorization and required review/);
   assert.match(text, /not mechanical correctness enforcement/);
   assert.match(text, /Required review remains mandatory/);
 };

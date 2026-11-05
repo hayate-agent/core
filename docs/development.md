@@ -4,6 +4,17 @@ This guide ships with the installed package and image. It describes this version
 not a promise that every planned interface is already implemented. `/harness`
 locates it. PI is a replaceable runtime adapter, not the product's identity.
 
+## Architecture: behaviour belongs in extensions
+
+**Behaviours should be expressed via either plugins or codified extensions.
+The core should remain clear and clean.** Core provides lifecycle, routing,
+persistence and explicit extension contracts; concrete behavioural policies belong
+in plugins or codified extensions rather than unconditional Core prompt text.
+Operator-specific working rules belong in the operator-managed SOUL.md. Prefer
+existing extension points; introduce a Core hook only when the required capability
+cannot be expressed through them. This principle does not remove infrastructure
+correctness checks or external access controls.
+
 ## Default working rule: vertical slices and KISS
 
 The default CLI supplies **ALWAYS vertical slices. ALWAYS KISS.** through
@@ -17,8 +28,11 @@ result before expanding horizontally. Include persistence, restart, continuation
 and activation when relevant and authorized. Avoid speculative abstractions,
 additional state machines and approval loops; justify added complexity with the
 request and evidence. Tests, merge and image builds are intermediate evidence,
-not proof of live completion. Safety, authorization and required review remain
-unchanged. Always make small focused changes and small PRs: one purpose per PR,
+not proof of live completion. Review and approval working rules belong in the
+operator-managed SOUL.md, not in Core's unconditional working instructions.
+The separately configured review engine and external repository policies remain
+independent mechanisms; this shared default does not establish a review obligation.
+Always make small focused changes and small PRs: one purpose per PR,
 independently deployable increments and explicit real dependencies. Do not batch
 unrelated fixes, hold ready fixes for unrelated work, or ship unusable horizontal
 fragments. This shared default preserves required CI and grants no automatic
@@ -34,8 +48,13 @@ context themselves, as with the other CLI capability instructions.
 ## Local targeted tests and integration checkpoints
 
 Use `npm ci --include=dev` in your own checkout (development tools are needed even
-when the shell has `NODE_ENV=production`). For each local vertical slice, run the
-relevant tests and `npm run typecheck`; a full suite is not required after every edit.
+when the shell has `NODE_ENV=production`). Run `npm test` for the complete suite:
+it builds the required runtime files first and uses a canonical, short temporary
+directory (important for macOS symlinks and Unix socket path limits). Local-memory
+worker tests require `flock` on PATH: Linux util-linux or macOS `brew install flock`.
+The lock is acquired on an inherited descriptor before the worker is executed.
+For each local vertical slice, run the relevant tests and `npm run typecheck`;
+a full suite is not required after every edit.
 
 ```sh
 npm run test:targeted -- --list                  # explain selection, no execution/network

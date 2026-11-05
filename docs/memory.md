@@ -3,7 +3,7 @@
 Memory is a native Harness capability, not a PI session extension. Plugins can
 register `registerMemoryProvider(name, factory)`; `local` is reserved. Factories
 receive `{ home, config }` and return `MemoryProvider` from `src/memory.ts`.
-Local is bundled, enabled by default, and requires Linux `flock`. No SQLite,
+Local is bundled, enabled by default, and requires `flock` (Linux util-linux or macOS `brew install flock`). No SQLite,
 additional database, npm dependency or permanently running LLM is required.
 
 ## Configuration
