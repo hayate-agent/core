@@ -74,7 +74,7 @@ export interface Inbound {
       /** Budget fallback metadata: names of shortened/omitted sections; absent in a full render. */
       truncated?: string[] };
     /** Bounded untrusted tool observations for the independent assessor, never grants. */
-    tools?: Array<{ name: string; error: boolean; result?: string }>;
+    tools?: Array<{ name: string; error: boolean; call?: string; result?: string }>;
     recent: Array<{ role: "user" | "assistant"; text: string }>;
     tasks: Array<{ id: string; original: string; state: string; next?: string; wait?: { reason: string; deadline: number } }>;
   };

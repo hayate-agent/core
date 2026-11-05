@@ -37,14 +37,14 @@ async function pausedLikeD2494ffb(home: string) {
   const file = path.join(home, "executions.json");
   const runtime = new FakeRuntime() as FakeRuntime & { modelPreflight: (ref: string) => Promise<{ available: boolean; thinkingSupported: boolean }> };
   runtime.modelPreflight = async () => ({ available: true, thinkingSupported: true });
-  let workerTurns = 0;
+  let workerTurns = 0; let continues = 0;
   const open = runtime.open.bind(runtime);
   runtime.open = async (key: string, options: OpenSessionOptions = {}) => {
     const session = await open(key, options);
     const prompt = session.prompt.bind(session);
     session.prompt = async (text: string, o: PromptOptions = {}) => {
       o.onEvent?.({ type: "execution", selection: { model: o.model ?? "p/default", thinking: o.thinking ?? "high" } } as never);
-      if (options.assessmentPurpose === "supervisor") return '{"state":"continue","next":"inventory the remaining legacy executions"}';
+      if (options.assessmentPurpose === "supervisor") return `{"state":"continue","next":"inventory the remaining legacy executions (${++continues})"}`;
       await prompt(text, o);
       if (key.startsWith("plan:")) return plan;
       workerTurns++;
