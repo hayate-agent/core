@@ -605,3 +605,37 @@ test("validator 'blocked' (genuine external) and technical failure never trigger
     assert.equal(env.calls.worker.length, 1);
   }
 });
+
+test("corrupt persisted correction metadata blocks visibly instead of an unbounded correction loop", async t => {
+  for (const correction of [{ index: 0, rounds: "x", note: "n" }, { index: 0, rounds: 99, note: "n" }, { index: 5, rounds: 1, note: "n" }]) {
+    const home = await mkdtemp(path.join(os.tmpdir(), "seq-corrupt-"));
+    t.after(() => rm(home, { recursive: true, force: true }));
+    const file = path.join(home, "executions.json");
+    const store = new ExecutionStore(file); await store.load();
+    const task = await store.submit("parent", "req", "one", "sequential");
+    const running = await store.claim(task.id);
+    await store.checkpoint(task.id, running.token!, JSON.stringify({ v: 1, planner: { requested: {} },
+      plan: JSON.parse(steps(["a", "simple"])).steps, outcomes: [], correction }));
+    const env = await setup(t, { worker: () => "x\nSTEP-STATUS: blocked: x", verdict: () => `{"state":"continue","next":"n${Math.random()}"}` }, { home, file });
+    await env.dispatcher.start();
+    while (!["blocked", "paused"].includes(env.store.list()[0]!.status)) await new Promise(r => setTimeout(r, 10));
+    for (let i = 0; i < 50 && !env.events.some(e => /Persistierter Plan/.test(e.text)); i++) await new Promise(r => setTimeout(r, 10));
+    assert.equal(env.calls.worker.length, 0, JSON.stringify(correction));
+    assert.ok(env.events.some(e => /Persistierter Plan ist ungültig/.test(e.text)));
+  }
+});
+
+test("manual pause during validation: correction never reaches the worker and is not auto-resumed", async t => {
+  let env!: Awaited<ReturnType<typeof setup>>;
+  env = await setup(t, { plan: steps(["only", "simple"], ["two", "simple"]), worker: () => "x\nSTEP-STATUS: blocked: x",
+    verdict: () => { const id = env.store.list()[0]!.id; void env.dispatcher.control("parent", id, "pause"); return '{"state":"continue","next":"use --source internal"}'; } });
+  await env.dispatcher.start();
+  await env.dispatcher.submit("parent", "req", "two");
+  // Pause with an open unsafe intent is held as "blocked" by ExecutionStore.control (execution.ts:487).
+  for (let i = 0; i < 300 && !["paused", "blocked"].includes(env.store.list()[0]!.status); i++) await new Promise(r => setTimeout(r, 10));
+  await new Promise(r => setTimeout(r, 100));
+  assert.ok(["paused", "blocked"].includes(env.store.list()[0]!.status));
+  assert.equal(env.calls.worker.length, 1);
+  assert.ok(!env.calls.worker.some(w => /VALIDATOR CORRECTION|STEP 2\/2/.test(w.prompt)));
+  assert.ok(!env.events.some(e => e.type === "result"));
+});

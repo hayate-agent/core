@@ -113,6 +113,9 @@ function readState(task: Readonly<Execution>): SequentialState | undefined | "in
     const state = JSON.parse(task.checkpoint) as SequentialState;
     if (state?.v !== 1 || !Array.isArray(state.plan) || !Array.isArray(state.outcomes) ||
         state.outcomes.length > state.plan.length || parsePlan(JSON.stringify({ steps: state.plan }))?.length !== state.plan.length) return "invalid";
+    const c = state.correction;
+    if (c !== undefined && (!c || typeof c !== "object" || c.index !== state.outcomes.length || !Number.isSafeInteger(c.rounds) ||
+        c.rounds < 1 || c.rounds > STEP_CONTINUATIONS || typeof c.note !== "string" || c.note.length > 1500)) return "invalid";
     return state;
   } catch { return "invalid"; }
 }
