@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { MemoryConfig, MemoryContext, MemoryEntry, MemoryHit, MemoryProvider, MemoryStatus, MemoryWrite } from "./memory.js";
 
-/** Separate OS process: index work cannot block the agent event loop. Linux flock owns writes. */
+/** Separate OS process: index work cannot block the agent event loop. Inherited flock owns writes. */
 export class LocalMemory implements MemoryProvider {
   readonly capabilities;
   private readonly pending = new Map<number, { resolve: (value: any) => void; reject: (error: Error) => void; timer: NodeJS.Timeout }>();
@@ -31,7 +31,10 @@ export class LocalMemory implements MemoryProvider {
     const dir = path.join(home, "memory");
     await mkdir(dir, { recursive: true, mode: 0o700 });
     const ext = import.meta.url.endsWith(".ts") ? "ts" : "js";
-    const child = spawn("flock", ["--no-fork", "--nonblock", path.join(dir, "writer.lock"), process.execPath,
+    // Lock an inherited descriptor before exec: works with both BSD and Linux flock,
+    // without a wrapper process retaining the lock after the worker exits.
+    const child = spawn("sh", ["-c", 'exec 9>"$1"; flock --nonblock 9 || exit 1; shift; exec "$@"',
+      "memory-worker", path.join(dir, "writer.lock"), process.execPath,
       ...(ext === "ts" ? ["--import", "tsx"] : []), fileURLToPath(new URL(`./memory-worker.${ext}`, import.meta.url))], {
       stdio: ["ignore", "ignore", "ignore", "ipc"], env: { ...process.env },
     });
