@@ -749,7 +749,7 @@ export class Harness {
       admission.depth === task.depth + 1 && admission.next === task.next && admission.original === task.original &&
       admission.expiresAt === task.expiresAt && !task.termination &&
       (!task.expiresAt || task.expiresAt > this.now()) &&
-      pending.every(e => e.status === "blocked" && !e.parentStopped &&
+      pending.every(e => this.supervisable(e) && !e.parentStopped &&
         (!e.dependency?.taskId || (e.dependency.taskId === task.id && e.dependency.original === task.original)) &&
         !(e.question && !e.question.answer)) &&
       receipt.evidence === createHash("sha256").update(JSON.stringify(pending)).digest("hex"));
@@ -758,6 +758,14 @@ export class Harness {
   /** Provenance only: a scoped child belongs to its task; an unscoped one may belong
    * to any task except one created after it was already outstanding. */
   private readonly restoredTaskInputs = new WeakSet<Inbound>();
+
+  /** Blocked children, plus a child paused only by an internal failure with settled effects
+   * (e.g. validator-continuation limit). Manual pause, questions, unresolved intents and
+   * operator stop stay binding. Assessment is read-only: it neither resumes nor replays the child. */
+  private supervisable(e: import("./execution.js").Execution): boolean {
+    return e.status === "blocked" ||
+      (e.status === "paused" && e.diagnosticCode === "runtime-failure" && !e.intent && !e.question && !e.parentStopped);
+  }
 
   private mayDependOn(e: import("./execution.js").Execution, taskId: string, task?: DurableTask): boolean {
     if (e.dependency?.taskId) return e.dependency.taskId === taskId;
@@ -1646,7 +1654,7 @@ export class Harness {
         task.recoveryRetry.attempts < 1 ||
         !Number.isSafeInteger(task.recoveryRetry.nextAt) || task.recoveryRetry.nextAt > this.now())) return;
     const pending = children();
-    if (!pending.length || pending.some(e => e.status !== "blocked" || e.question && !e.question.answer)) return;
+    if (!pending.length || pending.some(e => !this.supervisable(e) || e.question && !e.question.answer)) return;
     this.recoveringTasks.add(task);
     try {
       const executions = snapshot();
