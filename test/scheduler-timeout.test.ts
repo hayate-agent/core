@@ -2,11 +2,13 @@ import assert from 'node:assert/strict';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import {test} from 'node:test';
-import {mkdirSync,writeFileSync} from 'node:fs';
+import {mkdirSync,writeFileSync,mkdtempSync} from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
 // The builtin forwarding wrapper stays in an ordinary, isolated Node process.
 test('scheduler timeout terminates a direct script that ignores SIGTERM', async()=>{
- let stdout='',stderr='';const dir='/private/tmp/scheduler-timeout-logs';const t0=Date.now();
+ let stdout='',stderr='';const dir=mkdtempSync(path.join(os.tmpdir(),'scheduler-timeout-'));const t0=Date.now();
  try{
   ({stdout,stderr}=await promisify(execFile)(process.execPath,['--import','tsx','test/fixtures/scheduler-deadline-probe.ts'],{
    env:{...process.env,EXPECT_HARD:'1'},timeout:10000,
@@ -35,7 +37,7 @@ test('scheduler timeout terminates a direct script that ignores SIGTERM', async(
 });
 
 test('SIGTERM after readiness is received and ignored, then the deadline escalates to SIGKILL', async()=>{
- const dir='/private/tmp/scheduler-timeout-logs';mkdirSync(dir,{recursive:true});
+ const dir=mkdtempSync(path.join(os.tmpdir(),'scheduler-timeout-'));
  let stdout='',stderr='';
  try{
   ({stdout,stderr}=await promisify(execFile)(process.execPath,['--import','tsx','test/fixtures/scheduler-deadline-probe.ts'],{
