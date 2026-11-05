@@ -238,8 +238,8 @@ export class MatrixChannel implements Channel {
   }
 
   private readonly native: NativeActivityDelivery;
-  taskActivity(to: Address, event: import("./activity.js").ActivityEvent): void {
-    if (this.o.nativeActivity) this.native.event(to, event);
+  taskActivity(to: Address, event: import("./activity.js").ActivityEvent, input?: Inbound): void {
+    if (this.o.nativeActivity) this.native.event(to, event, input?.completionAnchor?.id);
   }
   dispatcherActivity(to: Address, id: string, state: string): void {
     if (this.o.nativeActivity) this.native.metadata(to, id, state);

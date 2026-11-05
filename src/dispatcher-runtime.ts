@@ -2,7 +2,7 @@ import { classifyComplexity, resolveModelRole, type ModelRoles, type ModelPair }
 import { taskContextLabel } from "./builtin-plugins/execution-metadata.js";
 import { TurnActivity } from "./activity.js";
 import { labelOutput } from "./hashtags.js";
-import { ExecutionWorkerFailure, type ExecutionEvent } from "./execution.js";
+import { ExecutionWorkerFailure, type Execution, type ExecutionEvent } from "./execution.js";
 import { ToolGuardError } from "./tool-guard-error.js";
 import { childDeniedTools } from "./child-tools.js";
 import { pickModelRule, type DispatchModelRule } from "./dispatcher-config.js";
@@ -11,6 +11,9 @@ import type { Address, Channel, SendMeta } from "./types.js";
 import type { DispatcherStrategy, DispatchContext } from "./dispatcher.js";
 import type { ExecutionStore } from "./execution.js";
 import { sequentialStrategy } from "./dispatcher-sequential.js";
+
+/** Correlation only: the originating input's anchor id, never its prose or tags. */
+const activityAnchor = (task: Execution) => task.dependency?.anchor && { id: task.dependency.anchor.id, task: "", receivedAt: task.dependency.anchor.receivedAt };
 
 /** Host bridge: workers use ordinary Harness turns, not an independent model loop.
  * Interrupted turns reconcile retained public transcript evidence; they are never
@@ -95,7 +98,7 @@ export class DispatcherRuntime {
             const activity = new TurnActivity({ id: `classifier-${task.id}-${task.token}`, role: "dispatcher-classifier",
               parent: task.id, context: "host", outputTags: task.dependency?.anchor?.outputTags }, event => {
               if (target) this.harness.channels.get(target.channel)?.taskActivity?.(target, { ...event, snapshot: { ...event.snapshot, parent: task.id } }, {
-                sessionKey: task.parent, source: "host", text: "", replyTo: target,
+                sessionKey: task.parent, source: "host", text: "", replyTo: target, completionAnchor: activityAnchor(task),
               });
             });
             let observed = Promise.resolve();
@@ -215,7 +218,7 @@ export class DispatcherRuntime {
       const routed = { ...event, snapshot: { ...event.snapshot, outputTags: structuredClone(task.dependency?.anchor?.outputTags), parent: task.id } };
       try {
         this.harness.channels.get(target.channel)?.taskActivity?.(target, routed, {
-          sessionKey: task.parent, source: "host", text: "", replyTo: target,
+          sessionKey: task.parent, source: "host", text: "", replyTo: target, completionAnchor: activityAnchor(task),
         });
       } catch { /* Best effort; telemetry cannot affect worker settlement. */ }
     },
