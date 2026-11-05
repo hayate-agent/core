@@ -48,9 +48,20 @@ not sandboxed workers. Main cannot select replay policy in a tool call.
 scheduler, ledger and worker bridge. It requires enabled [model roles](model-roles.md):
 
 1. One tool-free ephemeral planner turn on the exact `dispatcher` role returns a
-   closed JSON plan of 1–6 steps, each with the lowest adequate role
+   closed JSON plan of 1–6 steps, each with the lowest sufficient capability role
    (`simple`/`medium`/`high`), a reason and the evidence it must prove. A single
-   simple step is valid. Malformed output is a visible block, never repaired.
+   simple step is valid. Roles follow reasoning and task complexity: `simple` for
+   factual answers, read-only inspection, deterministic mechanical edits and known
+   runbook execution; `medium` for bounded implementation or fixes in known code
+   with their tests; `high` for genuinely complex reasoning beyond medium, such as
+   ambiguous root-cause investigation, difficult concurrency/recovery reasoning or
+   architecture. Operational risk is independent of model capacity: production,
+   credentials, deployments or irreversible effects alone do not require `high`.
+   Routine authorized credential rotation with a known runbook and production
+   read-only checks can be `simple`. Existing authorization, safety and verification
+   gates still apply at every role; routing grants no permission or gate bypass.
+   One coherent change with its tests is one step. This is a model judgement, not a
+   guarantee. Malformed output is a visible block, never repaired.
    When the runtime offers the HTTP planner capability (PI runtime), planning is
    one tool-free SDK request through the existing authenticated assessment
    transport (no retries, no redirects, exactly one send) with the same prompt,
