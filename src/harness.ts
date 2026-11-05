@@ -1615,7 +1615,7 @@ export class Harness {
    * exact child snapshot. This does not grant worker replay permission. Persist
    * the one-shot claim before inference, then admission before queue release.
    */
-  private async reconcileBlockedDependency(s: SessionState, task: DurableTask): Promise<void> {
+  private async reconcileBlockedDependency(s: SessionState, task: DurableTask, betweenTurns = false): Promise<void> {
     const children = () => this.opts.executionStore?.list(s.key).filter(e =>
       !["completed", "cancelled"].includes(e.status) && this.mayDependOn(e, task.id, task)) ?? [];
     const snapshot = () => JSON.stringify(children());
@@ -1623,8 +1623,10 @@ export class Harness {
       !!task.id && !!task.original.trim() && task.original.length <= 8000 &&
       (!task.anchor || task.anchor.task === task.original) &&
       Number.isSafeInteger(task.depth) && task.depth >= 0 && repetitions(task) < 20 && !task.termination &&
+      !(betweenTurns && (task.recoveryRetry?.attempts ?? 0) >= 3) &&
       (task.expiresAt === undefined || (Number.isSafeInteger(task.expiresAt) && task.expiresAt > this.now())) &&
-      !s.current && !s.queue.length && !s.running && !this.paused && !this.stopping && !this.gatewayChanging && !this.updateFenced &&
+      !s.current && (betweenTurns ? s.running && s.queue.every(input => input.taskId !== task.id) : !s.queue.length && !s.running) &&
+      !this.paused && !this.stopping && !this.gatewayChanging && !this.updateFenced &&
       s.key !== "improvement:nightly" && !this.stoppingHostParents.has(s.key) &&
       !this.opts.externallyRecoveredSession?.(s.key);
     const previous = task.supervisorDecision;
@@ -2198,6 +2200,16 @@ export class Harness {
           // A child checkpoint must not hide other retained, independently authorized work.
           for (const retained of this.tasks(s)) {
             if (retained.id !== input.taskId && retained.id !== targetId && !retained.next?.trim()) await this.assessStartupTask(s, retained, true);
+          }
+          // The pump still owns the session: assess at most one retained parent
+          // before starting the next unrelated queued turn, never concurrently.
+          if (input.source === "channel" || input.source === "api") {
+            for (const retained of this.tasks(s)) {
+              if (retained.id === input.taskId || retained.id === targetId) continue;
+              const before = retained.supervisorDecision;
+              await this.reconcileBlockedDependency(s, retained, true);
+              if (retained.supervisorDecision !== before) break;
+            }
           }
           await this.onStateChange?.();
           s.unsaved = false;
