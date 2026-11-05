@@ -150,7 +150,13 @@ export class Dispatcher {
       check();
       const result = await strategy.execute(task, {
         signal: abort.signal,
-        status: async text => { check(); await this.store.report(task.id, token, text); await this.flushEvents(); },
+        status: async text => {
+          check();
+          await this.store.report(task.id, token, text);
+          // Notification transport must not fail productive execution. The durable
+          // event remains queued until a later delivery attempt succeeds.
+          void this.flushEvents().catch(this.report);
+        },
         question: async text => {
           check(); await this.store.ask(task.id, token, text);
           void this.flushEvents().catch(this.report);
