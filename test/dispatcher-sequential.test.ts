@@ -475,3 +475,36 @@ test("planner chooses lowest sufficient capability without operational-risk infl
   assert.match(prompt, /one coherent change with its own tests and verification is ONE step/);
   assert.ok(prompt.endsWith(JSON.stringify({ task: "x" })));
 });
+
+test("multi-step: completed step survives a technical validator pause and restart continues the bounded step", async t => {
+  // Step 1 completes with an independent validator "completed". Step 2's validator returns a
+  // technical (invalid) answer, so the strategy pauses without a successor. After restart the
+  // host owner continues only step 2 in its retained session; step 1 is never re-executed.
+  let verdicts = 0;
+  const verdict = () => { verdicts++; return verdicts === 1 ? '{"state":"completed"}' : "not json"; };
+  const env = await setup(t, { plan: steps(["first", "simple"], ["second", "simple"]), verdict });
+  const task = await env.run("two steps");
+  assert.equal(task.status, "paused");
+  const before = state(task.checkpoint);
+  assert.equal(before.outcomes.length, 1, "step 1 completed and persisted");
+  assert.equal(before.prior?.index, 1, "pause is at step 2");
+  assert.equal(before.prior?.validation?.diagnostic, "invalid_response");
+  const workerTurnsBefore = env.calls.worker.length;
+  // Restart: new store, new host, same file. Only the supervision owner may act.
+  const store2 = new ExecutionStore(env.file); await store2.load();
+  const { Harness: H2 } = await import("../src/harness.js");
+  const { FakeRuntime: FR, MemoryChannel: MC } = await import("./fakes.js");
+  let assessments = 0;
+  const h2 = new H2({ runtime: new FR(), executionStore: store2, now: () => 10_000, tickMs: 60000,
+    completionCheck: async () => { assessments++; return { state: "blocked" }; } });
+  h2.addChannel(new MC()); h2.onStateChange = async () => {};
+  h2.restoreSessions([{ key: "parent", task: { id: "parent", original: "two steps", state: "waiting", depth: 0, next: "await dispatcher",
+    wait: { reason: "dispatcher owns the rollout", nextAt: 1_000, deadline: 1_793_995_200_000 } }, replyTo: undefined }] as never);
+  t.after(() => h2.stop(0));
+  await h2.recoverTasks(); await h2.tick();
+  assert.equal(assessments, 1, "technical pause gets exactly one bounded owner assessment");
+  const after = store2.list().find(item => item.id === task.id)!;
+  assert.equal(after.status, "paused", "no silent auto-resume; owner assessment only");
+  assert.equal(state(after.checkpoint).outcomes.length, 1, "completed step 1 not repeated");
+  assert.equal(env.calls.worker.length, workerTurnsBefore, "no worker turn replayed by restart");
+});
