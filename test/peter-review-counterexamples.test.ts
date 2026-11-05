@@ -30,16 +30,16 @@ function harness(store: ExecutionStore, clock: { now: number }, assess: () => Pr
   return { h, ch, runtime, calls: () => calls };
 }
 
-test("real Peter legacy: three blocked children without dependency.taskId yield one actionable blocker, no permit, no replay over 50 ticks and restart", async t => {
+test("real Peter legacy: an assessed global hold yields one actionable blocker, no permit, no replay over 50 ticks and restart", { timeout: 10000 }, async t => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "peter-unscoped-"));
   t.after(() => rm(dir, { recursive: true, force: true }));
   const store = new ExecutionStore(path.join(dir, "executions.json")); await store.load();
   const ids = [await blockedChild(store, "w1"), await blockedChild(store, "w2"), await blockedChild(store, "w3")];
   const before = JSON.stringify(store.list(key));
   const clock = { now: 1000 };
-  // Counterexample: assessor says continue; previously this set active/independent-next-proposed
-  // while hasPendingDependency fenced it forever, with no notice.
-  const a = harness(store, clock, async () => ({ state: "continue", next: "Different independent parent step" }));
+  // Independent steps are now admitted by design. Exercise the complementary
+  // global-hold decision here; legacy-existing-independent covers admission.
+  const a = harness(store, clock, async () => ({ state: "blocked" }));
   let saved: ReturnType<Harness["snapshotSessions"]> = [];
   let outbox: ReturnType<Harness["outboxEntries"]> = [];
   a.h.onStateChange = async () => { saved = structuredClone(a.h.snapshotSessions()); outbox = structuredClone(a.h.outboxEntries()); };
@@ -51,7 +51,7 @@ test("real Peter legacy: three blocked children without dependency.taskId yield 
   await a.h.recoverTasks();
   await a.h.start(); a.h.releaseRestored();
   for (let i = 0; i < 50; i++) { clock.now += 60000; await a.h.tick(); await a.h.drained(); }
-  assert.equal(a.calls(), 0, "no assessment for children whose ownership is unknown");
+  assert.equal(a.calls(), 2, "one persisted assessment per parent, without repeated inference");
   assert.equal(a.runtime.opened.length, 0);
   assert.equal(JSON.stringify(store.list(key)), before, "unknown children unchanged");
   const notices = a.ch.sent.filter(m => m.text.includes("ohne Aufgabenzuordnung"));
@@ -67,7 +67,7 @@ test("real Peter legacy: three blocked children without dependency.taskId yield 
   }
   // Restart from the persisted snapshot: no replayed notice, no assessment, no worker.
   await a.h.stop(0);
-  const b = harness(store, clock, async () => ({ state: "continue", next: "Different independent parent step" }));
+  const b = harness(store, clock, async () => ({ state: "blocked" }));
   b.h.onStateChange = async () => {};
   b.h.restoreSessions(saved); b.h.restoreOutbox(outbox);
   t.after(() => b.h.stop(0));
@@ -79,13 +79,13 @@ test("real Peter legacy: three blocked children without dependency.taskId yield 
   assert.equal(JSON.stringify(store.list(key)), before);
 });
 
-test("unscoped blocker also blocks a previously active task instead of leaving it queued behind the fence", async t => {
+test("an assessed global hold blocks a previously active task instead of leaving it queued behind the fence", { timeout: 10000 }, async t => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "peter-unscoped-"));
   t.after(() => rm(dir, { recursive: true, force: true }));
   const store = new ExecutionStore(path.join(dir, "executions.json")); await store.load();
   await blockedChild(store, "w1");
   const clock = { now: 1000 };
-  const a = harness(store, clock, async () => ({ state: "continue", next: "x" }));
+  const a = harness(store, clock, async () => ({ state: "blocked" }));
   a.h.onStateChange = async () => {};
   a.h.restoreSessions([{ key, replyTo: to, tasks: [{ id: "t", original: "Do it", state: "active", depth: 1, next: "step" }] }]);
   t.after(() => a.h.stop(0));
@@ -94,7 +94,7 @@ test("unscoped blocker also blocks a previously active task instead of leaving i
   assert.equal(a.h.snapshotSessions()[0]!.tasks![0]!.state, "blocked");
   assert.equal(a.ch.sent.filter(m => m.text.includes("ohne Aufgabenzuordnung")).length, 1);
   assert.equal(a.runtime.opened.length, 0);
-  assert.equal(a.calls(), 0);
+  assert.equal(a.calls(), 1);
 });
 
 test("third technical error at 60s spacing is terminal: persisted, one distinct exhausted notice, reset path usable, deadline not extended", async t => {
