@@ -6,7 +6,7 @@ const key = "mem:room1";
 const retained = (): DurableTask => ({ id: "authorized", original: "Inspect receipt; never republish", state: "active", depth: 1 });
 
 for (const mode of ["throw", "empty", "invalid"] as const)
-test(`${mode}: three bounded assessments yield durable work, not a fourth assessment`, async () => {
+test(`${mode}: three bounded assessments hold durable work without admission or a fourth assessment`, async () => {
   let now = 100, checks = 0;
   const h = new Harness({ runtime: new FakeRuntime(), tickMs: 60000, now: () => now,
     completionCheck: async (_i, _r, _s, diagnostic) => {
@@ -27,23 +27,25 @@ test(`${mode}: three bounded assessments yield durable work, not a fourth assess
       }
       now += 400000;
     }
-    assert.equal(h.state(key).task!.state, "active");
-    assert.match(h.state(key).task!.next!, /never replay completed effects/);
+    assert.equal(h.state(key).task!.state, "blocked");
+    assert.match(h.state(key).task!.next!, /Independent supervisor admission unavailable/);
+    assert.equal(h.state(key).task!.recoveryAdmission, undefined);
     await h.recoverTasks(); assert.equal(checks, 3);
-    assert.equal(h.pendingInputs().length, 1);
+    assert.equal(h.pendingInputs().length, 0);
     assert.equal(h.outboxEntries().length, 0);
   } finally { await h.stop(0); }
 });
 
-for (const attempts of [1, 3]) test(`unavailable with reserved retry ${attempts} reconciles without waiting for evaluator`, async () => {
+for (const attempts of [1, 3]) test(`unavailable with reserved retry ${attempts} holds work without evaluator admission`, async () => {
   const task = retained(); task.recoveryAssessment = "claimed";
   task.recoveryRetry = { attempts, nextAt: 999999, diagnostic: "technical" };
   const h = new Harness({ runtime: new FakeRuntime(), tickMs: 60000, now: () => 100 });
   h.restoreSessions([{ key, task }]); h.onStateChange = async () => {};
   try {
     await h.recoverTasks();
-    assert.equal(h.pendingInputs().length, 1);
+    assert.equal(h.pendingInputs().length, 0);
     assert.equal(h.state(key).task!.recoveryRetry?.diagnostic, "technical");
-    assert.equal(h.state(key).task!.state, "active");
+    assert.equal(h.state(key).task!.state, "blocked");
+    assert.equal(h.state(key).task!.recoveryAdmission, undefined);
   } finally { await h.stop(0); }
 });

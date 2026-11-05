@@ -74,6 +74,26 @@ test("maintenance deadline aborts compaction and rejects instead of hanging", as
   assert.equal(aborted, 1);
 });
 
+test("PiSession: observes clamped selection before restore, separate from usage", async () => {
+  const { agent, session } = make(); const events: any[] = [];
+  agent.emitMessages = () => {};
+  await session.prompt("override", { model: "p/b", thinking: "high", onEvent: e => events.push(e) });
+  assert.deepEqual(events.filter(e => e.type === "execution"), [{ type: "execution", selection: { model: "p/b", thinking: "off" } }]);
+  assert.equal(agent.model, A); assert.equal(agent.thinkingLevel, "high");
+  assert.equal(events.some(e => e.type === "usage"), false);
+  events.length = 0;
+  await session.prompt("defaults", { onEvent: e => events.push(e) });
+  assert.deepEqual(events[0], { type: "execution", selection: { model: "p/a", thinking: "high" } });
+  await session.prompt("observer fails", { onEvent: () => { throw Error("display failed"); } });
+  assert.equal(agent.prompts.length, 3);
+});
+
+test("PiSession: denied execution publishes no selection", async () => {
+  const { session } = make(); const events: any[] = [];
+  await assert.rejects(session.prompt("denied", { beforeExecution: () => { throw Error("denied"); }, onEvent: e => events.push(e) }), /denied/);
+  assert.deepEqual(events, []);
+});
+
 test("maintenance timeout has a stable safe code", async () => {
   await assert.rejects(boundedMaintenance(() => new Promise(() => {}), () => {}, 1), (err: any) => err.code === "timeout");
 });

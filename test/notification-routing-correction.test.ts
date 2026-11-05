@@ -1,3 +1,4 @@
+import { confirmNonproductive } from "./fakes.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Harness } from "../src/harness.js";
@@ -18,7 +19,7 @@ test("identical wait retains partial result, approval, blocker and direct answer
       "The answer is 32 records.",
     ]) {
       const channel = new MemoryChannel(); Object.assign(channel, { editableProgress: true });
-      const h = new Harness({ runtime: new FakeRuntime(() => {
+      const h = new Harness({ completionCheck: confirmNonproductive, runtime: new FakeRuntime(() => {
         h.planContinuation("mem:room1", { ...plan, replyKind }); return text;
       }), tickMs: 60000, now: () => 1000 });
       h.addChannel(channel); h.onStateChange = async () => {};
@@ -46,7 +47,7 @@ test("positive routine designation cannot hide changed condition, error, blocker
   ];
   for (const c of cases) {
     const channel = new MemoryChannel(); Object.assign(channel, { editableProgress: true });
-    const h = new Harness({ runtime: new FakeRuntime(() => {
+    const h = new Harness({ completionCheck: confirmNonproductive, runtime: new FakeRuntime(() => {
       h.planContinuation("mem:room1", c.plan ?? { ...plan, replyKind: "routine" });
       if (c.fail) throw Error("worker probe failed");
       return "attention evidence";
@@ -64,7 +65,7 @@ test("reply designation and text survive persisted outbox failure/restart for ro
     const channel = new MemoryChannel(); Object.assign(channel, { editableProgress: true });
     const text = replyKind === "routine" ? "unchanged wait" : "Worker A completed: 32 records; B still running";
     const runtime = new FakeRuntime(() => { h.planContinuation("mem:room1", { ...plan, replyKind }); return text; });
-    let h = new Harness({ runtime, tickMs: 60000, now: () => 1000 });
+    let h = new Harness({ completionCheck: confirmNonproductive, runtime, tickMs: 60000, now: () => 1000 });
     h.addChannel(channel); h.onStateChange = async () => {};
     channel.send = async () => { throw Error("offline"); };
     try {
@@ -79,7 +80,7 @@ test("reply designation and text survive persisted outbox failure/restart for ro
       assert.equal(!!outbox[0].statusKey, replyKind === "routine");
       await h.stop(0);
       channel.send = async (to, text, meta) => { channel.sent.push({ to, text, meta }); };
-      h = new Harness({ runtime, tickMs: 60000, now: () => 1000 });
+      h = new Harness({ completionCheck: confirmNonproductive, runtime, tickMs: 60000, now: () => 1000 });
       h.addChannel(channel); h.onStateChange = async () => {};
       h.restoreSessions(saved); h.restoreOutbox(outbox);
       await h.start(); h.releaseRestored(); await h.drained();

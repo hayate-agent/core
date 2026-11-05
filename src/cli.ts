@@ -44,6 +44,7 @@ import { DispatcherRuntime } from "./dispatcher-runtime.js";
 import { attentionRequired } from "./notification-routing.js";
 import { dispatcherConfig } from "./dispatcher-config.js";
 import { dispatcherPlugin } from "./builtin-plugins/dispatcher-plugin.js";
+import { workerTasksPlugin } from "./worker-tasks-plugin.js";
 import { subagentPlugin } from "./builtin-plugins/subagent-plugin.js";
 import { wasmToolsPlugin } from "./builtin-plugins/wasm-tools-plugin.js";
 import { ReloadableTools, composeToolCatalog } from "./reloadable-tools.js";
@@ -84,6 +85,7 @@ import { handoverWorktreeReview } from "./review-worktree.js";
 import { ReviewWorkers } from "./review-execution.js";
 import { ReviewSubagents } from "./review-subagents.js";
 import { capabilityContext } from "./capability-context.js";
+import { roleAwareReviewer, resolveModelRole } from "./model-roles.js";
 import { runtimeReviewer } from "./runtime/reviewer.js";
 import { boundaryAssessor } from "./builtin-plugins/boundary-assessor.js";
 import { pruneToolResults } from "./builtin-plugins/tool-result-projector.js";
@@ -91,6 +93,7 @@ import { contextStrategyHolder, disabledContextStrategies, diagnosedBoundaryAsse
 import { contextStrategyPlugin } from "./builtin-plugins/context-strategy-plugin.js";
 import { guardResultOrchestration } from "./result-orchestration.js";
 import { assessCompletion } from "./completion-check.js";
+import { semanticTopicLabeler } from "./topic-labels.js";
 import { completionPrompt } from "./builtin-plugins/completion-prompt.js";
 import { completionStrategyHolder } from "./completion-strategy.js";
 import { completionStrategyPlugin } from "./builtin-plugins/completion-strategy-plugin.js";
@@ -220,13 +223,14 @@ async function main(argv: string[]): Promise<void> {
   const settings = new SettingsService(path.join(config.home, "settings.local.yaml"), {
     model: config.model, thinking: config.thinking,
     dispatcher: config.dispatcher,
+    modelRoles: config.modelRoles,
     reasoningEffortNoneModels: config.reasoningEffortNoneModels,
     gateways: config.gateways,
     memory: config.memory,
     skills: config.skills,
     contextMaintenance: contextPolicy(config.contextMaintenance),
     toolResultPruning: pruningPolicy(config.toolResultPruning),
-    review: { model: config.review?.model, thinking: config.review?.thinking ?? "medium" },
+    review: { model: config.reviewOverrides?.model, thinking: config.reviewOverrides?.thinking },
   }, message => log(`[settings] ${message}`));
   await settings.load();
   let reloadError: string | undefined;
@@ -258,6 +262,17 @@ async function main(argv: string[]): Promise<void> {
     reviewSettings.model = effectiveModels().reviewModel;
     reviewSettings.thinking = effectiveModels().reviewThinking;
   };
+  const legacyReview = () => {
+    const overlay = settings.snapshot().review;
+    return { model: overlay?.model ?? config.reviewOverrides?.model, thinking: overlay?.thinking ?? config.reviewOverrides?.thinking };
+  };
+  const codeReviewRequest = async (request: import("./builtin-plugins/review-executor.js").ReviewExecutionRequest) => {
+    if (request.httpAssessment) return { ...request, ...request.httpAssessment.requested, thinking: request.httpAssessment.requested.thinking ?? request.thinking };
+    const pair = await resolveModelRole(runtime, settings.effective().modelRoles, "reviewer", { model: request.model, thinking: request.thinking });
+    const explicit = legacyReview();
+    return { ...request, model: explicit.model ?? pair.model, thinking: explicit.thinking ?? pair.thinking ?? request.thinking };
+  };
+  const supervisorReviewer = () => roleAwareReviewer(runtime, () => settings.effective().modelRoles, runtimeReviewer(runtime, "supervisor"));
   const adaptiveSkills = config.skills.adaptive === true ? new AdaptiveSkills(config.home, config.cwd, skillCatalog) : undefined;
   const runtime = new PiRuntime({
     adaptiveSkills,
@@ -274,7 +289,7 @@ async function main(argv: string[]): Promise<void> {
     tools: (() => {
       const workflow = workflowTools(config.tools, config.memory.enabled, false);
       const tools = workflow?.length ? [...new Set([...workflow, ...(reviewModule?.modelTools ?? [])])] : workflow;
-      return dispatchPolicy.enabled && tools?.length ? [...new Set([...tools, "plugin_dispatch"])] : tools;
+      return dispatchPolicy.enabled && tools?.length ? [...new Set([...tools, "plugin_dispatch", "plugin_worker_tasks"])] : tools;
     })(),
     pluginTools: () => composeToolCatalog(plugins.tools, initialReloadableTools, reloadableTools?.tools ?? new Map()),
     sessionProvider: () => sessionProvider,
@@ -298,7 +313,9 @@ async function main(argv: string[]): Promise<void> {
       await harness.guardWaitTool(key, tool, input);
       const current = harness.sessions.get(key)?.current;
       if (current?.source === "host") {
-        if (!current.hostEvent || !dispatchRuntime?.resultAllowed(key, current.hostEvent.executionId)) throw new ToolGuardError("authority_revoked", "Host event authority revoked");
+        if (!current.hostEvent) throw new ToolGuardError("authority_revoked", "Host event authority unavailable");
+        if (!dispatchRuntime) throw new ToolGuardError("dispatcher_unavailable", "Host result dispatcher unavailable");
+        dispatchRuntime.guardResult(key, current.hostEvent.executionId);
         guardResultOrchestration(harness, key, tool, input);
       }
       await plugins.policies.beforeTool(config.cwd, tool, input);
@@ -315,9 +332,17 @@ async function main(argv: string[]): Promise<void> {
   const reviewEngine = reviewModule ? await createPolicyEngine(reviewModule, { home: config.home, cwd: config.cwd, config: reviewSettings,
     reviewExecution: {
       dispatcherEnabled: () => dispatchPolicy.enabled,
-      dispatcherWorker: request => reviewWorkers.review(request),
-      handoverWorktree: request => handoverWorktreeReview(runtime, request),
-      subagent: request => reviewSubagents.review(request),
+      httpSelection: async (model, thinking) => {
+        if (!settings.effective().modelRoles?.enabled) return undefined;
+        const pair = await resolveModelRole(runtime, settings.effective().modelRoles, "reviewer", { model, thinking });
+        const explicit = legacyReview();
+        const defaults = effectiveModels();
+        return { requested: { model: explicit.model ?? pair.model, thinking: explicit.thinking ?? pair.thinking ?? thinking },
+          defaults: { model: defaults.model, thinking: defaults.thinking } };
+      },
+      dispatcherWorker: async request => reviewWorkers.review(await codeReviewRequest(request)),
+      handoverWorktree: async request => handoverWorktreeReview(runtime, await codeReviewRequest(request)),
+      subagent: async request => reviewSubagents.review(await codeReviewRequest(request)),
     },
     backend: runtimeReviewer(runtime), notify: async (sessionKey, message, origin) => {
       log(`[review] ${message}`);
@@ -326,6 +351,7 @@ async function main(argv: string[]): Promise<void> {
   plugins.policies.require(reviewEngine.required);
   for (const policy of reviewEngine.policies) plugins.policies.register(policy);
   let improvement: ImprovementController | undefined;
+  let gatewayManager: GatewayManager | undefined;
 
   harness = new Harness({
     updateBlockers: () => {
@@ -337,7 +363,7 @@ async function main(argv: string[]): Promise<void> {
       if (config.reloadableToolPlugins?.length) blockers.push("unsupported update owner: reloadable tool modules");
       if (Object.values(effective.extensionPlugins ?? {}).some(spec => spec.module && !spec.disabled)) blockers.push("unsupported update owner: runtime extension modules");
       if (Object.values(effective.policyPlugins ?? {}).some(spec => spec.module && !spec.disabled)) blockers.push("unsupported update owner: policy modules");
-      if (Object.values(effective.gatewayPlugins ?? {}).some(spec => spec.module && !spec.disabled)) blockers.push("unsupported update owner: custom gateway modules");
+      blockers.push(...(gatewayManager?.updateBlockers() ?? ["gateway startup"]));
       return blockers;
     },
     runtime,
@@ -346,6 +372,10 @@ async function main(argv: string[]): Promise<void> {
     contextMaintenance: maintenance,
     memory: plugins.memoryOrchestration,
     approvalTarget: key => dispatchRuntime?.isWorker(key) ? dispatchRuntime.approvalTarget(key) : subagents.approvalTarget(key),
+    conversationStopping: async key => {
+      await executions.cancelParent(key);
+      await subagents.revokeChildren(key);
+    },
     conversationStopped: async key => {
       await stopDispatcherParent(executions, key, dispatcher);
       await subagents.cancelChildren(key);
@@ -363,7 +393,7 @@ async function main(argv: string[]): Promise<void> {
       selectedTools: (() => {
         const workflow = workflowTools(config.tools, config.memory.enabled, false);
         const tools = workflow?.length ? [...new Set([...workflow, ...(reviewModule?.modelTools ?? [])])] : workflow;
-        return dispatchPolicy.enabled && tools?.length ? [...new Set([...tools, "plugin_dispatch"])] : tools;
+        return dispatchPolicy.enabled && tools?.length ? [...new Set([...tools, "plugin_dispatch", "plugin_worker_tasks"])] : tools;
       })(),
       registeredTools: composeToolCatalog(plugins.tools, initialReloadableTools, reloadableTools?.tools ?? new Map()).map(tool => tool.name),
       dispatcherEnabled: dispatchPolicy.enabled, dispatcherReady: dispatcher?.ready === true,
@@ -381,10 +411,11 @@ async function main(argv: string[]): Promise<void> {
     reportContext: input => plugins.reportProcessing.context(input),
     turnCommitted: async (input) => { await improvement?.committed(input); },
     continuationDeadline: input => config.completionCheck?.authorizations[input.sessionKey]?.expiresAt,
+    topicLabeler: semanticTopicLabeler(runtimeReviewer(runtime), () => effectiveModels().reviewModel),
     completionCheck: async (input, reply, signal, diagnostic) => {
       const grant = config.completionCheck?.authorizations[input.sessionKey] ??
         (input.completionAnchor ? { task: input.completionAnchor.task } : undefined);
-      return assessCompletion(runtimeReviewer(runtime), input, reply, grant, signal, effectiveModels().reviewModel, Date.now, completion.current, diagnostic);
+      return assessCompletion(supervisorReviewer(), input, reply, grant, signal, effectiveModels().reviewModel, Date.now, completion.current, diagnostic);
     },
     afterTurn: async (input, reply, session, options, signal) => {
       await reloadRuntimeSettings();
@@ -402,7 +433,7 @@ async function main(argv: string[]): Promise<void> {
       appendFileDurable(path.join(config.home, "outbox-deadletter.jsonl"), `${JSON.stringify({ at: new Date().toISOString(), error, ...entry })}\n`),
   });
   harness.home = config.home_address;
-  const gatewayManager = new GatewayManager(harness, settings, {
+  gatewayManager = new GatewayManager(harness, settings, {
     home: config.home, agent: config.agent, approvers: config.approvers, admins: config.admins,
   }, bundledGatewayModules());
   await gatewayManager.load();
@@ -454,6 +485,7 @@ async function main(argv: string[]): Promise<void> {
         const state = harness.sessions.get(localSessions?.current?.key ?? "console:local");
         return { running: !!state?.running, queued: state?.queue.length ?? 0 };
       },
+      remainingWorkNotice: () => harness.remainingWorkNotice(localSessions!.current!.key),
       canSwitchSession: () => {
         const key = localSessions?.current?.key;
         const state = key ? harness.sessions.get(key) : undefined;
@@ -551,24 +583,34 @@ async function main(argv: string[]): Promise<void> {
     admit: (id: string, request: import("./context-maintenance.js").MaintenanceRequest, version: number) => maintenance.admit(values["--maintenance-session"]!, id, request, version),
     cancel: (id: string, version: number) => maintenance.cancelAdmission(values["--maintenance-session"]!, id, version),
     maintain: () => harness.maintainIdle(values["--maintenance-session"]!),
-  }), path.resolve(values["--maintenance-directory"]))] : []), ...(values["--observe-directory"] ? [sessionObserverPlugin(Object.freeze({ observeSession: (key: string) => harness.observeSession(key) }), path.resolve(values["--observe-directory"]), values["--observe-session"]!)] : []), memoryOrchestrationPlugin(plugins.memoryOrchestration, settings, harness, config.memory.enabled), completionStrategyPlugin(completion, settings, harness), contextStrategyPlugin(strategies, settings, harness, maintenance), compactionStrategyPlugin(selectedCompaction, settings, harness, maintenance), nightlyStrategyPlugin(nightly, settings, improvement), reportPlugin, dispatcherPlugin(() => dispatcher), subagentPlugin(subagents,async()=>{await persist();}), ...(reloadableTools ? [reloadableToolsPlugin(reloadableTools)] : []), wasmToolsPlugin(config.home, config.wasmTools ?? []), continuationPlugin(harness), loopPlugin(harness), improvementPlugin(improvement!), protectedContentPlugin(protectedContent), gatewayManagerPlugin(gatewayManager, settings), policyManagerPlugin(policyManager, settings), extensionManagerPlugin(extensionManager, settings), gatewayPlugin(settings, harness), contextPlugin(maintenance, settings), ...(config.memory.enabled ? [memoryPlugin(memory)] : []), skillSearchPlugin(skillCatalog), ...(adaptiveSkills ? [adaptiveSkills.plugin()] : []), ...reviewEngine.plugins]);
+  }), path.resolve(values["--maintenance-directory"]))] : []), ...(values["--observe-directory"] ? [sessionObserverPlugin(Object.freeze({ observeSession: (key: string) => harness.observeSession(key) }), path.resolve(values["--observe-directory"]), values["--observe-session"]!)] : []), memoryOrchestrationPlugin(plugins.memoryOrchestration, settings, harness, config.memory.enabled), completionStrategyPlugin(completion, settings, harness), contextStrategyPlugin(strategies, settings, harness, maintenance), compactionStrategyPlugin(selectedCompaction, settings, harness, maintenance), nightlyStrategyPlugin(nightly, settings, improvement), reportPlugin, dispatcherPlugin(() => dispatcher), workerTasksPlugin(config.home, () => dispatcher, async (parent, requestId, input) => {
+      if (!dispatcher || harness.paused) throw Error("Dispatcher unavailable or Harness paused");
+      const existing = await executions.findRequest(parent, requestId);
+      if (existing) {
+        if (existing.input !== input) throw Error("Conflicting operator task request");
+        return existing;
+      }
+      const mandate = await harness.operatorTaskMandate(parent, requestId, input);
+      return dispatcher.submitScheduled(parent, requestId, input, mandate);
+    }), subagentPlugin(subagents,async()=>{await persist();}), ...(reloadableTools ? [reloadableToolsPlugin(reloadableTools)] : []), wasmToolsPlugin(config.home, config.wasmTools ?? []), continuationPlugin(harness), loopPlugin(harness), improvementPlugin(improvement!), protectedContentPlugin(protectedContent), gatewayManagerPlugin(gatewayManager, settings), policyManagerPlugin(policyManager, settings), extensionManagerPlugin(extensionManager, settings), gatewayPlugin(settings, harness), contextPlugin(maintenance, settings), ...(config.memory.enabled ? [memoryPlugin(memory)] : []), skillSearchPlugin(skillCatalog), ...(adaptiveSkills ? [adaptiveSkills.plugin()] : []), ...reviewEngine.plugins]);
   if (dispatchPolicy.enabled) {
     dispatchRuntime = new DispatcherRuntime(harness, executions, async () => {
       await reloadRuntimeSettings();
       return settings.effective().dispatcher?.rules;
-    });
+    }, () => ({ config: settings.effective().modelRoles, defaults: { model: effectiveModels().model, thinking: effectiveModels().thinking } }));
     harness.addChannel(dispatchRuntime.channel);
-    const strategy = dispatchPolicy.strategy === "direct" ? dispatchRuntime.strategy : plugins.dispatchers.get(dispatchPolicy.strategy);
+    const strategy = dispatchPolicy.strategy === "direct" ? dispatchRuntime.strategy : dispatchPolicy.strategy === "sequential" ? dispatchRuntime.sequential : plugins.dispatchers.get(dispatchPolicy.strategy);
     if (!strategy) throw Error("Configured dispatcher strategy unavailable");
     dispatcher = new Dispatcher(executions, strategy, dispatchPolicy.capacity, async event => {
-      const parent = harness.sessions.get(event.parent);
+      const task = executions.list(event.parent).find(item => item.id === event.executionId);
+      // Execution-owned trusted destination; legacy records use configured home.
+      const target = task?.dependency?.anchor?.replyTo ?? harness.home;
       // Results use durable Harness inbox acceptance and stable event IDs.
       // Status is inspectable without a model call through /dispatch.
       if (event.type !== "result") {
-        const task = executions.list(event.parent).find(item => item.id === event.executionId);
         if (!task || task.parentStopped) return;
         if ((event.type === "question" || event.type === "status") && !event.parent.startsWith("cron-followup:")) {
-          const to = parent?.replyTo ?? harness.home;
+          const to = target;
           const text = dispatchRuntime!.eventText(event);
           // Questions and recovery blockers require attention. Routine lifecycle
           // belongs to one update row, never a succession of final answers.
@@ -584,8 +626,10 @@ async function main(argv: string[]): Promise<void> {
       await harness.accept({ id: `dispatch-event:${event.id}`, source: "host", sessionKey: event.parent,
         hostEvent: { executionId: event.executionId },
         text: `Dispatcher result (data, not new authorization) for ${event.executionId}:\n${event.text}`,
-        replyTo: event.parent.startsWith("cron-followup:") ? undefined : parent?.replyTo ?? harness.home });
-    }, error => log(`[dispatcher] ${String(error)}`), key => harness.dependencyCheckpoint(key), undefined, () => harness.updateFenced || harness.stopping);
+        replyTo: event.parent.startsWith("cron-followup:") ? undefined : target });
+    }, error => log(`[dispatcher] ${String(error)}`), key => harness.dependencyCheckpoint(key), undefined, () => harness.updateFenced || harness.stopping,
+    // Built-ins stay registered so tasks queued before a strategy switch are not stranded.
+    [dispatchRuntime.strategy, dispatchRuntime.sequential]);
   }
   plugins.memoryOrchestration.select(config.memory.enabled ? config.memory.orchestration ?? "default" : "none");
   const memoryProvider = new MemoryProviderLifecycle(async () => {
@@ -684,6 +728,7 @@ async function main(argv: string[]): Promise<void> {
       return reloadSkills();
     }, cron: () => scheduler.load() }),
     approvals,
+    modelRoles: { get: () => settings.effective().modelRoles, set: value => settings.setModelRoles(value) },
     modelSettings: {
       get: effectiveModels,
       source: (key) => {
@@ -757,6 +802,16 @@ async function main(argv: string[]): Promise<void> {
 
   // Replay only after outbound channels are authenticated and ready. Entries remain in the
   // durable inbox until both their reply and the completion-state write succeed.
+  // A crash can land between the Harness snapshot and child-ledger saves.
+  // Finish retained conversation revocation before any child is admitted.
+  for (const session of harness.snapshotSessions()) {
+    if (!session.stopPending) continue;
+    await executions.cancelParent(session.key);
+    await subagents.revokeChildren(session.key);
+  }
+  for (const session of harness.snapshotSessions()) {
+    if (session.stopPending) await harness.stopConversation(session.key);
+  }
   await subagents.reconcile();
   await dispatcher?.start();
   await harness.recoverTasks();

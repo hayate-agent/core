@@ -1,3 +1,4 @@
+import { confirmNonproductive } from "./fakes.js";
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { Harness } from '../src/harness.js';
@@ -22,7 +23,7 @@ test('registered materialized continuation tool routes entire replies through re
           ...(replyKind === undefined ? {} : { replyKind }) }, { sessionKey: 'mem:room1' } as never);
         return text;
       }) as never);
-      h = new Harness({ runtime, now: () => 1000 }); h.onStateChange = async () => {};
+      h = new Harness({ completionCheck: confirmNonproductive, runtime, now: () => 1000 }); h.onStateChange = async () => {};
       h.addChannel(channel);
       await host.load([], { home: '/tmp', cwd: '/tmp', agent: 'fixture' }, [], [], [continuationPlugin(h)]);
       try {
@@ -43,7 +44,7 @@ for (const busyMode of ['queue', 'steer', 'interrupt'] as const) {
     const host = new PluginHost();
     const channel = new MemoryChannel(); channel.editableProgress = true;
     const runtime = new FakeRuntime();
-    const h = new Harness({ runtime, busyMode, now: () => 1000, tickMs: 60000 });
+    const h = new Harness({ completionCheck: confirmNonproductive, runtime, busyMode, now: () => 1000, tickMs: 60000 });
     h.onStateChange = async () => {}; h.addChannel(channel);
     await host.load([], { home: '/tmp', cwd: '/tmp', agent: 'fixture' }, [], [], [continuationPlugin(h)]);
     let entered!: () => void, finish!: () => void;
@@ -85,7 +86,7 @@ test('real Core rejects invalid replyKind through registered tool and leaves cha
       await assert.rejects(host.tools.get('plugin_task_continuation')!.execute({ state: 'waiting', replyKind }, { sessionKey: 'mem:room1' } as never), /Invalid continuation reply kind/);
       return 'Attention required.';
     }) as never);
-    h = new Harness({ runtime, now: () => 1000 }); h.onStateChange = async () => {}; h.addChannel(channel);
+    h = new Harness({ completionCheck: confirmNonproductive, runtime, now: () => 1000 }); h.onStateChange = async () => {}; h.addChannel(channel);
     await host.load([], { home: '/tmp', cwd: '/tmp', agent: 'fixture' }, [], [], [continuationPlugin(h)]);
     try {
       await h.start();

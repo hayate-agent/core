@@ -32,7 +32,8 @@ test('real pump runs 35 evidenced productive turns, then exactly 20 stagnant tur
     h.planContinuation('mem:room1', { state: 'continue', next: `same authorized approach ${turns}` });
     return 'done';
   });
-  h = new Harness({ runtime, now: () => 1000, progressEvidence: async () => `tree${tree}` });
+  h = new Harness({ runtime, now: () => 1000, progressEvidence: async () => `tree${tree}`,
+    completionCheck: async () => ({ state: 'continue', next: 'same authorized approach', progress: { advanced: false } }) });
   h.addChannel(new MemoryChannel());
   h.onStateChange = async () => {};
   await h.accept(msg('original authorized task')); await h.drained();

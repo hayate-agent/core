@@ -1,3 +1,4 @@
+import { confirmNonproductive } from "./fakes.js";
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { Harness, type DurableTask } from '../src/harness.js';
@@ -21,7 +22,7 @@ test('explicit continue is saved before effect; failed save holds it and retry e
     }
     return 'Verified result';
   });
-  h = new Harness({ runtime, now: () => 1000, tickMs: 60000, completionCheck: async () => ({ state: "completed" }) });
+  h = new Harness({ runtime, now: () => 1000, tickMs: 60000, completionCheck: async () => prompts === 1 ? { state: "continue", next: "Read rollout result" } : { state: "completed" } });
   h.restoreSessions([{ key, tasks: [task()] }]); h.addChannel(new MemoryChannel());
   h.onStateChange = async () => {
     if (fail) throw Error('disk unavailable');
@@ -46,7 +47,7 @@ test('a later default checkpoint still completes current question, not previousl
     h.planContinuation(key, { state: 'completed' });
     return 'Only the question is complete';
   });
-  h = new Harness({ runtime, now: () => 1000 }); h.restoreSessions([{ key, tasks: [task()] }]);
+  h = new Harness({ completionCheck: confirmNonproductive, runtime, now: () => 1000 }); h.restoreSessions([{ key, tasks: [task()] }]);
   h.onStateChange = async () => {}; h.addChannel(new MemoryChannel());
   try {
     await h.start(); await h.accept({ id: 'question', sessionKey: key, source: 'channel', text: 'Read-only', replyTo: ROOM }); await h.drained();

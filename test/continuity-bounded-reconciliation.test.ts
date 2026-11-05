@@ -52,7 +52,7 @@ test("transient assessment survives real tick/snapshot/restore and admits exactl
   } finally { await first.stop(0); }
 });
 
-test("unusable assessments exhaust persisted bounded attempts and admit reconciliation once", async () => {
+test("unusable assessments exhaust persisted bounded attempts without admitting work", async () => {
   let now = 1000, calls = 0;
   const channel = new MemoryChannel();
   let saved: ReturnType<Harness["snapshotSessions"]> = [{ key, task: task(), replyTo: { channel: "mem", target: "room1" } }];
@@ -65,8 +65,9 @@ test("unusable assessments exhaust persisted bounded attempts and admit reconcil
       await h.recoverTasks();
       saved = clone(h.snapshotSessions());
       assert.equal(runtime.sessions.size, 0); assert.equal(h.state(key).task?.depth, 2);
-      assert.equal(h.state(key).task?.state, "active");
-      assert.equal(h.pendingInputs().length, restart < 2 ? 0 : 1);
+      assert.equal(h.state(key).task?.state, restart < 2 ? "active" : "blocked");
+      assert.equal(h.pendingInputs().length, 0);
+      assert.equal(h.state(key).task?.recoveryAdmission, undefined);
     } finally { await h.stop(0); }
     now += 60000;
   }
@@ -90,8 +91,9 @@ test("a persisted interrupted claim retries only after backoff and retains its a
   try {
     await next.recoverTasks(); assert.equal(calls, 0);
     now += 60000; await next.recoverTasks(); assert.equal(calls, 1); assert.equal(next.state(key).task?.state, "active");
-    now += 60000; await next.recoverTasks(); assert.equal(calls, 2); assert.equal(next.state(key).task?.state, "active");
-    assert.equal(next.pendingInputs().length, 1);
+    now += 60000; await next.recoverTasks(); assert.equal(calls, 2); assert.equal(next.state(key).task?.state, "blocked");
+    assert.equal(next.pendingInputs().length, 0);
+    assert.equal(next.state(key).task?.recoveryAdmission, undefined);
   } finally { release(); await pending; await first.stop(0); await next.stop(0); }
 });
 

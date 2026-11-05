@@ -1,4 +1,5 @@
 import { ToolGuardError } from "./tool-guard-error.js";
+import { childDeniedTools } from "./child-tools.js";
 import { randomUUID } from "node:crypto";
 import type { Harness } from "./harness.js";
 import type { Address, Channel, SendMeta } from "./types.js";
@@ -43,13 +44,14 @@ export class Subagents {
   beforeTurn(key: string): void {
     if (!this.isChild(key)) return;
     const record = [...this.records.values()].find(r => r.sessionKey === key);
-    if (!record || !["queued", "running"].includes(record.state) || record.expiresAt <= Date.now()) {
-      throw new ToolGuardError("authority_revoked", "Subagent no longer authorized to execute");
-    }
+    if (!record) throw new ToolGuardError("ownership_lost", "Subagent ownership missing");
+    if (record.expiresAt <= Date.now()) throw new ToolGuardError("deadline_expired", "Subagent no longer authorized: deadline elapsed");
+    if (record.state === "cancelled") throw new ToolGuardError("execution_cancelled", "Subagent no longer authorized: cancelled");
+    if (!["queued", "running"].includes(record.state)) throw new ToolGuardError("authority_revoked", "Subagent no longer active");
   }
   guardTool(key: string, tool: string): void {
     this.beforeTurn(key);
-    if (this.isChild(key) && ["plugin_subagent", "plugin_loop", "plugin_task_continuation", "plugin_improvement_evaluate"].includes(tool)) {
+    if (this.isChild(key) && childDeniedTools(key).includes(tool)) {
       throw new ToolGuardError("worker_orchestration_denied", "Subagent orchestration is disabled; return a result or blocker within this turn");
     }
   }
@@ -63,7 +65,18 @@ export class Subagents {
     timer.unref();
     this.timers.set(record.id, timer);
   }
+  /** Revoke every child before interrupting the first runtime. */
+  async revokeChildren(parent: string): Promise<void> {
+    for (const record of this.list(parent)) {
+      if (["completed", "failed"].includes(record.state)) continue;
+      const current = this.records.get(record.id)!;
+      current.state = "cancelled";
+      current.result = "Cancellation requested; verify any external effects before retrying.";
+    }
+    await this.save();
+  }
   async cancelChildren(parent: string): Promise<void> {
+    await this.revokeChildren(parent);
     for (const record of this.list(parent)) await this.cancel(parent, record.id);
   }
   /** Never resubmit an orphaned start: its acceptance may already have had effects. */
@@ -126,14 +139,14 @@ export class Subagents {
   }
   async cancel(parent:string,id:string):Promise<void> {
     const record=this.get(parent,id);
-    if (["completed","failed","cancelled"].includes(record.state)) return;
-    await this.harness.stopConversation(record.sessionKey);
+    if (["completed","failed"].includes(record.state)) return;
     const current = this.records.get(id)!;
     current.state = "cancelled";
     current.result = "Cancellation requested; verify any external effects before retrying.";
     clearTimeout(this.timers.get(id));
     this.timers.delete(id);
     await this.save();
+    await this.harness.stopConversation(record.sessionKey);
   }
   readonly channel: Channel = {
     name:"subagents",start:async()=>{},stop:async()=>{for (const timer of this.timers.values()) clearTimeout(timer);this.timers.clear();},

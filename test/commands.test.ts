@@ -40,6 +40,20 @@ function setup(opts: { admins?: string[]; approvers?: string[]; skills?: SkillIn
   return { runtime, harness, ch, ctx, send, approvals };
 }
 
+test("channel command expansion assigns semantic tags before queueing with classifier enabled", async () => {
+  const { harness, send, ch } = setup();
+  harness.opts.topicLabeler = async text => {
+    assert.ok(!text.startsWith("/"));
+    return ["database-repair"];
+  };
+  try {
+    await send("/queue repair the database");
+    assert.ok(ch.texts().some(text => text.startsWith("#database-repair ·")));
+    await send("/retry");
+    assert.equal(harness.state("mem:room1").lastInput?.completionAnchor?.outputTags?.[0], "database-repair");
+  } finally { await harness.stop(1000); }
+});
+
 test("usage and tokens alias report session/cache/cost with honest scope and unknown fallback", async () => {
   const { harness, send, ch } = setup();
   try {

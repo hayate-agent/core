@@ -1,5 +1,5 @@
 import type { ExecutionRecoveryPolicy } from "./execution-recovery.js";
-import { ExecutionClaimConflict, type Execution, type ExecutionEvent, type ExecutionStore } from "./execution.js";
+import { ExecutionClaimConflict, ExecutionWorkerFailure, type Execution, type ExecutionEvent, type ExecutionStore } from "./execution.js";
 
 export interface DispatchContext {
   readonly signal: AbortSignal;
@@ -9,7 +9,7 @@ export interface DispatchContext {
   status?(text: string): Promise<void>;
   /** Persists a question and suspends this execution; never returns normally. */
   question?(text: string): Promise<never>;
-  intent(key: string, replay: "safe" | "unsafe"): Promise<void>;
+  intent(key: string, replay: "safe" | "unsafe", route?: import("./model-roles.js").ModelPair): Promise<void>;
   settleIntent(key: string, result: string, checkpoint: string): Promise<void>;
 }
 /** Trusted plugins supply policy; no model-generated field grants replay permission. */
@@ -47,9 +47,19 @@ export class Dispatcher {
     private readonly checkpoint?: (parent: string) => Execution["dependency"],
     private readonly recoveryPolicy?: ExecutionRecoveryPolicy,
     private readonly admissionFenced: () => boolean = () => false,
+    /** Trusted strategies that only continue existing tasks after a strategy switch; new work uses `strategy`. */
+    retained: readonly DispatcherStrategy[] = [],
   ) {
     if (!Number.isSafeInteger(capacity) || capacity < 1) throw Error("Invalid dispatcher capacity");
-    if (!strategy.name.trim() || !Number.isSafeInteger(strategy.version) || strategy.version < 1) throw Error("Invalid dispatcher strategy");
+    for (const item of [strategy, ...retained])
+      if (!item.name.trim() || !Number.isSafeInteger(item.version) || item.version < 1) throw Error("Invalid dispatcher strategy");
+    for (const item of retained) if (item.name !== strategy.name) this.strategies.set(item.name, item);
+    this.strategies.set(strategy.name, strategy);
+  }
+  private readonly strategies = new Map<string, DispatcherStrategy>();
+  private strategyFor(task: Execution): DispatcherStrategy | undefined {
+    const strategy = this.strategies.get(task.strategy);
+    return strategy?.version === task.strategyVersion ? strategy : undefined;
   }
   get ready(): boolean { return this.recovered && !this.stopped; }
   /** Includes durable runnable tasks and claim/delivery windows, not just worker slots. */
@@ -61,7 +71,7 @@ export class Dispatcher {
   async start(): Promise<void> {
     if (this.initialized) throw Error("Dispatcher already started");
     this.initialized = true;
-    await this.store.recover(new Map([[this.strategy.name, this.strategy]]), undefined, this.recoveryPolicy);
+    await this.store.recover(this.strategies, undefined, this.recoveryPolicy);
     this.recovered = true;
     await this.kick();
   }
@@ -109,11 +119,12 @@ export class Dispatcher {
     for (const task of this.store.list()) {
       if (this.stopped || this.active.size >= this.capacity) break;
       if (task.status !== "ready" || this.active.has(task.id)) continue;
-      if (task.strategy !== this.strategy.name || task.strategyVersion !== this.strategy.version) continue;
+      const strategy = this.strategyFor(task);
+      if (!strategy) continue;
       let claimed: Execution;
       try {
         claimed = await this.store.claim(task.id, {
-          strategy: this.strategy.name, version: this.strategy.version, replaySafe: this.strategy.replaySafe, reconcile: this.strategy.reconcile,
+          strategy: strategy.name, version: strategy.version, replaySafe: strategy.replaySafe, reconcile: strategy.reconcile,
         }, this.recoveryPolicy);
       } catch (error) {
         if (error instanceof ExecutionClaimConflict) continue;
@@ -121,18 +132,31 @@ export class Dispatcher {
       }
       // stop() can arrive while the durable claim is committing.
       if (this.stopped) return;
+      const current = this.store.list().find(item => item.id === claimed.id);
+      if (current?.status !== "running" || current.token !== claimed.token) continue;
       const abort = new AbortController();
-      const done = Promise.resolve().then(() => this.run(claimed, abort));
+      const done = Promise.resolve().then(() => this.run(claimed, abort, strategy));
       this.active.set(task.id, { abort, done });
     }
   }
-  private async run(task: Execution, abort: AbortController): Promise<void> {
+  private async run(task: Execution, abort: AbortController, strategy: DispatcherStrategy): Promise<void> {
     const token = task.token!;
-    const check = (): void => { if (abort.signal.aborted) throw Error("Dispatcher execution interrupted"); };
+    const check = (): void => {
+      const current = this.store.list().find(item => item.id === task.id);
+      if (abort.signal.aborted || current?.status !== "running" || current.token !== token)
+        throw new ExecutionClaimConflict("Dispatcher execution interrupted");
+    };
     try {
-      const result = await this.strategy.execute(task, {
+      check();
+      const result = await strategy.execute(task, {
         signal: abort.signal,
-        status: async text => { check(); await this.store.report(task.id, token, text); await this.flushEvents(); },
+        status: async text => {
+          check();
+          await this.store.report(task.id, token, text);
+          // Notification transport must not fail productive execution. The durable
+          // event remains queued until a later delivery attempt succeeds.
+          void this.flushEvents().catch(this.report);
+        },
         question: async text => {
           check(); await this.store.ask(task.id, token, text);
           void this.flushEvents().catch(this.report);
@@ -140,7 +164,7 @@ export class Dispatcher {
         },
         checkpoint: value => { check(); return this.store.checkpoint(task.id, token, value); },
         workerSession: key => { check(); return this.store.workerSession(task.id, token, key); },
-        intent: (key, replay) => { check(); return this.store.intent(task.id, token, key, replay); },
+        intent: (key, replay, route) => { check(); return this.store.intent(task.id, token, key, replay, route); },
         settleIntent: (key, result, checkpoint) => { check(); return this.store.settleIntent(task.id, token, key, result, checkpoint); },
       });
       check();
@@ -148,7 +172,7 @@ export class Dispatcher {
     } catch (error) {
       // Preserve partial state, but do not automatically spin on a failing plugin.
       if (!this.stopped && this.store.list().find(item => item.id === task.id)?.status === "running") {
-        await this.store.control(task.id, "pause").catch(this.report);
+        await this.store.fail(task.id, token, error instanceof ExecutionWorkerFailure ? error.diagnosticCode : "runtime-failure").catch(this.report);
       }
       if (!abort.signal.aborted && !(error instanceof ExecutionClaimConflict)) this.report(error);
     } finally {
@@ -162,7 +186,7 @@ export class Dispatcher {
   async resolve(parent: string, id: string, actor: string, action: "continue" | "retry", evidence: string): Promise<void> {
     const task = this.store.list(parent).find(task => task.id === id);
     if (!task) throw Error("Unknown execution in this conversation");
-    if (action === "continue" && task.intent && !this.strategy.reconcile) throw Error("Strategy has no reconciliation support; choose explicit retry or cancel");
+    if (action === "continue" && task.intent && !this.strategyFor(task)?.reconcile) throw Error("Strategy has no reconciliation support; choose explicit retry or cancel");
     await this.store.resolve(parent, id, actor, action, evidence);
     await this.kick();
   }

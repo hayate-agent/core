@@ -7,6 +7,7 @@ import { ExecutionStore } from "./execution.js";
 export interface ReviewExecutionRequest {
   cwd: string; sessionKey: string; fingerprint: string; prompt: string;
   model?: string; thinking: string; signal?: AbortSignal;
+  httpAssessment?: import("./builtin-plugins/review-executor.js").ReviewHttpContext;
 }
 export interface ReviewExecutionReceipt {
   kind: "dispatcher-worker" | "subagent" | "handover-worktree";
@@ -14,14 +15,26 @@ export interface ReviewExecutionReceipt {
 }
 export interface DedicatedReviewExecution {
   dispatcherEnabled(): boolean;
+  httpSelection?(model: string | undefined, thinking: string): Promise<{ requested: import("./model-roles.js").ModelPair; defaults: import("./model-roles.js").ModelPair } | undefined>;
   dispatcherWorker?(request: ReviewExecutionRequest): Promise<ReviewExecutionReceipt>;
   subagent?(request: ReviewExecutionRequest): Promise<ReviewExecutionReceipt>;
   handoverWorktree?(request: ReviewExecutionRequest): Promise<ReviewExecutionReceipt>;
 }
 
 /** Separate tool-free runtime session: no Harness working-turn/policy recursion. */
-export async function isolatedReview(runtime: AgentRuntime, key: string, request: ReviewExecutionRequest, signal?: AbortSignal): Promise<string> {
+export async function isolatedReview(runtime: AgentRuntime, key: string, request: ReviewExecutionRequest, signal?: AbortSignal, executionId = key): Promise<string> {
   if (signal?.aborted) throw Error("Review cancelled");
+  if (request.httpAssessment) {
+    if (!runtime.reviewCodeHttp) throw Error("Dedicated HTTP review unavailable");
+    const controller = new AbortController();
+    const abort = () => controller.abort();
+    signal?.addEventListener("abort", abort, { once: true });
+    const timer = setTimeout(abort, 120000); timer.unref?.();
+    try {
+      if (signal?.aborted) controller.abort();
+      return await runtime.reviewCodeHttp(request.prompt, request.httpAssessment, executionId, controller.signal);
+    } finally { clearTimeout(timer); signal?.removeEventListener("abort", abort); }
+  }
   const session = await runtime.open(key, { ephemeral: true });
   let aborting: Promise<void> | undefined;
   const abort = () => { aborting ??= Promise.resolve().then(() => session.abort()).catch(() => {}); };
@@ -43,6 +56,7 @@ export async function isolatedReview(runtime: AgentRuntime, key: string, request
  */
 export class ReviewWorkers {
   private dispatcher: Dispatcher;
+  private assessments = new Map<string, NonNullable<ReviewExecutionRequest["httpAssessment"]>>();
   private startup?: Promise<void>;
   private closed = false;
   constructor(private readonly runtime: AgentRuntime, private readonly store: ExecutionStore, capacity = 1) {
@@ -52,7 +66,10 @@ export class ReviewWorkers {
         const request = JSON.parse(task.input) as Omit<ReviewExecutionRequest, "signal">;
         const sessionKey = `dispatch:${task.id}:${task.token}`;
         await context.workerSession?.(sessionKey);
-        return isolatedReview(this.runtime, sessionKey, request, context.signal);
+        const assessmentId = (request as unknown as { assessmentId?: string }).assessmentId;
+        const httpAssessment = assessmentId ? this.assessments.get(assessmentId) : undefined;
+        if (assessmentId && !httpAssessment) throw Error("Review assessment owner unavailable");
+        return isolatedReview(this.runtime, sessionKey, { ...request, httpAssessment }, context.signal, task.id);
       },
     }, capacity, async () => {}, error => console.error(`[review-worker] ${error instanceof Error ? error.name : "failure"}`));
   }
@@ -71,13 +88,17 @@ export class ReviewWorkers {
   async review(request: ReviewExecutionRequest): Promise<ReviewExecutionReceipt> {
     await this.start();
     if (request.signal?.aborted || this.closed) throw Error("Review cancelled");
-    const { signal, ...data } = request;
+    const { signal, httpAssessment, ...data } = request;
+    if (httpAssessment) {
+      if (this.assessments.has(httpAssessment.id)) throw Error("Review assessment already active");
+      this.assessments.set(httpAssessment.id, httpAssessment);
+    }
     // Local flash providers show multi-minute latency variance (observed 70s to
     // 600s+ for the same ~38 KiB review prompt); a 120s deadline cancelled real
     // rounds while the model was still computing. 30 minutes stays fail-closed
     // for hung workers while absorbing that variance.
     const deadline = Date.now() + 1800000;
-    const task = await this.dispatcher.submit(request.sessionKey, `review:${randomUUID()}`, JSON.stringify(data));
+    const task = await this.dispatcher.submit(request.sessionKey, `review:${randomUUID()}`, JSON.stringify({ ...data, ...(httpAssessment ? { assessmentId: httpAssessment.id } : {}) }));
     try {
       for (;;) {
         if (signal?.aborted || this.closed) throw Error("Review cancelled");
@@ -92,6 +113,7 @@ export class ReviewWorkers {
       const current = this.store.list(request.sessionKey).find(item => item.id === task.id);
       if (current && !["completed", "cancelled"].includes(current.status)) await this.dispatcher.control(request.sessionKey, task.id, "cancel");
       await this.dispatcher.waitForExecution(task.id);
+      if (httpAssessment) this.assessments.delete(httpAssessment.id);
     }
   }
   async stop(): Promise<void> { this.closed = true; await this.startup?.catch(() => {}); await this.dispatcher.stop(); }

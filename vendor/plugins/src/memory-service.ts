@@ -42,7 +42,7 @@ export class MemoryService {
     const recordedAt = turn.recordedAt ?? Date.now();
     const key = "turn:" + createHash("sha256").update(turn.sessionKey + "\0" + (turn.id ?? `${recordedAt}:${turn.text}`) + "\0" + turn.reply).digest("hex");
     const entry: MemoryWrite = { key, kind: "operation", title: `${turn.outcome}: ${turn.text.replace(/\s+/g, " ").slice(0, 220)}`,
-      text: `Outcome reported by Harness: ${turn.outcome}. This is not verification of operational claims.\nRequest: ${turn.text.slice(0, 1000)}\nResult: ${turn.reply.slice(0, 4000)}`,
+      text: `Outcome reported by Hayate Agent: ${turn.outcome}. This is not verification of operational claims.\nRequest: ${turn.text.slice(0, 1000)}\nResult: ${turn.reply.slice(0, 4000)}`,
       source: key, reviewAfter: new Date(recordedAt + 7 * 86400000).toISOString(), expiresAt: new Date(recordedAt + 30 * 86400000).toISOString() };
     if (this.home) {
       const dir = path.join(this.home, "memory-pending");

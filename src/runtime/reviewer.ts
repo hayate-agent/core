@@ -2,10 +2,10 @@ import type { AgentRuntime } from "../types.js";
 import type { AssessmentBackend as ReviewBackend } from "../assessment-backend.js";
 
 /** Shared by production wiring and live integration checks. */
-export function runtimeReviewer(runtime: AgentRuntime): ReviewBackend {
+export function runtimeReviewer(runtime: AgentRuntime, purpose: "code-review" | "supervisor" = "code-review"): ReviewBackend {
   return {
     async review(prompt, model, thinking, signal) {
-      const reviewer = await runtime.open(`review:${Date.now()}`, { ephemeral: true });
+      const reviewer = await runtime.open(`review:${Date.now()}`, { ephemeral: true, assessmentPurpose: purpose });
       // Abort is best-effort; runtime failures must not escape the event callback as
       // unhandled rejections. Prompt/dispose errors still propagate to the review gate.
       const abort = () => { void Promise.resolve().then(() => reviewer.abort()).catch(() => undefined); };

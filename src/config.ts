@@ -8,6 +8,7 @@ import { contextPolicy } from "./context-maintenance.js";
 import { memoryConfig, type MemoryConfig } from "./memory.js";
 import { reviewConfig } from "./review-config.js";
 import { validateWasmTools } from "./wasm-tools.js";
+import { validateModelRoles, type ModelRoles } from "./model-roles.js";
 import { dispatcherConfig } from "./dispatcher-config.js";
 
 export interface ReviewConfig {
@@ -57,6 +58,9 @@ export interface HarnessConfig {
   skillUpdateSource?: import("./skill-updates.js").SkillUpdateSource;
   /** Infrastructure-owned semantic continuation grants, keyed by exact conversation. */
   completionCheck?: { authorizations: Record<string, import("./completion-check.js").CompletionAuthorization> };
+  /** Explicit installation review selections, before normalization adds defaults. */
+  reviewOverrides?: { model?: string; thinking?: string };
+  modelRoles?: ModelRoles;
   dispatcher?: Partial<import("./dispatcher-config.js").DispatcherConfig>;
   sessions?: { provider: string; options?: unknown };
   compaction?: { strategy: string };
@@ -124,6 +128,7 @@ export function defaultConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
   }
   if (overrides.reportProcessing !== undefined && (typeof overrides.reportProcessing !== "string" || !/^[a-z][a-z0-9_-]*$/.test(overrides.reportProcessing))) throw Error("Invalid reportProcessing");
   if (overrides.autoReloadToolPlugins !== undefined && typeof overrides.autoReloadToolPlugins !== "boolean") throw Error("autoReloadToolPlugins must be a boolean");
+  if (overrides.modelRoles !== undefined) validateModelRoles(overrides.modelRoles);
   dispatcherConfig(overrides.dispatcher);
   validateWasmTools(overrides.wasmTools ?? []);
   if (overrides.mcp !== undefined && (overrides.mcp === null || typeof overrides.mcp !== "object" || typeof overrides.mcp.enabled !== "boolean")) {
@@ -159,6 +164,7 @@ export function defaultConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
     timezone: overrides.timezone ?? process.env.TZ ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
     model: overrides.model,
     thinking: overrides.thinking,
+    reviewOverrides: { model: overrides.review?.model, thinking: overrides.review?.thinking },
     review: reviewConfig(overrides.review),
     reviewEngine: overrides.reviewEngine,
     contextStrategy: overrides.contextStrategy,
@@ -173,6 +179,7 @@ export function defaultConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
     protectedContent: overrides.protectedContent,
     skillUpdateSource: overrides.skillUpdateSource,
     completionCheck: overrides.completionCheck,
+    modelRoles: overrides.modelRoles,
     dispatcher: dispatcherConfig(overrides.dispatcher),
     sessions: overrides.sessions ?? { provider: "native" },
     compaction: overrides.compaction ?? { strategy: "native" },
