@@ -50,7 +50,13 @@ scheduler, ledger and worker bridge. It requires enabled [model roles](model-rol
 1. One tool-free ephemeral planner turn on the exact `dispatcher` role returns a
    closed JSON plan of 1–6 steps, each with the lowest adequate role
    (`simple`/`medium`/`high`), a reason and the evidence it must prove. A single
-   simple step is valid. Malformed output is a visible block, never repaired.
+   simple step is valid. Roles are chosen by operational risk, not apparent
+   reasoning depth: `simple` for factual answers, read-only inspection and
+   deterministic mechanical edits; `medium` for bounded implementation or fixes in
+   known code with their tests; `high` for unclear root causes, concurrency/data
+   loss/recovery, security or credentials, production/irreversible effects and
+   cross-system design. One coherent change with its tests is one step. This is a
+   model judgement, not a guarantee. Malformed output is a visible block, never repaired.
    When the runtime offers the HTTP planner capability (PI runtime), planning is
    one tool-free SDK request through the existing authenticated assessment
    transport (no retries, no redirects, exactly one send) with the same prompt,

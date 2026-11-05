@@ -354,3 +354,13 @@ test("HTTP planner: missing dispatcher role blocks before any request; persisted
   assert.deepEqual(second.calls.worker.map(c => c.model), ["p/cheap"]);
   assert.match(second.calls.worker[0]!.prompt, /STEP 2\/2:\ntwo/);
 });
+
+test("planner tier criteria are operational risk, lowest adequate role, not reasoning depth", () => {
+  const prompt = planPrompt("x");
+  assert.match(prompt, /LOWEST adequate role by operational risk/);
+  assert.match(prompt, /"simple" \(factual answers, read-only inspection, deterministic mechanical edits/);
+  assert.match(prompt, /"medium" \(bounded implementation or fix in known code, including its tests\)/);
+  assert.match(prompt, /"high" \(genuinely hard or risky: .*security or credentials, production or irreversible effects/);
+  assert.match(prompt, /one coherent change with its own tests and verification is ONE step/);
+  assert.ok(prompt.endsWith(JSON.stringify({ task: "x" })));
+});
