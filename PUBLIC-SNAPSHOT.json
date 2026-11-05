@@ -1,5 +1,5 @@
 {
-  "contentDigest": "5e7ce82e73b7f7e044a2d56e5d476261188248cc37014526c3b4036b5df78e95",
+  "contentDigest": "225300d0a1558b3eacf42e513a9f471a8fde09469f90711b3aa456f9e09b58dc",
   "files": [
     {
       "mode": "100644",
@@ -364,7 +364,7 @@
     {
       "mode": "100644",
       "path": "plugins.lock.json",
-      "sha256": "60f33444323b8a79acefbdea3bc0bb842e086ea4b24f120005323f41a1491cc7"
+      "sha256": "4154e3cfe6917c24ea8e0d39cadc3a01b4c068b46bd476ec6ecdd7baa97bdd18"
     },
     {
       "mode": "100644",
@@ -559,7 +559,7 @@
     {
       "mode": "100644",
       "path": "src/dispatcher-runtime.ts",
-      "sha256": "49ce4fb06bd9a066e187882702c14c49ac9d49a660991005ee00c54d7f4919f2"
+      "sha256": "37443154f6b8fa6169da166f96b95ff64bcd110a104fff3f283567622a6d585a"
     },
     {
       "mode": "100644",
@@ -1320,6 +1320,11 @@
       "mode": "100644",
       "path": "test/development.test.ts",
       "sha256": "abf359bf90cc8c28866ed5fe511191c91dff81d824cb8096e8390fd54e7cf09d"
+    },
+    {
+      "mode": "100644",
+      "path": "test/dispatcher-activity-anchor.test.ts",
+      "sha256": "acc7c1ecc712a962d3c7077d286c77ce89a6a9954f65b10ec85909b4d1a79091"
     },
     {
       "mode": "100644",
@@ -2559,7 +2564,7 @@
     {
       "mode": "100644",
       "path": "vendor/plugins/src/matrix-channel.ts",
-      "sha256": "a5388ad6aeddf9bc14cbbe2b463d4df93dd09af7a96aeff3f128db52360b0e97"
+      "sha256": "6c1311fc8f6fc50ac70fbeb0baaccc70d9519ce5ed36353118d318200bb9dc1d"
     },
     {
       "mode": "100644",
@@ -2594,7 +2599,7 @@
     {
       "mode": "100644",
       "path": "vendor/plugins/src/native-activity.ts",
-      "sha256": "247fb70440c55822e6ba0be6a050ef1ffe7f0befaedcfae8192c90ae3040bd10"
+      "sha256": "b9878941092065a395c9333f0533080a258dbb8a0c28e2c901a60fb8ac20a6cc"
     },
     {
       "mode": "100644",
@@ -2693,7 +2698,7 @@
     }
   ],
   "historyPolicy": "fresh-root; no source commits, tags, refs or deleted blobs",
-  "pluginSHA": "77ae4430058d9d8fd2e910e1bcb10d47032c792e",
+  "pluginSHA": "7b410193c7078019a22368897e6730e25b80f0fa",
   "schema": 1,
-  "sourceSHA": "7edb348ea6ab29562406097716426ab6db7c55a8"
+  "sourceSHA": "065683ca897df9f7e2429c7239ed25156edc89ae"
 }

@@ -15,8 +15,11 @@ export class NativeActivityDelivery {
   private timer?: ReturnType<typeof setTimeout>;
   private tools = new Map<string, Map<string, string>>();
   private calls: Record<string, { to: Address; text: string }> = {};
+  /** Per originating input: one bounded line per internal turn, rendered into one message. */
+  private lines = new Map<string, Map<string, string>>();
   constructor(private file: string, private send: (to: Address, id: string, text: string) => Promise<void>, private delayMs = 1000) {}
-  event(to: Address, event: ActivityEvent): void {
+  /** `origin` is the host completion-anchor id of the originating input, never model data. */
+  event(to: Address, event: ActivityEvent, origin?: string): void {
     const s = event.snapshot;
     const turn = createHash("sha256").update(JSON.stringify([to, s.id])).digest("hex");
     const active = this.tools.get(turn) ?? new Map<string, string>();
@@ -39,8 +42,17 @@ export class NativeActivityDelivery {
       : tool ? `Werkzeug ${tool.name}${active.size > 1 ? ` (+${active.size - 1} aktiv)` : ""}: ${tool.state}`
       : active.size ? `Werkzeug ${[...new Set(active.values())].join(", ")}: running`
       : `${s.phase} · ${s.activity}${event.kind === "alive" ? " · weiterhin aktiv (Host)" : ""}`;
-    // One stable reference per turn: tool calls and host status replace each other.
-    this.queue(turn, to, `${taskContextLabel(s.parent ?? s.id, s.outputTags)} · ${prefix} · ${detail}`);
+    // One stable reference per originating input (else per dispatched task, else per turn):
+    // main, classifier and worker phases edit one message instead of each posting their own.
+    const bubble = origin ? `origin:${createHash("sha256").update(JSON.stringify([to, origin])).digest("hex")}`
+      : s.parent ? `task:${createHash("sha256").update(JSON.stringify([to, s.parent])).digest("hex")}` : turn;
+    const lines = this.lines.get(bubble) ?? new Map<string, string>();
+    this.lines.delete(bubble);
+    if (this.lines.size >= 128) this.lines.delete(this.lines.keys().next().value!);
+    this.lines.set(bubble, lines);
+    lines.set(turn, `${taskContextLabel(s.parent ?? s.id, s.outputTags)} · ${prefix} · ${detail}`);
+    if (lines.size > 8) lines.delete(lines.keys().next().value!);
+    this.queue(bubble, to, [...lines.values()].join("\n"));
     if (tool?.state === "started") void this.flush().catch(() => undefined);
   }
   metadata(to: Address, id: string, state: string): void {
@@ -72,7 +84,7 @@ export class NativeActivityDelivery {
           this.sent = saved.sent ?? saved;
           // In-flight calls from a prior process cannot truthfully remain running.
           for (const [id, call] of Object.entries(saved.calls ?? {}) as Array<[string, { to: Address; text: string }]>) {
-            const text = call.text.replace(/: (started|running)$/, ": interrupted (host restart)");
+            const text = call.text.replace(/: (started|running)$/gm, ": interrupted (host restart)");
             await this.send(call.to, `native:${id}`, text);
             this.sent[id] = createHash("sha256").update(text).digest("hex");
           }
@@ -85,7 +97,7 @@ export class NativeActivityDelivery {
         const hash = createHash("sha256").update(item.text).digest("hex");
         if (this.sent[id] !== hash) {
           await this.send(item.to, `native:${id}`, item.text);
-          if (item.text.includes("Werkzeug ") && (item.text.endsWith(": started") || item.text.endsWith(": running"))) this.calls[id] = item;
+          if (/Werkzeug [^\n]*: (started|running)$/m.test(item.text)) this.calls[id] = item;
           else delete this.calls[id];
           // Commit the delivered state, not later queued events. A failed durable
           // write must leave the item retryable with the same Matrix transaction.
