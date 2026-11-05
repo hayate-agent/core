@@ -25,11 +25,11 @@
     "plugins:materialize": "node scripts/materialize-plugins.mjs",
     "prebuild": "npm run plugins:materialize",
     "pretypecheck": "npm run plugins:materialize",
-    "pretest": "npm run plugins:materialize",
+    "pretest": "npm run build",
     "build": "tsc -p tsconfig.json",
     "prepare": "npm run build",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node --import tsx --test test/*.test.ts",
+    "test": "node scripts/test.mjs",
     "test:targeted": "node scripts/test-targeted.mjs",
     "start": "node --import tsx src/cli.ts run"
   },
