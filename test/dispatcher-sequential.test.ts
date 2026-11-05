@@ -21,7 +21,7 @@ const roles: ModelRoles = { enabled: true, roles: {
 const defaults = { model: "p/default", thinking: "high" };
 const steps = (...list: Array<[string, string]>) => JSON.stringify({ steps: list.map(([task, role]) => ({ task, role, reason: `${role} suffices`, evidence: `evidence of ${task}` })) });
 
-interface Script { verdict?: string; plan?: string | (() => string); worker?: (prompt: string, model?: string) => string; tools?: (prompt: string) => number }
+interface Script { verdict?: string | (() => string); plan?: string | (() => string); worker?: (prompt: string, model?: string) => string; tools?: (prompt: string) => number }
 /** Real Harness, store and dispatcher; fake model runtime emitting observed selection and tool events. */
 async function setup(t: import("node:test").TestContext, script: Script, opts: { roles?: ModelRoles; unavailable?: string[]; home?: string; file?: string;
   http?: (request: PlannerHttpRequest) => Promise<PlannerHttpOutcome> } = {}) {
@@ -38,7 +38,7 @@ async function setup(t: import("node:test").TestContext, script: Script, opts: {
     const prompt = session.prompt.bind(session);
     session.prompt = async (text: string, o: PromptOptions = {}) => {
       o.onEvent?.({ type: "execution", selection: { model: o.model ?? "p/default", thinking: o.thinking ?? "high" } } as never);
-      if (options.assessmentPurpose === "supervisor") return script.verdict ?? '{"state":"completed"}';
+      if (options.assessmentPurpose === "supervisor") return (typeof script.verdict === "function" ? script.verdict() : script.verdict) ?? '{"state":"completed"}';
       if (key.startsWith("plan:")) {
         calls.plan.push({ options, model: o.model });
         await prompt(text, o);
@@ -169,6 +169,34 @@ test("worker STEP-STATUS cannot admit a successor without independent completion
     assert.equal(task.status, "paused");
     assert.equal(env.calls.worker.length, 1);
     assert.equal((JSON.parse(task.checkpoint!) as SequentialState).outcomes.length, 0);
+  }
+});
+
+test("validator continue resumes the SAME step in its session, bounded, without successor until completed", async t => {
+  const verdicts = ['{"state":"continue","next":"inspect PR 265"}', '{"state":"completed"}'];
+  const env = await setup(t, { plan: steps(["reconcile", "simple"], ["report", "simple"]), verdict: () => verdicts.shift() ?? '{"state":"completed"}' });
+  const task = await env.run("two steps");
+  assert.equal(task.status, "completed");
+  assert.equal(env.calls.worker.length, 3);
+  assert.match(env.calls.worker[1]!.prompt, /^CONTINUE STEP 1\/2/);
+  assert.match(env.calls.worker[1]!.prompt, /inspect PR 265/);
+  assert.equal(env.calls.worker[1]!.model, "p/cheap");
+  assert.match(env.calls.worker[2]!.prompt, /STEP 2\/2:\nreport/);
+  assert.equal(state(task.checkpoint).outcomes.length, 2);
+});
+
+test("validator continue is bounded; blocked and technical failures are distinguished", async t => {
+  const env = await setup(t, { plan: steps(["first", "simple"], ["second", "simple"]), verdict: '{"state":"continue","next":"more"}' });
+  const task = await env.run("two steps");
+  assert.equal(task.status, "paused");
+  assert.equal(env.calls.worker.length, 3);
+  assert.equal(state(task.checkpoint).outcomes.length, 0);
+  assert.ok(env.events.some(e => /weiterhin unvollständig/.test(JSON.stringify(e))));
+  for (const [verdict, text] of [['{"state":"blocked"}', /externe Blockade/], ['invalid', /technisch fehlgeschlagen/]] as const) {
+    const other = await setup(t, { plan: steps(["first", "simple"]), verdict });
+    await other.run("one step");
+    assert.equal(other.calls.worker.length, 1);
+    assert.ok(other.events.some(e => text.test(JSON.stringify(e))));
   }
 });
 
