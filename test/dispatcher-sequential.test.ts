@@ -21,7 +21,7 @@ const roles: ModelRoles = { enabled: true, roles: {
 const defaults = { model: "p/default", thinking: "high" };
 const steps = (...list: Array<[string, string]>) => JSON.stringify({ steps: list.map(([task, role]) => ({ task, role, reason: `${role} suffices`, evidence: `evidence of ${task}` })) });
 
-interface Script { verdict?: string | (() => string); plan?: string | (() => string); worker?: (prompt: string, model?: string) => string; tools?: (prompt: string) => number }
+interface Script { verdictDelayMs?: number; verdict?: string | (() => string); plan?: string | (() => string); worker?: (prompt: string, model?: string) => string; tools?: (prompt: string) => number }
 /** Real Harness, store and dispatcher; fake model runtime emitting observed selection and tool events. */
 async function setup(t: import("node:test").TestContext, script: Script, opts: { roles?: ModelRoles; unavailable?: string[]; home?: string; file?: string;
   http?: (request: PlannerHttpRequest) => Promise<PlannerHttpOutcome> } = {}) {
@@ -38,6 +38,7 @@ async function setup(t: import("node:test").TestContext, script: Script, opts: {
     const prompt = session.prompt.bind(session);
     session.prompt = async (text: string, o: PromptOptions = {}) => {
       o.onEvent?.({ type: "execution", selection: { model: o.model ?? "p/default", thinking: o.thinking ?? "high" } } as never);
+      if (options.assessmentPurpose === "supervisor" && script.verdictDelayMs) await new Promise(r => setTimeout(r, script.verdictDelayMs));
       if (options.assessmentPurpose === "supervisor") return (typeof script.verdict === "function" ? script.verdict() : script.verdict) ?? '{"state":"completed"}';
       if (key.startsWith("plan:")) {
         calls.plan.push({ options, model: o.model });
@@ -198,6 +199,26 @@ test("validator continue is bounded; blocked and technical failures are distingu
     assert.equal(other.calls.worker.length, 1);
     assert.ok(other.events.some(e => text.test(JSON.stringify(e))));
   }
+});
+
+// 520/377: retained step prompts took 10.2s/17.7s at the real reviewer (HTTP 200,
+// valid completed verdict) but the validator aborted at 10s -> technical pause.
+test("step validator tolerates a slow but valid reviewer instead of a 10s technical abort", async t => {
+  const env = await setup(t, { plan: steps(["first", "simple"]), verdictDelayMs: 10500 });
+  const task = await env.run("one step");
+  assert.equal(task.status, "completed");
+  assert.equal(state(task.checkpoint).outcomes.length, 1);
+});
+
+test("technical validator failure retains a bounded host diagnostic in the checkpoint", async t => {
+  const env = await setup(t, { plan: steps(["first", "simple"]), verdict: "not json" });
+  const task = await env.run("one step");
+  assert.equal(task.status, "paused");
+  const s = state(task.checkpoint);
+  assert.equal(s.outcomes.length, 0);
+  assert.equal(s.prior?.validation?.diagnostic, "invalid_response");
+  assert.equal(s.prior?.validation?.timeoutMs, 120000);
+  assert.ok(env.events.some(e => /technisch fehlgeschlagen oder unklar \(invalid_response\)/.test(JSON.stringify(e))));
 });
 
 test("missing independent reviewer blocks after worker proposal, without successor", async t => {
