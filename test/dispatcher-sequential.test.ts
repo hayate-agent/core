@@ -21,7 +21,7 @@ const roles: ModelRoles = { enabled: true, roles: {
 const defaults = { model: "p/default", thinking: "high" };
 const steps = (...list: Array<[string, string]>) => JSON.stringify({ steps: list.map(([task, role]) => ({ task, role, reason: `${role} suffices`, evidence: `evidence of ${task}` })) });
 
-interface Script { verdictDelayMs?: number; verdict?: string | (() => string); plan?: string | (() => string); worker?: (prompt: string, model?: string) => string; tools?: (prompt: string) => number }
+interface Script { verdictDelayMs?: number; verdict?: string | ((prompt: string) => string); toolEvents?: (prompt: string) => Array<{ name: string; detail: string; result: string }>; plan?: string | (() => string); worker?: (prompt: string, model?: string) => string; tools?: (prompt: string) => number }
 /** Real Harness, store and dispatcher; fake model runtime emitting observed selection and tool events. */
 async function setup(t: import("node:test").TestContext, script: Script, opts: { roles?: ModelRoles; unavailable?: string[]; home?: string; file?: string;
   http?: (request: PlannerHttpRequest) => Promise<PlannerHttpOutcome> } = {}) {
@@ -39,13 +39,17 @@ async function setup(t: import("node:test").TestContext, script: Script, opts: {
     session.prompt = async (text: string, o: PromptOptions = {}) => {
       o.onEvent?.({ type: "execution", selection: { model: o.model ?? "p/default", thinking: o.thinking ?? "high" } } as never);
       if (options.assessmentPurpose === "supervisor" && script.verdictDelayMs) await new Promise(r => setTimeout(r, script.verdictDelayMs));
-      if (options.assessmentPurpose === "supervisor") return (typeof script.verdict === "function" ? script.verdict() : script.verdict) ?? '{"state":"completed"}';
+      if (options.assessmentPurpose === "supervisor") return (typeof script.verdict === "function" ? script.verdict(text) : script.verdict) ?? '{"state":"completed"}';
       if (key.startsWith("plan:")) {
         calls.plan.push({ options, model: o.model });
         await prompt(text, o);
         return typeof script.plan === "function" ? script.plan() : script.plan ?? steps(["read file", "simple"]);
       }
       calls.worker.push({ prompt: text, model: o.model, thinking: o.thinking });
+      for (const [i, e] of (script.toolEvents?.(text) ?? []).entries()) {
+        o.onEvent?.({ type: "tool", phase: "start", name: e.name, callId: `c${i}`, detail: e.detail } as never);
+        o.onEvent?.({ type: "tool", phase: "end", name: e.name, callId: `c${i}`, detail: e.result } as never);
+      }
       for (let i = 0; i < (script.tools?.(text) ?? 0); i++) o.onEvent?.({ type: "tool", phase: "start", name: "bash" });
       await prompt(text, o);
       return script.worker?.(text, o.model) ?? "content\nSTEP-STATUS: complete";
@@ -187,7 +191,7 @@ test("validator continue resumes the SAME step in its session, bounded, without 
 });
 
 test("validator continue is bounded; blocked and technical failures are distinguished", async t => {
-  const env = await setup(t, { plan: steps(["first", "simple"], ["second", "simple"]), verdict: '{"state":"continue","next":"more"}' });
+  const env = await setup(t, { plan: steps(["first", "simple"], ["second", "simple"]), verdict: (() => { let n = 0; return () => `{"state":"continue","next":"more ${++n}"}`; })() });
   const task = await env.run("two steps");
   assert.equal(task.status, "paused");
   assert.equal(env.calls.worker.length, 3);
@@ -234,7 +238,7 @@ test("true external blocked holds: no continuation, no successor; invalid/uncert
 
 test("blocked claim continuation is bounded and never completes without independent completion", async t => {
   const env = await setup(t, { plan: steps(["first", "simple"], ["second", "simple"]), worker: () => "still stuck\nSTEP-STATUS: blocked: stuck",
-    verdict: '{"state":"continue","next":"more"}' });
+    verdict: (() => { let n = 0; return () => `{"state":"continue","next":"more ${++n}"}`; })() });
   const task = await env.run("two steps");
   assert.equal(task.status, "paused");
   assert.equal(env.calls.worker.length, 3);
@@ -507,4 +511,131 @@ test("multi-step: completed step survives a technical validator pause and restar
   assert.equal(after.status, "paused", "no silent auto-resume; owner assessment only");
   assert.equal(state(after.checkpoint).outcomes.length, 1, "completed step 1 not repeated");
   assert.equal(env.calls.worker.length, workerTurnsBefore, "no worker turn replayed by restart");
+});
+
+// Actual operator failures: worker "blocked" on a FALSE assumption that host tool
+// evidence contradicts. The validator must see that evidence and correct the SAME worker.
+const falseAssumptions = [
+  { name: "false updater capability", claim: "updater lacks --source internal", detail: "hayate-agent-update --help", result: "usage: hayate-agent-update --source internal --expect-revision <sha>" },
+  { name: "false review CWD", claim: "review tool refuses to run", detail: "cd /Users/karsten/scratch/wt && node dist/cli.js run --console", result: "review started in /Users/karsten/scratch/wt exit 0" },
+  { name: "artificial evidence count", claim: "need 3 independent receipts, only 2 exist", detail: "git log --oneline", result: "2 commits; the mandate requires no receipt count" },
+];
+for (const c of falseAssumptions) {
+  test(`${c.name}: validator corrects the SAME worker with host evidence, completes, no early successor`, async t => {
+    let validatorPrompts: string[] = [];
+    let phase = 0;
+    const env = await setup(t, {
+      plan: steps(["do first", "simple"], ["report", "simple"]),
+      toolEvents: prompt => prompt.includes("STEP 1/2") ? [{ name: "bash", detail: c.detail, result: c.result }] : [],
+      worker: prompt => {
+        if (prompt.includes("STEP 2/2")) return "reported\nSTEP-STATUS: complete";
+        if (/VALIDATOR CORRECTION/.test(prompt)) { phase = 2; return "done after correction\nSTEP-STATUS: complete"; }
+        phase = 1; return `${c.claim}\nSTEP-STATUS: blocked: ${c.claim}`;
+      },
+      verdict: prompt => {
+        validatorPrompts.push(prompt);
+        if (!prompt.includes("ROLE-STEP-1-DONE") && phase === 1 && prompt.includes(c.result)) return JSON.stringify({ state: "continue", next: `Assumption "${c.claim}" is contradicted by host evidence: ${c.result}. Proceed accordingly.` });
+        if (phase === 1) return '{"state":"blocked"}';
+        return '{"state":"completed"}';
+      },
+    });
+    const task = await env.run("mandate", { expiresAt: Date.now() + 3600_000 });
+    assert.equal(task.status, "completed", c.name);
+    // Host evidence reached the validator.
+    assert.ok(validatorPrompts[0]!.includes(c.result) && validatorPrompts[0]!.includes(c.detail.slice(0, 20)));
+    // Same retained worker session, correction + authority reach it, step 2 only after valid completion.
+    const step1 = env.calls.worker.filter(w => /STEP 1\/2|CONTINUE STEP/.test(w.prompt));
+    assert.equal(step1.length, 2);
+    assert.match(step1[1]!.prompt, /VALIDATOR CORRECTION[^\n]*mandate deadline \d{4}-/);
+    assert.ok(step1[1]!.prompt.includes(c.result));
+    assert.ok(env.calls.worker.findIndex(w => w.prompt.includes("STEP 2/2")) > env.calls.worker.findIndex(w => /VALIDATOR CORRECTION/.test(w.prompt)));
+    const s = state(task.checkpoint);
+    assert.equal(s.outcomes.length, 2);
+    assert.equal(s.correction, undefined);
+  });
+}
+
+test("correction is persisted before the corrected worker turn (restart-safe) and a restart resumes without replay", async t => {
+  let env!: Awaited<ReturnType<typeof setup>>;
+  let persisted: SequentialState | undefined;
+  const verdicts = ['{"state":"continue","next":"use --source internal"}', '{"state":"completed"}'];
+  env = await setup(t, { plan: steps(["only", "simple"]), verdict: () => verdicts.shift()!,
+    worker: prompt => {
+      if (/VALIDATOR CORRECTION/.test(prompt)) { persisted = state(env.store.list()[0]!.checkpoint); return "ok\nSTEP-STATUS: complete"; }
+      return "no\nSTEP-STATUS: blocked: x";
+    } });
+  await env.run("one");
+  assert.deepEqual(persisted?.correction, { index: 0, rounds: 1, note: "use --source internal" });
+
+  // Fresh process: persisted correction, nothing else; exact step resumes, earlier steps are not replayed.
+  const home = await mkdtemp(path.join(os.tmpdir(), "seq-corr-"));
+  t.after(() => rm(home, { recursive: true, force: true }));
+  const file = path.join(home, "executions.json");
+  const store = new ExecutionStore(file); await store.load();
+  const task = await store.submit("parent", "req", "two", "sequential");
+  const running = await store.claim(task.id);
+  await store.checkpoint(task.id, running.token!, JSON.stringify({ v: 1, planner: { requested: {} },
+    plan: JSON.parse(steps(["a", "simple"], ["b", "simple"])).steps,
+    outcomes: [{ role: "simple", requested: {}, result: "a done\nSTEP-STATUS: complete" }],
+    correction: { index: 1, rounds: 1, note: "use --source internal" } }));
+  const again = await setup(t, { worker: () => "b done\nSTEP-STATUS: complete" }, { home, file });
+  await again.dispatcher.start();
+  while (again.store.list()[0]!.status !== "completed") await new Promise(r => setTimeout(r, 10));
+  assert.equal(again.calls.plan.length, 0);
+  assert.equal(again.calls.worker.length, 1);
+  assert.match(again.calls.worker[0]!.prompt, /STEP 2\/2:\nb[\s\S]*PENDING VALIDATOR CORRECTION \(round 1[^\n]*\n"use --source internal"/);
+  assert.ok(!again.calls.worker[0]!.prompt.includes("STEP 1/2:"));
+});
+
+test("repeated identical wrong-assumption correction stops with one short actionable notice", async t => {
+  const env = await setup(t, { plan: steps(["only", "simple"]), worker: () => "stuck\nSTEP-STATUS: blocked: x",
+    verdict: '{"state":"continue","next":"use --source internal"}' });
+  const task = await env.run("one");
+  assert.equal(task.status, "paused");
+  assert.equal(env.calls.worker.length, 2); // original + one correction; identical second correction not re-sent
+  const notice = env.events.map(e => e.text ?? "").find(x => /nicht umgesetzt/.test(x));
+  assert.ok(notice && notice.length < 600);
+});
+
+test("validator 'blocked' (genuine external) and technical failure never trigger a correction", async t => {
+  for (const verdict of ['{"state":"blocked"}', "not json", '{"state":"uncertain"}']) {
+    const env = await setup(t, { plan: steps(["only", "simple"]), worker: () => "x\nSTEP-STATUS: blocked: x", verdict });
+    const task = await env.run("one");
+    assert.equal(task.status, "paused");
+    assert.equal(env.calls.worker.length, 1);
+  }
+});
+
+test("corrupt persisted correction metadata blocks visibly instead of an unbounded correction loop", async t => {
+  for (const correction of [{ index: 0, rounds: "x", note: "n" }, { index: 0, rounds: 99, note: "n" }, { index: 5, rounds: 1, note: "n" }]) {
+    const home = await mkdtemp(path.join(os.tmpdir(), "seq-corrupt-"));
+    t.after(() => rm(home, { recursive: true, force: true }));
+    const file = path.join(home, "executions.json");
+    const store = new ExecutionStore(file); await store.load();
+    const task = await store.submit("parent", "req", "one", "sequential");
+    const running = await store.claim(task.id);
+    await store.checkpoint(task.id, running.token!, JSON.stringify({ v: 1, planner: { requested: {} },
+      plan: JSON.parse(steps(["a", "simple"])).steps, outcomes: [], correction }));
+    const env = await setup(t, { worker: () => "x\nSTEP-STATUS: blocked: x", verdict: () => `{"state":"continue","next":"n${Math.random()}"}` }, { home, file });
+    await env.dispatcher.start();
+    while (!["blocked", "paused"].includes(env.store.list()[0]!.status)) await new Promise(r => setTimeout(r, 10));
+    for (let i = 0; i < 50 && !env.events.some(e => /Persistierter Plan/.test(e.text)); i++) await new Promise(r => setTimeout(r, 10));
+    assert.equal(env.calls.worker.length, 0, JSON.stringify(correction));
+    assert.ok(env.events.some(e => /Persistierter Plan ist ungültig/.test(e.text)));
+  }
+});
+
+test("manual pause during validation: correction never reaches the worker and is not auto-resumed", async t => {
+  let env!: Awaited<ReturnType<typeof setup>>;
+  env = await setup(t, { plan: steps(["only", "simple"], ["two", "simple"]), worker: () => "x\nSTEP-STATUS: blocked: x",
+    verdict: () => { const id = env.store.list()[0]!.id; void env.dispatcher.control("parent", id, "pause"); return '{"state":"continue","next":"use --source internal"}'; } });
+  await env.dispatcher.start();
+  await env.dispatcher.submit("parent", "req", "two");
+  // Pause with an open unsafe intent is held as "blocked" by ExecutionStore.control (execution.ts:487).
+  for (let i = 0; i < 300 && !["paused", "blocked"].includes(env.store.list()[0]!.status); i++) await new Promise(r => setTimeout(r, 10));
+  await new Promise(r => setTimeout(r, 100));
+  assert.ok(["paused", "blocked"].includes(env.store.list()[0]!.status));
+  assert.equal(env.calls.worker.length, 1);
+  assert.ok(!env.calls.worker.some(w => /VALIDATOR CORRECTION|STEP 2\/2/.test(w.prompt)));
+  assert.ok(!env.events.some(e => e.type === "result"));
 });

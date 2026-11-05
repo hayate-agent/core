@@ -21,7 +21,7 @@ const activityAnchor = (task: Execution) => task.dependency?.anchor && { id: tas
 export class DispatcherRuntime {
   private pending = new Map<string, { resolve(value: string): void; reject(error: Error): void }>();
   /** Host-observed selection/tool count of the current worker turn, keyed by task:token. */
-  private turns = new Map<string, { observed?: ModelPair; tools: number }>();
+  private turns = new Map<string, { observed?: ModelPair; tools: number; evidence: Array<{ name: string; error: boolean; call?: string; result?: string; callId?: string }> }>();
   constructor(private readonly harness: Harness, private readonly store: ExecutionStore, private readonly rules?: DispatchModelRule[] | (() => Promise<DispatchModelRule[] | undefined>), private readonly roleSettings?: () => { config?: ModelRoles; defaults: ModelPair }) {}
   eventText(event: ExecutionEvent): string {
     const task = this.store.list(event.parent).find(item => item.id === event.executionId);
@@ -153,8 +153,8 @@ export class DispatcherRuntime {
   get sequential(): DispatcherStrategy { return this.sequentialStrategy ??= sequentialStrategy({
     harness: this.harness, store: this.store, roles: () => this.roleSettings?.(),
     runTurn: (context, key, id, text, rule) => this.runTurn(context, key, id, text, rule),
-    turn: key => { const turn = this.turns.get(key) ?? { tools: 0 }; this.turns.delete(key); return turn; },
-    resetTurn: key => { this.turns.set(key, { tools: 0 }); },
+    turn: key => { const turn = this.turns.get(key) ?? { tools: 0, evidence: [] }; this.turns.delete(key); return { ...turn, evidence: turn.evidence.map(({ callId: _id, ...rest }) => rest) }; },
+    resetTurn: key => { this.turns.set(key, { tools: 0, evidence: [] }); },
   }); }
   /** One worker turn in the exact task-bound session. Cancellation waits for the pump. */
   async runTurn(context: DispatchContext, key: string, id: string, text: string, rule: ModelPair): Promise<string> {
@@ -199,7 +199,16 @@ export class DispatcherRuntime {
     turnEvent: (to, event, input) => {
       if (input?.sessionKey !== `dispatch:${to.target}`) return;
       const turn = this.turns.get(to.target);
-      if (turn && event.type === "tool" && event.phase === "start") turn.tools++;
+      if (turn && event.type === "tool" && event.phase === "start") {
+        turn.tools++;
+        // Host-observed tool facts for the independent validator (bounded, untrusted data).
+        turn.evidence.push({ name: event.name.slice(0, 80), error: false, ...(event.detail ? { call: event.detail.slice(0, 400) } : {}), ...(event.callId ? { callId: event.callId } : {}) });
+        if (turn.evidence.length > 12) turn.evidence.shift();
+      }
+      if (turn && event.type === "tool" && event.phase === "end") {
+        const entry = [...turn.evidence].reverse().find(item => event.callId ? item.callId === event.callId : item.name === event.name && item.result === undefined);
+        if (entry) { entry.error = !!event.error; if (event.detail) entry.result = event.detail.slice(0, 600); }
+      }
       if (event.type !== "execution") return;
       if (turn) turn.observed = { model: event.selection.model, thinking: event.selection.thinking };
       const task = this.taskForSession(input.sessionKey);
