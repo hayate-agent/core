@@ -201,6 +201,63 @@ test("validator continue is bounded; blocked and technical failures are distingu
   }
 });
 
+// A worker "STEP-STATUS: blocked" is a proposal like "complete": independently assessed.
+// Historical cause of earlier 520/377 pauses is an UNKNOWN limitation (diagnostics were missing);
+// it is neither treated as blocked-proof nor as success.
+const blockedWorker = (prompt: string) => /^CONTINUE STEP|STEP 2\/2/.test(prompt)
+  ? "did it\nSTEP-STATUS: complete" : "cannot proceed\nSTEP-STATUS: blocked: stuck";
+
+test("worker blocked claim with reviewer continue runs the next same-step turn, then completes", async t => {
+  const verdicts = ['{"state":"continue","next":"run the pending check"}', '{"state":"completed"}'];
+  const env = await setup(t, { plan: steps(["first", "simple"], ["second", "simple"]), worker: blockedWorker,
+    verdict: () => verdicts.shift() ?? '{"state":"completed"}' });
+  const task = await env.run("two steps");
+  assert.equal(task.status, "completed");
+  assert.match(env.calls.worker[1]!.prompt, /^CONTINUE STEP 1\/2/);
+  assert.match(env.calls.worker[1]!.prompt, /run the pending check/);
+  assert.equal(env.calls.worker[1]!.model, "p/cheap");
+  assert.match(env.calls.worker[2]!.prompt, /STEP 2\/2:\nsecond/);
+  assert.equal(state(task.checkpoint).outcomes.length, 2);
+});
+
+test("true external blocked holds: no continuation, no successor; invalid/uncertain assessment grants no execution", async t => {
+  for (const [verdict, text] of [['{"state":"blocked"}', /externe Blockade/], ['{"state":"waiting"}', /Warten auf externe/],
+    ['{"state":"completed"}', /ohne vollständigen Nachweis \(blocked\)/], ['invalid', /technisch fehlgeschlagen/], ['{"state":"uncertain"}', /technisch fehlgeschlagen/]] as const) {
+    const env = await setup(t, { plan: steps(["first", "simple"], ["second", "simple"]), worker: blockedWorker, verdict });
+    const task = await env.run("two steps");
+    assert.equal(task.status, "paused", verdict);
+    assert.equal(env.calls.worker.length, 1, verdict);
+    assert.equal(state(task.checkpoint).outcomes.length, 0, verdict);
+    assert.ok(env.events.some(e => text.test(JSON.stringify(e))), verdict);
+  }
+});
+
+test("blocked claim continuation is bounded and never completes without independent completion", async t => {
+  const env = await setup(t, { plan: steps(["first", "simple"], ["second", "simple"]), worker: () => "still stuck\nSTEP-STATUS: blocked: stuck",
+    verdict: '{"state":"continue","next":"more"}' });
+  const task = await env.run("two steps");
+  assert.equal(task.status, "paused");
+  assert.equal(env.calls.worker.length, 3);
+  assert.equal(state(task.checkpoint).outcomes.length, 0);
+  assert.ok(env.events.some(e => /weiterhin unvollständig/.test(JSON.stringify(e))));
+});
+
+test("blocked claim: parent stop and expired deadline preserved", async t => {
+  const expired = await setup(t, { worker: blockedWorker, verdict: '{"state":"continue","next":"x"}' });
+  const task = await expired.run("read", { expiresAt: Date.now() - 1 });
+  assert.equal(task.status, "paused");
+  assert.equal(expired.calls.worker.length, 0);
+  let env!: Awaited<ReturnType<typeof setup>>;
+  env = await setup(t, { plan: steps(["one", "simple"]), verdict: '{"state":"continue","next":"x"}',
+    worker: () => { void env.store.cancelParent("parent"); return "no\nSTEP-STATUS: blocked: stuck"; } });
+  await env.dispatcher.start();
+  await env.dispatcher.submit("parent", "req", "one");
+  while (["ready", "running"].includes(env.store.list()[0]!.status)) await new Promise(r => setTimeout(r, 10));
+  await new Promise(r => setTimeout(r, 30));
+  assert.equal(env.calls.worker.length, 1);
+  assert.ok(!env.events.some(e => e.type === "result"));
+});
+
 // 520/377: retained step prompts took 10.2s/17.7s at the real reviewer (HTTP 200,
 // valid completed verdict) but the validator aborted at 10s -> technical pause.
 test("step validator tolerates a slow but valid reviewer instead of a 10s technical abort", async t => {

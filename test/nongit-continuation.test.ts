@@ -15,23 +15,28 @@ test('independently assessed analysis continues beyond 20 without Git, including
     return checks === 45 ? { state: 'completed' as const } : { state: 'continue' as const, next: 'Continue original analysis' };
   }};
   const home = await mkdtemp(path.join(os.tmpdir(), 'nongit-continuation-'));
+  const first = new Harness(options); first.addChannel(new MemoryChannel());
+  let writes = Promise.resolve();
   try {
     const file = path.join(home, 'sessions.json');
-    const first = new Harness(options); first.addChannel(new MemoryChannel());
+    // Deterministic barrier (not a 1000x1ms wallclock poll, which expires under load).
+    let reachedPause!: () => void;
+    const pausedAt = new Promise<void>(resolve => { reachedPause = resolve; });
     // Serialize the test persistence adapter: background saveSoon callbacks may
     // overlap awaited writes. A paused turn alone is not a persistence barrier.
-    let writes = Promise.resolve();
     first.onStateChange = () => {
       const snapshot = JSON.stringify(first.snapshotSessions());
       writes = writes.then(async () => {
         await writeFile(file + '.next', snapshot);
         await rename(file + '.next', file);
-        if (checks === 25) first.paused = true;
+        if (checks === 25) { first.paused = true; reachedPause(); }
       });
       return writes;
     };
     await first.accept(msg('Analyze original scope'));
-    for (let i = 0; i < 1000 && !first.paused; i++) await new Promise(resolve => setTimeout(resolve, 1));
+    let bound: NodeJS.Timeout | undefined;
+    await Promise.race([pausedAt, new Promise<void>(resolve => { bound = setTimeout(resolve, 30_000); })]);
+    clearTimeout(bound);
     assert.equal(first.paused, true);
     await writes;
     assert.equal(turns, 25); assert.equal(checks, 25);
@@ -43,7 +48,14 @@ test('independently assessed analysis continues beyond 20 without Git, including
     assert.equal(turns, 45); assert.equal(checks, 45);
     assert.equal(restored.snapshotSessions()[0]!.tasks![0]!.state, 'completed');
     assert.equal(repetitions(restored.snapshotSessions()[0]!.tasks![0]!), 1); // terminal turn, not a continue
-  } finally { await rm(home, { recursive: true, force: true }); }
+  } finally {
+    // Teardown lifecycle: fence the first harness and settle its serialized writes
+    // before removing the directory, so no background save races the rm.
+    first.paused = true;
+    await first.stop(0);
+    for (let prev; prev !== writes;) { prev = writes; await writes.catch(() => undefined); }
+    await rm(home, { recursive: true, force: true });
+  }
 });
 
 test('identical successful validation receipts stay bounded despite changing model plans', async () => {

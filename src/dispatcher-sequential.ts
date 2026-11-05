@@ -219,7 +219,11 @@ export function sequentialStrategy(deps: SequentialDeps): DispatcherStrategy {
         // before persisting completion or admitting any successor. A validator
         // "continue" means unfinished work of THIS step: resume it in the same
         // retained worker session (same intent, same route), bounded.
-        for (let round = 0; status === "complete"; round++) {
+        // A worker "blocked" claim is equally only a proposal: it is assessed too.
+        // Reviewer continue runs the next same-step turn; a reviewer "completed"
+        // never overrides the worker's blocked claim (hold, no successor).
+        for (let round = 0; status === "complete" || status === "blocked"; round++) {
+          const claimed = status;
           const reviewer = await exactRole(runtime, deps.roles()?.config, "reviewer");
           if (typeof reviewer === "string") return block(reviewer);
           const backend = runtimeReviewer(runtime, "supervisor");
@@ -231,7 +235,7 @@ export function sequentialStrategy(deps: SequentialDeps): DispatcherStrategy {
           await authorize();
           verdictState = verdict?.state ?? "technical";
           if (verdict?.state === "completed") break;
-          status = undefined;
+          if (claimed === "complete") status = undefined;
           if (verdict?.state !== "continue" || round >= STEP_CONTINUATIONS) break;
           await context.status?.(`Schritt ${index + 1}/${state.plan.length}: Validator verlangt Fortsetzung desselben Schritts (${round + 1}/${STEP_CONTINUATIONS}).`).catch(() => {});
           deps.resetTurn(key);
