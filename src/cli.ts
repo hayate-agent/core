@@ -215,10 +215,16 @@ async function main(argv: string[]): Promise<void> {
   let localSessions: LocalSessions | undefined;
   const sessionEnabled = (key: string): boolean => {
     if (!interactive) return true;
-    const parent = key.startsWith("dispatch:") ? executions.list().find(task => key.startsWith(`dispatch:${task.id}:`))?.parent
-      : key.startsWith("subagent:") ? subagents.snapshot().find(task => task.sessionKey === key)?.parent : key;
-    if (!parent) return false;
-    return (!parent.startsWith("local-") && parent !== "console:local") || parent === localSessions?.current?.key;
+    let parent: string | undefined = key;
+    const seen = new Set<string>();
+    for (let depth = 0; depth < 32; depth++) {
+      if (!parent || seen.has(parent)) return false;
+      seen.add(parent);
+      if (parent.startsWith("dispatch:")) parent = executions.list().find(task => parent!.startsWith(`dispatch:${task.id}:`))?.parent;
+      else if (parent.startsWith("subagent:")) parent = subagents.snapshot().find(task => task.sessionKey === parent)?.parent;
+      else return (!parent.startsWith("local-") && parent !== "console:local") || parent === localSessions?.current?.key;
+    }
+    return false;
   };
   // One persistence foundation in both modes, also covering managed child turns.
   const executions = new ExecutionStore(path.join(config.home, "executions.json"), {
@@ -510,7 +516,9 @@ async function main(argv: string[]): Promise<void> {
         const key = localSessions?.current?.key;
         const state = key ? harness.sessions.get(key) : undefined;
         return !state?.running && !state?.queue.length && !state?.outbox.length && !state?.unsaved
-          && !harness.pendingInputs().some((input) => input.sessionKey === key);
+          && !harness.pendingInputs().some((input) => input.sessionKey === key)
+          && !executions.list(key).some(task => task.status === "running" || task.status === "ready")
+          && !subagents.list(key!).some(task => task.state === "running" || task.state === "queued");
       },
       panels: () => plugins.panels.values(),
       agent: config.agent,
@@ -722,10 +730,11 @@ async function main(argv: string[]): Promise<void> {
     const owners = Promise.allSettled([reviewWorkers.stop(), reviewSubagents.stop(), plugins.reportProcessing.stop(), dispatcher?.stop()]);
     const selected = interrupt && localSessions?.current ? harness.sessions.get(localSessions.current.key) : undefined;
     const cancelledInput = selected?.current;
+    const cancellationReceipt = selected && cancelledInput?.executionTurnId
+      ? executions.stopTurn(cancelledInput.executionTurnId, selected.key).then(() => true, () => false) : Promise.resolve(true);
     if (selected && cancelledInput) {
       selected.cancelling = cancelledInput;
       cancelledInput.continuation = undefined;
-      if (cancelledInput.executionTurnId) await executions.stopTurn(cancelledInput.executionTurnId, selected.key);
       const task = selected.tasks?.find(task => task.id === cancelledInput.taskId) ??
         (selected.task?.id === cancelledInput.taskId ? selected.task : undefined);
       if (task) { task.state = "stopped"; task.recoveryAdmission = undefined; }
@@ -733,17 +742,29 @@ async function main(argv: string[]): Promise<void> {
     const retained = await harness.stop(interrupt ? 0 : config.loop.drainSeconds * 1000, 2000);
     // Only the explicitly interrupted current turn is cancelled; queued human
     // inputs and other conversations remain durable, parked under their owners.
-    const unfinished = cancelledInput ? retained.filter(input =>
+    let receiptTimer: NodeJS.Timeout | undefined;
+    const cancelledDurably = await Promise.race([cancellationReceipt,
+      new Promise<boolean>(resolve => { receiptTimer = setTimeout(() => resolve(false), 1000); })]);
+    clearTimeout(receiptTimer);
+    let unfinished = cancelledInput && cancelledDurably ? retained.filter(input =>
       !(cancelledInput.id && input.id === cancelledInput.id) &&
       !(cancelledInput.executionTurnId && input.executionTurnId === cancelledInput.executionTurnId) &&
       !(cancelledInput.completionAnchor?.id && input.completionAnchor?.id === cancelledInput.completionAnchor.id)) : retained;
+    if (cancelledInput && !cancelledDurably) {
+      unfinished = [...retained, structuredClone(cancelledInput)];
+      console.error("[state] interruption could not be durably confirmed; input retained for reconciliation"); code = 1;
+    }
     harness.onStateChange = undefined;
     // A graceful stop is not the turn's fault: only crashes (OOM, kill) count towards giving up.
     for (const input of unfinished) if (sessionEnabled(input.sessionKey)) input.started = undefined;
     let persisted = false;
     for (let attempt = 0; attempt < 2 && !persisted; attempt++) {
-      try { await persist(unfinished); persisted = true; }
-      catch { console.error("[state] shutdown save failed; retaining ownership for a bounded retry"); }
+      let saveTimer: NodeJS.Timeout | undefined;
+      try {
+        await Promise.race([persist(unfinished), new Promise<never>((_resolve, reject) => { saveTimer = setTimeout(() => reject(Error("shutdown save timed out")), 2000); })]);
+        persisted = true;
+      } catch { console.error("[state] shutdown save failed; retaining ownership for a bounded retry"); }
+      finally { clearTimeout(saveTimer); }
     }
     if (!persisted) { console.error("[state] shutdown snapshot was NOT saved; previous durable inbox retained"); code = 1; }
     if (unfinished.length) console.error(`[harness] ${unfinished.length} pending input(s) retained for their owning conversations`);
