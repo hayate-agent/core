@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+
 # Managed subagents
 
 The main agent can use `plugin_subagent` to start, list, inspect and cancel a

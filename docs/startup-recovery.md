@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+
 # Bounded startup completion recovery
 
 An active host-retained task without `next` may be assessed once through the existing completion checker. The original task is the authority, never worker prose. No retained task means no startup inference or action. Unknown completion evidence permits verification/reconciliation only, not blind replay of external effects.

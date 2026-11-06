@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 import { spawn } from "node:child_process";
 
 /** Bounded trusted runner, not an OS sandbox. POSIX descendants that remain in

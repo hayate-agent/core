@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 import test from "node:test";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import assert from "node:assert/strict";

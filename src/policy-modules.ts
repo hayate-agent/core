@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 import type { Policy } from "./policies.js";
 export interface PolicyOverride { module?: string; disabled?: boolean }
 export type PolicyOverlay = Record<string, PolicyOverride>;

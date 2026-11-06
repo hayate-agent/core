@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 import type { ImprovementPolicy } from "./improvement.js";
 import type { NightlyProgress } from "./nightly-strategy.js";
 import { experimentReceipts, uniqueExperiments, improvementReport } from "./improvement-report.js";

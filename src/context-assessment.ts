@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 export interface BoundaryEvidence {
   /** Advisory model cancellation only; never grants authority. */
   signal?: AbortSignal;

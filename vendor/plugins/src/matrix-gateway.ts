@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 import { MatrixChannel, matrixOptionsFromEnv } from "./matrix-channel.js";
 import type { GatewayModule } from "./gateway-provider.js";
 const plugin: GatewayModule = {

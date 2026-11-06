@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+
 # Durable task recovery after restart
 
 For explicitly submitted background executions, see the separate

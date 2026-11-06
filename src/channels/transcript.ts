@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 import { Markdown, Text, truncateToWidth, type Component, type MarkdownTheme } from "@earendil-works/pi-tui";
 import { plainText, renderEntry, tint, type TranscriptEntry } from "./presentation.js";
 

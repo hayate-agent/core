@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+
 # Retained work recovery
 
 The host retains explicit task mandates across turns, handover and process restart.

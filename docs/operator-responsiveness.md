@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+
 # Operator foreground scheduling
 
 ## Cause and bounded evidence

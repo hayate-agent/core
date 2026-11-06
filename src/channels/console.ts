@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 import { createInterface, type Interface } from "node:readline";
 import type { Address, Channel, Inbound } from "../types.js";
 

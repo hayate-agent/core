@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 import type { DedicatedReviewExecution } from "./review-executor.js";
 import { ReviewService } from "./review.js";
 import { reviewPolicy } from "./review-policy.js";

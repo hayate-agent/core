@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+
 # Worker notification routing
 
 Routine dispatcher status uses `presentation: progress` and a stable logical

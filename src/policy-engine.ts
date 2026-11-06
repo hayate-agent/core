@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { PolicyRegistry, type Policy } from "./policies.js";

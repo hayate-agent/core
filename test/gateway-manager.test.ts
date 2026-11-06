@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 import { gatewayManagerPlugin } from "../src/builtin-plugins/gateway-manager-plugin.js";
 import test from "node:test";
 import assert from "node:assert/strict";

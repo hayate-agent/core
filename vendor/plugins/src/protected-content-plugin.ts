@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 import type { PluginModule } from "./plugins.js";
 import type { ProtectedContent } from "./protected-content.js";
 export function protectedContentPlugin(service: ProtectedContent): PluginModule {

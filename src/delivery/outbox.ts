@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 import { randomUUID } from "node:crypto";
 import { labelOutput } from "../hashtags.js";
 import { type Address, PermanentDeliveryError, type SendMeta, type TurnOutcome } from "../types.js";

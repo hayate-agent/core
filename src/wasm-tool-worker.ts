@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 import { parentPort, workerData } from "node:worker_threads";
 import { validateWasmLimits } from "./wasm-tool-limits.js";
 

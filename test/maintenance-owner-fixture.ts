@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // Local subprocess fixture: real owner lifecycle and transport, deterministic runtime only.
 import path from "node:path";
 import { Harness } from "../src/harness.js";

@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+
 # Main result follow-up within an existing mandate
 
 Dispatcher submission captures the current parent task identity, original operator

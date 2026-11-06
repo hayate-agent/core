@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 import { createServer, createConnection, type Socket } from "node:net";
 import { mkdir, lstat, chmod, unlink } from "node:fs/promises";
 import path from "node:path";

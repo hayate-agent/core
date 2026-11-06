@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+
 # Exhausted productive budget: durable operator attention
 
 The ceiling is twenty consecutive unevidenced productive attempts, not twenty

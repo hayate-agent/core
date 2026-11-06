@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 import type { MemoryTurn } from "./memory.js";
 
 /** Recall and capture behavior, separate from the durable memory provider API. */

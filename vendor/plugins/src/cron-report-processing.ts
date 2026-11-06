@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 import { CronReports, type CronReport } from "./cron-reports.js";
 
 export interface CronAnalysisBackend { analyze(prompt: string, signal: AbortSignal): Promise<string> }

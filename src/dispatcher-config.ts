@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 /** Per-task model routing rule: first matching rule wins; a rule with an empty match is the fallback. */
 export interface DispatchModelRuleMatch {
   minChars?: number;
