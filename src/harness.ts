@@ -1849,27 +1849,30 @@ export class Harness {
     task.next ??= "Independent supervisor admission unavailable; retained task requires assessment before productive continuation.";
   }
 
+  /** Host diagnostic only: identifiers and bounded enums, never task/reply/provider data. */
+  private recoveryNotice(sessionKey: string, task: DurableTask,
+    reason: "interrupted" | "unavailable" | "technical" | "inconclusive" | "mismatched" | "invalid" | "exhausted" | "retained"): string {
+    const reasons = {
+      retained: "a retained assessment diagnostic requires inspection",
+      invalid: "saved retry state is invalid",
+      exhausted: "the 3-attempt assessment budget is exhausted",
+      interrupted: "the previous assessment has no durable result",
+      unavailable: "the assessment backend is unavailable",
+      technical: "the assessment failed technically; the backend cause is unverified",
+      inconclusive: "the assessment is inconclusive, not an execution failure",
+      mismatched: "the saved admission does not match the task",
+    };
+    const diagnostics = ["technical", "invalid_response", "inconclusive", "unavailable"];
+    const diagnostic = task.recoveryRetry?.diagnostic;
+    const detail = diagnostic && diagnostics.includes(diagnostic) ? ` (${diagnostic})` : "";
+    const id = (value: string) => JSON.stringify(value.length > 200 ? value.slice(0, 200) + "…" : value);
+    return `Recovery assessment paused: ${reasons[reason]}${detail}.\n` +
+      `Task: ${id(task.id)}; session: ${id(sessionKey)}. No automatic work was started; completion is unverified.\n` +
+      `Inspect with /task-budget inspect <session-key> <task-id>. Existing approvals, stops and deadlines still apply.`;
+  }
+
   private recoveryAttention(s: SessionState, task: DurableTask,
     reason: "interrupted" | "unavailable" | "technical" | "inconclusive" | "mismatched" | "invalid" | "exhausted"): void {
-    const diagnostics = {
-      technical: "Die Recovery-Bewertung ist technisch fehlgeschlagen; die technische Ursache ist hier nicht verifiziert.",
-      invalid_response: "Die Recovery-Bewertung lieferte eine ungültige Antwort.",
-      inconclusive: "Die Recovery-Bewertung hat kein verwertbares Ergebnis geliefert.",
-      unavailable: "Die Completion-Bewertung war nicht verfügbar.",
-    };
-    const diagnostic = task.recoveryRetry?.diagnostic;
-    const detail = diagnostic && Object.hasOwn(diagnostics, diagnostic) ? diagnostics[diagnostic] :
-      "Ein verwertbares Bewertungsergebnis ist nicht gesichert.";
-    const reasons = {
-      invalid: "Der gespeicherte Recovery-Retryzustand ist ungültig; daraus folgt keine verlässliche Aussage über verbrauchte Bewertungsversuche.",
-      exhausted: `Die drei Recovery-Bewertungsversuche sind ausgeschöpft. ${detail} ` +
-        `Neue Bewertungsversuche nur nach ausdrücklichem Budget-Reset durch einen authentifizierten Administrator („Setze das Budget zurück für Aufgabe ${task.id} und fahre fort“); Frist und Worker bleiben unverändert.`,
-      interrupted: "Die gespeicherte Recovery-Bewertung wurde begonnen, aber ihr Ergebnis nicht dauerhaft gesichert (unterbrochen).",
-      unavailable: "Die Completion-Bewertung ist nicht verfügbar; ein nächster Schritt ist nicht dauerhaft festgelegt.",
-      technical: "Die unabhängige Bewertung ist technisch fehlgeschlagen; die genaue Backend-Ursache ist nicht verifiziert. Nur die Bewertung wird begrenzt erneut versucht, keine Worker-Aktion.",
-      inconclusive: "Die unabhängige Bewertung ist semantisch unentschieden; dies ist kein technischer Fehler und keine Bestätigung eines fachlichen Blockers.",
-      mismatched: "Die gespeicherte Recovery-Freigabe passt nicht mehr zum gespeicherten Auftrag oder nächsten Schritt.",
-    };
     task.state = "blocked";
     if ((reason === "exhausted" || reason === "interrupted") && (task.recoveryRetry?.attempts ?? 0) >= 3)
       task.termination = "recovery_assessment_failed";
@@ -1880,19 +1883,10 @@ export class Harness {
     const to = s.replyTo ?? this.home;
     // Filter only this host-generated diagnostic, before the shared outbox.
     // Keep the blocked task, diagnostic marker, persistence and log even when silent.
-    // Terminal exhaustion needs an operator reset decision; like task-budget
-    // escalation it is not an optional technical diagnostic.
-    if (to && (reason === "exhausted" && task.termination === "recovery_assessment_failed" ||
-        gatewaySettings(this.opts.gateways, to.channel).recoveryDiagnostics)) {
-      const text = `⚠️ Recovery angehalten: ${reasons[reason]}\nAuftrag: ${task.original}\n` +
-        `Verifizierter Stand: Auftrag und Fortsetzungstiefe ${task.depth} sind gespeichert. ` +
-        `Der Abschluss ist nicht unabhängig bestätigt; das belegt nicht, dass der Auftrag unerledigt ist. ` +
-        `Es wird keine automatische Fortsetzung gestartet.\n` +
-        (task.lastReply ? `UNVERIFIED EVIDENCE (letzte Antwort, keine Ausführungsfreigabe): ${JSON.stringify(task.lastReply.slice(0, 8000))}\n` : "") +
-        `Eine fehlende Bewertung erfordert für sich genommen keinen neuen fachlichen Auftrag. ` +
-        `Vor einer möglichen Fortsetzung müssen vorhandene Ergebnisse geprüft werden; ` +
-        `bestehende Stopps, Autorisierungs-, Abhängigkeits- und Ablaufgrenzen gelten weiter.`;
-      const entry = { ...this.outbox.create(s.key, to, text), id };
+    // Exhausting internal inference is not proof of a failed operation and must
+    // not override the operator's diagnostic opt-out. Keep the terminal state.
+    if (to && gatewaySettings(this.opts.gateways, to.channel).recoveryDiagnostics) {
+      const entry = { ...this.outbox.create(s.key, to, this.recoveryNotice(s.key, task, reason)), id };
       s.outbox.push(entry);
     }
     // Retry a failed save through the normal pump barrier, including a notice
@@ -1915,7 +1909,20 @@ export class Harness {
   restoreOutbox(entries: OutboxEntry[]): void {
     if (!entries.length) return;
     this.outbox.held = true;
-    for (const e of entries) this.state(e.sessionKey).outbox.push(e);
+    for (const entry of entries) {
+      const s = this.state(entry.sessionKey);
+      // Upgrade only this reserved host diagnostic family. Never filter ordinary
+      // replies by their wording, nor approvals, genuine blockers or task results.
+      const diagnostic = (entry.id?.startsWith(`task-recovery:${s.key}:`) ||
+        entry.id?.startsWith(`task-recovery-exhausted:${s.key}:`)) &&
+        (entry.text.startsWith("⚠️ Recovery angehalten:") || entry.text.startsWith("Recovery assessment paused:"));
+      if (!diagnostic) { s.outbox.push(entry); continue; }
+      const task = this.tasks(s).find(task => task.recoveryAttentionId === entry.id);
+      s.unsaved = true; // the pump must save the migration before delivering anything
+      if (!task || task.state !== "blocked" || !gatewaySettings(this.opts.gateways, entry.to.channel).recoveryDiagnostics) continue;
+      s.outbox.push({ ...entry, text: this.recoveryNotice(s.key, task,
+        entry.id!.startsWith(`task-recovery-exhausted:${s.key}:`) ? "exhausted" : "retained") });
+    }
   }
 
   private async pump(s: SessionState): Promise<void> {

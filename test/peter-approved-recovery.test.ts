@@ -36,8 +36,8 @@ test("technical dependency hold retries only bounded durable assessment; success
   await f.h.recoverTasks(); assert.equal(f.calls(), 1);
   assert.equal(f.task().supervisorDecision?.diagnostic, "technical");
   assert.equal(f.task().recoveryRetry?.attempts, 1);
-  assert.ok((JSON.stringify(f.h.outboxEntries()) + f.ch.texts().join(" ")).includes("technisch fehlgeschlagen"));
-  assert.ok(!(JSON.stringify(f.h.outboxEntries()) + f.ch.texts().join(" ")).includes("nicht konfiguriert"));
+  assert.ok((JSON.stringify(f.h.outboxEntries()) + f.ch.texts().join(" ")).includes("failed technically"));
+  assert.ok(!(JSON.stringify(f.h.outboxEntries()) + f.ch.texts().join(" ")).includes("not configured"));
   await f.h.recoverTasks(); assert.equal(f.calls(), 1);
   f.h.restoreSessions([{ key: "mem:room1", task: structuredClone(f.task()) }]);
   f.advance();
@@ -74,10 +74,10 @@ test("missing completion backend is visible once, stops after three attempts, ne
   for (let i = 0; i < 6; i++) { await f.h.recoverTasks(); f.advance(); }
   assert.equal(f.calls(), 3);
   assert.equal(f.task().recoveryRetry?.attempts, 3);
-  const notices = [...f.h.outboxEntries().map(x => x.text), ...f.ch.texts()].filter(x => x.includes("Recovery angehalten"));
+  const notices = [...f.h.outboxEntries().map(x => x.text), ...f.ch.texts()].filter(x => x.includes("Recovery assessment paused:"));
   // One technical diagnostic, then one distinct terminal exhaustion notice.
   assert.equal(notices.length, 2);
-  assert.equal(notices.filter(x => x.includes("ausgeschöpft")).length, 1);
+  assert.equal(notices.filter(x => x.includes("budget is exhausted")).length, 1);
   assert.equal(f.task().termination, "recovery_assessment_failed");
   assert.equal(f.runtime.opened.length, 0);
   assert.equal(f.store.list("mem:room1")[0].status, "blocked");
