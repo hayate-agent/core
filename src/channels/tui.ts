@@ -348,7 +348,7 @@ export class HarnessTuiChannel implements Channel {
         if (s.sequence !== undefined && current.sequence !== undefined) {
           if (s.sequence < current.sequence || (s.sequence === current.sequence && s.id !== current.id)) return;
           if (s.sequence === current.sequence && current.settled) return;
-        } else {
+        } else if (s.sequence === undefined) {
           // Legacy producers have no generation. Only a starting event can transfer ownership.
           if (s.id !== current.id && s.phase !== "starting") return;
           if (s.id === current.id && current.settled && s.phase !== "starting") return;
@@ -364,7 +364,10 @@ export class HarnessTuiChannel implements Channel {
       return;
     }
     this.classifiers.set(rowKey, { target: to.target, label: `${s.role === "dispatcher-classifier" ? "Dispatcher classifier" : s.role === "worker" ? "Worker" : "Main"} · ${taskContextLabel(s.parent ?? s.id, s.outputTags)} · ${s.phase} · ${activityExecutionLabel(s.execution, executionState)}` });
-    while (this.classifiers.size > 16) this.classifiers.delete(this.classifiers.keys().next().value!);
+    while (this.classifiers.size > 16) {
+      const oldest = [...this.classifiers.keys()].find(key => key !== `main:${to.target}`)!;
+      this.classifiers.delete(oldest);
+    }
     this.render();
   }
 

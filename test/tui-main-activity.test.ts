@@ -79,6 +79,14 @@ test("legacy retry can explicitly start again but cannot downgrade a sequenced o
   assert.equal((ui as any).execution.model, "current");
 });
 
+test("bounded worker history cannot evict the current main owner", () => {
+  const ui = make(), to = { channel: "console", target: "local" };
+  ui.taskActivity(to, event(snapshot("main", 1)));
+  for (let i = 0; i < 30; i++) ui.taskActivity(to, event(snapshot(`worker-${i}`, i + 2, "worker")));
+  assert.equal(rows(ui).length, 16);
+  assert.equal(rows(ui).filter(row => row.label.startsWith("Main")).length, 1);
+});
+
 test("rendered screen has one main while one input is queued, including late old events", async () => {
   const noop = () => {};
   const terminal = { columns: 220, rows: 30, kittyProtocolActive: false,
