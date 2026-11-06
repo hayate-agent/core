@@ -1,5 +1,5 @@
 {
-  "contentDigest": "3d8be7f5189a5321dc6f5c77d45be0fc3fa5da98644a765816ad8126b0490c49",
+  "contentDigest": "a20af0bdffa25cd61f740188da3c7386c355403690fe59189f1dd6698b8685da",
   "files": [
     {
       "mode": "100644",
@@ -1374,7 +1374,7 @@
     {
       "mode": "100644",
       "path": "test/dispatcher-sequential.test.ts",
-      "sha256": "54dc3636bae4a190ed7239f808f9496c605b81ef427ce3db09c83b1c6e7e3954"
+      "sha256": "775686be028f270380ddf7394262d9cd8fd09bac6b9c8983957c00058a115d23"
     },
     {
       "mode": "100644",
@@ -2730,5 +2730,5 @@
   "historyPolicy": "fresh-root; no source commits, tags, refs or deleted blobs",
   "pluginSHA": "7b410193c7078019a22368897e6730e25b80f0fa",
   "schema": 1,
-  "sourceSHA": "cae1b9c0d2a7cf5f03e2d9427997b8eac3ec4c65"
+  "sourceSHA": "726a2fa28d56c4cda26484b2eb9d37355e85d7d5"
 }
