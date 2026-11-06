@@ -21,7 +21,7 @@ const roles: ModelRoles = { enabled: true, roles: {
 const defaults = { model: "p/default", thinking: "high" };
 const steps = (...list: Array<[string, string]>) => JSON.stringify({ steps: list.map(([task, role]) => ({ task, role, reason: `${role} suffices`, evidence: `evidence of ${task}` })) });
 
-interface Script { verdictDelayMs?: number; verdict?: string | ((prompt: string) => string); toolEvents?: (prompt: string) => Array<{ name: string; detail: string; result: string }>; plan?: string | (() => string); worker?: (prompt: string, model?: string) => string; tools?: (prompt: string) => number }
+interface Script { verdictDelayMs?: number; verdict?: string | ((prompt: string) => string); toolEvents?: (prompt: string) => Array<{ name: string; detail: string; result: string }>; plan?: string | (() => string); worker?: (prompt: string, model?: string) => string | Promise<string>; tools?: (prompt: string) => number }
 /** Real Harness, store and dispatcher; fake model runtime emitting observed selection and tool events. */
 async function setup(t: import("node:test").TestContext, script: Script, opts: { roles?: ModelRoles; unavailable?: string[]; home?: string; file?: string;
   http?: (request: PlannerHttpRequest) => Promise<PlannerHttpOutcome> } = {}) {
@@ -56,7 +56,7 @@ async function setup(t: import("node:test").TestContext, script: Script, opts: {
       }
       for (let i = 0; i < (script.tools?.(text) ?? 0); i++) o.onEvent?.({ type: "tool", phase: "start", name: "bash" });
       await prompt(text, o);
-      return script.worker?.(text, o.model) ?? "content\nSTEP-STATUS: complete";
+      return (await script.worker?.(text, o.model)) ?? "content\nSTEP-STATUS: complete";
     };
     return session;
   };
@@ -832,3 +832,58 @@ test("manual pause during validation: correction never reaches the worker and is
   assert.ok(!env.calls.worker.some(w => /VALIDATOR CORRECTION|STEP 2\/2/.test(w.prompt)));
   assert.ok(!env.events.some(e => e.type === "result"));
 });
+
+// Required binding case: a validator correction must not bypass an existing required-approval hold.
+// The corrected effect is gated by the REAL Harness.requestApproval for the SAME retained worker session.
+for (const decision of ["approve", "deny"] as const) {
+  test(`approval hold binds a validator correction: ${decision} — corrected effect and successor wait for the decision`, async t => {
+    const effects: string[] = [];
+    let step2 = 0; let decided = false; let key = ""; let corrected = false;
+    const env = await setup(t, {
+      plan: steps(["do first", "simple"], ["report", "simple"]),
+      worker: async prompt => {
+        if (prompt.includes("STEP 2/2")) { step2++; return "reported\nSTEP-STATUS: complete"; }
+        if (/VALIDATOR CORRECTION/.test(prompt)) {
+          corrected = true;
+          const running = env.store.list().find(item => item.status === "running")!;
+          key = `dispatch:${running.id}:${running.token}`;
+          const ok = await env.harness.requestApproval(key, "bash", { command: "hayate-agent-update --source internal check" });
+          decided = true;
+          if (!ok) return "approval denied; effect not executed\nSTEP-STATUS: blocked: approval denied";
+          effects.push("corrected-effect");
+          return "done after correction\nSTEP-STATUS: complete";
+        }
+        return "updater lacks --source internal\nSTEP-STATUS: blocked: updater lacks --source internal";
+      },
+      verdict: () => !corrected ? '{"state":"continue","next":"updater supports --source internal; run the check"}' : (effects.length ? '{"state":"completed"}' : '{"state":"blocked"}'),
+    });
+    await env.dispatcher.start();
+    const submitted = await env.dispatcher.submit("parent", "req", "mandate");
+    const find = () => env.store.list().find(item => item.id === submitted.id)!;
+    const until = async (cond: () => boolean) => { for (let i = 0; i < 500 && !cond(); i++) await new Promise(r => setTimeout(r, 10)); assert.ok(cond(), "condition not reached"); };
+    await until(() => !!find().token && env.harness.approvals.size === 1);
+    key = `dispatch:${find().id}:${find().token}`;
+    const entry = [...env.harness.approvals.values()][0]!;
+    // Held: same retained worker session owns the pending approval; nothing executed, no successor, not complete.
+    assert.equal(entry.sessionKey, key);
+    await new Promise(r => setTimeout(r, 100));
+    assert.deepEqual(effects, []);
+    assert.equal(step2, 0);
+    assert.equal(find().status, "running");
+    assert.equal(decided, false);
+    assert.equal(env.harness.approvals.size, 1);
+    entry.resolve(decision === "approve");
+    if (decision === "approve") {
+      await until(() => find().status === "completed");
+      assert.deepEqual(effects, ["corrected-effect"]);
+      assert.equal(step2, 1);
+      assert.equal(state(find().checkpoint).correction, undefined);
+    } else {
+      await until(() => find().status !== "running");
+      assert.notEqual(find().status, "completed");
+      assert.deepEqual(effects, []);
+      assert.equal(step2, 0);
+      assert.equal(env.harness.approvals.size, 0);
+    }
+  });
+}
