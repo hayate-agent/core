@@ -784,8 +784,15 @@ async function main(argv: string[]): Promise<void> {
     // Exit with 75 after drain. The native foreground launcher or service supervisor restarts.
     restart: async () => {
       // Shut down outside the command handler; the drain delivers /restart's acknowledgement first.
-      if (localSessions?.current && process.send && process.connected)
-        process.send({ type: "hayate-restart", session: localSessions.current.id }, () => {});
+      if (localSessions?.current && process.send && process.connected) {
+        const session = localSessions.current.id;
+        await new Promise<void>((resolve, reject) => {
+          process.send!({ type: "hayate-restart", session }, error => {
+            if (error) reject(Error("Restart session could not be handed to the foreground launcher; agent was not stopped"));
+            else resolve();
+          });
+        });
+      }
       setImmediate(() => void shutdown(75));
     },
   });

@@ -25,7 +25,9 @@ export async function runForeground(entrypoint: string, args: string[], nodeArgs
       });
       const result = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
         child!.once("error", reject);
-        child!.once("exit", (code, signal) => resolve({ code, signal }));
+        // close follows exit AND IPC closure, so the final session handoff has
+        // been consumed before the replacement inherits its restart metadata.
+        child!.once("close", (code, signal) => resolve({ code, signal }));
       });
       child = undefined;
       if (stopping) return stopCode;
