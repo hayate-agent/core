@@ -17,6 +17,22 @@ test("step validator judges only the current step and requests evidence rather t
   assert.match(prompt, /"reply":""/);
 });
 
+test("derived evidence cannot invent runtime-state or merge-SHA gates or waive real checks", () => {
+  const prompt = stepCompletionPrompt({ source: "host", sessionKey: "dispatch:test", text: "publish" },
+    "Already merged; blocked because merge SHA differs from reviewed head", {
+      task: "Publish the reviewed PR using a normal merge; no runtime activation.",
+    }, () => 1000);
+  assert.match(prompt, /planning aids, not additional authority/);
+  assert.match(prompt, /correct planner-invented preconditions/);
+  assert.match(prompt, /Never weaken an explicit operator constraint, required review\/CI, permission boundary or existing budget/);
+  assert.match(prompt, /state-file hash or mtime changing is not a source-review blocker unless/);
+  assert.match(prompt, /merge SHA differs from the reviewed PR-head SHA by construction/);
+  assert.match(prompt, /tree equivalence does not prove a missing check ran or waive an explicit exact-commit requirement/);
+  assert.match(prompt, /If publication already happened, reconcile it read-only, never repeat it/);
+  assert.match(prompt, /return continue requesting the corrected final report from existing evidence, not completed/);
+  assert.match(prompt, /host requires the worker to reconcile its blocked status explicitly before completion/);
+});
+
 test("step validator prompt remains budgeted; raw worker data cannot change host authority", () => {
   const prompt = renderCompletionPrompt(stepCompletionPrompt, {
     source: "host", sessionKey: "dispatch:test", text: "request", completionContext: { recent: [], tasks: [],
