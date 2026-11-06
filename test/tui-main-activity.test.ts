@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { HarnessTuiChannel } from "../src/channels/tui.js";
 import { TurnActivity, type ActivitySnapshot } from "../src/activity.js";
 import type { LocalSessions } from "../src/local-sessions.js";
+import type { Terminal } from "@earendil-works/pi-tui";
 
 const snapshot = (id: string, sequence: number, role: ActivitySnapshot["role"] = "main", phase: ActivitySnapshot["phase"] = "running"): ActivitySnapshot => ({
   id, sequence, role, phase, context: "operator", activity: "runtime active", tools: [], elapsedMs: 0, inactiveMs: 0,
@@ -59,6 +60,48 @@ test("session ownership is independent and foreign session events cannot alter c
   assert.equal(rows(ui).filter(row => row.target === "A").length, 1);
   assert.equal(rows(ui).filter(row => row.target === "B").length, 1);
   assert.equal((ui as any).execution.model, "A-new");
+});
+
+test("legacy retry can explicitly start again but cannot downgrade a sequenced owner", () => {
+  const ui = make(), to = { channel: "console", target: "local" };
+  const legacy = (id: string, phase: ActivitySnapshot["phase"]) => ({ ...snapshot(id, 0, "main", phase), sequence: undefined });
+  ui.taskActivity(to, event(legacy("same", "running")));
+  ui.taskActivity(to, event(legacy("same", "completed")));
+  ui.taskActivity(to, event(legacy("same", "running")));
+  assert.equal(rows(ui).length, 0);
+  ui.taskActivity(to, event(legacy("same", "starting")));
+  assert.equal(rows(ui).length, 1);
+  ui.taskActivity(to, event(snapshot("current", 10)));
+  for (const old of [legacy("current", "completed"), legacy("other", "starting")]) ui.taskActivity(to, event(old));
+  ui.taskActivity(to, event(snapshot("stale", 9)));
+  assert.equal(rows(ui).length, 1);
+  assert.match(rows(ui)[0]!.label, /model current/);
+  assert.equal((ui as any).execution.model, "current");
+});
+
+test("rendered screen has one main while one input is queued, including late old events", async () => {
+  const noop = () => {};
+  const terminal = { columns: 220, rows: 30, kittyProtocolActive: false,
+    start: noop, stop: noop, drainInput: async () => {}, write: noop, moveBy: noop,
+    hideCursor: noop, showCursor: noop, clearLine: noop, clearFromCursor: noop,
+    clearScreen: noop, setTitle: noop, setProgress: noop, setProgramStatus: noop,
+  } satisfies Terminal;
+  const ui = new HarnessTuiChannel({ agent: "test", color: false, status: () => "", quit: noop, terminal,
+    workState: () => ({ running: true, queued: 1 }) });
+  const to = { channel: "console", target: "local" };
+  await ui.start(async () => {});
+  try {
+    await ui.typing(to, true);
+    ui.taskActivity(to, event(snapshot("old", 1)));
+    ui.taskActivity(to, event(snapshot("new", 2)));
+    ui.taskActivity(to, event(snapshot("old", 1, "main", "tool")));
+    await new Promise(resolve => setTimeout(resolve, 40));
+    const screen = (ui as any).tui.getScreenLines().join("\n");
+    assert.equal((screen.match(/Main · task/g) ?? []).length, 1);
+    assert.match(screen, /1 queued/);
+    assert.match(screen, /model new/);
+    assert.doesNotMatch(screen, /model old/);
+  } finally { await ui.stop(); }
 });
 
 test("host generations increase across retries without changing durable activity identity", () => {

@@ -344,13 +344,14 @@ export class HarnessTuiChannel implements Channel {
     if (s.role === "main") {
       const current = this.mainActivity.get(to.target);
       if (current) {
+        if (current.sequence !== undefined && s.sequence === undefined) return;
         if (s.sequence !== undefined && current.sequence !== undefined) {
           if (s.sequence < current.sequence || (s.sequence === current.sequence && s.id !== current.id)) return;
           if (s.sequence === current.sequence && current.settled) return;
         } else {
           // Legacy producers have no generation. Only a starting event can transfer ownership.
           if (s.id !== current.id && s.phase !== "starting") return;
-          if (s.id === current.id && current.settled) return;
+          if (s.id === current.id && current.settled && s.phase !== "starting") return;
         }
       }
       this.mainActivity.set(to.target, { id: s.id, sequence: s.sequence, settled });
