@@ -223,6 +223,8 @@ export class PiSession implements RuntimeSession {
     return this.session.isStreaming;
   }
 
+  get prompting(): boolean { return !!this.turn || this.session.isCompacting; }
+
   async prompt(text: string, options: PromptOptions = {}): Promise<string> {
     const { onEvent, instructions, model, thinking } = options;
     const turn = { aborted: false };
@@ -236,7 +238,9 @@ export class PiSession implements RuntimeSession {
 
       if (this.restore) {
         // Never run on a leftover override: fails this turn loudly until restoration works.
-        await this.session.setModel(this.restore.model);
+        const fresh = this.models.getModel(this.restore.model.provider, this.restore.model.id);
+        if (!fresh) throw Error(`unknown model: ${this.restore.model.provider}/${this.restore.model.id}`);
+        await this.session.setModel(fresh);
         this.session.setThinkingLevel(this.restore.thinking);
         this.restore = undefined;
       }
@@ -438,7 +442,12 @@ export class PiSession implements RuntimeSession {
 export class PiRuntime implements AgentRuntime {
   readonly name = "pi";
   private modelsRuntime?: ModelRuntime;
+  private modelsLoading?: Promise<ModelRuntime>;
   private resourceRevision = 0;
+  private modelRevision = 0;
+  private modelReloadFailed = false;
+  private readonly activeSessions = new Set<PiSession>();
+  private modelReload?: Promise<void>;
 
   constructor(private readonly opts: PiRuntimeOptions) {}
 
@@ -448,14 +457,43 @@ export class PiRuntime implements AgentRuntime {
   }
 
   private async modelRuntime(): Promise<ModelRuntime> {
-    this.modelsRuntime ??= await ModelRuntime.create();
+    await this.modelReload;
+    if (this.modelReloadFailed) throw Error("Model catalog reload failed; correct the configuration and use /reload-models");
+    return this.loadModelRuntime();
+  }
+
+  private async loadModelRuntime(): Promise<ModelRuntime> {
+    if (!this.modelsRuntime) {
+      this.modelsLoading ??= ModelRuntime.create();
+      try { this.modelsRuntime = await this.modelsLoading; }
+      finally { this.modelsLoading = undefined; }
+    }
     return this.modelsRuntime;
   }
 
   async reload(): Promise<void> {
-    this.modelsRuntime = undefined;
-    // Existing sessions consume this at their next prompt, never mid-turn.
+    // Resource reload must not refresh provider/model configuration as a side effect.
     this.resourceRevision++;
+  }
+
+  async reloadModels(): Promise<void> {
+    if (this.modelReload) return this.modelReload;
+    if ([...this.activeSessions].some(session => session.busy || session.prompting)) throw Error("Model catalog is busy; retry /reload-models after active prompts finish");
+    const work = async () => {
+      try {
+        const models = await this.loadModelRuntime();
+        // Keep the shared SDK object: existing sessions also hold this instance.
+        const result = await models.refresh({ allowNetwork: false });
+        if (result.aborted || result.errors.size || models.getError()) throw Error("Invalid model catalog");
+        this.modelReloadFailed = false;
+        this.modelRevision++;
+      } catch {
+        this.modelReloadFailed = true;
+        throw Error("Model catalog reload failed; correct the configuration and use /reload-models");
+      }
+    };
+    this.modelReload = work();
+    try { await this.modelReload; } finally { this.modelReload = undefined; }
   }
 
   async login(ui: LoginUI): Promise<void> {
@@ -531,6 +569,7 @@ export class PiRuntime implements AgentRuntime {
     if (options.assessmentPurpose && (!options.ephemeral || !["code-review", "supervisor", "dispatch-complexity", "dispatch-plan"].includes(options.assessmentPurpose))) throw Error("Invalid assessment purpose");
     const { cwd, sessionsDir } = this.opts;
     const models = await this.modelRuntime();
+    const openedModelRevision = this.modelRevision;
     const dir = path.join(sessionsDir, safeKey(sessionKey));
     if (!options.ephemeral) await mkdir(dir, { recursive: true });
     let provider = options.ephemeral ? undefined : this.opts.sessionProvider?.();
@@ -740,11 +779,12 @@ export class PiRuntime implements AgentRuntime {
     // has changed this session's active model/thinking.
     const fallbackModel = session.model && `${session.model.provider}/${session.model.id}`;
     const fallbackThinking = session.thinkingLevel;
+    let appliedModelRevision = openedModelRevision;
     const applySelection = async () => {
       const defaults = this.opts.modelDefaults?.();
       const model = selection.model ?? defaults?.model ?? this.opts.model ?? fallbackModel;
       const thinking = selection.thinking ?? defaults?.thinking ?? this.opts.thinking ?? fallbackThinking;
-      if (model && `${session.model?.provider}/${session.model?.id}` !== model) {
+      if (model && (appliedModelRevision !== this.modelRevision || `${session.model?.provider}/${session.model?.id}` !== model)) {
         const ref = parseModelRef(model);
         const resolved = models.getModel(ref.provider, ref.id);
         if (!resolved) throw new Error(`unknown model: ${model}`);
@@ -780,6 +820,8 @@ export class PiRuntime implements AgentRuntime {
     let appliedToolFingerprint = boundToolFingerprint;
     let appliedMcpFingerprint = "";
     const wrapped = new PiSession(session, models, slot, checkpoint, record, this.opts.compaction?.(), async () => {
+      await this.modelReload;
+      if (this.modelReloadFailed) throw Error("Model catalog reload failed; correct the configuration and use /reload-models");
       await this.opts.beforeRequest?.();
       await refreshPersona();
       updatePersonaPrompt(session, promptAddendum());
@@ -800,7 +842,11 @@ export class PiRuntime implements AgentRuntime {
         appliedToolFingerprint = boundToolFingerprint;
         if (toolCatalogFingerprint() !== appliedToolFingerprint) throw Error("Tool catalog changed during session reload; retry prompt");
       }
-      if (!options.ephemeral) await applySelection();
+      if (this.modelReloadFailed) throw Error("Model catalog reload failed; correct the configuration and use /reload-models");
+      if (!options.ephemeral) {
+        await applySelection();
+        appliedModelRevision = this.modelRevision;
+      }
       if (!options.ephemeral && this.opts.skillContext) skillContext = await this.opts.skillContext();
       // Reload reads project/global defaults again. Reassert the selected owner before
       // a working or advisory prompt can enter the SDK's intra-tool loop.
@@ -821,10 +867,11 @@ export class PiRuntime implements AgentRuntime {
       await wrapped.dispose().catch(() => {});
       throw err;
     }
-    if (lease) {
-      const dispose = wrapped.dispose.bind(wrapped);
-      wrapped.dispose = async () => { try { await dispose(); } finally { lease.release(); } };
-    }
+    this.activeSessions.add(wrapped);
+    const dispose = wrapped.dispose.bind(wrapped);
+    wrapped.dispose = async () => {
+      try { await dispose(); } finally { this.activeSessions.delete(wrapped); lease?.release(); }
+    };
     return wrapped;
     } catch (error) {
       try { unownedSession?.dispose(); } catch { /* preserve the opening failure */ }

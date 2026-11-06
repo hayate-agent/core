@@ -1,5 +1,19 @@
 # Configuration
 
+## Reloading model configuration
+
+Use **`/reload-models`** after editing the provider/model catalog (`models.json`).
+This administrator command refreshes local configuration without a model request,
+preserves selected model IDs and reasoning settings, and rebinds existing idle
+sessions to fresh model metadata at their next turn. This includes API/protocol
+changes for the same provider/model ID. Active prompts must finish first. Invalid
+configuration fails closed until corrected and reloaded; it never silently falls
+back to another model. Queued topic-label inputs are retried without resending.
+
+**`/reload-skills`** and **`/reload-mcp`** reload skills/session resources only;
+they do not reload the model catalog or restart the agent.
+
+
 Each instance supplies its own configuration; identity and providers are not
 hardcoded in the application.
 

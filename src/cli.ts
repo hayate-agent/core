@@ -486,7 +486,9 @@ async function main(argv: string[]): Promise<void> {
   if (interactive) {
     localSessions = await LocalSessions.open(config.home, config.cwd);
     sessionOwners.add(localSessions);
-    await localSessions.create();
+    const restartSession = process.send && process.connected ? process.env.HAYATE_RESTART_SESSION : undefined;
+    if (restartSession) await localSessions.resume(restartSession);
+    else await localSessions.create();
     tui = new HarnessTuiChannel({
       sessions: localSessions,
       workState: () => {
@@ -779,9 +781,18 @@ async function main(argv: string[]): Promise<void> {
     openAdmin: false, // Remote gateways may be enabled later; console remains explicitly privileged.
     approvers,
     agent: config.agent,
-    // Exit with 75 (EX_TEMPFAIL); the supervisor (systemd/Kubernetes) restarts the process.
+    // Exit with 75 after drain. The native foreground launcher or service supervisor restarts.
     restart: async () => {
       // Shut down outside the command handler; the drain delivers /restart's acknowledgement first.
+      if (localSessions?.current && process.send && process.connected) {
+        const session = localSessions.current.id;
+        await new Promise<void>((resolve, reject) => {
+          process.send!({ type: "hayate-restart", session }, error => {
+            if (error) reject(Error("Restart session could not be handed to the foreground launcher; agent was not stopped"));
+            else resolve();
+          });
+        });
+      }
       setImmediate(() => void shutdown(75));
     },
   });

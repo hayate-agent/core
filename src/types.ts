@@ -206,8 +206,10 @@ export interface AgentRuntime {
   /** Read retained history without opening, binding or activating a session. */
   sessionHistory?(key: string, id: string): Promise<import("./session-archive.js").ArchiveEntry[]>;
   login?(ui: LoginUI): Promise<void>;
-  /** Re-read persona/skills/config for sessions opened afterwards. */
+  /** Reload session resources (skills/extensions/MCP), not the model catalog. */
   reload(): Promise<void>;
+  /** Explicit local model-catalog reload; preserve selections, refuse active prompts. */
+  reloadModels?(): Promise<void>;
 }
 
 /**
