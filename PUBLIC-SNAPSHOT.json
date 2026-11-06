@@ -1,5 +1,5 @@
 {
-  "contentDigest": "a20af0bdffa25cd61f740188da3c7386c355403690fe59189f1dd6698b8685da",
+  "contentDigest": "b60bbb2a3a5d2d81dfa1125eab50b2a876d0c5abccadf81bcf5150d66dc9dc96",
   "files": [
     {
       "mode": "100644",
@@ -145,6 +145,11 @@
       "mode": "100644",
       "path": "docs/improvement.md",
       "sha256": "d515542b1f48883e14666e91552d626d3b0a2db56dfff8659a97189eacfcc13e"
+    },
+    {
+      "mode": "100644",
+      "path": "docs/inbound-attachments.md",
+      "sha256": "379d5dc477a42e1de415e88a5774a2aef2358affa53c53e02a203b205b4e8bc7"
     },
     {
       "mode": "100644",
@@ -389,7 +394,7 @@
     {
       "mode": "100644",
       "path": "src/activity.ts",
-      "sha256": "3c4e0149ca9da9a0b11aa34649eaf4e4cf158e7711e0e5a358aaf50edcd88079"
+      "sha256": "9b07cd240151ccdcae08b0dead9577d003f8532c32189b11cd234c3fd7ea910c"
     },
     {
       "mode": "100644",
@@ -425,6 +430,11 @@
       "mode": "100644",
       "path": "src/assessment-http.ts",
       "sha256": "acaa2f77a702447131a4aaa93d06260d9cf2386fb0f37d6dd58849edf83f725a"
+    },
+    {
+      "mode": "100644",
+      "path": "src/attachments.ts",
+      "sha256": "fa77ae7fc1a053ca0e066fea129ce12b5f09833ced6de533c1a07342fda670ad"
     },
     {
       "mode": "100644",
@@ -464,7 +474,7 @@
     {
       "mode": "100644",
       "path": "src/channels/tui.ts",
-      "sha256": "ec2235b3e7f24e2457248554d278a64e0b32afd590d666f8546588d871755ede"
+      "sha256": "b5d77dcff2c93d00b28914ce7648d6ba314036108683e9edd3617a9cce4aaddd"
     },
     {
       "mode": "100644",
@@ -479,7 +489,7 @@
     {
       "mode": "100644",
       "path": "src/cli.ts",
-      "sha256": "d9b952e3407815c38dfaf341acf16c945ba7cb4066ee809ec695f68737a94287"
+      "sha256": "1714ca7f83f6ed45e086fbddc7a73462ea578c6c9ce47f2a6d631b8afb128be6"
     },
     {
       "mode": "100644",
@@ -609,7 +619,7 @@
     {
       "mode": "100644",
       "path": "src/gateway-provider.ts",
-      "sha256": "63fa2611ab9616f8d5907e42b960f7445c9511dca58cc8dca19e715fb84ef421"
+      "sha256": "269571183db447d02edc07171f140d53f4becdc8464a940093816b31a742ff71"
     },
     {
       "mode": "100644",
@@ -619,7 +629,7 @@
     {
       "mode": "100644",
       "path": "src/harness.ts",
-      "sha256": "38f1f93ad0a9c3d8d12514b1246fadef457cd483d8b93fc474e380a7d27e137e"
+      "sha256": "9ee65df5dde91c501cd11893db64f2a465ef39c45dd7f4d40d48f88d64988ab5"
     },
     {
       "mode": "100644",
@@ -819,7 +829,7 @@
     {
       "mode": "100644",
       "path": "src/runtime/pi.ts",
-      "sha256": "a8279a6abd3b44a64fbbc96ccc40ff0f6a50920cfef735e520fa53cbdd04427e"
+      "sha256": "bd913197058d59d2335894c44927016faf58d9de7556ff2a6b5ef25502e82d76"
     },
     {
       "mode": "100644",
@@ -919,7 +929,7 @@
     {
       "mode": "100644",
       "path": "src/types.ts",
-      "sha256": "c5a9b47473daa805f85f8a9868872505a2ecca57056cd855fdcdaf61495e535a"
+      "sha256": "b6eff355d10bcbf56fd853ce9c1c1ef312cf969c4eaae06303d711222f357f93"
     },
     {
       "mode": "100644",
@@ -1015,6 +1025,11 @@
       "mode": "100644",
       "path": "test/assessment-exhaustion.test.ts",
       "sha256": "6117295da4676c33b4ce7e20c6c111b2fbd592941f672e71cb543cb7efc098c0"
+    },
+    {
+      "mode": "100644",
+      "path": "test/attachments.test.ts",
+      "sha256": "1cf9db0dd54d64b7b40ea35be4b5938527c47835cbfb490c54eb4072ab7ec992"
     },
     {
       "mode": "100644",
@@ -1894,7 +1909,7 @@
     {
       "mode": "100644",
       "path": "test/pi-session.test.ts",
-      "sha256": "f714c9e0c93073c465946cc0f34b06b6a740242e2100b55b84b07237e6e0de58"
+      "sha256": "c7f89dde95376ca9c500374a2be64caa92eb93acf7ba6d00acbe776348b2be48"
     },
     {
       "mode": "100644",
@@ -2268,6 +2283,11 @@
     },
     {
       "mode": "100644",
+      "path": "test/slack-attachment-integration.test.ts",
+      "sha256": "04f397e46e64935229b974b15daaf8d859a8ecc3f998867fba72ebbb074197e8"
+    },
+    {
+      "mode": "100644",
       "path": "test/startup-completion.test.ts",
       "sha256": "33aa1dd4d1eff114c8dbc49fd03864878b916b17a7ea212950d334da94683960"
     },
@@ -2370,6 +2390,11 @@
       "mode": "100644",
       "path": "test/tui-context.test.ts",
       "sha256": "dada7d4effef6377e5d379a29cea3f7855cda1834fd090ae2b4fdfaacd6b3647"
+    },
+    {
+      "mode": "100644",
+      "path": "test/tui-main-activity.test.ts",
+      "sha256": "23a397f73de0cc25fbf4275ac20e9a93bfcd2d72a12ea5d001f9c1823779a63a"
     },
     {
       "mode": "100644",
@@ -2730,5 +2755,5 @@
   "historyPolicy": "fresh-root; no source commits, tags, refs or deleted blobs",
   "pluginSHA": "7b410193c7078019a22368897e6730e25b80f0fa",
   "schema": 1,
-  "sourceSHA": "726a2fa28d56c4cda26484b2eb9d37355e85d7d5"
+  "sourceSHA": "cbec53bfa46bda14b17f162ad231c5042e4daba4"
 }

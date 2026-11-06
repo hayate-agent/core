@@ -8,6 +8,8 @@ export interface GatewayInstance {
   approvers?: string[];
 }
 export interface GatewayFactoryContext {
+  /** Versioned durable, session-bound attachment reference contract. */
+  inboundAttachments?: 1;
   home: string;
   agent: string;
   approvers: string[];
