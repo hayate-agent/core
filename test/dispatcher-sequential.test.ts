@@ -757,7 +757,6 @@ test("restart after durable worker result revalidates before running any worker"
 
 test("checkpoint budget is checked before recording a new unsafe effect intent", async t => {
   const home = await mkdtemp(path.join(os.tmpdir(), "seq-fixed-budget-"));
-  t.after(() => rm(home, { recursive: true, force: true }));
   const file = path.join(home, "executions.json");
   const store = new ExecutionStore(file); await store.load();
   const task = await store.submit("parent", "req", "six steps", "sequential");
@@ -766,6 +765,9 @@ test("checkpoint budget is checked before recording a new unsafe effect intent",
     plan: Array.from({ length: 6 }, () => ({ task: "x".repeat(3900), role: "simple", reason: "r", evidence: "e" })),
     outcomes: Array.from({ length: 5 }, () => ({ role: "simple", requested: {}, result: "x".repeat(7300) })) }));
   const env = await setup(t, {}, { home, file });
+  // after hooks run in registration order: stop the fixture's dispatcher before
+  // removing a home whose durable event delivery may still be committing.
+  t.after(() => rm(home, { recursive: true, force: true }));
   await env.dispatcher.start();
   for (let i = 0; i < 300 && env.store.list()[0]!.status !== "paused"; i++) await new Promise(r => setTimeout(r, 10));
   assert.equal(env.store.list()[0]!.status, "paused");
