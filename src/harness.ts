@@ -166,6 +166,8 @@ export interface HarnessOptions {
   executionStore?: import("./execution.js").ExecutionStore;
   tickMs: number;
   busyMode: BusyMode;
+  /** Host selection fence: retained conversations stay durable but inactive until explicitly selected. */
+  sessionEnabled?: (key: string) => boolean;
   gateways?: GatewayConfig;
   /** Max automatic goal continuation turns before the goal pauses itself. */
   goalMaxTurns?: number;
@@ -398,8 +400,8 @@ export class Harness {
    * Returns unfinished user/cron inputs (aborted or still queued) so the caller can
    * persist and replay them: at-least-once processing across restarts.
    */
-  async stop(drainMs = 0): Promise<Inbound[]> {
-    const deadline = Date.now() + Math.max(0, drainMs);
+  async stop(drainMs = 0, abortGraceMs = 0): Promise<Inbound[]> {
+    const deadline = Date.now() + Math.max(0, drainMs) + Math.max(0, abortGraceMs);
     // New channel input is refused (channels do not acknowledge it, so it is redelivered);
     // channels stay connected during the drain so replies still go out.
     this.stopping = true;
@@ -482,7 +484,7 @@ export class Harness {
 
   private isDrained(): boolean {
     if (this.inbox.accepting.size) return false;
-    for (const s of this.sessions.values()) if (s.running || s.queue.length || s.outbox.length || s.unsaved) return false;
+    for (const s of this.sessions.values()) if (s.running || ((this.opts.sessionEnabled?.(s.key) ?? true) && (s.queue.length || s.outbox.length || s.unsaved))) return false;
     return true;
   }
 
@@ -1584,9 +1586,32 @@ export class Harness {
    * with a failed reply instead of crash-looping. Queued inputs that never ran are not charged.
    * The caller persists the counters before releasing the inputs.
    */
+  private readonly deferredReplay = new WeakMap<Inbound, number>();
+  async activateSession(key: string): Promise<void> {
+    if (this.opts.sessionEnabled?.(key) === false) return;
+    for (const s of this.sessions.values()) {
+      if (this.opts.sessionEnabled?.(s.key) === false) continue;
+      const deferred = s.queue.filter(input => this.deferredReplay.has(input));
+      s.queue = s.queue.filter(input => !this.deferredReplay.has(input));
+      for (const input of deferred) {
+        const limit = this.deferredReplay.get(input)!;
+        this.deferredReplay.delete(input); this.inbox.restored.delete(input);
+        this.restorePending([input], limit);
+      }
+    }
+    await this.onStateChange?.();
+    await this.recoverTasks();
+    this.releaseRestored();
+  }
   restorePending(inputs: Inbound[], maxReplays = Harness.MAX_REPLAYS): void {
     for (const input of inputs) {
       if (this.opts.externallyRecoveredSession?.(input.sessionKey)) continue;
+      if (this.opts.sessionEnabled?.(input.sessionKey) === false) {
+        this.state(input.sessionKey).queue.push(input);
+        this.deferredReplay.set(input, maxReplays);
+        this.inbox.restored.add(input); this.restoredTaskInputs.add(input);
+        continue;
+      }
       if (input.started) input.replays = (input.replays ?? 0) + 1;
       input.started = undefined;
       const s = this.state(input.sessionKey);
@@ -1610,6 +1635,7 @@ export class Harness {
   async recoverTasks(): Promise<void> {
     if (this.gatewayChanging) return;
     for (const s of this.sessions.values()) {
+      if (this.opts.sessionEnabled?.(s.key) === false) continue;
       if (this.opts.externallyRecoveredSession?.(s.key)) continue;
       for (const task of this.tasks(s)) {
       await this.reconcileBlockedDependency(s, task);
@@ -1954,10 +1980,10 @@ export class Harness {
   }
 
   private async pump(s: SessionState): Promise<void> {
-    if (s.running || this.gatewayChanging || this.stoppingHostParents.has(s.key)) return;
+    if (s.running || this.gatewayChanging || this.stoppingHostParents.has(s.key) || this.opts.sessionEnabled?.(s.key) === false) return;
     s.running = true;
     try {
-      while (!this.halting && !this.stoppingHostParents.has(s.key)) {
+      while (!this.halting && !this.stoppingHostParents.has(s.key) && this.opts.sessionEnabled?.(s.key) !== false) {
         // A finished turn's reply goes out only once its completion is durable.
         if (s.unsaved) {
           try {
@@ -2768,7 +2794,7 @@ export class Harness {
     }
     if (this.paused || this.stopping || this.gatewayChanging || this.activeDeliveries || this.outbox.held) return;
     for (const s of this.sessions.values()) {
-      if (s.running || s.queue.length || s.outbox.length || s.unsaved || this.stoppingHostParents.has(s.key)) continue;
+      if (this.opts.sessionEnabled?.(s.key) === false || s.running || s.queue.length || s.outbox.length || s.unsaved || this.stoppingHostParents.has(s.key)) continue;
       for (const task of this.tasks(s)) {
       // Reconcile pre-upgrade exhausted checkpoints without a model nudge.
       if ((task.state === "blocked" || task.state === "active") && repetitions(task) >= 20 && !task.budgetAttentionId) {

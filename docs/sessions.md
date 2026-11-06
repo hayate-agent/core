@@ -83,6 +83,24 @@ Do not perform a mixed-version takeover or use lock-file deletion as recovery.
 Legacy lock backend files can be quarantined offline; they contain no conversation
 history. Do not modify Matrix crypto stores, state, pending inputs or JSONL sessions.
 
+## Fresh terminal sessions and interruption
+
+A fresh interactive start creates a new conversation. Pending inputs, undelivered
+replies, recurring work and delegated workers of older local conversations remain
+stored under their original owners; startup does not execute or deliver them in
+the new conversation. Opening an unrelated conversation does not consume an old
+input's crash/replay allowance. Use `/resume <id>` to activate an old conversation
+explicitly. `/restart` retains the selected conversation and may resume its pending
+work, subject to the normal ownership, stop, expiry and recovery rules.
+
+Ctrl+C exits through the immediate interruption path, including when a dialog is
+open. It cancels the current turn but preserves other queued human inputs and
+other conversations. `/quit` is graceful shutdown; `/restart` drains then replaces
+the process. Terminal hangup and loss of the foreground launcher also request
+shutdown, preventing a detached runtime from retaining the Home lock. A terminal
+multiplexer that merely detaches keeps its process alive by design; that is not a
+stale lock. Never delete a live owner's lock to start a competing process.
+
 ## Existing conversations
 
 With an explicitly selected external provider, first opening imports the latest

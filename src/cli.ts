@@ -212,6 +212,14 @@ async function main(argv: string[]): Promise<void> {
   let hostAdmissionReady = false;
   let dispatchRuntime: DispatcherRuntime | undefined;
   let dispatcher: Dispatcher | undefined;
+  let localSessions: LocalSessions | undefined;
+  const sessionEnabled = (key: string): boolean => {
+    if (!interactive) return true;
+    const parent = key.startsWith("dispatch:") ? executions.list().find(task => key.startsWith(`dispatch:${task.id}:`))?.parent
+      : key.startsWith("subagent:") ? subagents.snapshot().find(task => task.sessionKey === key)?.parent : key;
+    if (!parent) return false;
+    return (!parent.startsWith("local-") && parent !== "console:local") || parent === localSessions?.current?.key;
+  };
   // One persistence foundation in both modes, also covering managed child turns.
   const executions = new ExecutionStore(path.join(config.home, "executions.json"), {
     protectedExecutions: () => new Set(harness?.pendingInputs().flatMap(input => input.hostEvent ? [input.hostEvent.executionId] : []) ?? []),
@@ -376,6 +384,7 @@ async function main(argv: string[]): Promise<void> {
       return blockers;
     },
     runtime,
+    sessionEnabled,
     progressEvidence: () => workingTreeEvidence(config.cwd),
     executionStore: executions,
     contextMaintenance: maintenance,
@@ -484,7 +493,6 @@ async function main(argv: string[]): Promise<void> {
   }
   // Console: interactive use, or when nothing else would receive input. A daemon with Matrix or
   // the API (e.g. a container without a TTY) does not read stdin unless asked to.
-  let localSessions: LocalSessions | undefined;
   if (interactive) {
     localSessions = await LocalSessions.open(config.home, config.cwd);
     sessionOwners.add(localSessions);
@@ -509,7 +517,12 @@ async function main(argv: string[]): Promise<void> {
       models: () => runtime.models(),
       login: (ui) => runtime.login(ui),
       quit: () => void shutdown(0),
-      prepareSession: async () => { await harness.sessionFor(localSessions?.current?.key ?? "console:local"); },
+      interrupt: () => void shutdown(130, true),
+      prepareSession: async () => {
+        const key = localSessions?.current?.key ?? "console:local";
+        await harness.sessionFor(key);
+        if (hostAdmissionReady) { await dispatcher?.activateParent(key); await subagents.reconcile(sessionEnabled); await harness.activateSession(key); }
+      },
       model: () => harness.sessions.get(localSessions?.current?.key ?? "console:local")?.session?.status().model ?? "unavailable",
       reasoning: () => harness.sessions.get(localSessions?.current?.key ?? "console:local")?.session?.status().thinking ?? "unavailable",
       status: () => {
@@ -643,7 +656,7 @@ async function main(argv: string[]): Promise<void> {
         replyTo: event.parent.startsWith("cron-followup:") ? undefined : target });
     }, error => log(`[dispatcher] ${String(error)}`), key => harness.dependencyCheckpoint(key), undefined, () => harness.updateFenced || harness.stopping,
     // Built-ins stay registered so tasks queued before a strategy switch are not stranded.
-    [dispatchRuntime.strategy, dispatchRuntime.sequential]);
+    [dispatchRuntime.strategy, dispatchRuntime.sequential], sessionEnabled);
   }
   plugins.memoryOrchestration.select(config.memory.enabled ? config.memory.orchestration ?? "default" : "none");
   const memoryProvider = new MemoryProviderLifecycle(async () => {
@@ -692,34 +705,54 @@ async function main(argv: string[]): Promise<void> {
   for (const channel of plugins.channels.values()) harness.addChannel(channel);
 
   let stopping = false;
-  const shutdown = async (code = 0) => {
+  const shutdown = async (code = 0, interrupt = false) => {
     if (stopping) return;
     stopping = true;
     harness.stopping = true; // fence synchronously, before any ordered cleanup awaits
     // Like Hermes restart_drain_timeout: stop input, finish in-flight work for up to
     // drainSeconds, abort the rest, then persist state (user's /pause flag untouched).
     scheduler.stop();
-    await reviewWorkers.stop();
-    await reviewSubagents.stop();
     clearInterval(policyTimer);
     clearInterval(cronReportTimer);
-    await plugins.reportProcessing.stop();
-    improvement?.stop();
-    void dispatcher?.stop().catch(() => log("[dispatcher] shutdown incomplete"));
-    const unfinished = await harness.stop(config.loop.drainSeconds * 1000);
-    harness.onStateChange = undefined;
-    // A graceful stop is not the turn's fault: only crashes (OOM, kill) count towards giving up.
-    for (const input of unfinished) input.started = undefined;
-    await persist(unfinished).catch((err) => console.error(`[state] save failed: ${err}`));
-    if (unfinished.length) console.error(`[harness] ${unfinished.length} unfinished input(s) saved for replay`);
     clearInterval(gatewayTimer);
     clearInterval(memoryTimer);
-    await memoryProvider.close().catch(() => console.error("[memory] cleanup failed"));
-    await extensionManager.stop().catch(() => console.error("[extensions] cleanup failed"));
-    await policyManager.stop().catch(() => console.error("[policies] cleanup failed"));
-    await sessionProviderOwner?.close().catch(() => console.error("[sessions] provider cleanup failed"));
-    await plugins.stop().catch(() => console.error("[plugins] cleanup failed"));
-    await sessionOwnership.release();
+    improvement?.stop();
+    // Abort all owners before awaiting any of them: an active review may itself
+    // be waiting on a Harness worker. Sequential teardown deadlocked that cycle.
+    const owners = Promise.allSettled([reviewWorkers.stop(), reviewSubagents.stop(), plugins.reportProcessing.stop(), dispatcher?.stop()]);
+    const selected = interrupt && localSessions?.current ? harness.sessions.get(localSessions.current.key) : undefined;
+    const cancelledInput = selected?.current;
+    if (selected && cancelledInput) {
+      selected.cancelling = cancelledInput;
+      cancelledInput.continuation = undefined;
+      if (cancelledInput.executionTurnId) await executions.stopTurn(cancelledInput.executionTurnId, selected.key);
+      const task = selected.tasks?.find(task => task.id === cancelledInput.taskId) ??
+        (selected.task?.id === cancelledInput.taskId ? selected.task : undefined);
+      if (task) { task.state = "stopped"; task.recoveryAdmission = undefined; }
+    }
+    const retained = await harness.stop(interrupt ? 0 : config.loop.drainSeconds * 1000, 2000);
+    // Only the explicitly interrupted current turn is cancelled; queued human
+    // inputs and other conversations remain durable, parked under their owners.
+    const unfinished = cancelledInput ? retained.filter(input =>
+      !(cancelledInput.id && input.id === cancelledInput.id) &&
+      !(cancelledInput.executionTurnId && input.executionTurnId === cancelledInput.executionTurnId) &&
+      !(cancelledInput.completionAnchor?.id && input.completionAnchor?.id === cancelledInput.completionAnchor.id)) : retained;
+    harness.onStateChange = undefined;
+    // A graceful stop is not the turn's fault: only crashes (OOM, kill) count towards giving up.
+    for (const input of unfinished) if (sessionEnabled(input.sessionKey)) input.started = undefined;
+    let persisted = false;
+    for (let attempt = 0; attempt < 2 && !persisted; attempt++) {
+      try { await persist(unfinished); persisted = true; }
+      catch { console.error("[state] shutdown save failed; retaining ownership for a bounded retry"); }
+    }
+    if (!persisted) { console.error("[state] shutdown snapshot was NOT saved; previous durable inbox retained"); code = 1; }
+    if (unfinished.length) console.error(`[harness] ${unfinished.length} pending input(s) retained for their owning conversations`);
+    const cleanup = Promise.allSettled([owners, memoryProvider.close(), extensionManager.stop(), policyManager.stop(), sessionProviderOwner?.close(), plugins.stop()]);
+    let cleanupTimer: NodeJS.Timeout | undefined;
+    await Promise.race([cleanup, new Promise<void>(resolve => { cleanupTimer = setTimeout(resolve, 3000); })]);
+    clearTimeout(cleanupTimer);
+    // The kernel releases the Home lock when this owner exits, never while its
+    // uncooperative callbacks could still write beside a replacement process.
     process.exit(code);
   };
 
@@ -802,8 +835,13 @@ async function main(argv: string[]): Promise<void> {
   // Kill the largest tool child before the kernel OOM-kills the whole container.
   const stopGuard = startMemoryGuard({ percent: config.memoryGuard.percent, log });
   process.on("exit", stopGuard);
-  process.on("SIGINT", () => void shutdown(0));
-  process.on("SIGTERM", () => void shutdown(0));
+  process.on("SIGINT", () => void shutdown(130, interactive));
+  process.on("SIGTERM", () => void shutdown(143));
+  process.on("SIGHUP", () => void shutdown(129, interactive));
+  if (interactive) {
+    process.stdin.once("end", () => void shutdown(129, true));
+    process.once("disconnect", () => void shutdown(129, true));
+  }
   try {
     await harness.start();
     await improvement!.start();
@@ -835,11 +873,13 @@ async function main(argv: string[]): Promise<void> {
   for (const session of harness.snapshotSessions()) {
     if (session.stopPending) await harness.stopConversation(session.key);
   }
-  await subagents.reconcile();
+  await subagents.reconcile(sessionEnabled);
   await dispatcher?.start();
   await harness.recoverTasks();
   if (saved?.pending?.length || saved?.outbox?.length || harness.pendingInputs().length) {
-    console.error(`[harness] replaying ${saved?.pending?.length ?? 0} unfinished input(s), ${saved?.outbox?.length ?? 0} undelivered reply(ies)`);
+    const pending = (saved?.pending ?? []).filter(input => sessionEnabled(input.sessionKey)).length;
+    const replies = (saved?.outbox ?? []).filter(entry => sessionEnabled(entry.sessionKey)).length;
+    if (pending || replies) console.error(`[harness] replaying ${pending} unfinished input(s), ${replies} undelivered reply(ies) for selected/remote conversations`);
     // Replay counters (and abandoned inputs' failure replies) are durable before anything runs.
     await persist();
     harness.releaseRestored();
