@@ -63,8 +63,12 @@ Core uses process-bound OS file locks, not a database, PID-file lease or heartbe
 It requires Linux/macOS `flock(2)` semantics and Python 3 with standard-library
 `fcntl`. A short isolated helper locks an inherited descriptor and exits; the
 Node process retains the same open file description and therefore the lock.
-Normal close, process exit and crashes release ownership in the kernel. No helper
-needs to stay alive. A missing helper or unsupported locking fails closed, with
+Normal close and process exit release ownership in the kernel. Acquisition
+returns only after the helper exits. If the Node process crashes during acquisition,
+a remaining helper can briefly retain its inherited descriptor; the helper has its
+own ten-second alarm. A process suspended by the OS can still retain a lock until
+resumed or terminated: inspect it rather than deleting a lock file. No helper
+needs to stay alive during normal operation. A missing helper or unsupported locking fails closed, with
 no fallback. The permanent lock inode must not be unlinked or replaced while in use.
 
 Core does not import or initialize SQLite. The external Matrix encryption SDK's

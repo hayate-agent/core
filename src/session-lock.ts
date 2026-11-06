@@ -5,7 +5,9 @@ import { link, open, readFile, unlink, type FileHandle } from "node:fs/promises"
 // Permanent inode: never unlink or replace a published lock while a home is in use.
 const MARKER = "hayate-session-lock:flock:v2\n";
 const BUSY = "Session or Harness home is already open in another terminal. Use a separate HAYATE_AGENT_HOME for an independent process.";
-const LOCK_HELPER = `import errno, fcntl, os, sys
+const LOCK_HELPER = `import errno, fcntl, signal, sys
+# Also bound an orphaned acquisition helper when the Node owner has already died.
+signal.alarm(10)
 try:
     fcntl.flock(3, fcntl.LOCK_EX | fcntl.LOCK_NB)
 except OSError as error:
