@@ -116,6 +116,38 @@ test("validator model selection: explicit validator, then review, then default; 
   assert.match(await validatorRole(env.runtime, { config, review, defaults }) as string, /validator.*unavailable; no silent default model/);
 });
 
+test("planner-derived invariants are corrected in the same worker without repeating publication", async t => {
+  let effects = 0;
+  const env = await setup(t, {
+    plan: steps(["publish reviewed head and prove merge SHA equals reviewed head", "simple"]),
+    worker: prompt => {
+      assert.match(prompt, /planning aids, not additional authority/);
+      if (prompt.startsWith("CONTINUE STEP")) {
+        return "PR head H is merge M's second parent; required source review and tests passed. No repeated push or merge.\nSTEP-STATUS: complete";
+      }
+      effects++;
+      return "PR already merged. Blocked only because merge M is not reviewed head H.\nSTEP-STATUS: blocked: SHA equality";
+    },
+    verdict: prompt => {
+      assert.match(prompt, /correct planner-invented preconditions/);
+      assert.match(prompt, /never repeat it to satisfy a false precondition/);
+      assert.match(prompt, /Never weaken an explicit operator constraint/);
+      return prompt.includes('"reply":"PR already merged.')
+        ? JSON.stringify({ state: "continue", next: "Report the existing PR head, merge parents and checked tree read-only; do not publish again." })
+        : '{"state":"completed"}';
+    },
+  });
+  const mandate = "Publish the reviewed and tested PR with a normal merge; preserve review budget; do not deploy.";
+  assert.match(planPrompt(mandate), /planning aids, not additional authority/);
+  const task = await env.run(mandate);
+  assert.equal(task.status, "completed");
+  assert.equal(effects, 1);
+  assert.equal(env.calls.worker.length, 2);
+  assert.equal(env.calls.review.length, 2);
+  assert.equal(state(task.checkpoint).outcomes.length, 1);
+  assert.match(env.calls.review[0]!, /Publish the reviewed and tested PR with a normal merge/);
+});
+
 test("configured small validator runs instead of the reviewer or default model", async t => {
   const config: ModelRoles = { enabled: true, roles: { ...roles.roles, validator: { model: "p/small-validator", thinking: "low" } } };
   const env = await setup(t, {}, { roles: config });
