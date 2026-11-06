@@ -2,8 +2,8 @@
 
 `modelRoles` is an optional object in installation settings or the existing durable
 local settings overlay. Absence/`enabled: false` preserves historical routing.
-The object has only `enabled` and optional `roles`; the five allowed roles are
-`dispatcher`, `simple`, `medium`, `high`, `reviewer`. Each pair accepts a full
+The object has only `enabled` and optional `roles`; the allowed roles are
+`dispatcher`, `simple`, `medium`, `high`, `reviewer`, `validator`. Each pair accepts a full
 `provider/model` reference and optional thinking level (`off`, `minimal`, `low`,
 `medium`, `high`, `xhigh`, `max`). This does not grant tools, authority or budget.
 
@@ -13,6 +13,7 @@ Authenticated channel administrators (or the attached local console) can use:
 /model-roles show
 /model-roles set dispatcher provider/model medium
 /model-roles set simple provider/model low
+/model-roles set validator provider/small-model low
 /model-roles enable
 /model-roles disable
 /model-roles reset simple
@@ -38,6 +39,32 @@ without prompting a provider. Missing capability/model or unsupported thinking
 falls back to the consumer's entire existing default pair. Availability is not
 proof of successful live authentication. There is no initial-429 replay.
 
+## Sequential validator model
+
+The step validator has its own optional `modelRoles.roles.validator` pair. Selection
+is **ValidatorModel → ReviewModel → DefaultModel**: the configured validator, then
+an explicit `review.model` (`/review-model`), then the `reviewer` role if supplied,
+then the installation's default `model`. An unset role falls through; an explicitly
+selected but unavailable model fails visibly, never silently switches models.
+Worker/dispatcher roles remain independently configured. A smaller capable model
+can validate routine steps; choosing it changes no authority or evidence gates.
+
+```yaml
+model: provider/default-model
+review:
+  model: provider/review-model
+modelRoles:
+  enabled: true
+  roles:
+    dispatcher: { model: provider/planner }
+    simple: { model: provider/small-worker }
+    validator: { model: provider/small-validator, thinking: low }
+```
+
+Use `/model-roles reset validator` to inherit the review model again, or reset
+`review.model` and the `reviewer` role to inherit the default model. Changes apply
+to the next assessment; active requests are not retargeted.
+
 The reviewer profile selects models only. CodeReview still uses independent
 review workers/subagents/worktree transport, its JSON verdict and durable budget;
 explicit legacy review model/thinking fields take precedence. Supervisor still
@@ -45,5 +72,5 @@ uses completion assessment, authority/admission and whole-prompt budget gates;
 its default thinking remains low, independent of CodeReview's medium default.
 Neither reviewer selection affects topic labels or context maintenance.
 
-Source delivery is not activation. No provider configuration, credentials,
-runtime settings, images or deployment are changed by installing this source.
+Model-role selection uses existing provider credentials. Restart the gateway after
+changing installation files, or use the administrator commands for live settings.

@@ -87,6 +87,7 @@ import { ReviewSubagents } from "./review-subagents.js";
 import { capabilityContext } from "./capability-context.js";
 import { roleAwareReviewer, resolveModelRole } from "./model-roles.js";
 import { runtimeReviewer } from "./runtime/reviewer.js";
+import { validatorRole } from "./dispatcher-sequential.js";
 import { boundaryAssessor } from "./builtin-plugins/boundary-assessor.js";
 import { pruneToolResults } from "./builtin-plugins/tool-result-projector.js";
 import { contextStrategyHolder, disabledContextStrategies, diagnosedBoundaryAssessor } from "./context-strategies.js";
@@ -272,7 +273,14 @@ async function main(argv: string[]): Promise<void> {
     const explicit = legacyReview();
     return { ...request, model: explicit.model ?? pair.model, thinking: explicit.thinking ?? pair.thinking ?? request.thinking };
   };
-  const supervisorReviewer = () => roleAwareReviewer(runtime, () => settings.effective().modelRoles, runtimeReviewer(runtime, "supervisor"));
+  const validatorSettings = () => ({ config: settings.effective().modelRoles,
+    defaults: { model: effectiveModels().model, thinking: "low" },
+    review: settings.effective().review?.model ? { model: settings.effective().review!.model, thinking: settings.effective().review?.thinking ?? "low" } : undefined });
+  const supervisorReviewer = () => ({ review: async (prompt: string, _model: string | undefined, _thinking: string, signal: AbortSignal) => {
+    const pair = await validatorRole(runtime, validatorSettings());
+    if (typeof pair === "string") throw Error(pair);
+    return runtimeReviewer(runtime, "supervisor").review(prompt, pair.model, pair.thinking ?? "low", signal);
+  } });
   const adaptiveSkills = config.skills.adaptive === true ? new AdaptiveSkills(config.home, config.cwd, skillCatalog) : undefined;
   const runtime = new PiRuntime({
     adaptiveSkills,
@@ -597,7 +605,9 @@ async function main(argv: string[]): Promise<void> {
     dispatchRuntime = new DispatcherRuntime(harness, executions, async () => {
       await reloadRuntimeSettings();
       return settings.effective().dispatcher?.rules;
-    }, () => ({ config: settings.effective().modelRoles, defaults: { model: effectiveModels().model, thinking: effectiveModels().thinking } }));
+    }, () => ({ config: settings.effective().modelRoles,
+      defaults: { model: effectiveModels().model, thinking: effectiveModels().thinking },
+      review: settings.effective().review?.model ? { model: settings.effective().review!.model, thinking: settings.effective().review?.thinking ?? "medium" } : undefined }));
     harness.addChannel(dispatchRuntime.channel);
     const strategy = dispatchPolicy.strategy === "direct" ? dispatchRuntime.strategy : dispatchPolicy.strategy === "sequential" ? dispatchRuntime.sequential : plugins.dispatchers.get(dispatchPolicy.strategy);
     if (!strategy) throw Error("Configured dispatcher strategy unavailable");

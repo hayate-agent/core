@@ -22,7 +22,7 @@ export class DispatcherRuntime {
   private pending = new Map<string, { resolve(value: string): void; reject(error: Error): void }>();
   /** Host-observed selection/tool count of the current worker turn, keyed by task:token. */
   private turns = new Map<string, { observed?: ModelPair; tools: number; evidence: Array<{ name: string; error: boolean; call?: string; result?: string; callId?: string }> }>();
-  constructor(private readonly harness: Harness, private readonly store: ExecutionStore, private readonly rules?: DispatchModelRule[] | (() => Promise<DispatchModelRule[] | undefined>), private readonly roleSettings?: () => { config?: ModelRoles; defaults: ModelPair }) {}
+  constructor(private readonly harness: Harness, private readonly store: ExecutionStore, private readonly rules?: DispatchModelRule[] | (() => Promise<DispatchModelRule[] | undefined>), private readonly roleSettings?: () => { config?: ModelRoles; defaults: ModelPair; review?: ModelPair }) {}
   eventText(event: ExecutionEvent): string {
     const task = this.store.list(event.parent).find(item => item.id === event.executionId);
     const question = event.type === "question" ? /^Question ([a-f0-9-]{36}): ([\s\S]*)$/.exec(event.text) : null;
