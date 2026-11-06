@@ -132,9 +132,9 @@ test("third technical error at 60s spacing is terminal: persisted, one distinct 
   await a.h.start(); a.h.releaseRestored();
   for (let i = 0; i < 20; i++) { clock.now += 60000; await a.h.tick(); await a.h.drained(); await a.h.recoverTasks(); }
   assert.equal(a.calls(), 1, "no fourth assessment");
-  const exhausted = a.ch.sent.filter(m => m.text.includes("ausgeschöpft"));
+  const exhausted = a.ch.sent.filter(m => m.text.includes("budget is exhausted"));
   assert.equal(exhausted.length, 1);
-  assert.match(exhausted[0]!.text, /Budget-Reset/);
+  assert.match(exhausted[0]!.text, /\/task-budget inspect/);
   assert.match(String(exhausted[0]!.meta?.deliveryId), /^task-recovery-exhausted:/);
   assert.equal(a.runtime.opened.length, 0);
   assert.equal(JSON.stringify(store.list(key)), before);
