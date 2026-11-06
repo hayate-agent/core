@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { mkdtemp, writeFile, readFile, rm } from "node:fs/promises";
+import { mkdtemp, writeFile, readFile, rm, mkdir, symlink } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { runForeground } from "../src/launcher.js";
+import { runForeground, runtimeEntrypoint } from "../src/launcher.js";
 import { spawn } from "node:child_process";
 import { pathToFileURL } from "node:url";
 
@@ -22,6 +22,23 @@ else{try{process.kill(rows[0].pid,0);process.exitCode=9;}catch{process.exitCode=
     assert.notEqual(rows[0].pid, rows[1].pid);
     assert.deepEqual(rows.map((r: any) => r.args), [["run", "--home", "a path"], ["run", "--home", "a path"]]);
     assert.equal(rows[1].session, "12345678-1234-1234-1234-123456789abc");
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("foreground restart follows an updated current release selector instead of pinning old imports", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "foreground-release-"));
+  try {
+    await mkdir(path.join(root, "old")); await mkdir(path.join(root, "new"));
+    await writeFile(path.join(root, "old/launcher.js"), ""); await writeFile(path.join(root, "new/launcher.js"), "");
+    await symlink("old", path.join(root, "current"));
+    await symlink(path.join(root, "current/launcher.js"), path.join(root, "installed-command"));
+    const log = path.join(root, "calls");
+    await writeFile(path.join(root, "old/cli.js"), `const fs=require('fs');fs.appendFileSync(${JSON.stringify(log)},'old\\n');fs.unlinkSync(${JSON.stringify(path.join(root, "current"))});fs.symlinkSync('new',${JSON.stringify(path.join(root, "current"))});process.exit(75);`);
+    await writeFile(path.join(root, "new/cli.js"), `require('fs').appendFileSync(${JSON.stringify(log)},'new\\n');`);
+    const entry = runtimeEntrypoint(path.join(root, "installed-command"));
+    assert.equal(entry, path.join(root, "current/cli.js"));
+    assert.equal(await runForeground(entry, [], []), 0);
+    assert.equal(await readFile(log, "utf8"), "old\nnew\n");
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
