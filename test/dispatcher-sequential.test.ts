@@ -771,6 +771,9 @@ test("checkpoint budget is checked before recording a new unsafe effect intent",
   assert.equal(env.store.list()[0]!.status, "paused");
   assert.equal(env.store.list()[0]!.intent, undefined);
   assert.equal(env.calls.worker.length, 0);
+  // Store.fail persists the paused state before Dispatcher delivers its pending
+  // status events. Wait for delivery too; observing paused alone is not a barrier.
+  for (let i = 0; i < 100 && !env.events.some(e => /keinen Platz/.test(e.text)); i++) await new Promise(r => setTimeout(r, 10));
   assert.ok(env.events.some(e => /keinen Platz/.test(e.text)));
 });
 
