@@ -278,7 +278,8 @@ export class PiSession implements RuntimeSession {
         model: this.session.model ? `${this.session.model.provider}/${this.session.model.id}` : undefined,
         thinking: this.session.thinkingLevel,
       }) }); } catch { /* Telemetry cannot fail execution. */ }
-      await this.session.prompt(text, { source: "rpc" });
+      if (options.images?.length && !this.session.model?.input?.includes("image")) throw Error("Selected model does not support inbound images");
+      await this.session.prompt(text, { source: "rpc", images: options.images });
       await this.session.waitForIdle();
     } finally {
       this.slot.instructions = undefined;

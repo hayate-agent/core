@@ -13,6 +13,7 @@ function fakeAgentSession() {
     thinkingLevel: "high",
     messages: [] as unknown[],
     prompts: [] as string[],
+    promptOptions: [] as unknown[],
     failSetModel: (_m: unknown) => false,
     gate: undefined as Promise<void> | undefined,
     async setModel(m: unknown) {
@@ -28,8 +29,9 @@ function fakeAgentSession() {
     subscribedAt: 0,
     subscribe(listener: (event: any) => void) { s.subscribedAt = s.messages.length; s.listener = listener; return () => { s.listener = undefined; }; },
     last: "",
-    async prompt(text: string) {
+    async prompt(text: string, options?: unknown) {
       s.prompts.push(text);
+      s.promptOptions.push(options);
       s.last = `ran on ${(s.model as { id: string }).id}`;
       s.messages.push({ role: "assistant", stopReason: "stop", content: [{ type: "text", text: s.last }] });
     },
@@ -52,6 +54,22 @@ function make() {
   const session = new PiSession(agent as any, models as any, {});
   return { agent, session };
 }
+
+test('PiSession passes actual image blocks into SDK prompt options', async () => {
+  const { agent, session } = make();
+  agent.model = { ...A, input: ['text', 'image'] };
+  const images = [{ type: 'image' as const, mimeType: 'image/png', data: 'iVBORw0KGgo=' }];
+  await session.prompt('describe', { images });
+  assert.deepEqual(agent.promptOptions[0], { source: 'rpc', images });
+});
+
+test('PiSession rejects image input on text-only or unknown-capability models before SDK call', async () => {
+  for (const model of [{ ...A, input: ['text'] }, A]) {
+    const { agent, session } = make(); agent.model = model;
+    await assert.rejects(session.prompt('describe', { images: [{ type: 'image', mimeType: 'image/png', data: 'AA==' }] }), /does not support/);
+    assert.equal(agent.prompts.length, 0);
+  }
+});
 
 test("archive preserves tool-call arguments and result correlation for interrupted execution", () => {
   const agent = fakeAgentSession();
