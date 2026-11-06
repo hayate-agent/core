@@ -16,6 +16,32 @@ environment-enabled; WebUI is a separately installed local ESM gateway selected
 through `gatewayPlugins.webui.module`. Both use normal Harness command/execution
 routing; the UI is not Core functionality.
 
+## Main completion validation
+
+The selected completion strategy judges the whole authorized task, including Main
+responses, not just delegated worker results. Verified milestones, promised/open
+steps and genuine holds are considered separately. A future-tense promise is not
+completion. A generated continuation, worker grant or saved plan is not a new human
+instruction and cannot invent an operator prohibition or broaden permission.
+
+An independent `continue` admits one concrete next step under the original scope,
+stop/expiry, dependency and budget fences. Technical/invalid judgments retain the
+settled Main reply for existing bounded assessment retry; they never replay the
+productive turn. Genuine semantic uncertainty grants no execution. The prompt
+strategy remains replaceable through the existing completion-strategy extension;
+no external JEV backend is required by the default LLM implementation.
+
+CLI Main validation has a 30-second default request budget. Configure 1–120 seconds:
+
+```yaml
+completionCheck:
+  timeoutMs: 30000
+```
+
+Existing explicit `completionCheck.authorizations` remain supported. The validator
+model still uses Validator → Review → Default, without silently replacing an
+explicitly selected unavailable model. Restart after changing the timeout.
+
 ## Reloading model configuration
 
 Use **`/reload-models`** after editing the provider/model catalog (`models.json`).

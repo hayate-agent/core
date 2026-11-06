@@ -434,12 +434,12 @@ async function main(argv: string[]): Promise<void> {
     reportOutput: (input, output) => plugins.reportProcessing.record(input, output),
     reportContext: input => plugins.reportProcessing.context(input),
     turnCommitted: async (input) => { await improvement?.committed(input); },
-    continuationDeadline: input => config.completionCheck?.authorizations[input.sessionKey]?.expiresAt,
+    continuationDeadline: input => config.completionCheck?.authorizations?.[input.sessionKey]?.expiresAt,
     topicLabeler: semanticTopicLabeler(runtimeReviewer(runtime), () => effectiveModels().reviewModel),
     completionCheck: async (input, reply, signal, diagnostic) => {
-      const grant = config.completionCheck?.authorizations[input.sessionKey] ??
+      const grant = config.completionCheck?.authorizations?.[input.sessionKey] ??
         (input.completionAnchor ? { task: input.completionAnchor.task } : undefined);
-      return assessCompletion(supervisorReviewer(), input, reply, grant, signal, effectiveModels().reviewModel, Date.now, completion.current, diagnostic);
+      return assessCompletion(supervisorReviewer(), input, reply, grant, signal, effectiveModels().reviewModel, Date.now, completion.current, diagnostic, config.completionCheck?.timeoutMs ?? 30000);
     },
     afterTurn: async (input, reply, session, options, signal) => {
       await reloadRuntimeSettings();
