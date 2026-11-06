@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: Apache-2.0
 import assert from "node:assert/strict";
 import { mkdtemp, mkdir, readFile, realpath, rm, symlink, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";

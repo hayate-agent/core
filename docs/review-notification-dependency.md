@@ -1,5 +1,3 @@
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
 # Dedicated review host / notification source dependency
 
 This changeset reconciles two already authorized source mandates. It does not

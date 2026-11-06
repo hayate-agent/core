@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: Apache-2.0
 import { ImprovementController as Controller } from "../src/improvement.js";
 import nightlyDefault from "../src/builtin-plugins/nightly-default.js";
 import type { Harness } from "../src/harness.js";

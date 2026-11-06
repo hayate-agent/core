@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: Apache-2.0
 import type { PluginModule } from "./plugins.js";
 import type { ReloadableTools } from "./reloadable-tools.js";
 export function reloadableToolsPlugin(service: ReloadableTools): PluginModule {

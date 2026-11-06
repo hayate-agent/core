@@ -1,5 +1,3 @@
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
 # Semantic completion fallback
 
 The bundled advisory classification wording is owned by [hayate-agent/plugins](https://github.com/hayate-agent/plugins) and

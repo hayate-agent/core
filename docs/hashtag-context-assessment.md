@@ -1,5 +1,3 @@
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
 # Hashtags: identification is not context isolation
 
 ## Decision

@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: Apache-2.0
 import { mkdir, readFile } from "node:fs/promises";
 import { appendFileDurable, writeFileDurable } from "./durable.js";
 import path from "node:path";

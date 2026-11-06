@@ -1,5 +1,3 @@
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
 # Local overlay reconciliation
 
 `/update status` and `/update apply [skills|cron|all]` are administrator commands.

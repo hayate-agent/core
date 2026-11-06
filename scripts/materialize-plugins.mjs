@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: Apache-2.0
 import { readFile, writeFile, mkdir, rm } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';

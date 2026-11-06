@@ -1,5 +1,3 @@
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
 # Context maintenance
 
 ## Strategy ownership and startup selection

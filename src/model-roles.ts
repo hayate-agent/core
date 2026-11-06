@@ -1,6 +1,6 @@
 import type { AgentRuntime } from "./types.js";
 
-export const modelRoleNames = ["dispatcher", "simple", "medium", "high", "reviewer"] as const;
+export const modelRoleNames = ["dispatcher", "simple", "medium", "high", "reviewer", "validator"] as const;
 export type ModelRole = typeof modelRoleNames[number];
 export interface ModelPair { model?: string; thinking?: string }
 export interface ModelRoles { enabled: boolean; roles?: Partial<Record<ModelRole, ModelPair>> }

@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: Apache-2.0
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";

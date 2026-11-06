@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: Apache-2.0
 import type { ReviewConfig } from "./config.js";
 
 export function reviewConfig(input?: Partial<Omit<ReviewConfig, "mandatory" | "scope">> & { mandatory?: Partial<ReviewConfig["mandatory"]>; scope?: Partial<ReviewConfig["scope"]> }): ReviewConfig {

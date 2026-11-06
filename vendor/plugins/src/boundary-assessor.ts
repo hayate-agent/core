@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: Apache-2.0
 import type { AssessmentBackend as ReviewBackend } from "./assessment-backend.js";
 import type { BoundaryAssessment } from "./context-assessment.js";
 

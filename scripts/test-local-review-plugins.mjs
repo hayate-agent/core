@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: Apache-2.0
 // Explicit development integration; never changes plugins.lock.json or publishes pins.
 import { readFile, writeFile, mkdtemp, rm } from 'node:fs/promises';
 import { createHash } from 'node:crypto';

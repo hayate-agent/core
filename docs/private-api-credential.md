@@ -1,5 +1,3 @@
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
 # Private loopback API credential
 
 `API_SERVER_KEY` retains its existing behavior. Alternatively, explicitly set all:

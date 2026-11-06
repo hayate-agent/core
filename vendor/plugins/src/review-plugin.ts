@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: Apache-2.0
 import type { PluginModule } from "./plugins.js";
 import type { ReviewService, FindingAssessment } from "./review.js";
 

@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: Apache-2.0
 export type UpdateTarget = "skills" | "cron";
 export interface UpdateResult { component: string; status: "available" | "activated" | "failed" | "activated-with-warnings" | "unsupported" | "rollout-required"; detail: string }
 

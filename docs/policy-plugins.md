@@ -1,5 +1,3 @@
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
 # Runtime policy modules (API v1)
 
 The CLI stages trusted local policy implementations at an instance-wide idle

@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: Apache-2.0
 export interface PruningPolicy {
   enabled: boolean;
   /** Approximate tool-text budget, estimated conservatively from UTF-8 bytes / 4. */

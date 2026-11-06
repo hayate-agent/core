@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: Apache-2.0
 import path from "node:path";
 import type { PluginModule } from "./plugins.js";
 import type { Inbound } from "./types.js";

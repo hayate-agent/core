@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: Apache-2.0
 import path from "node:path";
 import type { ReviewConfig } from "./config.js";
 import type { Changeset } from "./changeset.js";

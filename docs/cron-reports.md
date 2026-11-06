@@ -1,5 +1,3 @@
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
 # Cron audiences and retained follow-through
 
 Retention, report context, analysis and proposal planning are supplied by the

@@ -1,27 +1,27 @@
 {
-    "experiments": [
-        {
-            "baseline": "40 ms",
-            "candidate": "3000 ms",
-            "evidence": "Synthetic result",
-            "hypothesis": "Synthetic timing regression",
-            "outcome": "improved"
-        },
-        {
-            "baseline": "reference",
-            "candidate": "1,41 % slower",
-            "evidence": "Synthetic result",
-            "hypothesis": "Synthetic benchmark",
-            "outcome": "rejected"
-        },
-        {
-            "baseline": "reference",
-            "candidate": "514/515",
-            "evidence": "Synthetic result",
-            "hypothesis": "Synthetic suite",
-            "outcome": "inconclusive"
-        }
-    ],
-    "night": "2026-01-01",
-    "turns": 3
+  "experiments": [
+    {
+      "baseline": "40 ms",
+      "candidate": "3000 ms",
+      "evidence": "Synthetic result",
+      "hypothesis": "Synthetic timing regression",
+      "outcome": "improved"
+    },
+    {
+      "baseline": "reference",
+      "candidate": "1,41 % slower",
+      "evidence": "Synthetic result",
+      "hypothesis": "Synthetic benchmark",
+      "outcome": "rejected"
+    },
+    {
+      "baseline": "reference",
+      "candidate": "514/515",
+      "evidence": "Synthetic result",
+      "hypothesis": "Synthetic suite",
+      "outcome": "inconclusive"
+    }
+  ],
+  "night": "2026-01-01",
+  "turns": 3
 }
