@@ -179,7 +179,7 @@ test("restart after a settled step neither replans nor repeats the effect", asyn
 
 test("interrupted step with unsafe intent and no evidence blocks on restart instead of blind replay", async t => {
   const home = await mkdtemp(path.join(os.tmpdir(), "seq-unsafe-"));
-  t.after(() => rm(home, { recursive: true, force: true }));
+  t.after(() => rm(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }));
   const file = path.join(home, "executions.json");
   const store = new ExecutionStore(file); await store.load();
   const task = await store.submit("parent", "req", "write", "sequential");
