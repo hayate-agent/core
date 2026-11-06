@@ -38,7 +38,7 @@ for (const mode of ["interrupted", "unavailable", "inconclusive", "failed", "mis
     const home = await mkdtemp(path.join(os.tmpdir(), "actionable-recovery-"));
     const store = new StateStore(path.join(home, "state.json"));
     const channel = new MemoryChannel();
-    const task: DurableTask = { id: "retained", original: "Was ist mit Deinem Self-Improvement?!", state: "active", depth: 2 };
+    const task: DurableTask = { id: "retained", original: "Was ist mit Deinem Self-Improvement?!", lastReply: "PRIVATE_RESULT_EVIDENCE", state: "active", depth: 2 };
     if (mode === "interrupted") task.recoveryAssessment = "claimed";
     // A third failed assessment is terminal exhaustion: one actionable notice.
     if (mode === "inconclusive" || mode === "failed")
@@ -113,16 +113,18 @@ for (const mode of ["interrupted", "unavailable", "inconclusive", "failed", "mis
       }
       assert.equal(h.outboxEntries().length, 1);
       const notice = h.outboxEntries()[0]!;
-      assert.match(notice.text, /Auftrag: Was ist mit Deinem Self-Improvement/);
-      assert.match(notice.text, /Verifizierter Stand:/);
-      assert.match(notice.text, /Abschluss ist nicht unabhängig bestätigt/);
-      assert.doesNotMatch(notice.text, /Entscheidung nötig:|Bitte antworte|konkreten nächsten Schritt|Ohne diese Klärung/);
+      assert.match(notice.text, /^Recovery assessment paused:/);
+      assert.match(notice.text, /Task: "retained"/);
+      assert.match(notice.text, /completion is unverified/);
+      assert.match(notice.text, /\/task-budget inspect/);
+      assert.ok(notice.text.length < 800);
+      assert.doesNotMatch(notice.text, /Recovery angehalten|Auftrag:|Self-Improvement|PRIVATE_RESULT_EVIDENCE|UNVERIFIED EVIDENCE/);
       assert.doesNotMatch(notice.text, /PRIVATE_PROVIDER_TOKEN|raw provider error|fehlende Berechtigung|operator reconciliation required/);
-      const reason = { interrupted: /unterbrochen/, unavailable: /nicht konfiguriert/, inconclusive: /drei Recovery-Bewertungsversuche/, failed: /fehlgeschlagen/, mismatched: /passt nicht/, invalid: /Retryzustand ist ungültig/, exhausted: /drei Recovery-Bewertungsversuche/, technical: /technisch fehlgeschlagen/, parse: /ungültige Antwort/, "technical-saved": /technisch fehlgeschlagen/, "parse-saved": /ungültige Antwort/ }[mode];
+      const reason = { interrupted: /no durable result/, unavailable: /unavailable/, inconclusive: /3-attempt assessment budget/, failed: /technical/, mismatched: /does not match/, invalid: /retry state is invalid/, exhausted: /3-attempt assessment budget/, technical: /technical/, parse: /invalid_response/, "technical-saved": /technical/, "parse-saved": /invalid_response/ }[mode];
       assert.match(notice.text, reason);
-      if (mode === "invalid") assert.doesNotMatch(notice.text, /ausgeschöpft|drei Recovery-Bewertungsversuche/);
+      if (mode === "invalid") assert.doesNotMatch(notice.text, /exhausted|3-attempt/);
       if (exhausted) {
-        assert.match(notice.text, /ausgeschöpft/);
+        assert.match(notice.text, /exhausted/);
         assert.match(notice.id, /^task-recovery-exhausted:/);
         assert.equal(h.state(key).task!.termination, "recovery_assessment_failed");
       }
@@ -142,7 +144,7 @@ for (const mode of ["interrupted", "unavailable", "inconclusive", "failed", "mis
       }
       assert.doesNotMatch(JSON.stringify(checkpoint), /PRIVATE_PROVIDER_TOKEN|raw provider error/);
       assert.equal(checkpoint.outbox![0]!.id, notice.id);
-      next = new Harness({ runtime: new FakeRuntime(), tickMs: 60000 }); next.addChannel(channel);
+      next = new Harness({ runtime: new FakeRuntime(), tickMs: 60000, gateways: { recoveryDiagnostics: true } }); next.addChannel(channel);
       next.restoreSessions(checkpoint.sessions); next.restorePending(checkpoint.pending ?? []); next.restoreOutbox(checkpoint.outbox ?? []);
       next.onStateChange = () => store.save({ ...checkpoint, sessions: next!.snapshotSessions(), pending: next!.pendingInputs(), outbox: next!.outboxEntries() });
       await next.recoverTasks(); next.releaseRestored(); await next.drained();
