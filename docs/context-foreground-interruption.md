@@ -1,5 +1,3 @@
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
 # Same-conversation maintenance interruption
 
 Foreground channel/API input arriving during an interruptible maintenance model

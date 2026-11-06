@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: Apache-2.0
 import { fileURLToPath } from "node:url";
 
 /** Resolved from installed package, not from the operator's current project. */

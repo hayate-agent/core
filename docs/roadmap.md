@@ -1,5 +1,3 @@
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
 # Delivery checklist
 
 This tracks user requirements, not claims of implemented capabilities. All core

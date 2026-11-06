@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: Apache-2.0
 import { createConnection } from "node:net";
 import { open } from "node:fs/promises";
 import { constants } from "node:fs";

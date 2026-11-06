@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: Apache-2.0
 /** Conservative binary policy, checked before compilation. The engine still
  * validates the complete module. No imports, memory64, shared or unbounded limits.
  */

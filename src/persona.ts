@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: Apache-2.0
 import { open, readdir, realpath, lstat } from "node:fs/promises";
 import { constants } from "node:fs";
 import path from "node:path";

@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: Apache-2.0
 export type MessageKind = "user" | "assistant" | "info" | "success" | "error" | "cancelled";
 export interface TranscriptEntry { kind: MessageKind; text: string; }
 

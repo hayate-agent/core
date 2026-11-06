@@ -1,5 +1,3 @@
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
 # Terminal presentation
 
 The Hayate Agent interactive UI is a harness channel. PI is embedded through its SDK

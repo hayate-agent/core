@@ -1,5 +1,3 @@
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
 # Explicit continuation scope (development slice)
 
 `planContinuation(sessionKey, plan)` accepts optional `plan.taskId`. Omission

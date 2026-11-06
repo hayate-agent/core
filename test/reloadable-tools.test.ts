@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: Apache-2.0
 import { reloadableToolsPlugin } from "../src/builtin-plugins/reloadable-tools-plugin.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";

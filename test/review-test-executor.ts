@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: Apache-2.0
 import type { AssessmentBackend } from "../src/assessment-backend.js";
 import type { DedicatedReviewExecution } from "../src/review-execution.js";
 /** Explicit mock transport for ledger/policy tests, not evidence of real isolation. */

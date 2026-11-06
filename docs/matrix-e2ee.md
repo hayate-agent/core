@@ -1,5 +1,3 @@
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
 # Native Matrix encryption
 
 Matrix uses `@matrix-org/matrix-sdk-crypto-nodejs` (Rust SDK OlmMachine, SQLite),

@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: Apache-2.0
 import { OlmMachine, UserId, DeviceId, RoomId, DeviceLists, EncryptionSettings, EncryptionAlgorithm, HistoryVisibility, RequestType, ShieldStateCode } from "@matrix-org/matrix-sdk-crypto-nodejs";
 import { mkdir, readFile, writeFile, chmod, lstat } from "node:fs/promises";
 import path from "node:path";

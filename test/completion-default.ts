@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: Apache-2.0
 import { assessCompletion as assess } from "../src/completion-check.js";
 import { completionPrompt } from "../src/builtin-plugins/completion-prompt.js";
 /** Exercise the production host guard with the separately owned default strategy. */

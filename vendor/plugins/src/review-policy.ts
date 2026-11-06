@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: Apache-2.0
 import type { Policy } from "./policies.js";
 import type { ReviewService } from "./review.js";
 import type { Address, Inbound } from "./types.js";

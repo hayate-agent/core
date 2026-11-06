@@ -1,5 +1,3 @@
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
 # Prepared handover recovery retry pacing
 
 A prepared handover is a durable checkpoint, not proof that the replacement

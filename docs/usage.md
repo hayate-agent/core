@@ -1,5 +1,3 @@
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
 # Token and cost reporting
 
 Use `/usage` or its alias `/tokens` in chat or the local terminal. Both are

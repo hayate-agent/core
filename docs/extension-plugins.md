@@ -1,5 +1,3 @@
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
 # Runtime extension modules (API1)
 
 Trusted local modules can be added, replaced or removed at an instance-wide idle

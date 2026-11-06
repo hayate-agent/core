@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: Apache-2.0
 import type { Inbound } from "../types.js";
 
 /** User, API and cron inputs are replayed after a crash; heartbeat/loop/goal ticks regenerate. */

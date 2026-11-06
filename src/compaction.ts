@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: Apache-2.0
 /** Compaction implementations reuse runtime capabilities rather than reinterpret history. */
 export interface CompactionStrategy {
   compact(context: { instructions?: string; compactNative(instructions?: string): Promise<void> }): Promise<void>;

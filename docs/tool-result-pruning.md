@@ -1,5 +1,3 @@
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
 # Tool-result pruning
 
 Enabled by default, without a model call. The Harness PI adapter uses the `context`

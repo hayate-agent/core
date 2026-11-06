@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: Apache-2.0
 export interface ModelSettings {
   model?: string;
   thinking?: string;

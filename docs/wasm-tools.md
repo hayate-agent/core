@@ -1,5 +1,3 @@
-<!-- SPDX-License-Identifier: Apache-2.0 -->
-
 # Restricted WebAssembly tools (experimental)
 
 `wasmTools` is an infrastructure-owned, tool-only alternative to trusted ESM plugins:

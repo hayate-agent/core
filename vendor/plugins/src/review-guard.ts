@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: Apache-2.0
 import type { ReviewService } from "./review.js";
 
 /** Defense in depth for standard shell workflows, NOT an OS/process sandbox. */

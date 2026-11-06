@@ -1,5 +1,4 @@
 #!/bin/sh
-# SPDX-License-Identifier: Apache-2.0
 # Run inside the built runtime image as its normal uid1000 user.
 # Downloads pinned user-owned tooling/browser; no apt, sudo or cluster credentials.
 set -eu
