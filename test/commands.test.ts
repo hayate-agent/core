@@ -218,6 +218,22 @@ for (const name of ["restart", "reload"]) {
   });
 }
 
+test("model reload is explicit, admin-only and separate from skill/MCP resources", async () => {
+  const { send, harness, runtime, ch, ctx } = setup({ admins: ["owner"] });
+  let catalogs = 0, skills = 0;
+  Object.assign(runtime, { reloadModels: async () => { catalogs++; } });
+  ctx.reloadSkills = async () => { skills++; };
+  try {
+    await send("/reload-models", "stranger");
+    assert.equal(catalogs, 0); assert.match(ch.texts().at(-1)!, /admin only/);
+    await send("/reload-models", "owner");
+    await send("/reload_models", "owner");
+    assert.equal(catalogs, 2); assert.equal(skills, 0); assert.equal(runtime.reloads, 0);
+    assert.match(ch.texts().at(-1)!, /Model catalog reloaded/);
+    assert.equal(runtime.sessions.size, 0);
+  } finally { await harness.stop(1000); }
+});
+
 test("skills/MCP reload aliases still reload resources without restarting", async () => {
   const { send, harness, runtime, ch, ctx } = setup({ admins: ["owner"] });
   let skillsReloaded = 0;

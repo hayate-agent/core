@@ -61,7 +61,12 @@ Interactive mode runs the Hayate Agent scheduler and configured gateway channels
 `MATRIX_*` variables (see the main README). Slack is not implemented yet.
 For an always-on native service use your OS supervisor (systemd on Linux/WSL with
 systemd enabled, launchd on macOS), preserving HOME, PATH and your secret injection.
-A `/restart` exits with status 75; configure the supervisor to restart on failure.
+The installed `hayate-agent` executable includes a foreground launcher: `/restart`
+drains and exits the old runtime, waits for its state locks to be released, then
+starts a replacement with the same arguments. An interactive restart resumes the
+selected conversation. Ordinary quit and failure exits do not trigger a restart.
+Direct `node dist/cli.js` and container entrypoints remain supervisor-managed:
+exit status 75 requests a restart from systemd, launchd or the container runtime.
 No native service installer is included yet.
 
 ## Docker Compose

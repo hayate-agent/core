@@ -75,11 +75,14 @@ and [Matrix encryption](docs/matrix-e2ee.md) for setup details.
 | Start or resume a conversation | `/new`, `/title`, `/sessions`, `/resume` |
 | Control current work | `/stop`, `/queue`, `/steer`, `/busy` |
 | Schedule work | `/goal`, `/heartbeat`, `/loop`, `/cron` |
-| Choose models and reasoning | `/model`, `/reasoning`, `/model-roles` |
+| Choose models and reasoning | `/model`, `/reasoning`, `/model-roles`, `/reload-models` |
 | Manage context | `/compact`, `/skills` |
 | Find help | `/help`, `/status` |
 
-Command availability depends on the channel and your permissions.
+Command availability depends on the channel and your permissions. Use
+`/reload-models` after changing provider/model configuration and `/reload-skills`
+after changing skills. `/restart` restarts the installed native CLI after draining
+work; it resumes the selected interactive conversation.
 
 ## Configuration and safety
 
