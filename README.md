@@ -2,50 +2,18 @@
 
 <img src="docs/assets/hayate-agent.jpg" alt="Hayate Agent" width="640">
 
-A persistent AI agent for your terminal and messaging gateways. Use it to work on
-code interactively, or keep it running to handle conversations, scheduled tasks
-and longer-term goals.
+**An AI agent for your terminal and Matrix.** Work on code interactively, pick up
+conversations later, or run Hayate as an always-on assistant for scheduled tasks
+and longer projects.
 
-Hayate Agent owns scheduling, queues and message delivery. PI is the current model
-and tool runtime; you do not need a separate PI installation to install Hayate Agent.
-Existing PI provider configuration can be reused.
+Hayate manages conversations, task queues, scheduling and message delivery. It
+uses [Pi](https://github.com/badlogic/pi-mono) as its current model and tool
+runtime; no separate Pi installation is required.
 
-## Naming and compatibility
+## Get started
 
-**Hayate Agent** uses npm package and executable `hayate-agent`, home
-`~/.hayate-agent`, configuration `hayate-agent.yaml` and `HAYATE_AGENT_*`
-environment variables. Existing local agent state is read without moving it;
-see [configuration](docs/configuration.md). Internal repository/image names are
-exempt. “Harness” describes runtime architecture, not a second product name.
-The remaining audit is tracked in [the naming inventory](docs/naming-inventory.md).
-
-Branding does not replace configured agent keys, SOUL/VOICE identities or other
-agents' personas. Updated templates apply only to newly created files; existing
-files are never overwritten. Updating source or building does not activate a
-running installation: install the reviewed version and restart through your
-normal deployment process. Cross-repository overlays/plugins may retain their
-own display text until separately updated.
-
-## Repositories
-
-- [hayate-agent/core](https://github.com/hayate-agent/core) — product source and documentation.
-- [hayate-agent/plugins](https://github.com/hayate-agent/plugins) — independently versioned plugin adapters.
-- [hayate-agent/deployments](https://github.com/hayate-agent/deployments) — reserved deployment repository; no public deployment manifests are available there.
-
-These are the canonical repository addresses, not a migration of existing runtime
-remotes, plugin source pins or deployment configuration. The deployments address
-does not establish a directory layout or a mapping from older overlay/base repositories.
-Core and Plugins publish source on GitHub. Core's public `deploy/kubernetes/`
-contains only a `SOUL.md` persona example, not Kubernetes manifests or a complete
-configuration bundle. Use the native or Compose instructions below; Kubernetes
-requires operator-owned manifests. Existing installations do not need their
-remotes or configuration changed.
-
-## Install and start
-
-You need **Git and Node.js with npm**. Node **24.22.1 LTS** is recommended;
-the native CLI requires at least Node 22.19.0. Linux, macOS and Windows through
-WSL2 are supported.
+You need **Git and Node.js 22.19 or newer** with npm. Node 24 LTS is recommended.
+Linux, macOS and Windows through WSL2 are supported.
 
 ```sh
 git clone https://github.com/hayate-agent/core.git "$HOME/hayate-agent"
@@ -58,135 +26,101 @@ cd /path/to/your/project
 hayate-agent
 ```
 
-Keep the checkout: this local installation links to it. Add the PATH line to your
-shell profile to make the command available in future terminals. No `sudo` or
-initialization wizard is required. `npm ci` also builds the CLI.
+Keep the checkout: the local installation links to it. Add the PATH setting to
+your shell profile if needed. In the terminal interface, use `/login` to connect
+a model provider and `/model` to choose a model. Existing Pi provider settings in
+`~/.pi/agent` can be reused; custom providers are configured in `models.json`.
 
-In the terminal interface, use **`/login`** to connect a supported provider and
-**`/model`** to select a model. Custom providers use PI's `models.json`; see
-[configuration](docs/configuration.md). Existing PI settings in `~/.pi/agent`
-are reused, so changes there can affect other PI-based applications.
+Ask Hayate to inspect a project, explain code, make a change or run tests. Use
+`/help` to explore commands and `/sessions` to return to an earlier conversation.
 
-**Your first session:** ask the agent to inspect your project, use `/help` to
-browse commands, and `/sessions` or `/resume` to return to an earlier conversation.
-Each interactive launch starts a fresh conversation scoped to the current workspace.
+## What Hayate can do
 
-For Docker Compose, Kubernetes and background services, see
-[installation](docs/installation.md). Native Windows outside WSL2 is not supported.
+- **Code in the terminal:** streaming responses, tool activity, session history
+  and configurable tools in a fullscreen interface.
+- **Work across conversations:** keep independent conversations and durable queues,
+  with explicit session selection and resumption.
+- **Run ongoing tasks:** heartbeats, cron jobs, recurring loops and standing goals.
+- **Delegate work:** route tasks to model roles and validate sequential steps
+  before moving on. Models and reasoning levels are configurable.
+- **Connect through Matrix:** DMs and rooms, encrypted conversations, user
+  allowlists, mention rules and tool-approval handling.
+- **Integrate with applications:** an HTTP run API with streamed progress,
+  optional MCP tools and trusted plugins for commands, channels and policies.
+- **Make it your own:** `SOUL.md` for identity, `VOICE.md` for tone and skills for
+  reusable procedures.
 
-## What you can do
-
-| Capability | What it means in practice |
-|---|---|
-| **Interactive coding** | A fullscreen terminal interface with streaming answers, tool activity and a fixed input area. Configure which tools the model may use. |
-| **Persistent conversations** | Keep history across restarts, name sessions, and explicitly resume work. Native PI session storage is the default. |
-| **Always-on work** | Run heartbeats, recurring loops, cron jobs and standing goals without keeping a terminal open. |
-| **Parallel conversations** | Separate conversations can run concurrently; each conversation processes its own queue in order. |
-| **Matrix gateway** | Talk to the same Hayate Agent through DMs or rooms, with allowlists, mention rules, threads and approval handling. |
-| **HTTP run API** | Submit runs programmatically and stream progress through a Hermes-compatible API. AgentOS integration is optional. |
-| **Identity and skills** | Use `SOUL.md` for identity, `VOICE.md` for tone, and discoverable skills for reusable procedures. |
-| **Trusted plugins** | Add commands, channels, tools, terminal panels and interactive dialogs through local ESM modules. Storage and manual compaction also have extension points. |
-| **Optional MCP** | Enable PI-backed MCP integration when needed; it is not a required service. |
-
-Approvals are **off by default**. You can enable manual approval for selected
-tools. Plugins are trusted process code, not sandboxed extensions.
-
-## Everyday commands
-
-- **Sessions:** `/new`, `/title`, `/sessions`, `/resume`, `/compact`.
-- **While working:** `/stop`, `/queue`, `/steer`, `/busy`.
-- **Ongoing tasks:** `/goal`, `/heartbeat`, `/loop`, `/cron`. See [Cron reports](docs/cron-reports.md) for internal/user audiences and retained follow-through.
-- **Configuration:** `/model`, `/reasoning`, `/personality`, `/skills`.
-- **Discoverability:** `/help`, `/status`, `/harness` (bundled development guide).
-
-Not every command is available on every channel. Use `/help` in your current
-interface rather than memorizing the full command list.
-
-## Run as a gateway
+## Run a Matrix or API assistant
 
 ```sh
 hayate-agent run
 ```
 
-This starts the same Hayate Agent without the interactive TUI. Configure Matrix with
-`MATRIX_HOMESERVER` and either `MATRIX_ACCESS_TOKEN` or password-login settings.
-Set `MATRIX_ALLOWED_USERS` and the room/approval policy before connecting it to
-other people. A configured model provider is required to answer messages.
+Configure `MATRIX_HOMESERVER` and the agent's access token or password-login
+settings before starting Matrix. Set allowed users and room policies before
+inviting the agent to shared rooms. Encrypted conversations need persistent
+Matrix device and crypto state.
 
-The HTTP API is enabled with `API_SERVER_KEY`; supply secrets through your runtime
-environment, not source control. Use a supervisor or container deployment for an
-always-on service. `/restart` drains work and exits with status 75; the supervisor
-is responsible for starting it again.
+The HTTP API is enabled with `API_SERVER_KEY`. Supply credentials through your
+secret manager or runtime environment, never through a public configuration file.
+Use a service supervisor or container for an always-on assistant.
 
-See [configuration](docs/configuration.md) for settings and
-[operations](docs/operations.md) for durable delivery, retries, memory pressure
-and shutdown behavior.
+See [installation](docs/installation.md), [configuration](docs/configuration.md)
+and [Matrix encryption](docs/matrix-e2ee.md) for setup details.
 
-## Configuration and data
+## Everyday commands
 
-Hayate Agent state defaults to **`~/.hayate-agent`**. Use
-`HAYATE_AGENT_HOME` for a separate agent home. A minimal optional
-`hayate-agent.yaml` looks like this:
+| Task | Commands |
+| --- | --- |
+| Start or resume a conversation | `/new`, `/title`, `/sessions`, `/resume` |
+| Control current work | `/stop`, `/queue`, `/steer`, `/busy` |
+| Schedule work | `/goal`, `/heartbeat`, `/loop`, `/cron` |
+| Choose models and reasoning | `/model`, `/reasoning`, `/model-roles` |
+| Manage context | `/compact`, `/skills` |
+| Find help | `/help`, `/status` |
 
-```yaml
-agent: example-agent
-timezone: Europe/Berlin
-loop:
-  busyMode: queue
-  drainSeconds: 60
-```
+Command availability depends on the channel and your permissions.
 
-Model/provider credentials and PI settings live separately in `~/.pi/agent`
-(or `PI_CODING_AGENT_DIR`). Persistent installations need to retain both locations.
-`init` creates missing starter files; `doctor` checks local configuration. Neither
-is required for normal interactive use.
+## Configuration and safety
 
-The container runs as UID/GID 1000 and includes Chromium runtime libraries,
-Python virtual environments and native build tools. Agents can install their own
-CLI tools in writable persistent storage; no particular browser CLI is required.
-See [browser tooling](docs/browser-tools.md). For operator-owned Kubernetes
-deployments, pin immutable image digests and supply private configuration and
-secrets separately.
+Agent state defaults to `~/.hayate-agent`. Set `HAYATE_AGENT_HOME` to use a separate
+profile. An optional `hayate-agent.yaml` configures the agent, tools, scheduling
+and model roles. Provider credentials live separately in `~/.pi/agent` or the
+configured `PI_CODING_AGENT_DIR`. Back up both locations for persistent services.
 
-## Current boundaries
+Tool approvals are off by default; enable them for tools that require human
+confirmation. Plugins run as trusted process code, not inside a sandbox. Queue
+persistence does not make external side effects exactly-once: after an interrupted
+operation, reconcile its actual result before repeating it.
 
-- **Native Matrix E2EE** uses the Rust SDK with an identity-bound persistent store;
-  see [configuration, limits and acceptance](docs/matrix-e2ee.md). This capability
-  requires the matching published crypto-enabled plugin pin and runtime image;
-  older releases, including v0.1.129, do not support encrypted conversations.
-- **Slack and Telegram adapters are not included.** The plugin channel interface
-  supports additional transports, but does not implement them automatically.
-- A Web UI and automatic activation/rollback of agent-built runtime versions are
-  not shipped features.
-- Matrix supports optional [gateway progress and status reactions](docs/gateway-progress.md),
-  with global defaults and per-gateway overrides. A generic secret-manager context
-  is still under development.
-- Durable queues reduce lost work, but crash recovery is **at least once**, not
-  exactly once. External tool effects may be repeated after a crash.
+Slack and Telegram adapters and a web chat interface are not included. Matrix
+and the terminal are the supported interactive interfaces.
 
-## Documentation
+## Documentation and related projects
 
-- [Installation](docs/installation.md) — native, Compose and Kubernetes
-- [Configuration](docs/configuration.md) — models, tools, identity and access settings
-- [Sessions](docs/sessions.md) — resume, storage providers and compaction
-- [MCP](docs/mcp.md) · [Plugins](docs/plugins.md) — integrations and extension APIs
-- [Operations](docs/operations.md) — recovery and service operation
-- [Self-development](docs/self-development.md) · [Development guide](docs/development.md)
+- [Installation](docs/installation.md) — native CLI and background services
+- [Configuration](docs/configuration.md) — providers, tools, identity and access
+- [Sessions](docs/sessions.md) — history, resumption and storage
+- [Model roles](docs/model-roles.md) · [Dispatcher](docs/dispatcher.md)
+- [MCP](docs/mcp.md) · [Plugin API](docs/plugins.md)
+- [Operations](docs/operations.md) — recovery, delivery and shutdown
+- [hayate-agent/plugins](https://github.com/hayate-agent/plugins) — plugin adapters
+- [hayate-agent/deployments](https://github.com/hayate-agent/deployments) — deployment examples
 
-## Contribute
+## Contributing
 
-Use a user-owned checkout, make changes on a feature branch, and run:
+Create a feature branch, add tests for your change and run:
 
 ```sh
-npm ci
+npm ci --include=dev
 npm run typecheck
 npm test
 npm run build
 ```
 
-Submit changes through a pull request. Keep deployment identities, internal
-endpoints and credentials out of the public repository.
+Open a pull request with the problem, the change and its verification. See the
+[development guide](docs/development.md) for architecture and testing details.
 
 ## License
 
-Apache License 2.0. See [LICENSE](LICENSE).
+[Apache-2.0](LICENSE).
