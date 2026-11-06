@@ -49,16 +49,24 @@ You can also test without installing the command globally: after `npm ci`, run
 `node "$HOME/hayate-agent/dist/cli.js"` from your project directory.
 
 Optional `init` creates missing Hayate Agent persona/configuration files without
-replacing existing files; `doctor` checks local configuration, not provider
-connectivity. Neither is a prerequisite for interactive use. See
+replacing existing files. Its commented starter includes safe tool,
+gateway-feedback and disabled dispatcher defaults, with activation pointers for
+WebUI and Matrix. Core also includes a [starter YAML](examples/hayate-agent.yaml).
+`doctor` checks local configuration, not provider connectivity.
+Neither is a prerequisite for interactive use. See
 [configuration](configuration.md) for a separate agent profile and
 [self-development](self-development.md) for using the agent on its own source.
 
 ### Gateway / background service
 
 `hayate-agent run` starts the same persistent Hayate Agent without its TUI.
-Interactive mode runs the Hayate Agent scheduler and configured gateway channels too. For a headless API service, set `API_SERVER_KEY`. Matrix is enabled through
-`MATRIX_*` variables (see the main README). Slack is not implemented yet.
+Interactive mode runs the Hayate Agent scheduler and configured gateway channels too.
+Follow the [gateway quickstart](gateways.md) to install the separate WebUI plugin,
+activate the bundled Matrix plugin, configure remote operators and optionally
+enable background dispatch. WebUI is local-only at `http://127.0.0.1:3210`;
+Matrix uses explicit `MATRIX_*` credentials and access policy. For a headless API
+service, separately configure `API_SERVER_KEY` or [a private loopback key file](private-api-credential.md).
+The run API is not the WebUI. Slack is not implemented yet.
 For an always-on native service use your OS supervisor (systemd on Linux/WSL with
 systemd enabled, launchd on macOS), preserving HOME, PATH and your secret injection.
 The installed `hayate-agent` executable includes a foreground launcher: `/restart`
