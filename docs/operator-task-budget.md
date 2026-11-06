@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+
 # Authenticated operator task-budget control
 
 This command repairs an exhausted **retained chat task**, not a dispatcher worker,

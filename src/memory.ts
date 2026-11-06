@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 import type { TurnOutcome } from "./types.js";
 
 /** Conversation identity is supplied by the host, never by model arguments. */

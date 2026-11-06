@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 import type { ReviewState } from "./review.js";
 
 /** Bounded transport/model projection. The authoritative history stays in the ledger. */

@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+
 # Operations
 
 For an explicit, exact-task continuation/recovery budget reset, use the

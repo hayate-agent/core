@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 import type { Inbound } from "./types.js";
 
 /** Generic durable-output extension. Host owns settlement/delivery and authority;

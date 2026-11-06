@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 import type { Inbound, PromptOptions, RuntimeSession } from "./types.js";
 import { requiresReview } from "./review-scope.js";
 import type { ReviewService } from "./review.js";

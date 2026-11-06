@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+
 # Turn-end continuation instead of default polling
 
 The automatic five-minute model heartbeat is replaced by a turn-end continuation

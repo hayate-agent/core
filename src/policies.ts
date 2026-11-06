@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 import type { Inbound, PromptOptions, RuntimeSession } from "./types.js";
 
 /** Trusted policy implementations. Registration never grants tool permissions. */

@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+
 # Editable progress replies
 
 Channels may opt into `Channel.editableProgress = true`. Plugin channels expose

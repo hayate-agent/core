@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+
 # Conversation loops
 
 `/loop` and the bundled `plugin_loop` tool manage the same conversation-local

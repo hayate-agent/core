@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 /** Keep bundled workflow tools reachable under explicit nonempty runtime selection.
  * An explicitly empty list still disables all model-visible tools.
  */

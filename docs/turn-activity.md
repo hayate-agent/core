@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+
 # Native turn activity
 
 Channels may implement the optional `taskActivity(to, event, input)` callback.

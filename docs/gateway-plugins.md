@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+
 # Runtime gateway modules (v1)
 
 The CLI consumes a bundled gateway-module catalog rather than constructing Matrix

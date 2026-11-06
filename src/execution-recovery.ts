@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 import type { Execution } from "./execution.js";
 
 /** Trusted optional policy, not an instruction returned by a worker. */

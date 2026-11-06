@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 /**
  * Cron scheduler, compatible with the Hermes `cron/jobs.yaml` format used by the
  * agent config repos (name, schedule, script, no_agent, prompt_file, model, deliver, origin, enabled).

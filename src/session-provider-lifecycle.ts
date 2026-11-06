@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 import type { SessionProvider } from "./sessions.js";
 
 /** Owns one startup-selected backend. Session leases pin checkpoint closures to it;

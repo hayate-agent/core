@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 import { readFileSync } from "node:fs";
 
 /** Build metadata is baked into the image, never read from the agent workspace. */

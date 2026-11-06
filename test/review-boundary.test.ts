@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 import { testReviewExecution } from "./review-test-executor.js";
 import assert from "node:assert/strict";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";

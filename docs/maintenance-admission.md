@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+
 # Identified maintenance admission (host contract)
 
 This is a host API, not a network endpoint. `ContextMaintenance.admit(key, id,

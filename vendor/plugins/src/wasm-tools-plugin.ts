@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 import type { PluginModule } from "./plugins.js";
 import { wasmTools, type WasmToolConfig } from "./wasm-tools.js";
 export function wasmToolsPlugin(home: string, config: WasmToolConfig[]): PluginModule {

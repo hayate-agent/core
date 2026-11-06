@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 import type { ExperimentReceipt } from "./improvement-receipt.js";
 export type { ExperimentReceipt } from "./improvement-receipt.js";
 

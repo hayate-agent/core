@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 import type { MemoryProvider } from "./memory.js";
 
 /** Stable provider identity for tools, orchestration and background capture.

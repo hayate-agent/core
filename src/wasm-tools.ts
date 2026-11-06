@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 import { Worker } from "node:worker_threads";
 import { open } from "node:fs/promises";
 import { constants } from "node:fs";

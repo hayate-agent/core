@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 /**
  * Bounded window of accepted input ids (persisted): a turn starts exactly once per id across
  * redeliveries and restarts. Channels whose upstream acknowledgement lags acceptance (Matrix

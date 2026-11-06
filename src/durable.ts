@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 import { randomUUID } from "node:crypto";
 import { open, rename, unlink } from "node:fs/promises";
 import path from "node:path";

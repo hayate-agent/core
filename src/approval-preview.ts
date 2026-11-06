@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 /**
  * Disclosure policy for approval prompts: they may be posted in shared rooms, so tool
  * arguments are never shown; only an allowlisted program name or a file path.

@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+
 # Task repetition allowance (v1)
 
 The ceiling is **20 consecutive stalled or unevidenced attempts**, not 20 turns

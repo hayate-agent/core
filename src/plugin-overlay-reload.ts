@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 import { isDeepStrictEqual } from "node:util";
 import type { SettingsService, LocalSettings } from "./settings.js";
 import type { GatewayManager } from "./gateway-manager.js";
