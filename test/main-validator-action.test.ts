@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Harness } from "../src/harness.js";
+import { defaultConfig } from "../src/config.js";
 import { continuationProvenance, continuationRequest } from "../src/continuation-provenance.js";
 import { FakeRuntime, MemoryChannel, msg } from "./fakes.js";
 
@@ -49,6 +50,12 @@ test("Main technical assessment failure without any self-checkpoint retries only
     assert.equal(runtime.sessions.get(key)!.prompts.length, 1, "technical retry must not replay the working turn");
     assert.equal(h.snapshotSessions()[0]!.tasks![0]!.state, "completed");
   } finally { await h.stop(0); }
+});
+
+test("Main assessment timeout is bounded and configurable without replacing task authorization", () => {
+  assert.equal(defaultConfig({ completionCheck: { timeoutMs: 45000 } }).completionCheck?.timeoutMs, 45000);
+  for (const timeoutMs of [0, 999, 120001, Infinity, 1.5])
+    assert.throws(() => defaultConfig({ completionCheck: { timeoutMs } }), /completionCheck.timeoutMs/);
 });
 
 test("all generated turn kinds remain distinguishable from human ingress", () => {
