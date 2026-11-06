@@ -52,6 +52,7 @@ export class HarnessTuiChannel implements Channel {
   private execution?: ExecutionMetadata;
   private executionState: "pending" | "observed" | "unavailable" = "pending";
   private classifiers = new Map<string, { target: string; label: string }>();
+  private readonly mainActivity = new Map<string, { id: string; sequence?: number; settled: boolean }>();
   private pendingSubmissions = 0;
   private startedAt = 0;
   private finishedAt = 0;
@@ -338,12 +339,35 @@ export class HarnessTuiChannel implements Channel {
     if (this.opts.sessions && to.target !== this.sessionKey) return;
     const s = event.snapshot;
     const executionState = s.executionState ?? (s.phase === "starting" ? "pending" : "unavailable");
+    const settled = ["completed", "failed", "cancelled"].includes(s.phase);
+    const rowKey = s.role === "main" ? `main:${to.target}` : s.id;
     if (s.role === "main") {
+      const current = this.mainActivity.get(to.target);
+      if (current) {
+        if (current.sequence !== undefined && s.sequence === undefined) return;
+        if (s.sequence !== undefined && current.sequence !== undefined) {
+          if (s.sequence < current.sequence || (s.sequence === current.sequence && s.id !== current.id)) return;
+          if (s.sequence === current.sequence && current.settled) return;
+        } else if (s.sequence === undefined) {
+          // Legacy producers have no generation. Only a starting event can transfer ownership.
+          if (s.id !== current.id && s.phase !== "starting") return;
+          if (s.id === current.id && current.settled && s.phase !== "starting") return;
+        }
+      }
+      this.mainActivity.set(to.target, { id: s.id, sequence: s.sequence, settled });
       this.execution = s.execution;
       this.executionState = executionState;
     }
-    this.classifiers.set(s.id, { target: to.target, label: `${s.role === "dispatcher-classifier" ? "Dispatcher classifier" : s.role === "worker" ? "Worker" : "Main"} · ${taskContextLabel(s.parent ?? s.id, s.outputTags)} · ${s.phase} · ${activityExecutionLabel(s.execution, executionState)}` });
-    while (this.classifiers.size > 16) this.classifiers.delete(this.classifiers.keys().next().value!);
+    if (s.role === "main" && settled) {
+      this.classifiers.delete(rowKey);
+      this.render();
+      return;
+    }
+    this.classifiers.set(rowKey, { target: to.target, label: `${s.role === "dispatcher-classifier" ? "Dispatcher classifier" : s.role === "worker" ? "Worker" : "Main"} · ${taskContextLabel(s.parent ?? s.id, s.outputTags)} · ${s.phase} · ${activityExecutionLabel(s.execution, executionState)}` });
+    while (this.classifiers.size > 16) {
+      const oldest = [...this.classifiers.keys()].find(key => key !== `main:${to.target}`)!;
+      this.classifiers.delete(oldest);
+    }
     this.render();
   }
 
