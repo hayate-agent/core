@@ -71,16 +71,24 @@ scheduler, ledger and worker bridge. It requires enabled [model roles](model-rol
    Runtimes without the capability keep the ephemeral session planner.
    A worker's `STEP-STATUS: complete` is only evidence: the host independently
    checks the step and required evidence on the exact `reviewer` role before
-   persisting completion or admitting a successor. Missing, failed or inconclusive
-   validation blocks; it never triggers replanning or a model upgrade.
+   persisting completion or admitting a successor. Missing/empty/malformed worker
+   reports are assessed too, never silently accepted or excluded from validation.
+   A step-specific tool-free reviewer requests concrete read-only evidence or a
+   missing final report from the same retained worker (at most two corrections).
+   Failed/inconclusive inference is attempted at most twice per worker result,
+   without re-running the worker, replanning or upgrading its model. Genuine
+   external holds still stop immediately; exhausted inference pauses visibly.
 2. Plan, step index and outcomes are persisted in the execution checkpoint before
    any worker turn; each step saves an unsafe intent with its exact route first.
 3. Steps run sequentially as ordinary worker turns in the task-bound session with
    the original task as authority. Deadline, parent stop and ownership are checked
    before every step; approvals keep trusted parent routing. Prior outcomes are
    passed as untrusted data.
-4. A step counts only with a final `STEP-STATUS: complete` line; anything else
-   pauses the task with a visible reason. The final result lists requested and
+4. A step counts only with a final `STEP-STATUS: complete` line AND independent
+   completion. A missing line can be repaired by a bounded report-only correction,
+   never by silently inferring success. Genuine holds or exhausted correction
+   budgets pause with a visible reason. Progress delivery failures do not fail
+   the persisted plan. The final result lists requested and
    observed model per step and is produced only when every step completed.
    `STEP-STATUS` is only the worker's step outcome signal inside the strategy; the
    aggregated result is delivered to the parent as untrusted host data and still
@@ -91,7 +99,12 @@ scheduler, ledger and worker bridge. It requires enabled [model roles](model-rol
    is retried once one role higher; otherwise the limit is reported.
 6. Restart resumes from the persisted plan without replanning. An unresolved step
    intent uses the existing transcript reconciliation; without retained evidence
-   it blocks for explicit operator resolution. Effects are never replayed blindly.
+   it blocks for explicit operator resolution. A persisted settled worker result
+   is revalidated without replaying its tools. Evidence and inference attempts
+   survive restart; restarting/resuming does not reset the inference budget. A
+   correction after restart reconciles the retained session before any worker
+   turn. Evidence excerpts may be truncated to the checkpoint budget. Effects
+   are never replayed blindly.
 
 Not yet included: parallel steps, replanning after failure, per-step operator
 approval of the plan, and plugin-visible plan inspection beyond `/dispatch` status.
