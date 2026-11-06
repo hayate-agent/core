@@ -61,7 +61,7 @@ export function parsePlan(text: string): PlanStep[] | undefined {
 }
 
 /** Exact configured, preflighted role. Never a silent fallback to the default model. */
-export async function exactRole(runtime: AgentRuntime, config: ModelRoles | undefined, role: StepRole | "dispatcher" | "reviewer"): Promise<ModelPair | string> {
+export async function exactRole(runtime: AgentRuntime, config: ModelRoles | undefined, role: StepRole | "dispatcher" | "reviewer" | "validator"): Promise<ModelPair | string> {
   if (!config?.enabled) return "Model roles are disabled; the sequential strategy requires configured roles.";
   const pair = config.roles?.[role];
   if (!pair?.model) return `Model role ${role} is not configured; no silent default model.`;
@@ -71,6 +71,17 @@ export async function exactRole(runtime: AgentRuntime, config: ModelRoles | unde
     if (result.available && result.thinkingSupported) return { model: pair.model, ...(pair.thinking ? { thinking: pair.thinking } : {}) };
   } catch { /* reported below */ }
   return `Model role ${role} (${pair.model}${pair.thinking ? `/${pair.thinking}` : ""}) is unavailable; no silent default model.`;
+}
+
+/** Missing configuration falls through; an explicitly selected unavailable model never does. */
+export async function validatorRole(runtime: AgentRuntime, settings: { config?: ModelRoles; defaults: ModelPair; review?: ModelPair } | undefined): Promise<ModelPair | string> {
+  const config = settings?.config;
+  const pair = (config?.enabled ? config.roles?.validator : undefined)?.model
+    ? config!.roles!.validator!
+    : settings?.review?.model ? settings.review
+    : (config?.enabled && config.roles?.reviewer?.model) ? config.roles.reviewer
+    : settings?.defaults;
+  return exactRole(runtime, { enabled: true, roles: { validator: pair } }, "validator");
 }
 
 /** Exact planning prompt shared by the session and HTTP planners; task stays quoted untrusted data. */
@@ -152,7 +163,7 @@ function finalResult(state: SequentialState): string {
 export interface SequentialDeps {
   harness: Harness;
   store: ExecutionStore;
-  roles: () => { config?: ModelRoles; defaults: ModelPair } | undefined;
+  roles: () => { config?: ModelRoles; defaults: ModelPair; review?: ModelPair } | undefined;
   /** Same task-bound worker turn as direct; returns the reply. */
   runTurn(context: DispatchContext, key: string, id: string, text: string, rule: ModelPair): Promise<string>;
   /** Consumes the observed selection and tool-call count of the last turn for this key. */
@@ -289,7 +300,7 @@ Correctable vs blocked: a worker "blocked" claim or evidence shortfall that rest
         let lastNote = state.correction?.index === index ? state.correction.note : undefined;
         for (let round = state.correction?.index === index ? state.correction.rounds : 0; status !== "inadequate"; round++) {
           const claimed = status;
-          const reviewer = await exactRole(runtime, deps.roles()?.config, "reviewer");
+          const reviewer = await validatorRole(runtime, deps.roles());
           if (typeof reviewer === "string") return block(reviewer);
           const backend = runtimeReviewer(runtime, "supervisor");
           let verdict: Awaited<ReturnType<typeof assessCompletion>> = undefined;

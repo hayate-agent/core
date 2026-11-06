@@ -7,7 +7,7 @@ import { DispatcherRuntime } from "../src/dispatcher-runtime.js";
 import { Dispatcher } from "../src/dispatcher.js";
 import { ExecutionStore, type ExecutionEvent } from "../src/execution.js";
 import { Harness } from "../src/harness.js";
-import { parsePlan, planPrompt, stepStatus, type SequentialState } from "../src/dispatcher-sequential.js";
+import { parsePlan, planPrompt, stepStatus, validatorRole, type SequentialState } from "../src/dispatcher-sequential.js";
 import { FakeRuntime } from "./fakes.js";
 import type { ModelRoles } from "../src/model-roles.js";
 import type { AgentRuntime, OpenSessionOptions, PromptOptions } from "../src/types.js";
@@ -27,7 +27,7 @@ async function setup(t: import("node:test").TestContext, script: Script, opts: {
   http?: (request: PlannerHttpRequest) => Promise<PlannerHttpOutcome> } = {}) {
   const home = opts.home ?? await mkdtemp(path.join(os.tmpdir(), "seq-dispatch-"));
   const file = opts.file ?? path.join(home, "executions.json");
-  const calls = { review: [] as string[], plan: [] as Array<{ options: OpenSessionOptions; model?: string }>, worker: [] as Array<{ prompt: string; model?: string; thinking?: string }> };
+  const calls = { reviewModels: [] as Array<string | undefined>, review: [] as string[], plan: [] as Array<{ options: OpenSessionOptions; model?: string }>, worker: [] as Array<{ prompt: string; model?: string; thinking?: string }> };
   const runtime = new FakeRuntime() as FakeRuntime & { modelPreflight: (ref: string) => Promise<{ available: boolean; thinkingSupported: boolean }> };
   runtime.modelPreflight = async ref => ({ available: !(opts.unavailable ?? []).includes(ref), thinkingSupported: true });
   const http: PlannerHttpRequest[] = [];
@@ -41,6 +41,7 @@ async function setup(t: import("node:test").TestContext, script: Script, opts: {
       if (options.assessmentPurpose === "supervisor" && script.verdictDelayMs) await new Promise(r => setTimeout(r, script.verdictDelayMs));
       if (options.assessmentPurpose === "supervisor") {
         calls.review.push(text);
+        calls.reviewModels.push(o.model);
         return (typeof script.verdict === "function" ? script.verdict(text) : script.verdict) ?? '{"state":"completed"}';
       }
       if (key.startsWith("plan:")) {
@@ -84,6 +85,31 @@ async function setup(t: import("node:test").TestContext, script: Script, opts: {
     } };
 }
 const state = (checkpoint?: string) => JSON.parse(checkpoint!) as SequentialState;
+
+test("validator model selection: explicit validator, then review, then default; no availability fallback", async t => {
+  const env = await setup(t, {});
+  const validator = { model: "p/small-validator", thinking: "low" };
+  const review = { model: "p/code-review", thinking: "medium" };
+  const config: ModelRoles = { enabled: true, roles: { ...roles.roles, validator } };
+  assert.deepEqual(await validatorRole(env.runtime, { config, review, defaults }), validator);
+  delete config.roles!.validator;
+  assert.deepEqual(await validatorRole(env.runtime, { config, review, defaults }), review);
+  assert.deepEqual(await validatorRole(env.runtime, { config, defaults }), roles.roles!.reviewer);
+  delete config.roles!.reviewer;
+  assert.deepEqual(await validatorRole(env.runtime, { config, defaults }), defaults);
+  config.roles!.validator = validator;
+  env.runtime.modelPreflight = async () => ({ available: false, thinkingSupported: true });
+  assert.match(await validatorRole(env.runtime, { config, review, defaults }) as string, /validator.*unavailable; no silent default model/);
+});
+
+test("configured small validator runs instead of the reviewer or default model", async t => {
+  const config: ModelRoles = { enabled: true, roles: { ...roles.roles, validator: { model: "p/small-validator", thinking: "low" } } };
+  const env = await setup(t, {}, { roles: config });
+  const task = await env.run("read");
+  assert.equal(task.status, "completed");
+  assert.deepEqual(env.calls.reviewModels, ["p/small-validator"]);
+  assert.equal(env.calls.worker[0]!.model, "p/cheap");
+});
 
 test("simple read plan uses one cheap step and records requested vs observed trace", async t => {
   const env = await setup(t, {});
