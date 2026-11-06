@@ -65,6 +65,31 @@ This assertion is not an audit or a sandbox. Policy/extension/reloadable tool
 modules still lack this contract and return explicit unavailable reasons;
 this does not disable supported core-only admission.
 
+## Optional WebUI ownership
+
+The separately installed WebUI plugin implements the existing foreground-owned
+contract as both a native gateway and, optionally, a settings-tool plugin. Core
+needs no transport-specific exemption. Browser/SSE connections are idle resources;
+actual agent work enters through host ingress/tools. The owner fences new input,
+closes sockets (including incomplete requests), drains entered host acceptance and
+presentation writes/refresh, then awaits module cleanup. Failed cleanup rejects
+shutdown/restart rather than declaring successful quiescence.
+
+UI modules must themselves explicitly assert foreground ownership and register
+resource cleanup; undeclared modules fail before activation. The assertion is
+trusted code, not validation that arbitrary JS is safe. Host work, approvals,
+pending delivery and unsupported unrelated plugins retain their normal blockers.
+See the [WebUI setup](gateways.md#2-browser-install-and-activate-the-webui-plugin)
+and its plugin guide for the exact module contract and tested limits.
+
+An older already-running prototype remains unsupported until an **explicitly
+authorized maintenance transition** restarts its owner with the new module.
+Changing files, reloading only the gateway, or observing no other blockers does
+not retroactively opt its startup PluginHost into admission. Never manufacture a
+lease, suppress blockers or remove security checks to perform that transition.
+
+## Managed Matrix recovery module
+
 The shipped `docs/gateways/matrix-recovery.mjs` is the managed version of the
 20261026 recovery gateway. It preserves both bounded Matrix429 retry/backoff and
 review audit-summary compaction; it inherits native Matrix stop/ingress/outbox
