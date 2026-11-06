@@ -12,7 +12,12 @@ export interface Address {
   thread?: string;
 }
 
+export interface InboundAttachment { sessionKey: string; sha256: string; size: number; name: string }
+export interface PromptImage { type: "image"; data: string; mimeType: string }
+
 export interface Inbound {
+  /** Content-addressed blobs under the configured attachment root; never inline binary state. */
+  attachments?: InboundAttachment[];
   /** Channel-level id (e.g. Matrix event id) to drop duplicates on redelivery. */
   id?: string;
   /** Several channel messages merged into one turn; seen parts are dropped on redelivery. */
@@ -122,6 +127,7 @@ export type TurnEvent =
     };
 
 export interface PromptOptions extends TurnOptions {
+  images?: PromptImage[];
   onEvent?: (event: TurnEvent) => void;
   /** Host-only authorization guard, invoked after asynchronous runtime setup. */
   beforeExecution?: () => void;

@@ -354,6 +354,7 @@ async function main(argv: string[]): Promise<void> {
   let gatewayManager: GatewayManager | undefined;
 
   harness = new Harness({
+    attachmentRoot: path.join(config.home, "attachments"),
     updateBlockers: () => {
       const blockers = [...plugins.updateBlockers(), ...(dispatcher?.updateBlockers() ?? [])];
       if (!hostAdmissionReady) blockers.push("startup reconciliation");
@@ -434,6 +435,7 @@ async function main(argv: string[]): Promise<void> {
   });
   harness.home = config.home_address;
   gatewayManager = new GatewayManager(harness, settings, {
+    inboundAttachments: 1,
     home: config.home, agent: config.agent, approvers: config.approvers, admins: config.admins,
   }, bundledGatewayModules());
   await gatewayManager.load();
