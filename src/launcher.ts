@@ -6,9 +6,10 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 export async function runForeground(entrypoint: string, args: string[], nodeArgs: string[] = process.execArgv): Promise<number> {
   let stopping = false;
+  let stopCode = 143;
   let child: ReturnType<typeof spawn> | undefined;
   let resumeSession: string | undefined;
-  const signal = (name: NodeJS.Signals) => { stopping = true; child?.kill(name); };
+  const signal = (name: NodeJS.Signals) => { stopping = true; stopCode = name === "SIGINT" ? 130 : 143; child?.kill(name); };
   const interrupt = () => signal("SIGINT");
   const terminate = () => signal("SIGTERM");
   process.on("SIGINT", interrupt); process.on("SIGTERM", terminate);
@@ -27,10 +28,10 @@ export async function runForeground(entrypoint: string, args: string[], nodeArgs
         child!.once("exit", (code, signal) => resolve({ code, signal }));
       });
       child = undefined;
-      if (stopping) return result.signal === "SIGINT" ? 130 : 143;
+      if (stopping) return stopCode;
       if (result.code !== 75) return result.code ?? (result.signal === "SIGINT" ? 130 : 1);
     }
-    return 143;
+    return stopCode;
   } finally {
     process.off("SIGINT", interrupt); process.off("SIGTERM", terminate);
   }

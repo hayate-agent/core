@@ -486,7 +486,7 @@ async function main(argv: string[]): Promise<void> {
   if (interactive) {
     localSessions = await LocalSessions.open(config.home, config.cwd);
     sessionOwners.add(localSessions);
-    const restartSession = process.send ? process.env.HAYATE_RESTART_SESSION : undefined;
+    const restartSession = process.send && process.connected ? process.env.HAYATE_RESTART_SESSION : undefined;
     if (restartSession) await localSessions.resume(restartSession);
     else await localSessions.create();
     tui = new HarnessTuiChannel({
@@ -784,7 +784,8 @@ async function main(argv: string[]): Promise<void> {
     // Exit with 75 after drain. The native foreground launcher or service supervisor restarts.
     restart: async () => {
       // Shut down outside the command handler; the drain delivers /restart's acknowledgement first.
-      if (localSessions?.current && process.send) process.send({ type: "hayate-restart", session: localSessions.current.id });
+      if (localSessions?.current && process.send && process.connected)
+        process.send({ type: "hayate-restart", session: localSessions.current.id }, () => {});
       setImmediate(() => void shutdown(75));
     },
   });

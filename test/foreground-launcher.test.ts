@@ -4,6 +4,8 @@ import { mkdtemp, writeFile, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { runForeground } from "../src/launcher.js";
+import { spawn } from "node:child_process";
+import { pathToFileURL } from "node:url";
 
 test("foreground restart waits for the old owner, retains arguments and the requested session", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "foreground-restart-"));
@@ -20,6 +22,26 @@ else{try{process.kill(rows[0].pid,0);process.exitCode=9;}catch{process.exitCode=
     assert.notEqual(rows[0].pid, rows[1].pid);
     assert.deepEqual(rows.map((r: any) => r.args), [["run", "--home", "a path"], ["run", "--home", "a path"]]);
     assert.equal(rows[1].session, "12345678-1234-1234-1234-123456789abc");
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("foreground termination waits for graceful child cleanup and does not restart exit 75", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "foreground-signal-"));
+  try {
+    const entry = path.join(root, "runtime.cjs"), ready = path.join(root, "ready"), done = path.join(root, "done");
+    await writeFile(entry, `const fs=require('fs');fs.appendFileSync(${JSON.stringify(ready)},'started\\n');
+process.on('SIGTERM',()=>setTimeout(()=>{fs.writeFileSync(${JSON.stringify(done)},'cleaned');process.exit(75)},100));setInterval(()=>{},1000);`);
+    const module = pathToFileURL(path.resolve("src/launcher.ts")).href;
+    const code = `const {runForeground}=await import(${JSON.stringify(module)});process.exitCode=await runForeground(${JSON.stringify(entry)},[],[]);`;
+    const child = spawn(process.execPath, ["--import", "tsx", "--input-type=module", "-e", code], { stdio: "ignore" });
+    const exited = new Promise<number | null>((resolve, reject) => { child.once("exit", resolve); child.once("error", reject); });
+    let found = false;
+    for (let i = 0; i < 200; i++) { try { found = (await readFile(ready, "utf8")) === "started\n"; if (found) break; } catch {} await new Promise(r => setTimeout(r, 10)); }
+    assert.ok(found);
+    child.kill("SIGTERM");
+    assert.equal(await exited, 143);
+    assert.equal(await readFile(done, "utf8"), "cleaned");
+    assert.equal(await readFile(ready, "utf8"), "started\n");
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
