@@ -1,8 +1,20 @@
 #!/usr/bin/env node
 /** Foreground process owner. Only exit 75 requests a restart; never overlap writers. */
 import { spawn } from "node:child_process";
-import { realpathSync } from "node:fs";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { realpathSync, lstatSync, readlinkSync } from "node:fs";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+
+/** Follow executable shims, but preserve directory selectors such as current/.
+ * The next child must load the selected release, not this launcher's old imports. */
+export function runtimeEntrypoint(executable: string): string {
+  let selected = path.resolve(executable);
+  for (let i = 0; lstatSync(selected).isSymbolicLink(); i++) {
+    if (i >= 16) throw Error("Launcher symlink chain is too long");
+    selected = path.resolve(path.dirname(selected), readlinkSync(selected));
+  }
+  return path.join(path.dirname(selected), "cli.js");
+}
 
 export async function runForeground(entrypoint: string, args: string[], nodeArgs: string[] = process.execArgv): Promise<number> {
   let stopping = false;
@@ -40,7 +52,7 @@ export async function runForeground(entrypoint: string, args: string[], nodeArgs
 }
 
 if (process.argv[1] && pathToFileURL(realpathSync(process.argv[1])).href === import.meta.url) {
-  runForeground(fileURLToPath(new URL("./cli.js", import.meta.url)), process.argv.slice(2))
+  runForeground(runtimeEntrypoint(process.argv[1]), process.argv.slice(2))
     .then(code => { process.exitCode = code; })
     .catch(() => { console.error("Hayate Agent could not start its runtime process."); process.exitCode = 1; });
 }
