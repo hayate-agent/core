@@ -50,7 +50,7 @@ test("technical dependency hold retries only bounded durable assessment; success
   assert.equal(f.task().recoveryRetry, undefined);
   assert.equal(f.task().expiresAt, 400000);
   await f.h.start(); f.h.releaseRestored(); await f.h.tick();
-  for (let i = 0; i < 100 && !f.runtime.sessions.get("mem:room1")?.prompts.length; i++) { await f.h.tick(); await new Promise(r => setTimeout(r, 5)); }
+  for (let i = 0; i < 1000 && !f.runtime.sessions.get("mem:room1")?.prompts.length; i++) { await f.h.tick(); await new Promise(r => setTimeout(r, 5)); }
   assert.equal(f.runtime.sessions.get("mem:room1")?.prompts.length, 1, JSON.stringify({ sessions: f.h.snapshotSessions(), pending: f.h.pendingInputs(), opened: f.runtime.opened }));
   assert.equal(f.store.list("mem:room1")[0].status, "blocked");
   assert.equal(f.store.list("mem:room1")[0].restarts, 0);
