@@ -45,7 +45,7 @@ test("built npm executable uses Hayate help, init, doctor and restart configurat
   try {
     const pkg = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
     assert.equal(pkg.name, "hayate-agent");
-    assert.deepEqual(pkg.bin, { "hayate-agent": "./dist/cli.js" });
+    assert.deepEqual(pkg.bin, { "hayate-agent": "./dist/launcher.js" });
     const executable = path.resolve(pkg.bin["hayate-agent"]);
     const env = { ...process.env, HOME: root, HAYATE_AGENT_AGENT: "canonical-agent" };
     const ignoredHome = path.join(root, ".vanillacore-harness");

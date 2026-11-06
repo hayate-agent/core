@@ -178,6 +178,29 @@ for (const failure of ["outage", "timeout"]) test(`${failure}: durable ingress s
   await restored.stop(1000);
 });
 
+test("explicit catalog reload releases only queued topic metadata after a durable save", async () => {
+  let at = 1000, available = false, turns = 0, failSave = false;
+  const h = new Harness({ runtime: new FakeRuntime(() => { turns++; return "answer"; }), now: () => at, tickMs: 60000,
+    topicLabeler: async () => { if (!available) throw Error("provider unavailable"); return ["recovered"]; } });
+  h.onStateChange = async () => { if (failSave) throw Error("disk unavailable"); };
+  const channel = new MemoryChannel(); h.addChannel(channel); await h.start();
+  try {
+    await h.accept({ ...msg("unchanged original input"), id: "one-ingress" });
+    await until(() => h.pendingInputs()[0]?.topicPending?.attempts === 1);
+    const retry = h.pendingInputs()[0]!.topicPending!;
+    assert.ok(retry.nextAt > at);
+    failSave = true;
+    await assert.rejects(h.retryTopicLabels(), /disk unavailable/);
+    assert.equal(turns, 0);
+    available = true; failSave = false;
+    assert.equal(await h.retryTopicLabels(), 1);
+    await until(() => h.isDrained());
+    assert.equal(turns, 1);
+    assert.deepEqual(channel.texts(), ["#recovered · answer"]);
+    assert.equal(await h.retryTopicLabels(), 0);
+  } finally { failSave = false; await h.stop(1000); }
+});
+
 test("metadata ambiguity retains original input for normal content clarification, deduplicates and leaves explicit input usable", async () => {
   let calls = 0, turns = 0;
   const runtime = new FakeRuntime(text => {

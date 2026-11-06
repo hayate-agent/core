@@ -562,6 +562,18 @@ export const COMMANDS: Command[] = [
     },
   },
   {
+    name: "reload-models",
+    aliases: ["reload_models"],
+    admin: true,
+    help: "Reload provider/model configuration; preserve model choices and update idle sessions at their next turn",
+    run: async (_a, _i, ctx) => {
+      if (!ctx.harness.runtime.reloadModels) throw Error("This runtime does not support model catalog reload");
+      await ctx.harness.runtime.reloadModels();
+      const queued = await ctx.harness.retryTopicLabels();
+      return `Model catalog reloaded; existing model selections are preserved and refreshed on their next turn. ${queued} queued topic-label retry/retries released.`;
+    },
+  },
+  {
     name: "reload-skills",
     aliases: ["reload_skills", "reload-mcp", "reload_mcp"],
     help: "Re-scan skills; reload session resources/MCP before each session's next turn",

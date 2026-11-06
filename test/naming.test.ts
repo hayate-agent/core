@@ -24,7 +24,7 @@ test("package uses canonical identifiers while internal repository stays exempt"
   const pkg = JSON.parse(await text("package.json"));
   assert.match(pkg.description, /^Hayate Agent:/);
   assert.equal(pkg.name, "hayate-agent");
-  assert.deepEqual(pkg.bin, { "hayate-agent": "./dist/cli.js" });
+  assert.deepEqual(pkg.bin, { "hayate-agent": "./dist/launcher.js" });
   assert.equal(pkg.repository.url, "https://git.vanillacore.net/harness/core.git");
   assert.equal(JSON.parse(await text("package-lock.json")).name, pkg.name);
   assert.match(await text("README.md"), /^# Hayate Agent\n/);

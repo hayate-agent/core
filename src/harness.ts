@@ -1292,6 +1292,21 @@ export class Harness {
     return this.withForegroundWork(() => this.submitForeground(input, deferPump));
   }
 
+  /** Explicit model reload may retry queued metadata now, never replay an active turn. */
+  async retryTopicLabels(): Promise<number> {
+    const sessions = [...this.sessions.values()].filter(s => s.queue.some(input => !!input.topicPending));
+    let count = 0;
+    for (const s of sessions) {
+      for (const input of s.queue) if (input.topicPending) { input.topicPending.nextAt = this.now(); count++; }
+      s.unsaved = true;
+    }
+    if (count) {
+      await this.onStateChange?.();
+      for (const s of sessions) void this.pump(s);
+    }
+    return count;
+  }
+
   private readonly labeledInputs = new WeakSet<Inbound>();
 
   private needsTopic(input: Inbound): boolean {
