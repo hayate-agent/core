@@ -4,3 +4,5 @@ dist/
 
 # Materialized from immutable harness/plugins sources
 src/builtin-plugins/
+optional-plugins/
+optional-plugins.*.stage/

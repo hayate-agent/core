@@ -49,10 +49,17 @@ same WebUI port or use the same Matrix device/crypto store.
 
 ## 2. Browser: install and activate the WebUI plugin
 
-WebUI is an **optional separately built local plugin**, not a bundled Core module.
-Install a reviewed version of [hayate-agent/plugins](https://github.com/hayate-agent/plugins)
-that contains `webui/`; if the selected release lacks it, do not assume Core can
-download or enable it automatically. Pin the checkout to a reviewed commit for a
+WebUI remains an **optional local plugin**, not a Core web server. Current Core
+packages/images include its verified runtime files at
+`dist/optional-plugins/webui/index.mjs`; see [packaged plugin assets](plugin-assets.md).
+For the image, use the absolute path
+`/opt/hayate-agent/dist/optional-plugins/webui/index.mjs` in the activation examples
+below. This packaged presence does not activate it automatically.
+
+For an independent plugin installation, or older Core packages without these
+assets, install a reviewed version of [hayate-agent/plugins](https://github.com/hayate-agent/plugins)
+that contains `webui/`; if the selected release lacks it, use a release with these files. Runtime startup
+does not download or enable optional code automatically. Pin the checkout to a reviewed commit for a
 service deployment. In that checkout:
 
 ```sh

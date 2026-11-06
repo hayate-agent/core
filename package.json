@@ -23,7 +23,8 @@
   },
   "scripts": {
     "plugins:materialize": "node scripts/materialize-plugins.mjs",
-    "prebuild": "npm run plugins:materialize",
+    "plugins:assets": "node scripts/materialize-plugin-assets.mjs && node scripts/build-plugin-assets.mjs",
+    "prebuild": "npm run plugins:materialize && npm run plugins:assets",
     "pretypecheck": "npm run plugins:materialize",
     "pretest": "npm run build",
     "build": "tsc -p tsconfig.json",

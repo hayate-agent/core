@@ -71,7 +71,7 @@ Follow the **[terminal, WebUI, Matrix and dispatcher setup guide](docs/gateways.
 | Interface / feature | Activation |
 | --- | --- |
 | Terminal | Run `hayate-agent`; use `/login`, `/model` and `/help` |
-| WebUI | Install/build the separate WebUI plugin; select `gatewayPlugins.webui.module` in `settings.local.yaml`; open `http://127.0.0.1:3210` |
+| WebUI | Select the packaged optional plugin under `dist/optional-plugins/webui` (or install it separately); configure `gatewayPlugins.webui.module`; open `http://127.0.0.1:3210` |
 | Matrix | Bundled plugin; inject `MATRIX_HOMESERVER`, bot credentials and sender/room policy |
 | Dispatcher | Optional; verify backend concurrency, then enable `dispatcher` and restart |
 | HTTP run API | Separately enabled with `API_SERVER_KEY` or a private loopback key file |
