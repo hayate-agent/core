@@ -38,8 +38,8 @@ streaming is unchanged by gateway notification policy.
 
 ## Technical recovery diagnostics
 
-`gateways.recoveryDiagnostics: true` opts in to host-generated “Recovery
-angehalten” diagnostics. The same boolean may be set under
+`gateways.recoveryDiagnostics: true` opts in to concise, English host-generated
+“Recovery assessment paused” diagnostics. The same boolean may be set under
 `gateways.overrides.<channel>.recoveryDiagnostics`; an explicit false overrides a
 global true. Configure it in `hayate-agent.yaml`, `settings.local.yaml`, or a managed
 `settings.d/*.yaml` drop-in (normal settings precedence). There is no diagnostic
@@ -48,12 +48,26 @@ chat command or environment override. File changes take effect on the next start
 Default-off suppresses only newly generated recovery-assessment notices before the
 shared durable outbox, for every channel (including plugin gateways and TUI/API
 addresses). It does not filter assistant replies, results, genuine blockers,
-operator decisions, approval requests, task-budget escalation notices, or the
-one terminal notice after three failed recovery assessments (it persists
-`recovery_assessment_failed` and names the supported budget reset). Already
-persisted outbox entries are not deleted. Blocked tasks, recovery markers, logs
-and task status remain durable; no completion, retry, authority, depth, budget or
-deadline is changed. Opting in later does not replay previously silent notices.
+operator decisions, approval requests or productive task-budget escalation notices.
+All internal recovery-assessment diagnostics respect this setting, including
+exhaustion after three attempts. The terminal `recovery_assessment_failed` state,
+retry budget and inspection/reset controls remain intact; a failed assessment is
+not evidence that the user's operation failed.
+
+Opt-in notices contain only task/session identifiers and bounded diagnostic codes,
+never the original request, last model response, provider error or automatic-reset
+instructions. Inspect the retained task using `/task-budget inspect` before any
+explicit administrator reset. Existing stops, approvals and deadlines remain binding.
+
+On restart, already queued host recovery diagnostics are suppressed when disabled
+or when their task is no longer blocked. With diagnostics enabled, retained legacy
+notices are replaced with the concise English format, preserving the delivery ID.
+This migration matches the reserved host recovery ID family and known diagnostic
+prefix, not ordinary reply text. Assistant replies, approvals and genuine blockers
+are not filtered. The migration is saved before any delivery. Already delivered
+messages are not deleted. Blocked tasks, recovery markers, logs and task status
+remain durable; no completion, retry, authority, depth, budget or deadline changes.
+Opting in later does not replay previously silent notices.
 
 Matrix environment variables are optional explicit overrides. Precedence:
 environment > per-gateway YAML > global YAML > defaults.

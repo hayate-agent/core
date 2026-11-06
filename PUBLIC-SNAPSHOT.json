@@ -1,5 +1,5 @@
 {
-  "contentDigest": "877e2d30bb404c37c196b9fe2c2afde27186f38f7324382f07e5d659b464f779",
+  "contentDigest": "64e08bf42518ee969f03ddcd8dc38c63e6af286c551c486c465b4ce64a7ec5fb",
   "files": [
     {
       "mode": "100644",
@@ -124,7 +124,7 @@
     {
       "mode": "100644",
       "path": "docs/gateway-progress.md",
-      "sha256": "422be73bce664a352c51a6d7dfacb36b9b9e321689ae1701347192d91a0bba61"
+      "sha256": "c56f897d5f2966c16c34da368b9ca895851c2163e26d08dab53b6e44a2f0a9eb"
     },
     {
       "mode": "100644",
@@ -619,7 +619,7 @@
     {
       "mode": "100644",
       "path": "src/harness.ts",
-      "sha256": "ab84809405e6eaf780a48030e248517743dcfa6d5abb09399d44a0d4c8cc7062"
+      "sha256": "af959ef67bc809be528bc75543aaf37e14ae7b688a5c012a9a2afe6794e1650b"
     },
     {
       "mode": "100644",
@@ -949,7 +949,7 @@
     {
       "mode": "100644",
       "path": "test/actionable-recovery-attention.test.ts",
-      "sha256": "62c1b9ac6ee2b3d93e33be78657907deb1077a713d00e1e2eae27eca77335964"
+      "sha256": "7df2504ae5b1b9209e6b3167a9e079e26c08ff473503c430ed5d922f45986581"
     },
     {
       "mode": "100644",
@@ -1844,7 +1844,7 @@
     {
       "mode": "100644",
       "path": "test/operator-task-budget.test.ts",
-      "sha256": "77db04d36e5e1bd4000f80d6cba13dbe2142194be1b73936352852e1955a82b3"
+      "sha256": "d5bc3d1d5b371167596f140d599cb8d314cf3c2d70afb2f343f55d72bb1a7f87"
     },
     {
       "mode": "100644",
@@ -1984,12 +1984,17 @@
     {
       "mode": "100644",
       "path": "test/recovery-diagnostics.test.ts",
-      "sha256": "e8a162ed4ce6a301006c2ad6b5242da4585f68f12aa5c6710fab55438500638c"
+      "sha256": "52d2c92b4fd88ee8ceff39957daf96156eba61330993d2c430bee6ab15ac363b"
+    },
+    {
+      "mode": "100644",
+      "path": "test/recovery-notice-policy.test.ts",
+      "sha256": "55ed255dfd1fa85a6b905501c8f7923b5e21111f6eecbd89a3fe4d3d8890347c"
     },
     {
       "mode": "100644",
       "path": "test/recovery-real-behavior.test.ts",
-      "sha256": "1b3dd9638556acec4a49a5029cbc805d7ae0abae00b62dd1ad4388e62a8fd176"
+      "sha256": "c7af135e720a00f319c4da52ae49cf63f824ed5a29afba1a33eb1b8f1d598702"
     },
     {
       "mode": "100644",
@@ -2304,7 +2309,7 @@
     {
       "mode": "100644",
       "path": "test/technical-continue-recovery.test.ts",
-      "sha256": "dc9f74b359b68dbcb074d137d00d205fe06b255714fadb54416771a9ea7ec727"
+      "sha256": "d11fa44fb92915d2f73ff7de39947ee84d3b478308c6fa82818611bdabf0cfe7"
     },
     {
       "mode": "100644",
@@ -2710,5 +2715,5 @@
   "historyPolicy": "fresh-root; no source commits, tags, refs or deleted blobs",
   "pluginSHA": "7b410193c7078019a22368897e6730e25b80f0fa",
   "schema": 1,
-  "sourceSHA": "0a8a26527ff26a77405d17134751fe398c2cb1fc"
+  "sourceSHA": "d179df21e0bd1fbe2b5cc32d0d9bd9330b09ce3d"
 }

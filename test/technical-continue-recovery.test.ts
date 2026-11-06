@@ -57,9 +57,9 @@ test('technical retry budget and backoff survive repeated JSON restores and exha
    await h.tick();assert.equal(checks,attempt);now+=60001;
   }
   await h.tick();await h.recoverTasks();assert.equal(checks,3);
-  // Restore again: terminal state and its single notice are not regenerated.
-  {const saved=json(h.snapshotSessions()),out=h.outboxEntries();await h.stop(0);h=make();h.restoreSessions(saved);h.restoreOutbox(out);await h.recoverTasks();now+=60001;await h.recoverTasks();assert.equal(checks,3);assert.equal(h.outboxEntries().length,1);}
-  const t=h.state(key).tasks![0];assert.equal(t.state,'blocked');assert.notEqual(t.explicitBlocked,true);assert.equal(t.termination,'recovery_assessment_failed');assert.match(String(t.recoveryAttentionId),/^task-recovery-exhausted:/);assert.equal(h.outboxEntries().length,1);assert.equal(t.recoveryRetry?.diagnostic,'technical');assert.equal(t.next,next);assert.equal(t.recoveryRetry?.attempts,3);assert.equal(h.pendingInputs().length,0);
+  // Restore again: terminal state is retained without regenerating diagnostic chat.
+  {const saved=json(h.snapshotSessions()),out=h.outboxEntries();await h.stop(0);h=make();h.restoreSessions(saved);h.restoreOutbox(out);await h.recoverTasks();now+=60001;await h.recoverTasks();assert.equal(checks,3);assert.equal(h.outboxEntries().length,0);}
+  const t=h.state(key).tasks![0];assert.equal(t.state,'blocked');assert.notEqual(t.explicitBlocked,true);assert.equal(t.termination,'recovery_assessment_failed');assert.match(String(t.recoveryAttentionId),/^task-recovery-exhausted:/);assert.equal(h.outboxEntries().length,0);assert.equal(t.recoveryRetry?.diagnostic,'technical');assert.equal(t.next,next);assert.equal(t.recoveryRetry?.attempts,3);assert.equal(h.pendingInputs().length,0);
  }finally{await h.stop(0);}
 });
 

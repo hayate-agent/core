@@ -110,7 +110,7 @@ test('no resurrection of stopped/completed/expired/explicit blocked or paused ta
 });
 
 for (const failure of ['technical', 'invalid'] as const)
-test(`three ${failure} recovery assessment failures terminate once, notify by default and accept the supported reset after reload`, async () => {
+test(`three ${failure} recovery assessment failures terminate silently by default and accept the supported reset after reload`, async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'exhausted-recovery-'));
   const store = new StateStore(path.join(dir, 'state.json'));
   let now = 1000, checks = 0, turns = 0;
@@ -142,17 +142,16 @@ test(`three ${failure} recovery assessment failures terminate once, notify by de
     assert.equal(saved.depth, 5);
     assert.equal(saved.expiresAt, 10_000_000);
     assert.match(String(saved.recoveryAttentionId), /^task-recovery-exhausted:/);
-    assert.equal(loaded.outbox?.length, 1);
-    assert.match(loaded.outbox![0]!.text, /ausgeschöpft/);
+    assert.equal(loaded.outbox?.length, 0);
     assert.equal(loaded.pending?.length ?? 0, 0);
-    // Restart: no fourth assessment, no duplicate notice, no worker turn; exactly one delivery.
+    // Restart: no fourth assessment, no diagnostic, no worker turn.
     await a.h.stop(0); a = make();
     a.h.restoreSessions(loaded.sessions); a.h.restoreOutbox(loaded.outbox ?? []);
     await a.h.recoverTasks(); now += 61000; await a.h.recoverTasks();
     a.h.releaseRestored(); await a.h.drained(); await a.h.tick(); await a.h.drained();
     assert.equal(checks, 3);
-    assert.equal(a.h.outboxEntries().filter(e => e.id !== loaded.outbox![0]!.id).length, 0);
-    assert.equal(a.ch.sent.filter(m => /ausgeschöpft/.test(m.text)).length, 1);
+    assert.equal(a.h.outboxEntries().length, 0);
+    assert.equal(a.ch.sent.length, 0);
     assert.equal(turns, 0);
     assert.equal(a.h.pendingInputs().length, 0);
     // The supported reset is now eligible; it does not extend the deadline.
