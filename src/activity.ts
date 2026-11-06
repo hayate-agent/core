@@ -5,6 +5,8 @@ import { executionMetadata, type ExecutionMetadata } from "./builtin-plugins/exe
 /** Host evidence only. No model text, arguments, results or authorization are accepted. */
 export interface ActivitySnapshot {
   id: string;
+  /** Process-local host generation: orders retries and late events without trusting wall clocks. */
+  sequence?: number;
   role: "main" | "worker" | "dispatcher-classifier";
   parent?: string;
   /** Captured by the host from the exact originating assignment, never runtime events. */
@@ -21,12 +23,14 @@ export interface ActivitySnapshot {
 export interface ActivityPolicy { enabled?: boolean; intervalMs?: number; maxAlive?: number }
 export type ActivityEvent = { type: "activity"; kind: "progress" | "alive"; snapshot: ActivitySnapshot; tool?: { callId: string; name: string; state: "started" | "completed" | "failed" } };
 
+let nextSequence = 0;
 const identity = (value: string) => createHash("sha256").update(value).digest("hex").slice(0, 12);
 // Tool names are runtime metadata, but custom tools can contain arbitrary strings.
 const safeName = (name: string) => /^[a-zA-Z][a-zA-Z0-9_.:-]{0,63}$/.test(name) ? name : "tool";
 
 /** One bounded timer per actual running process turn; never enqueues a prompt. */
 export class TurnActivity {
+  private readonly sequence = ++nextSequence;
   private readonly started: number;
   private last: number;
   private lastEmitted: number;
@@ -56,7 +60,7 @@ export class TurnActivity {
   }
   snapshot(): ActivitySnapshot {
     const now = this.now();
-    return { ...this.input, id: `turn-${identity(this.input.id)}`, parent: this.input.parent ? `context-${identity(this.input.parent)}` : undefined,
+    return { ...this.input, sequence: this.sequence, id: `turn-${identity(this.input.id)}`, parent: this.input.parent ? `context-${identity(this.input.parent)}` : undefined,
       execution: this.execution ? { ...this.execution } : undefined, executionState: this.executionState,
       phase: this.phase, activity: this.activity, tools: [...this.tools.values()], elapsedMs: Math.max(0, now - this.started), inactiveMs: Math.max(0, now - this.last) };
   }
