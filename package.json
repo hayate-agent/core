@@ -16,7 +16,7 @@
     "LICENSE"
   ],
   "bin": {
-    "hayate-agent": "./dist/cli.js"
+    "hayate-agent": "./dist/launcher.js"
   },
   "engines": {
     "node": ">=22.19.0"
