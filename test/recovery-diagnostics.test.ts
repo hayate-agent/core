@@ -40,7 +40,7 @@ for (const channelName of ["matrix", "telegram", "slack", "future", "tui", "api"
         restored.restoreOutbox(h.outboxEntries()); restored.onStateChange = async () => {};
         await restored.recoverTasks(); restored.releaseRestored(); await restored.drained();
         await restored.tick(); await restored.drained();
-        assert.equal(channel.texts().filter(text => text.includes("Recovery angehalten")).length, enabled ? 1 : 0);
+        assert.equal(channel.texts().filter(text => text.includes("Recovery assessment paused:")).length, enabled ? 1 : 0);
         assert.equal(restored.state("retained").task?.state, "blocked");
         assert.equal(restored.pendingInputs().length, 0);
       } finally { await h.stop(0); await restored?.stop(0); }
@@ -68,7 +68,7 @@ for (const reply of ["Ergebnis: geprüft und gespeichert.", "Freigabe erforderli
     try {
       await h.submit(msg("Prüfe den Auftrag")); await h.drained();
       assert.deepEqual(channel.texts(), [reply]);
-      assert.equal(channel.texts().some(text => text.includes("Recovery angehalten")), false);
+      assert.equal(channel.texts().some(text => text.includes("Recovery assessment paused:")), false);
     } finally { await h.stop(0); }
   });
 }
