@@ -80,10 +80,10 @@ export class Subagents {
     for (const record of this.list(parent)) await this.cancel(parent, record.id);
   }
   /** Never resubmit an orphaned start: its acceptance may already have had effects. */
-  async reconcile(): Promise<void> {
+  async reconcile(enabled: (parent: string) => boolean = () => true): Promise<void> {
     const pending = new Set(this.harness.pendingInputs().map(input => input.sessionKey));
     for (const record of this.records.values()) {
-      if (!["queued", "running"].includes(record.state)) continue;
+      if (!enabled(record.parent) || !["queued", "running"].includes(record.state)) continue;
       if (pending.has(record.sessionKey) || this.harness.sessions.get(record.sessionKey)?.outbox.length) {
         if (!Number.isFinite(record.expiresAt) || record.expiresAt <= Date.now()) await this.cancel(record.parent, record.id);
         else this.arm(record);
