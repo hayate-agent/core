@@ -26,9 +26,10 @@ permission grant. Existing approvals and execution restrictions remain authorita
 Review engines explicitly declare `executionContexts: 1` in their generic policy
 module; the bundled adapter selection reads its factory's capability marker.
 An older selected review adapter cannot accept a non-default stream binding when
-review is enabled. The companion Plugins review adapter must be published and
-immutably pinned before the feature can ship; optional development packages are
-not automatically included in a Core distribution.
+review is enabled. A compatible review adapter is required; inspect its capability
+rather than assuming support from a release number. Core's existing bundled adapter
+update process remains unchanged. The workspace/WebUI overlay is installed and
+updated separately and does not require an overlay revision pin in Core.
 
 ## Versioned backend services
 
