@@ -33,7 +33,8 @@ export async function captureChangeset(cwd: string, baseRef: string): Promise<Ch
     const body = await readFile(absolute);
     if (body.includes(0)) throw new Error("Untracked binary file requires operator review");
     if (!isUtf8(body)) throw new Error("Untracked invalid UTF-8 file requires operator review");
-    diff += `\nUntracked file ${JSON.stringify(file)}\n${body.toString("utf8")}\n`;
+    // Byte length makes the framing injective: a body cannot forge another file header.
+    diff += `\nUntracked file ${JSON.stringify(file)} (${body.length} bytes)\n${body.toString("utf8")}\n`;
     if (Buffer.byteLength(diff) > LIMIT) throw new Error("Changeset exceeds review size limit");
   }
   if (Buffer.byteLength(diff) > LIMIT) throw new Error("Changeset exceeds review size limit");
