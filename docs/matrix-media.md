@@ -69,27 +69,20 @@ Uploads are re-read on retry, so keep outbound source files unchanged until deli
 
 Source changes span `plugins/src/matrix-channel.ts` and the core binary durable-write
 helper/capability context. Core's `src/builtin-plugins` is generated; do not edit it.
-The production `plugins.lock.json` remains unchanged until the plugin revision is
-published and pinned through the normal release process. A normal `npm run build`
-materializes the pinned version, **not** unpublished workspace changes.
-
-To test this local source combination without publishing or changing the production lock:
+`plugins.lock.json` pins the published attachment implementation and its SHA-256.
+A normal build therefore materializes the reviewed implementation, not unpublished
+workspace changes:
 
 ```sh
 cd core
-node --input-type=module -e '
-import fs from "node:fs";
-import crypto from "node:crypto";
-const lock = JSON.parse(fs.readFileSync("plugins.lock.json"));
-for (const name of Object.keys(lock.files))
-  lock.files[name] = crypto.createHash("sha256").update(fs.readFileSync("../plugins/src/" + name)).digest("hex");
-fs.writeFileSync("/tmp/hayate-media-plugins.lock.json", JSON.stringify(lock));'
-node scripts/materialize-plugins.mjs ../plugins /tmp/hayate-media-plugins.lock.json
-./node_modules/.bin/tsc --noEmit
+npm run build
+npm run typecheck
 node --import tsx --test test/matrix*.test.ts test/capability-context.test.ts
+npm test
 ```
 
 Coverage includes a real Olm/Megolm encrypted attachment roundtrip, tamper rejection,
 ACL/admission, bounded transfers, filenames, threading and stable event transactions.
-These are simulated homeserver tests, not evidence of live deployment. No service
-restart, installation switch or fleet rollout is part of this change.
+These are simulated homeserver tests, not evidence of live deployment. Runtime
+activation uses the normal release/promotion process and fresh update admission;
+a merged source PR alone does not establish live availability.
