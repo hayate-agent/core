@@ -41,6 +41,7 @@ export interface CommandContext {
   /** Who may resolve approvals. Empty: same as admins. Independent of admin rights otherwise. */
   approvers?: string[];
   agent: string;
+  cwdFor?: (sessionKey: string) => string;
   pluginCommands?: ReadonlyMap<string, PluginCommand>;
   pluginUI?: () => PluginUI | undefined;
   localSessionKey?: () => string;
@@ -694,7 +695,7 @@ export function installCommands(ctx: CommandContext): void {
         if (plugin.admin && !isAdmin(ctx, input)) reply(ctx, input, "⛔ admin only");
         else {
           try {
-            const text = await plugin.run(parsed.args, { sessionKey: input.sessionKey, sender: input.sender,
+            const text = await plugin.run(parsed.args, { sessionKey: input.sessionKey, sender: input.sender, cwd: ctx.cwdFor?.(input.sessionKey),
               ui: input.replyTo?.channel === "console" && input.sessionKey === (ctx.localSessionKey?.() ?? "console:local") ? ctx.pluginUI?.() : undefined });
             if (text) reply(ctx, input, text);
           } catch { reply(ctx, input, `⚠️ /${plugin.name}: plugin command failed (details withheld)`); }

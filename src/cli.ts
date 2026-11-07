@@ -12,6 +12,7 @@ import { readdir } from "node:fs/promises";
 import path from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { LocalSessions } from "./local-sessions.js";
+import { ExecutionContexts } from "./execution-contexts.js";
 import { HarnessTuiChannel } from "./channels/tui.js";
 import { ConsoleChannel } from "./channels/console.js";
 import { GatewayManager } from "./gateway-manager.js";
@@ -233,7 +234,7 @@ async function main(argv: string[]): Promise<void> {
   await executions.load();
   const reviewSettings = reviewConfig(config.review);
   const reviewModule = reviewSettings.enabled ? await loadPolicyEngine(config.home, config.reviewEngine, {
-    apiVersion: 1, modelTools: ["plugin_review"], create: context => createReviewEngine({ ...context, config: reviewSettings }),
+    apiVersion: 1, executionContexts: (createReviewEngine as typeof createReviewEngine & { executionContexts?: 1 }).executionContexts, modelTools: ["plugin_review"], create: context => createReviewEngine({ ...context, config: reviewSettings }),
   }) : undefined;
   const settings = new SettingsService(path.join(config.home, "settings.local.yaml"), {
     model: config.model, thinking: config.thinking,
@@ -295,9 +296,27 @@ async function main(argv: string[]): Promise<void> {
     if (typeof pair === "string") throw Error(pair);
     return runtimeReviewer(runtime, "supervisor").review(prompt, pair.model, pair.thinking ?? "low", signal);
   } });
+  let contextParent: (key: string) => string | undefined = () => undefined;
+  const executionContexts = new ExecutionContexts(path.join(config.home, "execution-contexts.json"), config.cwd, key => contextParent(key));
+  await executionContexts.load();
+  const cwdFor = (key: string) => executionContexts.get(key).cwd;
+  const executionContextCapability = Object.freeze({
+    get: (key: string) => executionContexts.get(key),
+    bind: async (key: string, context: { cwd: string; directories?: string[] }) => {
+      if (context.cwd !== config.cwd && reviewSettings.enabled && reviewModule?.executionContexts !== 1) throw Error("Selected review engine does not support stream execution contexts");
+      if (harness.sessions.has(key) || harness.pendingInputs().some(input => input.sessionKey === key)) {
+        const existing = executionContexts.get(key);
+        if (existing.cwd !== context.cwd) throw Error("Existing stream cannot change its execution directory; create a new stream");
+      }
+      return harness.withForegroundWork(() => executionContexts.bind(key, context));
+    },
+  });
   const adaptiveSkills = config.skills.adaptive === true ? new AdaptiveSkills(config.home, config.cwd, skillCatalog) : undefined;
   const runtime = new PiRuntime({
     adaptiveSkills,
+    // Capture worker ancestry before token ownership changes; a reopened worker
+    // must never silently fall back to the host startup directory.
+    executionContext: key => executionContexts.capture(key),
     cwd: config.cwd,
     sessionsDir: path.join(config.home, "sessions"),
     model: config.model,
@@ -340,18 +359,18 @@ async function main(argv: string[]): Promise<void> {
         dispatchRuntime.guardResult(key, current.hostEvent.executionId);
         guardResultOrchestration(harness, key, tool, input);
       }
-      await plugins.policies.beforeTool(config.cwd, tool, input);
+      await plugins.policies.beforeTool(cwdFor(key), tool, input);
     },
-    personaSections: async () => {
+    personaSections: async (cwd = config.cwd) => {
       await protectedContent.verify();
-      return personaSections(await loadPersona(config.persona, personality), { name: config.agent, workspace: config.cwd });
+      return personaSections(await loadPersona(config.persona, personality), { name: config.agent, workspace: cwd });
     },
     approvals,
     requestApproval: (key, tool, input) => harness.requestApproval(key, tool, input),
   });
   const reviewWorkers = new ReviewWorkers(runtime, new ExecutionStore(path.join(config.home, "review-executions.json")), dispatchPolicy.capacity);
   const reviewSubagents = new ReviewSubagents(runtime, path.join(config.home, "review-subagents"));
-  const reviewEngine = reviewModule ? await createPolicyEngine(reviewModule, { home: config.home, cwd: config.cwd, config: reviewSettings,
+  const reviewEngine = reviewModule ? await createPolicyEngine(reviewModule, { home: config.home, cwd: config.cwd, cwdFor, config: reviewSettings,
     reviewExecution: {
       dispatcherEnabled: () => dispatchPolicy.enabled,
       httpSelection: async (model, thinking) => {
@@ -391,7 +410,7 @@ async function main(argv: string[]): Promise<void> {
     },
     runtime,
     sessionEnabled,
-    progressEvidence: () => workingTreeEvidence(config.cwd),
+    progressEvidence: input => workingTreeEvidence(cwdFor(input.sessionKey)),
     executionStore: executions,
     contextMaintenance: maintenance,
     memory: plugins.memoryOrchestration,
@@ -429,7 +448,7 @@ async function main(argv: string[]): Promise<void> {
       await protectedContent.verify();
       if (config.autoReloadToolPlugins) await reloadableTools?.refresh();
       await improvement?.before(input);
-      await plugins.policies.prepare(config.cwd, input);
+      await plugins.policies.prepare(cwdFor(input.sessionKey), input);
     },
     reportOutput: (input, output) => plugins.reportProcessing.record(input, output),
     reportContext: input => plugins.reportProcessing.context(input),
@@ -443,7 +462,7 @@ async function main(argv: string[]): Promise<void> {
     },
     afterTurn: async (input, reply, session, options, signal) => {
       await reloadRuntimeSettings();
-      const result = await plugins.policies.finish(config.cwd, input, reply, session, options, signal);
+      const result = await plugins.policies.finish(cwdFor(input.sessionKey), input, reply, session, options, signal);
       await improvement?.completed(input, result);
       return result;
     },
@@ -459,6 +478,7 @@ async function main(argv: string[]): Promise<void> {
   harness.home = config.home_address;
   gatewayManager = new GatewayManager(harness, settings, {
     inboundAttachments: 1,
+    services: plugins.services,
     home: config.home, agent: config.agent, approvers: config.approvers, admins: config.admins,
   }, bundledGatewayModules());
   await gatewayManager.load();
@@ -564,8 +584,13 @@ async function main(argv: string[]): Promise<void> {
   updateReviewDefaults();
   // The state file doubles as the inbox: unfinished user/cron inputs are part of every save.
   const subagents = new Subagents(harness, async () => { await persist(); });
+  contextParent = key => subagents.snapshot().find(record => record.sessionKey === key)?.parent ??
+    executions.list().find(task => key === `dispatch:${task.id}:${task.token}`)?.parent;
   subagents.restore(saved?.subagents ?? []);
   subagents.restoreOverrides(saved?.subagentOverrides ?? {});
+  // Freeze contexts of previously used conversations before plugins can bind new
+  // streams. Legacy histories inherit their pre-upgrade host/worker context.
+  for (const session of saved?.sessions ?? []) await executionContexts.capture(session.key);
   harness.addChannel(subagents.channel);
   const persist = (pending: Inbound[] = harness.pendingInputs()) =>
     store.save({
@@ -611,7 +636,7 @@ async function main(argv: string[]): Promise<void> {
       await dispatcher.submitScheduled(key, requestId, task, mandate);
     },
   });
-  await plugins.load(config.plugins ?? [], { agent: config.agent, home: config.home, cwd: config.cwd }, [...builtinCommandNames, "sessions", "resume", ...skills.map((s) => s.name)], ["console", "api", "dispatch", ...Object.keys(bundledGatewayModules()), ...harness.channels.keys()], [...(values["--maintenance-directory"] ? [maintenanceControlPlugin(Object.freeze({
+  await plugins.load(config.plugins ?? [], { agent: config.agent, home: config.home, cwd: config.cwd, executionContexts: executionContextCapability, foregroundWork: work => harness.withForegroundWork(work) }, [...builtinCommandNames, "sessions", "resume", ...skills.map((s) => s.name)], ["console", "api", "dispatch", ...Object.keys(bundledGatewayModules()), ...harness.channels.keys()], [...(values["--maintenance-directory"] ? [maintenanceControlPlugin(Object.freeze({
     status: () => maintenance.admissionStatus(values["--maintenance-session"]!),
     admit: (id: string, request: import("./context-maintenance.js").MaintenanceRequest, version: number) => maintenance.admit(values["--maintenance-session"]!, id, request, version),
     cancel: (id: string, version: number) => maintenance.cancelAdmission(values["--maintenance-session"]!, id, version),
@@ -768,7 +793,7 @@ async function main(argv: string[]): Promise<void> {
     }
     if (!persisted) { console.error("[state] shutdown snapshot was NOT saved; previous durable inbox retained"); code = 1; }
     if (unfinished.length) console.error(`[harness] ${unfinished.length} pending input(s) retained for their owning conversations`);
-    const cleanup = Promise.allSettled([owners, memoryProvider.close(), extensionManager.stop(), policyManager.stop(), sessionProviderOwner?.close(), plugins.stop()]);
+    const cleanup = Promise.allSettled([owners, memoryProvider.close(), extensionManager.stop(), policyManager.stop(), sessionProviderOwner?.close(), plugins.stop().then(() => executionContexts.drain())]);
     let cleanupTimer: NodeJS.Timeout | undefined;
     await Promise.race([cleanup, new Promise<void>(resolve => { cleanupTimer = setTimeout(resolve, 3000); })]);
     clearTimeout(cleanupTimer);
@@ -811,6 +836,7 @@ async function main(argv: string[]): Promise<void> {
       },
     },
     skills: () => skills,
+    cwdFor,
     pluginCommands: plugins.commands,
     pluginUI: () => tui?.pluginUI(),
     localSessionKey: () => localSessions?.current?.key ?? "console:local",
