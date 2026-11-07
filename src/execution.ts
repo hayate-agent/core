@@ -347,6 +347,15 @@ export class ExecutionStore {
       return { ...task, claimedRecoveryAction };
     });
   }
+  /** Roll back only a scheduler claim that never reached its strategy. */
+  releaseUnstartedClaim(id: string, token: string, recoveryAction?: "continue" | "retry"): Promise<void> {
+    return this.mutate(draft => {
+      const task = this.owned(draft, id, token);
+      task.status = "ready";
+      if (recoveryAction) task.recoveryGrant = { action: recoveryAction, restarts: task.restarts };
+      delete task.token;
+    });
+  }
   observeExecution(id: string, token: string, selection: ExecutionMetadata): Promise<void> {
     return this.mutate(draft => { this.owned(draft, id, token).execution = executionMetadata(selection); });
   }
@@ -494,11 +503,11 @@ export class ExecutionStore {
   }
   /** Startup reconstruction is separate from scheduling. Unknown strategies/versions
    * and ambiguous external effects stay blocked. Both old and new replay policy must agree. */
-  recover(strategies: ReadonlyMap<string, RecoveryStrategy>, restartLimit?: number, policy?: ExecutionRecoveryPolicy): Promise<void> {
+  recover(strategies: ReadonlyMap<string, RecoveryStrategy>, restartLimit?: number, policy?: ExecutionRecoveryPolicy, enabled: (task: Execution) => boolean = () => true): Promise<void> {
     if (restartLimit !== undefined && (!Number.isSafeInteger(restartLimit) || restartLimit < 0)) throw Error("Invalid recovery restart limit");
     return this.mutate(draft => {
       for (const task of draft.executions) {
-        if (!["ready", "running"].includes(task.status)) continue;
+        if (!enabled(task) || !["ready", "running"].includes(task.status)) continue;
         const strategy = strategies.get(task.strategy);
         const interrupted = task.status === "running";
         if (interrupted) task.restarts++;

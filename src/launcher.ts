@@ -21,10 +21,11 @@ export async function runForeground(entrypoint: string, args: string[], nodeArgs
   let stopCode = 143;
   let child: ReturnType<typeof spawn> | undefined;
   let resumeSession: string | undefined;
-  const signal = (name: NodeJS.Signals) => { stopping = true; stopCode = name === "SIGINT" ? 130 : 143; child?.kill(name); };
+  const signal = (name: NodeJS.Signals) => { stopping = true; stopCode = name === "SIGINT" ? 130 : name === "SIGHUP" ? 129 : 143; child?.kill(name); };
   const interrupt = () => signal("SIGINT");
   const terminate = () => signal("SIGTERM");
-  process.on("SIGINT", interrupt); process.on("SIGTERM", terminate);
+  const hangup = () => signal("SIGHUP");
+  process.on("SIGINT", interrupt); process.on("SIGTERM", terminate); process.on("SIGHUP", hangup);
   try {
     while (!stopping) {
       const env = { ...process.env };
@@ -47,7 +48,7 @@ export async function runForeground(entrypoint: string, args: string[], nodeArgs
     }
     return stopCode;
   } finally {
-    process.off("SIGINT", interrupt); process.off("SIGTERM", terminate);
+    process.off("SIGINT", interrupt); process.off("SIGTERM", terminate); process.off("SIGHUP", hangup);
   }
 }
 

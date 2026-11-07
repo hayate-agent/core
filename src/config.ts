@@ -57,7 +57,7 @@ export interface HarnessConfig {
   protectedContent?: import("./protected-content.js").ProtectedContentConfig;
   skillUpdateSource?: import("./skill-updates.js").SkillUpdateSource;
   /** Infrastructure-owned semantic continuation grants, keyed by exact conversation. */
-  completionCheck?: { authorizations: Record<string, import("./completion-check.js").CompletionAuthorization> };
+  completionCheck?: { authorizations?: Record<string, import("./completion-check.js").CompletionAuthorization>; timeoutMs?: number };
   /** Explicit installation review selections, before normalization adds defaults. */
   reviewOverrides?: { model?: string; thinking?: string };
   modelRoles?: ModelRoles;
@@ -128,6 +128,8 @@ export function defaultConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
   }
   if (overrides.reportProcessing !== undefined && (typeof overrides.reportProcessing !== "string" || !/^[a-z][a-z0-9_-]*$/.test(overrides.reportProcessing))) throw Error("Invalid reportProcessing");
   if (overrides.autoReloadToolPlugins !== undefined && typeof overrides.autoReloadToolPlugins !== "boolean") throw Error("autoReloadToolPlugins must be a boolean");
+  if (overrides.completionCheck?.timeoutMs !== undefined && (!Number.isSafeInteger(overrides.completionCheck.timeoutMs) ||
+      overrides.completionCheck.timeoutMs < 1000 || overrides.completionCheck.timeoutMs > 120000)) throw Error("completionCheck.timeoutMs must be between 1000 and 120000 milliseconds");
   if (overrides.modelRoles !== undefined) validateModelRoles(overrides.modelRoles);
   dispatcherConfig(overrides.dispatcher);
   validateWasmTools(overrides.wasmTools ?? []);

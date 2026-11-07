@@ -20,6 +20,8 @@ export interface TuiOptions {
   reasoning?: () => string;
   prepareSession?: () => Promise<void>;
   quit: () => void;
+  /** Explicit terminal interrupt: abort current work rather than draining queued work. */
+  interrupt?: () => void;
   terminal?: Terminal;
   models?: () => Promise<string[]>;
   login?: (ui: LoginUI) => Promise<void>;
@@ -131,7 +133,7 @@ export class HarnessTuiChannel implements Channel {
         this.tui.requestRender();
         return { consume: true };
       }
-      if (matchesKey(data, "ctrl+c")) { if (this.cancelDialog) this.cancelDialog(); else this.opts.quit(); return { consume: true }; }
+      if (matchesKey(data, "ctrl+c")) { (this.opts.interrupt ?? this.opts.quit)(); return { consume: true }; }
       return undefined;
     });
     if (this.opts.sessions?.current) this.note(`New session: ${this.opts.sessions.current.id}\nWorkspace: ${this.opts.sessions.workspace}\nNo previous conversation loaded. /sessions · /resume <id> · /new [title]`);

@@ -49,6 +49,7 @@ export class Dispatcher {
     private readonly admissionFenced: () => boolean = () => false,
     /** Trusted strategies that only continue existing tasks after a strategy switch; new work uses `strategy`. */
     retained: readonly DispatcherStrategy[] = [],
+    private readonly parentEnabled: (parent: string) => boolean = () => true,
   ) {
     if (!Number.isSafeInteger(capacity) || capacity < 1) throw Error("Invalid dispatcher capacity");
     for (const item of [strategy, ...retained])
@@ -65,14 +66,21 @@ export class Dispatcher {
   /** Includes durable runnable tasks and claim/delivery windows, not just worker slots. */
   updateBlockers(): string[] {
     return this.submitting || this.active.size || this.scheduling || this.delivering ||
-      this.store.events().length || this.store.list().some(task => task.status === "ready" || task.status === "running")
+      this.store.events().some(event => this.parentEnabled(event.parent)) || this.store.list().some(task => this.parentEnabled(task.parent) && (task.status === "ready" || task.status === "running"))
       ? ["dispatcher work"] : [];
   }
   async start(): Promise<void> {
     if (this.initialized) throw Error("Dispatcher already started");
     this.initialized = true;
-    await this.store.recover(this.strategies, undefined, this.recoveryPolicy);
+    await this.store.recover(this.strategies, undefined, this.recoveryPolicy, task => this.parentEnabled(task.parent));
     this.recovered = true;
+    await this.kick();
+  }
+  /** Explicit conversation selection may release only its retained, non-active workers. */
+  async activateParent(parent: string): Promise<void> {
+    if (!this.ready || !this.parentEnabled(parent)) return;
+    await this.store.recover(this.strategies, undefined, this.recoveryPolicy,
+      task => task.parent === parent && !this.active.has(task.id));
     await this.kick();
   }
   /** Host-only scheduled submission; never expose mandate as a model tool argument. */
@@ -118,7 +126,7 @@ export class Dispatcher {
     void this.flushEvents().catch(this.report);
     for (const task of this.store.list()) {
       if (this.stopped || this.active.size >= this.capacity) break;
-      if (task.status !== "ready" || this.active.has(task.id)) continue;
+      if (task.status !== "ready" || this.active.has(task.id) || !this.parentEnabled(task.parent)) continue;
       const strategy = this.strategyFor(task);
       if (!strategy) continue;
       let claimed: Execution;
@@ -134,6 +142,10 @@ export class Dispatcher {
       if (this.stopped) return;
       const current = this.store.list().find(item => item.id === claimed.id);
       if (current?.status !== "running" || current.token !== claimed.token) continue;
+      if (!this.parentEnabled(claimed.parent)) {
+        await this.store.releaseUnstartedClaim(claimed.id, claimed.token!, claimed.claimedRecoveryAction);
+        continue;
+      }
       const abort = new AbortController();
       const done = Promise.resolve().then(() => this.run(claimed, abort, strategy));
       this.active.set(task.id, { abort, done });
@@ -148,6 +160,10 @@ export class Dispatcher {
     };
     try {
       check();
+      if (!this.parentEnabled(task.parent)) {
+        await this.store.releaseUnstartedClaim(task.id, token, task.claimedRecoveryAction);
+        return;
+      }
       const result = await strategy.execute(task, {
         signal: abort.signal,
         status: async text => {
@@ -209,10 +225,11 @@ export class Dispatcher {
     if (this.delivering) return this.delivering;
     this.delivering = (async () => {
       while (!this.stopped) {
-        const events = this.store.events();
+        const events = this.store.events().filter(event => this.parentEnabled(event.parent));
         if (!events.length) return;
         for (const event of events) {
           if (this.stopped) return;
+          if (!this.parentEnabled(event.parent)) continue;
           // Receiver must durably deduplicate by event.id before acknowledging.
           // Failures leave the event pending and reject; never spin on failure.
           await this.deliver(event);

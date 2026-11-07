@@ -557,7 +557,7 @@ test("approval prompt delivery retries with a stable delivery id, then denies", 
   };
   harness.state("mem:room1").replyTo = ROOM;
   const pending = harness.requestApproval("mem:room1", "bash", {});
-  await new Promise((r) => setTimeout(r, 30));
+  for (const limit = Date.now() + 5000; ids.length < 3 && Date.now() < limit;) await new Promise((r) => setTimeout(r, 5));
   assert.equal(ids.length, 3);
   assert.equal(new Set(ids).size, 1);
   ch.send = async () => {};

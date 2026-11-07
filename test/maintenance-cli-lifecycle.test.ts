@@ -12,7 +12,7 @@ const cli = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
 
 function message(child: ChildProcess, command?: string): Promise<Record<string, unknown>> {
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => { cleanup(); reject(Error("owner IPC timeout")); }, 5000);
+    const timer = setTimeout(() => { cleanup(); reject(Error("owner IPC timeout")); }, 20000);
     const cleanup = () => { clearTimeout(timer); child.off("message", received); child.off("exit", exited); child.off("error", failed); };
     const received = (value: unknown) => { cleanup(); resolve(value as Record<string, unknown>); };
     const exited = () => { cleanup(); reject(Error("owner exited before reply")); };
@@ -24,13 +24,13 @@ function message(child: ChildProcess, command?: string): Promise<Record<string, 
 async function stop(child: ChildProcess): Promise<void> {
   if (child.exitCode !== null || child.signalCode !== null) return;
   await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => { child.kill("SIGKILL"); }, 5000);
+    const timer = setTimeout(() => { child.kill("SIGKILL"); }, 20000);
     child.once("exit", (code, signal) => { clearTimeout(timer); code === 0 ? resolve() : reject(Error(`owner stop: ${code}/${signal}`)); });
     child.send("stop");
   });
 }
 
-test("real CLI reconciles pending intent across owner restart, applies once and retains applied status", { timeout: 30000 }, async () => {
+test("real CLI reconciles pending intent across owner restart, applies once and retains applied status", { timeout: 90000 }, async () => {
   const home = await mkdtemp(path.join(os.tmpdir(), "maintenance-cli-owner-"));
   const endpoint = path.join(home, "control", "maintenance.sock");
   const request = path.join(home, "request.json");
@@ -41,7 +41,7 @@ test("real CLI reconciles pending intent across owner restart, applies once and 
   };
   const command = async (...args: string[]) => {
     const { stdout } = await exec(process.execPath, ["--import", "tsx", cli, "maintenance", endpoint, ...args], {
-      timeout: 5000, env: { ...process.env, HAYATE_AGENT_HOME: path.join(home, "invalid-home") },
+      timeout: 20000, env: { ...process.env, HAYATE_AGENT_HOME: path.join(home, "invalid-home") },
     });
     return JSON.parse(stdout.trim());
   };

@@ -1,0 +1,21 @@
+{
+  "schema": 1,
+  "plugins": [
+    {
+      "name": "webui",
+      "repository": "https://git.vanillacore.net/harness/plugins",
+      "revision": "a03e5d2622cd50a5a3a67eae3df1704ac5d4811f",
+      "source": "webui",
+      "files": {
+        "index.mjs": "9a176bc4351570d4b05a1f14a788379cd3a9eb533cfb6e5f06f7d19dd6fbccbf",
+        "ui.mjs": "b4d5571c2e21e87a4c5c151c937ba8b279ec6b802e02192e2034d4fa605a04e8",
+        "README.md": "f7cd48459078ff5bad4d3e27e56e1a0766385c759d3c5f8247ec6020f3ac71ea",
+        "package.json": "575554e9d69a82523c735011bff871de157ffc848404dba1f4d0ca0cb17ecc5c",
+        "package-lock.json": "e54cef25cc89000f2f1de488fb24cddaefa205e54b86197e135c3ab87a14fe6e",
+        "public/app.js": "e907932b585c404fa9f154e0268438bcb8b3a4eb9fcf682b172bc7181fed1e02",
+        "public/index.html": "79329f7b44bf5f8cdf808f737c53c57f63600724ef0b3c4ba3ebe648d67ba342",
+        "public/style.css": "7cdfd6f49e8fda91d187fa70243b40de8d4f59967d6010c06501c7b61262acdf"
+      }
+    }
+  ]
+}

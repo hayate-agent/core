@@ -2,11 +2,13 @@ import type { PluginModule } from "./plugins.js";
 import type { ReviewService, FindingAssessment } from "./review.js";
 
 /** Bundled plugin; the service and durable budget belong to the Harness, not a local extension. */
-export function reviewPlugin(service: ReviewService, cwd: string): PluginModule {
+export function reviewPlugin(service: ReviewService, fallback: string, cwdFor?: (key: string) => string): PluginModule {
+  const resolveCwd = (context: { sessionKey: string; cwd?: string }) => context.cwd ?? cwdFor?.(context.sessionKey) ?? fallback;
   return {
     apiVersion: 1,
     activate(api) {
       api.registerCommand({ name: "review", admin: true, help: "Review current changeset (status | run | extend <id> <rounds> <base> <fingerprint> <reason>)", async run(args, context) {
+        const cwd = resolveCwd(context);
         const [action, id, count, base, fingerprint, ...reason] = args.trim().split(/\s+/);
         if (action === "extend") {
           if (!id || !/^[1-9]\d*$/.test(count ?? "") || !base || !fingerprint || !reason.length) {
@@ -30,6 +32,7 @@ export function reviewPlugin(service: ReviewService, cwd: string): PluginModule 
           }, required: ["id", "disposition", "evidence"], additionalProperties: false } },
         }, required: ["action"], additionalProperties: false },
         async execute(input, context) {
+          const cwd = resolveCwd(context);
           if (input.action === "run") return service.summarize(await service.run(cwd, context.sessionKey, context.signal));
           if (input.action === "assess") return service.summarize(await service.assess(cwd, String(input.fingerprint), input.assessments as FindingAssessment[]));
           if (input.action !== "status") throw new Error("Invalid review action");

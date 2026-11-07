@@ -5,8 +5,9 @@
  */
 import { NativeActivityDelivery } from "./native-activity.js";
 import { GatewayProgress, progressMode, type ProgressMode } from "./channels/progress.js";
-import { createHash, randomUUID } from "node:crypto";
-import { mkdir, readFile } from "node:fs/promises";
+import { createHash, randomUUID, randomBytes, createCipheriv, createDecipheriv } from "node:crypto";
+import { mkdir, readFile, open } from "node:fs/promises";
+import { constants } from "node:fs";
 import path from "node:path";
 import { marked } from "marked";
 import { writeFileDurable } from "./durable.js";
@@ -16,6 +17,10 @@ import { MatrixCrypto } from "./matrix-crypto.js";
 
 export interface MatrixOptions {
   homeserver: string;
+  /** Local private storage for incoming attachments. Defaults beside sync state. */
+  mediaDir?: string;
+  /** Per-file transfer limit (default 20 MiB). */
+  mediaMaxBytes?: number;
   progress?: ProgressMode;
   nativeActivity?: boolean;
   nativeActivityCoalesceMs?: number;
@@ -61,6 +66,8 @@ export function matrixOptionsFromEnv(env: NodeJS.ProcessEnv, home: string): Matr
   return {
     homeserver: env.MATRIX_HOMESERVER.replace(/\/+$/, ""),
     accessToken: env.MATRIX_ACCESS_TOKEN,
+    mediaDir: env.MATRIX_MEDIA_DIR || path.join(home, "matrix-media"),
+    mediaMaxBytes: env.MATRIX_MEDIA_MAX_BYTES === undefined ? undefined : Number(env.MATRIX_MEDIA_MAX_BYTES),
     nativeActivity: truthy(env.MATRIX_NATIVE_ACTIVITY, false),
     nativeActivityCoalesceMs: Number(env.MATRIX_NATIVE_ACTIVITY_COALESCE_MS ?? 1000),
     progress: env.MATRIX_PROGRESS === undefined ? undefined : progressMode(env.MATRIX_PROGRESS),
@@ -246,6 +253,7 @@ export class MatrixChannel implements Channel {
   }
   async flushNativeActivity(): Promise<void> { await this.native.flush(); }
   constructor(private readonly o: MatrixOptions) {
+    if (o.mediaMaxBytes !== undefined && (!Number.isSafeInteger(o.mediaMaxBytes) || o.mediaMaxBytes <= 0)) throw Error("Invalid MATRIX_MEDIA_MAX_BYTES");
     this.native = new NativeActivityDelivery(`${o.syncStateFile}.activity.json`, async (to, id, text) => {
       await this.send(to, text, { progressId: id, presentation: "progress" });
     }, Number.isFinite(o.nativeActivityCoalesceMs) ? Math.max(100, Math.min(30000, o.nativeActivityCoalesceMs!)) : 1000);
@@ -642,16 +650,17 @@ export class MatrixChannel implements Channel {
     const rel = c["m.relates_to"] ?? {};
     if (rel.rel_type === "m.replace") return; // edits
     if (c.msgtype === "m.notice" && !this.o.processNotices) return;
-    if (c.msgtype !== "m.text" && c.msgtype !== "m.notice" && c.msgtype !== "m.emote") return; // media later
+    const media = ["m.image", "m.file", "m.audio", "m.video"].includes(c.msgtype);
+    if (!media && c.msgtype !== "m.text" && c.msgtype !== "m.notice" && c.msgtype !== "m.emote") return;
     let body = String(c.body ?? "");
     // Reply fallback quote (also on thread replies): never part of the prompt or mention check.
     if (rel["m.in_reply_to"]) body = body.replace(/^(>.*\n)+\n?/, "");
     const mentioned = this.mentions(c, body);
     if (mentioned) body = this.stripMention(body);
     // Classified after normalization: "Agent: /pause" is the command /pause.
-    const isCommand = body.trimStart().startsWith("/");
+    const isCommand = !media && body.trimStart().startsWith("/");
     // Approvers may always resolve approvals, without general conversational access.
-    const approvalCmd = /^\s*\/(approve|deny)(\s|$)/.test(body) && this.o.approvers.includes(ev.sender);
+    const approvalCmd = !media && /^\s*\/(approve|deny)(\s|$)/.test(body) && this.o.approvers.includes(ev.sender);
     if (!this.allowed(ev.sender) && !approvalCmd) return;
     const dm = await this.isDm(roomId);
     const explicitThread: string | undefined = rel.rel_type === "m.thread" ? rel.event_id : undefined;
@@ -671,6 +680,11 @@ export class MatrixChannel implements Channel {
     }
     void this.api("POST", `/rooms/${encodeURIComponent(roomId)}/receipt/m.read/${encodeURIComponent(ev.event_id)}`, {}).catch(() => undefined);
 
+    // Fetch only after all sender/room/mention checks. Media labels are never commands.
+    if (media) {
+      const file = await this.downloadMedia(roomId, ev);
+      body = `Matrix attachment: ${body}\n[Matrix attachment (untrusted): ${JSON.stringify({ path: file, name: c.filename ?? c.body, mimetype: c.info?.mimetype })}]\nUse the read tool to inspect this local attachment. To send a file, output a standalone line MEDIA:/absolute/path.`;
+    }
     const text = isCommand || dm ? body : `[${ev.sender}] ${body}`;
     const input: Inbound = {
       id: ev.event_id,
@@ -681,7 +695,7 @@ export class MatrixChannel implements Channel {
       replyTo: { channel: "matrix", target: roomId, thread },
       replyOptional: replyOptional || undefined,
     };
-    if (decrypted || isCommand || this.o.batchDelayMs <= 0) return this.handOff(input);
+    if (media || decrypted || isCommand || this.o.batchDelayMs <= 0) return this.handOff(input);
     // Keyed before auto-threading: rapid top-level messages merge into the first one's thread.
     this.batch(`${roomId}|${explicitThread ?? ""}|${ev.sender}`, input);
   }
@@ -729,6 +743,116 @@ export class MatrixChannel implements Channel {
     this.handOff({ id: ev.event_id, sessionKey: `matrix:${roomId}`, text: `/${verb} ${approvalId}`, source: "channel", sender: ev.sender, replyTo: { channel: "matrix", target: roomId } });
   }
 
+  // ---------------------------------------------------------------- media
+
+  private get mediaLimit(): number { return this.o.mediaMaxBytes ?? 20 * 1024 * 1024; }
+
+  /** Authenticated media stays on our configured homeserver; never forward tokens to MXC hosts or redirects. */
+  private async mediaRequest(endpoint: string, data?: Buffer, mime = "application/octet-stream", renewed = false): Promise<Buffer> {
+    let res: Response;
+    try {
+      res = await this.fetch(`${this.o.homeserver}${endpoint}`, {
+        method: data ? "POST" : "GET", redirect: "error",
+        headers: { authorization: `Bearer ${this.o.accessToken}`, ...(data ? { "content-type": mime } : {}) },
+        body: data as BodyInit | undefined,
+        signal: AbortSignal.any([this.abort.signal, AbortSignal.timeout(60_000)]),
+      });
+    } catch (err) { throw new MatrixTransportError("Matrix media transport failed", err); }
+    if (res.status === 401 && this.started && this.passwordAuth && !renewed) {
+      await res.body?.cancel();
+      this.renewing ??= this.login().finally(() => { this.renewing = undefined; });
+      await this.renewing;
+      return this.mediaRequest(endpoint, data, mime, true);
+    }
+    if (!res.ok) {
+      await res.body?.cancel();
+      throw new HttpError(res.status, `Matrix media HTTP ${res.status}`);
+    }
+    const limit = data ? 64 * 1024 : this.mediaLimit;
+    if (Number(res.headers.get("content-length")) > limit) {
+      await res.body?.cancel();
+      throw Error("Matrix media exceeds size limit");
+    }
+    const chunks: Buffer[] = [];
+    let size = 0;
+    try {
+      for await (const chunk of res.body ?? []) {
+        size += chunk.length;
+        if (size > limit) throw Error("Matrix media exceeds size limit");
+        chunks.push(Buffer.from(chunk));
+      }
+    } catch (err) {
+      if (size > limit) throw err;
+      throw new MatrixTransportError("Matrix media body failed", err);
+    }
+    return Buffer.concat(chunks);
+  }
+
+  private async downloadMedia(roomId: string, ev: MatrixEvent): Promise<string> {
+    const c = ev.content;
+    const encrypted = c.file;
+    const uri = encrypted ? encrypted.url : c.url;
+    const match = typeof uri === "string" && /^mxc:\/\/([^/?#\s]+)\/([^/?#\s]+)$/.exec(uri);
+    if (!match) throw Error("Invalid Matrix media URI");
+    if (c.info?.size > this.mediaLimit) throw Error("Matrix media exceeds size limit");
+    let bytes = await this.mediaRequest(`/_matrix/client/v1/media/download/${encodeURIComponent(match[1])}/${encodeURIComponent(match[2])}`);
+    if (encrypted) {
+      if (encrypted.v !== "v2" || encrypted.key?.kty !== "oct" || encrypted.key?.alg !== "A256CTR" || typeof encrypted.key.k !== "string" || typeof encrypted.iv !== "string" || typeof encrypted.hashes?.sha256 !== "string") throw Error("Invalid encrypted Matrix attachment");
+      const key = Buffer.from(encrypted.key.k, "base64url");
+      const iv = Buffer.from(encrypted.iv, "base64");
+      const hash = Buffer.from(encrypted.hashes.sha256, "base64");
+      if (key.length !== 32 || iv.length !== 16 || !createHash("sha256").update(bytes).digest().equals(hash)) throw Error("Matrix attachment integrity check failed");
+      const decipher = createDecipheriv("aes-256-ctr", key, iv);
+      bytes = Buffer.concat([decipher.update(bytes), decipher.final()]);
+    }
+    const dir = this.o.mediaDir ?? path.join(path.dirname(this.o.syncStateFile), "matrix-media");
+    await mkdir(dir, { recursive: true, mode: 0o700 });
+    const name = String(c.filename ?? c.body ?? "attachment").split(/[\\/]/).pop()!.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 100) || "attachment";
+    const id = createHash("sha256").update(JSON.stringify([roomId, ev.event_id])).digest("hex");
+    const file = path.resolve(dir, `${id}-${name}`);
+    await writeFileDurable(file, bytes);
+    return file;
+  }
+
+  private async uploadMedia(to: Address, file: string, txn: string): Promise<void> {
+    if (!this.roomAdmitted(to.target)) throw new PermanentDeliveryError("Matrix room admission denied");
+    const encrypted = await this.roomEncrypted(to.target);
+    if (encrypted && !this.crypto) throw Error("Matrix E2EE is unavailable; refusing plaintext media");
+    let bytes: Buffer;
+    const handle = await open(file, constants.O_RDONLY | constants.O_NONBLOCK);
+    try {
+      const stat = await handle.stat();
+      if (!stat.isFile() || stat.size > this.mediaLimit) throw new PermanentDeliveryError("Matrix upload must be a regular file within the size limit");
+      // Bounded read even if a file grows after stat().
+      bytes = Buffer.alloc(Math.min(stat.size + 1, this.mediaLimit + 1));
+      let size = 0;
+      while (size < bytes.length) {
+        const read = await handle.read(bytes, size, bytes.length - size, null);
+        if (!read.bytesRead) break;
+        size += read.bytesRead;
+      }
+      if (size > stat.size || size > this.mediaLimit) throw new PermanentDeliveryError("Matrix upload grew during read");
+      bytes = bytes.subarray(0, size);
+    } finally { await handle.close(); }
+    const name = path.basename(file);
+    const mime = ({ ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp", ".pdf": "application/pdf", ".txt": "text/plain" } as Record<string, string>)[path.extname(name).toLowerCase()] ?? "application/octet-stream";
+    const content: Record<string, any> = { msgtype: mime.startsWith("image/") ? "m.image" : "m.file", body: name, filename: name, info: { mimetype: mime, size: bytes.length } };
+    let descriptor: Record<string, any> | undefined;
+    if (encrypted) {
+      const key = randomBytes(32), iv = Buffer.concat([randomBytes(8), Buffer.alloc(8)]);
+      const cipher = createCipheriv("aes-256-ctr", key, iv);
+      bytes = Buffer.concat([cipher.update(bytes), cipher.final()]);
+      descriptor = { v: "v2", key: { kty: "oct", alg: "A256CTR", key_ops: ["encrypt", "decrypt"], ext: true, k: key.toString("base64url") }, iv: iv.toString("base64").replace(/=+$/, ""), hashes: { sha256: createHash("sha256").update(bytes).digest("base64").replace(/=+$/, "") } };
+    }
+    const uploaded = JSON.parse((await this.mediaRequest(`/_matrix/media/v3/upload${encrypted ? "" : `?filename=${encodeURIComponent(name)}`}`, bytes, encrypted ? "application/octet-stream" : mime)).toString("utf8"));
+    if (typeof uploaded.content_uri !== "string" || !uploaded.content_uri.startsWith("mxc://")) throw Error("Matrix upload returned no media URI");
+    if (descriptor) content.file = { ...descriptor, url: uploaded.content_uri };
+    else content.url = uploaded.content_uri;
+    if (to.thread) content["m.relates_to"] = { rel_type: "m.thread", event_id: to.thread, is_falling_back: true, "m.in_reply_to": { event_id: to.thread } };
+    await this.sendRoom(to.target, "m.room.message", encodeURIComponent(txn), content);
+    if (to.thread) this.botThreads.add(to.thread);
+  }
+
   // ---------------------------------------------------------------- outbound
 
   private async sendRoom(roomId: string, type: string, txn: string, content: Record<string, any>): Promise<any> {
@@ -743,6 +867,35 @@ export class MatrixChannel implements Channel {
   }
 
   async send(to: Address, text: string, meta?: SendMeta): Promise<void> {
+    // Explicit output protocol, never implicit uploads of arbitrary Markdown links.
+    if (meta?.presentation !== "progress") {
+      const files: string[] = [];
+      let fence: string | undefined;
+      text = text.split("\n").map(line => {
+        const marker = /^\s*(`{3,}|~{3,})/.exec(line)?.[1];
+        if (marker) {
+          if (!fence) fence = marker;
+          else if (marker[0] === fence[0] && marker.length >= fence.length) fence = undefined;
+          return line;
+        }
+        const match = !fence && /^MEDIA:(\/[^\r\n]+)\r?$/.exec(line);
+        if (!match) return line;
+        files.push(match[1]!);
+        return "";
+      }).join("\n");
+      if (files.length) {
+        text = text.trim();
+        const delivery = meta?.deliveryId ?? randomUUID();
+        for (const [n, file] of files.entries()) {
+          try { await this.uploadMedia(to, file, `${delivery}.media.${n}`); }
+          catch (err) {
+            if ((err instanceof HttpError && err.status >= 400 && err.status < 500 && ![401, 429].includes(err.status)) || ["ENOENT", "EACCES", "EISDIR"].includes((err as NodeJS.ErrnoException).code ?? "")) throw new PermanentDeliveryError((err as Error).message);
+            throw err;
+          }
+        }
+        if (!text) return;
+      }
+    }
     if (meta?.progressId) {
       if (meta.presentation !== "progress") await this.telemetry;
       try { await this.sendEditable(to, text, meta); }

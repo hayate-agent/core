@@ -1,0 +1,45 @@
+# Hayate starter profile. Copy to <home>/hayate-agent.yaml, not your project root.
+# Or run: hayate-agent init --home <home> --cwd /path/to/workspace
+# No model/provider IDs, credentials or context-window sizes are prescribed.
+agent: hayate
+# cwd: /absolute/path/to/workspace  # Omitted: working directory at process startup.
+# model: your-provider/your-model  # Select a registered model via /model first.
+# thinking: low                   # Only set levels supported by your model.
+
+# Explicit model-visible tools, not an operating-system sandbox.
+# Remove tools: entirely to use runtime defaults; tools: [] exposes none.
+tools: [read, bash, edit, write, grep, find, ls]
+
+loop:
+  tickMs: 15000
+  busyMode: queue
+  drainSeconds: 60
+
+# These are gateway feedback defaults, NOT gateway activation switches.
+# See ../gateways.md for enabling Matrix/WebUI. "reduced" opts into progress.
+gateways:
+  progress: off
+  statusReactions: false
+
+# Safe default: no background dispatch until backend concurrency is verified.
+# To enable, change enabled AND concurrentRequests to true, then restart.
+# See ../dispatcher.md for direct/sequential strategies and model roles.
+dispatcher:
+  enabled: false
+  strategy: direct
+  concurrentRequests: false
+  capacity: 1
+  retentionDays: 7
+
+# Optional WebUI presentation tool, AFTER installing the separate WebUI plugin:
+# plugins:
+#   - plugins/webui/index.mjs
+# Also add plugin_webui_settings to the tools list above if you want the agent
+# to customize its WebUI. This is separate from gatewayPlugins in settings.local.yaml.
+
+# Explicit remote command authority. Replace with real authenticated identities.
+# admins: ["@operator:example.org"]
+# approvers: ["@operator:example.org"]
+# Add "webui:local" only if all local WebUI users may act as operators/approvers.
+# The attached local console is trusted; remote empty lists are NOT a grant.
+# This does not enable tool approval prompts; see ../gateways.md.

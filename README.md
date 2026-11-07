@@ -2,7 +2,7 @@
 
 <img src="docs/assets/hayate-agent.jpg" alt="Hayate Agent" width="640">
 
-**An AI agent for your terminal and Matrix.** Work on code interactively, pick up
+**An AI agent for your terminal, browser and Matrix.** Work on code interactively, pick up
 conversations later, or run Hayate as an always-on assistant for scheduled tasks
 and longer projects.
 
@@ -43,6 +43,8 @@ Ask Hayate to inspect a project, explain code, make a change or run tests. Use
 - **Run ongoing tasks:** heartbeats, cron jobs, recurring loops and standing goals.
 - **Delegate work:** route tasks to model roles and validate sequential steps
   before moving on. Models and reasoning levels are configurable.
+- **Use a browser:** an optional local WebUI plugin with persistent chats,
+  streamed responses and agent-configurable presentation.
 - **Connect through Matrix:** DMs and rooms, encrypted conversations, user
   allowlists, mention rules and tool-approval handling.
 - **Integrate with applications:** an HTTP run API with streamed progress,
@@ -50,23 +52,38 @@ Ask Hayate to inspect a project, explain code, make a change or run tests. Use
 - **Make it your own:** `SOUL.md` for identity, `VOICE.md` for tone and skills for
   reusable procedures.
 
-## Run a Matrix or API assistant
+## Choose your interface and starting configuration
+
+The terminal works without an initialization step. For an explicit profile:
 
 ```sh
-hayate-agent run
+hayate-agent init --home "$HOME/.hayate-agent" --cwd /absolute/path/to/workspace
+# After enabling the desired gateways:
+hayate-agent run --home "$HOME/.hayate-agent"
 ```
 
-Configure `MATRIX_HOMESERVER` and the agent's access token or password-login
-settings before starting Matrix. Set allowed users and room policies before
-inviting the agent to shared rooms. Encrypted conversations need persistent
-Matrix device and crypto state.
+`init` creates a commented starter configuration and identity files, without
+replacing existing files or installing plugins. A
+[copyable starter YAML](docs/examples/hayate-agent.yaml) is included in Core.
 
-The HTTP API is enabled with `API_SERVER_KEY`. Supply credentials through your
-secret manager or runtime environment, never through a public configuration file.
-Use a service supervisor or container for an always-on assistant.
+Follow the **[terminal, WebUI, Matrix and dispatcher setup guide](docs/gateways.md)**:
 
-See [installation](docs/installation.md), [configuration](docs/configuration.md)
-and [Matrix encryption](docs/matrix-e2ee.md) for setup details.
+| Interface / feature | Activation |
+| --- | --- |
+| Terminal | Run `hayate-agent`; use `/login`, `/model` and `/help` |
+| WebUI | Select the packaged optional plugin under `dist/optional-plugins/webui` (or install it separately); configure `gatewayPlugins.webui.module`; open `http://127.0.0.1:3210` |
+| Matrix | Bundled plugin; inject `MATRIX_HOMESERVER`, bot credentials and sender/room policy |
+| Dispatcher | Optional; verify backend concurrency, then enable `dispatcher` and restart |
+| HTTP run API | Separately enabled with `API_SERVER_KEY` or a private loopback key file |
+
+WebUI remains local-only; do not forward it into a network before authentication
+and user isolation are implemented. Matrix encryption requires persistent device
+and crypto state. Supply credentials through your secret manager or environment,
+never through a public configuration file. Use a supervisor for always-on use.
+
+The default configuration does **not** start background dispatch, prescribe a
+model/context size or grant remote operator rights. See the setup guide for
+explicit admin/approver configuration and optional WebUI customization tools.
 
 ## Everyday commands
 
@@ -96,12 +113,15 @@ confirmation. Plugins run as trusted process code, not inside a sandbox. Queue
 persistence does not make external side effects exactly-once: after an interrupted
 operation, reconcile its actual result before repeating it.
 
-Slack and Telegram adapters and a web chat interface are not included. Matrix
-and the terminal are the supported interactive interfaces.
+Slack and Telegram adapters are not included. Web chat is available through the
+separately installed [WebUI plugin](https://github.com/hayate-agent/plugins/blob/main/webui/README.md),
+not as a built-in Core web server.
 
 ## Documentation and related projects
 
 - [Installation](docs/installation.md) — native CLI and background services
+- [Gateway quickstart](docs/gateways.md) — terminal, WebUI, Matrix and dispatcher
+- [Starter configuration](docs/examples/hayate-agent.yaml) — commented safe defaults
 - [Configuration](docs/configuration.md) — providers, tools, identity and access
 - [Sessions](docs/sessions.md) — history, resumption and storage
 - [Model roles](docs/model-roles.md) · [Dispatcher](docs/dispatcher.md)

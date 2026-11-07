@@ -1,5 +1,47 @@
 # Configuration
 
+## Start with a working profile
+
+For an end-to-end setup, use the [terminal/WebUI/Matrix guide](gateways.md), then
+add the optional [dispatcher](gateways.md#4-optional-background-delegation-enable-the-dispatcher).
+Core includes a [commented starter YAML](examples/hayate-agent.yaml);
+`hayate-agent init --home <home> --cwd /absolute/workspace` creates the same kind of
+safe baseline without overwriting existing files. No provider credentials, model
+IDs, context lengths or mandatory reasoning levels are prescribed.
+
+`hayate-agent.yaml` owns startup tools/plugins, authority and dispatcher policy.
+`settings.local.yaml` owns explicit writable overrides, including `gatewayPlugins`.
+`gateways` only controls transport feedback, not activation. Matrix is bundled and
+environment-enabled; WebUI is a separately installed local ESM gateway selected
+through `gatewayPlugins.webui.module`. Both use normal Harness command/execution
+routing; the UI is not Core functionality.
+
+## Main completion validation
+
+The selected completion strategy judges the whole authorized task, including Main
+responses, not just delegated worker results. Verified milestones, promised/open
+steps and genuine holds are considered separately. A future-tense promise is not
+completion. A generated continuation, worker grant or saved plan is not a new human
+instruction and cannot invent an operator prohibition or broaden permission.
+
+An independent `continue` admits one concrete next step under the original scope,
+stop/expiry, dependency and budget fences. Technical/invalid judgments retain the
+settled Main reply for existing bounded assessment retry; they never replay the
+productive turn. Genuine semantic uncertainty grants no execution. The prompt
+strategy remains replaceable through the existing completion-strategy extension;
+no external JEV backend is required by the default LLM implementation.
+
+CLI Main validation has a 30-second default request budget. Configure 1–120 seconds:
+
+```yaml
+completionCheck:
+  timeoutMs: 30000
+```
+
+Existing explicit `completionCheck.authorizations` remain supported. The validator
+model still uses Validator → Review → Default, without silently replacing an
+explicitly selected unavailable model. Restart after changing the timeout.
+
 ## Reloading model configuration
 
 Use **`/reload-models`** after editing the provider/model catalog (`models.json`).
@@ -56,7 +98,8 @@ files describe identity and tone, not secrets. Every session also receives a gen
 Harness foundation: product identity, runtime distinction, task context and truthful
 self-development instructions. It does not hardcode a persona or claim unavailable
 integrations. SOUL and VOICE add your configured identity and writing style even when
-no named personality overlay is selected. See README for Matrix settings.
+no named personality overlay is selected. See the [gateway guide](gateways.md) for
+Matrix credentials/access controls and WebUI activation.
 
 ### Composed persona instructions (not alternative profiles)
 
