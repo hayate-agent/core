@@ -13,7 +13,7 @@ export interface PluginTool {
   name: string;
   description: string;
   parameters: { type: "object"; properties?: Record<string, unknown>; required?: string[]; [key: string]: unknown };
-  execute(input: Record<string, unknown>, context: { sessionKey: string; signal?: AbortSignal }): Promise<string>;
+  execute(input: Record<string, unknown>, context: { sessionKey: string; signal?: AbortSignal; cwd?: string }): Promise<string>;
 }
 
 /** Plain text only: no terminal escape sequences or focus/input ownership. */
@@ -30,6 +30,8 @@ export interface PluginMessage {
   sender?: string;
   id?: string;
   thread?: string;
+  /** Trusted adapter-selected overrides; routing/authority remain host-owned. */
+  turn?: import("./types.js").TurnOptions;
 }
 
 export interface PluginChannel {
@@ -58,8 +60,12 @@ function wrapChannel(channel: PluginChannel): Channel {
           [message.sender, message.id, message.thread].some((v) => v !== undefined && typeof v !== "string")) {
         throw new Error(`Invalid message from plugin channel ${name}`);
       }
+      if (message.turn !== undefined && (!message.turn || typeof message.turn !== "object" || Array.isArray(message.turn) ||
+          Object.entries(message.turn).some(([key, value]) => !["model", "thinking", "instructions"].includes(key) || typeof value !== "string"))) {
+        throw new Error(`Invalid turn settings from plugin channel ${name}`);
+      }
       const input: Inbound = {
-        source: "channel", text: message.text,
+        source: "channel", text: message.text, turn: message.turn ? structuredClone(message.turn) : undefined,
         sessionKey: `plugin:${name}:${message.session}`,
         sender: message.sender,
         id: message.id === undefined ? undefined : `plugin:${name}:${message.id}`,
@@ -99,13 +105,26 @@ export interface PluginCommand {
   help: string;
   /** Default true. Explicit false permits ordinary channel users. */
   admin?: boolean;
-  run(args: string, context: { sessionKey: string; sender?: string; ui?: PluginUI }): Promise<string | void>;
+  run(args: string, context: { sessionKey: string; sender?: string; ui?: PluginUI; cwd?: string }): Promise<string | void>;
 }
 
 import { ReportProcessingRegistry, type ReportProcessing } from "./report-processing.js";
 
+export interface HostExecutionContexts {
+  get(sessionKey: string): { cwd: string; directories: string[] };
+  bind(sessionKey: string, context: { cwd: string; directories?: string[] }): Promise<{ cwd: string; directories: string[] }>;
+}
+export interface PluginService { version: number; implementation: unknown }
+export interface PluginServices { get(name: string): PluginService | undefined }
+
 export interface PluginAPI {
   readonly version: 1;
+  /** Trusted in-process capabilities; never infer authority from model input. */
+  readonly executionContexts?: HostExecutionContexts;
+  /** Reserve host admission for trusted work outside model turns. */
+  readonly foregroundWork?: <T>(work: () => Promise<T>) => Promise<T>;
+  readonly services: PluginServices;
+  registerService(name: string, version: number, implementation: object): void;
   readonly agent: string;
   readonly home: string;
   readonly cwd: string;
@@ -139,6 +158,8 @@ export class PluginHost {
   updateBlockers(): string[] { return [...this.unsupportedUpdateOwners].map(owner => `unsupported update owner: ${owner}`); }
   readonly policies: PolicyRegistry;
   constructor(requiredPolicies: readonly string[] = []) { this.policies = new PolicyRegistry(requiredPolicies); }
+  private readonly serviceEntries = new Map<string, PluginService>();
+  readonly services: PluginServices = Object.freeze({ get: (name: string) => this.serviceEntries.get(name) });
   readonly commands = new Map<string, PluginCommand>();
   readonly channels = new Map<string, Channel>();
   readonly tools = new Map<string, PluginTool>();
@@ -155,7 +176,7 @@ export class PluginHost {
   private loading?: Promise<void>;
   private stopping?: Promise<void>;
 
-  load(files: string[], context: Pick<PluginAPI, "agent" | "home" | "cwd">, reserved: Iterable<string>, reservedChannels: Iterable<string> = ["console", "api", "matrix"], bundled: PluginModule[] = []): Promise<void> {
+  load(files: string[], context: Pick<PluginAPI, "agent" | "home" | "cwd"> & Pick<Partial<PluginAPI>, "executionContexts" | "foregroundWork">, reserved: Iterable<string>, reservedChannels: Iterable<string> = ["console", "api", "matrix"], bundled: PluginModule[] = []): Promise<void> {
     if (this.closed || this.closing) return Promise.reject(new Error("Plugin host is closed"));
     if (this.loading) return Promise.reject(new Error("Plugin activation already in progress"));
     const loading = this.activate(files, context, reserved, reservedChannels, bundled);
@@ -164,7 +185,7 @@ export class PluginHost {
     return loading;
   }
 
-  private async activate(files: string[], context: Pick<PluginAPI, "agent" | "home" | "cwd">, reserved: Iterable<string>, reservedChannels: Iterable<string> = ["console", "api", "matrix"], bundled: PluginModule[] = []): Promise<void> {
+  private async activate(files: string[], context: Pick<PluginAPI, "agent" | "home" | "cwd"> & Pick<Partial<PluginAPI>, "executionContexts" | "foregroundWork">, reserved: Iterable<string>, reservedChannels: Iterable<string> = ["console", "api", "matrix"], bundled: PluginModule[] = []): Promise<void> {
     if (this.closed) throw new Error("Plugin host is closed");
     const names = new Set([...reserved, ...this.commands.keys()]);
     const channelNames = new Set([...reservedChannels, ...this.channels.keys()]);
@@ -178,6 +199,13 @@ export class PluginHost {
         try {
           await module.activate(Object.freeze({
             version: 1 as const, ...context,
+            services: this.services,
+            registerService: (name: string, version: number, implementation: object) => {
+              if (!registering || !/^[a-z][a-z0-9_-]*$/.test(name) || !Number.isSafeInteger(version) || version < 1 ||
+                  !implementation || typeof implementation !== "object" || Array.isArray(implementation)) throw Error("Invalid plugin service");
+              if (this.serviceEntries.has(name)) throw Error(`Plugin service conflict: ${name}`);
+              this.serviceEntries.set(name, Object.freeze({ version, implementation }));
+            },
             registerCommand: (command: PluginCommand) => {
               if (!registering) throw new Error("Plugin registration is closed");
               if (!command || typeof command.name !== "string" || !/^[a-z][a-z0-9_-]*$/.test(command.name) || typeof command.help !== "string" || typeof command.run !== "function" ||
@@ -261,6 +289,7 @@ export class PluginHost {
     } catch (err) {
       await this.dispose().catch(() => {});
       this.reportProcessing.clear();
+      this.serviceEntries.clear();
       this.commands.clear();
       this.channels.clear();
       this.tools.clear();
@@ -289,6 +318,7 @@ export class PluginHost {
     if (this.closed) return;
     this.closed = true;
     this.policies.clear();
+    this.serviceEntries.clear();
     this.memoryOrchestration.clear();
     this.commands.clear();
     this.channels.clear();

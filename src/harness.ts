@@ -163,7 +163,7 @@ export interface HarnessOptions {
   activity?: import("./activity.js").ActivityPolicy;
   runtime: AgentRuntime;
   /** Trusted host snapshot; absent/failed evidence consumes repetition allowance. */
-  progressEvidence?: () => Promise<string | undefined>;
+  progressEvidence?: (input: Inbound) => Promise<string | undefined>;
   executionStore?: import("./execution.js").ExecutionStore;
   tickMs: number;
   busyMode: BusyMode;
@@ -2097,7 +2097,7 @@ export class Harness {
         const goalBefore = s.goal ? structuredClone(s.goal) : undefined;
         const evidenceEpoch = ++this.evidenceEpoch;
         const evidenceExclusive = this.evidenceReaders++ === 0;
-        const evidenceBefore = input.waitCheck ? undefined : await this.opts.progressEvidence?.().catch(() => undefined);
+        const evidenceBefore = input.waitCheck ? undefined : await this.opts.progressEvidence?.(input).catch(() => undefined);
         try {
           const ledger = this.opts.executionStore;
           const durableTurn = input.executionTurnId ? ledger?.turn(input.executionTurnId, s.key) : undefined;
@@ -2120,7 +2120,7 @@ export class Harness {
             if (ledger && input.executionTurnId) await ledger.beginTurn(input.executionTurnId, s.key);
             await this.runTurn(s, input, selectedHistory);
             const task = this.tasks(s).find(t => t.id === (input.continuation?.taskId ?? input.taskId));
-            const evidenceAfter = await this.opts.progressEvidence?.().catch(() => undefined);
+            const evidenceAfter = await this.opts.progressEvidence?.(input).catch(() => undefined);
             if (task && !input.waitCheck && task.state !== "stopped" && s.cancelling !== input)
               accountRepetition(task, evidenceExclusive && this.evidenceEpoch === evidenceEpoch ? evidenceBefore : undefined, evidenceAfter, this.assessedProgress.get(input));
             this.assessedProgress.delete(input);

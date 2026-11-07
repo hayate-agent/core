@@ -14,6 +14,8 @@ export interface GatewayFactoryContext {
   agent: string;
   approvers: string[];
   admins?: string[];
+  /** Read-only lookup of explicitly installed trusted backend plugin services. */
+  services?: import("./plugins.js").PluginServices;
 }
 export interface GatewayModule {
   apiVersion: 1;
