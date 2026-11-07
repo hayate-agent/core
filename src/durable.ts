@@ -7,7 +7,7 @@ import path from "node:path";
  * fsync the directory. When this resolves the new content survives power loss, so
  * acknowledgements (state inbox before Matrix cursor) keep their order on disk.
  */
-export async function writeFileDurable(file: string, data: string, mode = 0o600): Promise<void> {
+export async function writeFileDurable(file: string, data: string | Uint8Array, mode = 0o600): Promise<void> {
   // Each call owns its staging inode, including overlapping replacements of one target.
   const tmp = `${file}.${process.pid}.${randomUUID()}.tmp`;
   const fh = await open(tmp, "wx", mode);
