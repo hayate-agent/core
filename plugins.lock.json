@@ -26,10 +26,10 @@
     "policy-manager-plugin.ts": "ef61d6f32c3fadd75f16bec3732763f15e0fa131a12a7af30240a0599a44ef44",
     "protected-content-plugin.ts": "1340a07212f5b30001478d1b761ef4e8c3c8e367fbfc36c02ccb80894b4fe9d0",
     "reloadable-tools-plugin.ts": "ae2680f7dd5f2bc1e95896599c349ec4fe61b5dc4f871f1896e6606f11b8e961",
-    "review-engine.ts": "a632583ed355c270d33d4f0fcc256ec33a6ac7922fd59cd832e3f75435352232",
+    "review-engine.ts": "4b2ae8db0fbec45dbec567cd21daccd122d28822ca7abe62c3d8124dd583fda5",
     "review-guard.ts": "f2d135b0fea32b1a092d3d377555eec0aa3165fe8304fa08c50c5aef5cca1e4d",
     "review-lifecycle.ts": "b58492dfc56c7a8fa119cd68d9627e5500eefa9bb34be71a1de6569eb6c958f1",
-    "review-plugin.ts": "026856223984fb18723b587f3e99468321fca4df04c72074b00baee6f8f1d9e7",
+    "review-plugin.ts": "f6c1773ffbd7044e7dd43916f98e3ad5495741eb8608d22ea9bc2d92b89c637d",
     "review-policy.ts": "f98ece923d85bd55758bc201a00b1151d99962b800541900c16594365e65d2b7",
     "review-scope.ts": "b3339cbf59042ebbcfc6d131469086eefd008279718712cd67362d1993493ce5",
     "review-summary.ts": "097d9138cfb09ff69c49e282854a8c4e13462f40e8502e5d1bb68083db8649dd",
@@ -49,6 +49,6 @@
     "execution-metadata.ts": "a19904571ba749a4821bcd47f4b9c4f496b067c553090a18cb36cc4bdd666cbc"
   },
   "repository": "https://git.vanillacore.net/harness/plugins",
-  "revision": "620b553a6b330d8b5fd80727ee028d7fc82c8f3b",
+  "revision": "867e7c92ee436b2a49b574148aed37d573b2d39a",
   "schema": 1
 }
