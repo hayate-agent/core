@@ -1,7 +1,10 @@
 # Native Matrix encryption
 
-Matrix uses `@matrix-org/matrix-sdk-crypto-nodejs` (Rust SDK OlmMachine, SQLite),
-not JavaScript/home-made cryptography. Encryption is enabled by default.
+Matrix message encryption uses `@matrix-org/matrix-sdk-crypto-nodejs` (Rust SDK
+OlmMachine, SQLite), not a JavaScript implementation of Olm/Megolm. Encryption is
+enabled by default. [Images and files](matrix-media.md) use Matrix v2 attachment
+encryption via Node's AES-CTR/SHA-256 primitives, with keys carried inside the
+Megolm-encrypted message.
 
 ## Configuration
 

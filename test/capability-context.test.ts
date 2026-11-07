@@ -26,6 +26,13 @@ test("Core adds no unconditional review or approval rule when no review engine s
   assert.match(capabilityContext(facts), /Dedicated review is mandatory/);
 });
 
+test("Matrix sessions discover the authorized attachment output protocol", () => {
+  const context = capabilityContext({ ...facts, sessionKey: "matrix:!room:example.org" });
+  assert.match(context, /MEDIA:\/absolute\/path/);
+  assert.match(context, /never upload secrets or files without user authorization/);
+  assert.doesNotMatch(capabilityContext(facts), /MEDIA:/);
+});
+
 test("selected review instructions and fresh capability facts reach working turns without skill context", async () => {
   const runtime = new FakeRuntime(); let revision = 1;
   const h = new Harness({runtime,tickMs:60000,capabilityContext: input => capabilityContext({...facts,sessionKey:input.sessionKey,revision})});
