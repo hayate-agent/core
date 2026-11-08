@@ -16,6 +16,16 @@ test('concurrent durable replacements own independent temporary files', async (t
  assert.deepEqual(await readdir(dir),['state.json']);
 });
 
+test('durable binary replacement preserves every byte', async (t) => {
+ const dir=await mkdtemp(path.join(os.tmpdir(),'durable-binary-'));
+ t.after(()=>rm(dir,{recursive:true,force:true}));
+ const file=path.join(dir,'attachment');
+ const bytes=Uint8Array.from({length:256},(_,i)=>i);
+ await writeFileDurable(file,bytes);
+ assert.deepEqual(await readFile(file),Buffer.from(bytes));
+ assert.deepEqual(await readdir(dir),['attachment']);
+});
+
 test('failed rename removes owned temporary file and preserves existing target',async(t)=>{
  const dir=await mkdtemp(path.join(os.tmpdir(),'durable-failure-'));
  t.after(()=>rm(dir,{recursive:true,force:true}));

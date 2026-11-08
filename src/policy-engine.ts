@@ -7,7 +7,7 @@ import type { Address, Inbound } from "./types.js";
 
 /** Trusted startup composition: one selection supplies both hooks and operator/model APIs. */
 export interface PolicyEngineContext {
-  home: string; cwd: string; config: unknown; backend: AssessmentBackend;
+  home: string; cwd: string; cwdFor?: (sessionKey: string) => string; config: unknown; backend: AssessmentBackend;
   reviewExecution?: import("./review-execution.js").DedicatedReviewExecution;
   notify(sessionKey: string, message: string, origin?: Address): Promise<void>;
   origin(input: Inbound): Address | undefined;
@@ -20,6 +20,7 @@ export interface PolicyEngine {
 }
 export interface PolicyEngineModule {
   apiVersion: 1;
+  executionContexts?: 1;
   modelTools: string[];
   create(context: PolicyEngineContext): Promise<PolicyEngine> | PolicyEngine;
 }
@@ -27,7 +28,7 @@ export async function loadPolicyEngine(home: string, module: string | undefined,
   const selected = module ? (await import(pathToFileURL(path.resolve(home, module)).href)).default : baseline;
   if (selected?.apiVersion !== 1 || typeof selected.create !== "function" || !Array.isArray(selected.modelTools) ||
       selected.modelTools.some((name: unknown) => typeof name !== "string" || !/^plugin_[a-z0-9_]+$/.test(name))) throw Error("Invalid policy engine module");
-  return { apiVersion: 1, modelTools: [...selected.modelTools], create: selected.create.bind(selected) };
+  return { apiVersion: 1, executionContexts: selected.executionContexts, modelTools: [...selected.modelTools], create: selected.create.bind(selected) };
 }
 export async function createPolicyEngine(module: PolicyEngineModule, context: PolicyEngineContext): Promise<PolicyEngine> {
   const engine = await module.create(context);

@@ -124,7 +124,14 @@ export class SettingsService {
   readonly diagnostics: string[] = [];
   private writing: Promise<unknown> = Promise.resolve();
   revision = 0;
-  constructor(readonly file: string, private readonly defaults: LocalSettings, private readonly warn: (message: string) => void = () => {}) {}
+  private readonly defaults: LocalSettings;
+  constructor(readonly file: string, defaults: LocalSettings, private readonly warn: (message: string) => void = () => {}) {
+    // Installation defaults are JSON-shaped settings, but optional typed fields
+    // can be present with undefined. Normalize only this trusted snapshot to
+    // absent fields before strict effective-layer validation. Disk values (null,
+    // unknown keys, invalid types) still pass through the unchanged validators.
+    this.defaults = JSON.parse(JSON.stringify(defaults)) as LocalSettings;
+  }
   private diagnose(message: string): void {
     // Never include values/parser excerpts: overlays can contain misplaced secrets.
     if (this.diagnostics.length >= 20) return;

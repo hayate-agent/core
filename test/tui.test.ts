@@ -333,7 +333,10 @@ test("local TUI isolates sessions, blocks busy switches, restores visible histor
     await ui.send({ channel: "console", target: first.key }, "foreign secret answer");
     await settle();
     assert.ok(!(ui as any).tui.getScreenLines().join("\n").includes("foreign secret answer"));
-    term.type(`/resume ${first.id}\r`); await settle();
+    term.type(`/resume ${first.id}\r`);
+    const resumeDeadline = Date.now() + 5000;
+    while (sessions.current?.id !== first.id && Date.now() < resumeDeadline) await settle();
+    await settle();
     assert.equal(sessions.current?.id, first.id);
     assert.match((ui as any).tui.getScreenLines().join("\n"), /visible previous history/);
     term.type("/title Renamed\r");

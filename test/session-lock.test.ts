@@ -89,16 +89,24 @@ test("LocalSessions home and session both recover after SIGKILL without changing
   } finally { if (owner) await stop(owner); await store.release(); await rm(home, { recursive: true, force: true }); }
 });
 
-test("interrupted acquisition leaves inert temp files; marker-only and empty database states recover", async () => {
+test("interrupted acquisition leaves inert temp files; only permanent OS lock markers are created", async () => {
   const { home, lock } = await fixture();
   try {
     await writeFile(`${lock}.interrupted.tmp`, "partial");
     const first = await SessionLock.acquire(lock); await first.release();
-    await writeFile(`${lock}.sqlite`, "");
     const next = await SessionLock.acquire(lock); await next.release();
     assert.equal(await readFile(`${lock}.interrupted.tmp`, "utf8"), "partial");
-    assert.deepEqual((await readdir(home)).sort(), ["home.lock", "home.lock.interrupted.tmp", "home.lock.sqlite"]);
+    assert.deepEqual((await readdir(home)).sort(), ["home.lock", "home.lock.interrupted.tmp"]);
   } finally { await rm(home, { recursive: true, force: true }); }
+});
+
+test("missing OS helper fails closed without any alternate locking backend", async () => {
+  const { home, lock } = await fixture();
+  const originalPath = process.env.PATH;
+  try {
+    process.env.PATH = "";
+    await assert.rejects(SessionLock.acquire(lock), /Python 3 with fcntl; no fallback/);
+  } finally { process.env.PATH = originalPath; await rm(home, { recursive: true, force: true }); }
 });
 
 test("release is idempotent and never unlinks successor identity", async () => {

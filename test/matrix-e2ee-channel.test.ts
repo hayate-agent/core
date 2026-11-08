@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { MatrixCrypto } from "../src/builtin-plugins/matrix-crypto.js";
@@ -28,10 +28,13 @@ test("real encrypted channel preserves ACL/envelope/threads, delayed keys surviv
   let syncResponse: any = { next_batch: "initial" };
   let encryptedRoom = true, sendFailure = false;
   const sent: any[] = [];
+  let mediaBytes: Buffer;
   const fetcher = (async (url: string, init: RequestInit) => {
     const p = new URL(url).pathname.replace("/_matrix/client/v3", "");
     let out: any;
-    if (p === "/account/whoami") out = { user_id: bobId, device_id: "BOB" };
+    if (p === "/_matrix/media/v3/upload") { mediaBytes = Buffer.from(init.body as any); out = { content_uri: "mxc://example.org/media" }; }
+    else if (p === "/_matrix/client/v1/media/download/example.org/media") return new Response(new Uint8Array(mediaBytes));
+    else if (p === "/account/whoami") out = { user_id: bobId, device_id: "BOB" };
     else if (p === "/sync") out = syncResponse;
     else if (p.endsWith("/state/m.room.encryption")) {
       if (!encryptedRoom) return new Response("{}", { status: 404 });
@@ -76,6 +79,21 @@ test("real encrypted channel preserves ACL/envelope/threads, delayed keys surviv
     await ch.send({ channel: "matrix", target: room }, "progress", { progressId: "p", presentation: "progress" });
     await ch.send({ channel: "matrix", target: room }, "final", { progressId: "p" });
     assert.ok(sent.every(s => s.p.includes("/send/m.room.encrypted/")), "progress seeds and edits are encrypted too");
+    const attachment = path.join(dir, "private.txt");
+    await writeFile(attachment, "secret attachment");
+    await ch.send({ channel: "matrix", target: room, thread: "$root" }, `MEDIA:${attachment}`, { deliveryId: "media" });
+    const mediaEvent = sent.at(-1)!;
+    assert.match(mediaEvent.p, /\/send\/m.room.encrypted\/media.media.0$/);
+    assert.equal(mediaBytes!.includes(Buffer.from("secret attachment")), false);
+    await alice.sync({ to_device: { events: inbox[aliceId] } });
+    const mediaPlain = await alice.decrypt(room, { ...event, sender: bobId, event_id: "$media-out", content: mediaEvent.content });
+    assert.equal(mediaPlain.content.file.v, "v2");
+    assert.equal(mediaPlain.content["m.relates_to"].event_id, "$root");
+    const returned = await alice.encrypt(room, "m.room.message", mediaPlain.content, [aliceId, bobId]);
+    syncResponse = { next_batch: "media", to_device: { events: inbox[bobId] }, rooms: { join: { [room]: { timeline: { events: [{ ...event, event_id: "$media-in", content: returned }] } } } } };
+    await ch.syncOnce();
+    const localFile = JSON.parse(received.at(-1).text.match(/untrusted\): (.*)\]/)![1]).path;
+    assert.equal(await readFile(localFile, "utf8"), "secret attachment");
     sendFailure = true; await assert.rejects(ch.send({ channel: "matrix", target: room }, "never cleartext"));
     failKeys = true;
     await assert.rejects(ch.send({ channel: "matrix", target: room }, "no keys no downgrade"));

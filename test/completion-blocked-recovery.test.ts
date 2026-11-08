@@ -29,7 +29,9 @@ for (const failure of ["undefined", "error"] as const) test(`inconclusive ${fail
   } finally { await h.stop(0); }
   let restoredChecks = 0;
   const runtime = new FakeRuntime();
-  const restored = new Harness({ runtime, tickMs: 60000, completionCheck: async input => {
+  const restored = new Harness({ runtime, tickMs: 60000,
+    now: () => Math.max(Date.now(), snapshot![0].tasks![0].recoveryRetry?.nextAt ?? 0),
+    completionCheck: async input => {
     restoredChecks++;
     assert.equal(input.completionAnchor?.task, mandate);
     return { state: "continue", next: "Verify the candidate's required CI before authorized integration" };

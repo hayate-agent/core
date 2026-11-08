@@ -42,6 +42,7 @@ for (const state of ["waiting", "blocked", "completed"] as const) {
         assert.deepEqual(task.supervisorDecision, { proposal: state, verdict: "unresolved",
           diagnostic: failure === "missing" ? "unavailable" : failure === "error" ? "technical" : "invalid_response" });
         const restored = new Harness({ runtime: new FakeRuntime(), tickMs: 60000,
+          now: () => Math.max(Date.now(), task.recoveryRetry?.nextAt ?? 0),
           completionCheck: async () => ({ state: "continue", next: "Inspect the isolated test result without repeating uncertain effects" }) });
         restored.addChannel(new MemoryChannel()); restored.onStateChange = async () => {};
         try {

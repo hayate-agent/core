@@ -12,6 +12,17 @@ managed-subagent turns and dispatcher worker turns all record a stable turn
 identity and terminal settlement there; dispatcher tasks additionally use its
 claim/effect/event records. Main is not redirected through a background worker.
 
+## First-time activation
+
+The [starter profile](examples/hayate-agent.yaml) keeps dispatch disabled.
+For a minimal first activation, see the
+[direct/sequential setup walkthrough](gateways.md#4-optional-background-delegation-enable-the-dispatcher).
+Use `direct` with `capacity: 1` after confirming backend concurrency, then restart
+and check `/dispatch status`. `sequential` additionally needs real registered
+model-role selections; model IDs, context capacities and supported reasoning
+levels are not prescribed by the starter. Ordinary terminal/WebUI/Matrix chat
+works without enabling dispatch.
+
 ## Configuration
 
 The same `dispatcher` mapping may be set in writable

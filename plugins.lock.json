@@ -1,7 +1,7 @@
 {
   "files": {
     "boundary-assessor.ts": "50673771d39126c132829704b5b2ab6172092e867245f8edca8c9b0eb71615cb",
-    "completion-prompt.ts": "803d6e3794bd5ea48b6863668fca9e436d77af2ce892c0811fbaca3ef062416b",
+    "completion-prompt.ts": "8335827538216dc7f115aa37bc945d660c70e46b648058f7ab740334a05be5dc",
     "context-plugin.ts": "1da424038b5f5dd8e88999d86c4b26fecca5d21ca4170b83fdba9958eef787f0",
     "continuation-plugin.ts": "e5485881f09b871912fa5574af6fe9c7b323abe01b03b8876cd235b436595a7d",
     "cron-report-plugin.ts": "71bb9d6432985d25defb18d4ef45653342c2243f42e215b972b0eb586d24a260",
@@ -15,7 +15,7 @@
     "improvement-plugin.ts": "97e965b6f71567d823549d8a3b2a6888a2ed1f86eda76c2bc29c565b82431ca5",
     "improvement-report.ts": "2e206939ef70e86df87059a5ab5584b203dec1decf289e437642e163d630b273",
     "loop-plugin.ts": "ab7e0ea59919503cd4d9c36b01eb08f7687c00ef88679de2dcc33067b56ae6cd",
-    "matrix-channel.ts": "6c1311fc8f6fc50ac70fbeb0baaccc70d9519ce5ed36353118d318200bb9dc1d",
+    "matrix-channel.ts": "130e350df9401967c9e4b27dab18876ade0403a0b42d3a7240c51ed35a97cd69",
     "matrix-gateway.ts": "cab666ab5d2675d9b459102f119598b4444dcbbdecb3a5d16d473a676a131be3",
     "matrix-sync.ts": "32a217a65dc5f05f0c0940e2f52426c1ab2044688513befb282af7376943b5c1",
     "memory-orchestration-plugin.ts": "c796ff18def036016ac47095d18a490fab0d15ff8eaff342e463babc16bf78ea",
@@ -26,10 +26,10 @@
     "policy-manager-plugin.ts": "ef61d6f32c3fadd75f16bec3732763f15e0fa131a12a7af30240a0599a44ef44",
     "protected-content-plugin.ts": "1340a07212f5b30001478d1b761ef4e8c3c8e367fbfc36c02ccb80894b4fe9d0",
     "reloadable-tools-plugin.ts": "ae2680f7dd5f2bc1e95896599c349ec4fe61b5dc4f871f1896e6606f11b8e961",
-    "review-engine.ts": "a632583ed355c270d33d4f0fcc256ec33a6ac7922fd59cd832e3f75435352232",
+    "review-engine.ts": "4b2ae8db0fbec45dbec567cd21daccd122d28822ca7abe62c3d8124dd583fda5",
     "review-guard.ts": "f2d135b0fea32b1a092d3d377555eec0aa3165fe8304fa08c50c5aef5cca1e4d",
     "review-lifecycle.ts": "b58492dfc56c7a8fa119cd68d9627e5500eefa9bb34be71a1de6569eb6c958f1",
-    "review-plugin.ts": "026856223984fb18723b587f3e99468321fca4df04c72074b00baee6f8f1d9e7",
+    "review-plugin.ts": "f6c1773ffbd7044e7dd43916f98e3ad5495741eb8608d22ea9bc2d92b89c637d",
     "review-policy.ts": "f98ece923d85bd55758bc201a00b1151d99962b800541900c16594365e65d2b7",
     "review-scope.ts": "b3339cbf59042ebbcfc6d131469086eefd008279718712cd67362d1993493ce5",
     "review-summary.ts": "097d9138cfb09ff69c49e282854a8c4e13462f40e8502e5d1bb68083db8649dd",
@@ -49,6 +49,6 @@
     "execution-metadata.ts": "a19904571ba749a4821bcd47f4b9c4f496b067c553090a18cb36cc4bdd666cbc"
   },
   "repository": "https://git.vanillacore.net/harness/plugins",
-  "revision": "7b410193c7078019a22368897e6730e25b80f0fa",
+  "revision": "5fead638f8688e4dc846de4408328802f0490977",
   "schema": 1
 }

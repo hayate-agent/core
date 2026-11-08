@@ -1,5 +1,12 @@
 # Runtime gateway modules (v1)
 
+For first-time setup rather than module implementation, start with the
+[terminal, WebUI, Matrix and dispatcher walkthrough](gateways.md).
+Matrix's normal baseline is already bundled and activates from `MATRIX_*`
+configuration. The optional WebUI is built/installed separately and selected with
+`gatewayPlugins.webui.module` in `settings.local.yaml`. `gateways.progress` is
+feedback policy, not an activation switch.
+
 The CLI consumes a bundled gateway-module catalog rather than constructing Matrix
 or naming its factory. Matrix factory, transport, sync recovery and native activity
 delivery are maintained in [hayate-agent/plugins](https://github.com/hayate-agent/plugins) and materialized from the immutable

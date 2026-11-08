@@ -10,7 +10,7 @@ COPY package.json package-lock.json ./
 RUN npm ci --ignore-scripts \
     && npm rebuild @matrix-org/matrix-sdk-crypto-nodejs \
     && node --input-type=module -e 'await import("@matrix-org/matrix-sdk-crypto-nodejs")'
-COPY tsconfig.json plugins.lock.json ./
+COPY tsconfig.json plugins.lock.json plugin-assets.lock.json ./
 COPY scripts ./scripts
 COPY src ./src
 RUN npm run build && npm prune --omit=dev

@@ -65,6 +65,8 @@ export function installAdaptiveSkillHooks(pi: ExtensionAPI, adaptive: AdaptiveSk
 
 export interface PiRuntimeOptions {
   cwd: string;
+  /** Immutable host-owned per-stream context; never process-global chdir. */
+  executionContext?: (sessionKey: string) => { cwd: string; directories: string[] } | Promise<{ cwd: string; directories: string[] }>;
   /** Per-agent session store, one subdirectory per session key. */
   sessionsDir: string;
   model?: string;
@@ -92,7 +94,7 @@ export interface PiRuntimeOptions {
   toolGuard?: (sessionKey: string, tool: string, input: unknown) => Promise<void>;
   /** Provider-neutral instruction supplier: reread before every working model call,
    * including existing sessions and continuation iterations; reject read failures. */
-  personaSections: () => Promise<string[]>;
+  personaSections: (cwd?: string) => Promise<string[]>;
   /** "off" (default, YOLO) or "manual". Mutable at runtime via /approvals and /yolo on|off (no argument reports status). */
   approvals: { mode: "off" | "manual"; tools: string[] };
   requestApproval?: ApprovalRequest;
@@ -453,7 +455,7 @@ export class PiRuntime implements AgentRuntime {
   constructor(private readonly opts: PiRuntimeOptions) {}
 
   forReviewWorktree(cwd: string): AgentRuntime {
-    return new PiRuntime({ ...this.opts, cwd, tools: [], skillPaths: [],
+    return new PiRuntime({ ...this.opts, cwd, executionContext: undefined, tools: [], skillPaths: [],
       sessionProvider: undefined, legacySessionProvider: undefined });
   }
 
@@ -518,7 +520,7 @@ export class PiRuntime implements AgentRuntime {
     const legacy = this.opts.legacySessionProvider;
     if (provider) return provider.list(key, offset, 20);
     if (await legacy?.active(key)) return legacy!.list(key, offset, 20);
-    const rows = await SessionManager.list(this.opts.cwd, path.join(this.opts.sessionsDir, safeKey(key)));
+    const rows = await SessionManager.list((await this.opts.executionContext?.(key))?.cwd ?? this.opts.cwd, path.join(this.opts.sessionsDir, safeKey(key)));
     return rows.slice(offset, offset + 20).map((s) => ({ id: s.id, key,
       title: s.name ?? (s.firstMessage.replace(/\s+/g, " ").slice(0, 90) || "New conversation"),
       updated: s.modified.toISOString(), revision: 0, format: "pi-session-v1" }));
@@ -559,16 +561,19 @@ export class PiRuntime implements AgentRuntime {
       entries = record.entries;
     } else {
       const dir = path.join(this.opts.sessionsDir, safeKey(key));
-      const info = (await SessionManager.list(this.opts.cwd, dir)).find(row => row.id === id);
+      const historyCwd = (await this.opts.executionContext?.(key))?.cwd ?? this.opts.cwd;
+      const info = (await SessionManager.list(historyCwd, dir)).find(row => row.id === id);
       if (!info) throw new Error("Session not found in this conversation");
-      entries = SessionManager.open(info.path, dir, this.opts.cwd).getEntries();
+      entries = SessionManager.open(info.path, dir, historyCwd).getEntries();
     }
     return (await import("../hashtags.js")).transcriptEntries(entries);
   }
 
   async open(sessionKey: string, options: OpenSessionOptions = {}): Promise<RuntimeSession> {
     if (options.assessmentPurpose && (!options.ephemeral || !["code-review", "supervisor", "dispatch-complexity", "dispatch-plan"].includes(options.assessmentPurpose))) throw Error("Invalid assessment purpose");
-    const { cwd, sessionsDir } = this.opts;
+    const { sessionsDir } = this.opts;
+    const context = await this.opts.executionContext?.(sessionKey);
+    const cwd = context?.cwd ?? this.opts.cwd;
     const models = await this.modelRuntime();
     const openedModelRevision = this.modelRevision;
     const dir = path.join(sessionsDir, safeKey(sessionKey));
@@ -602,17 +607,18 @@ export class PiRuntime implements AgentRuntime {
       sessionManager = SessionManager.open(info.path, dir, cwd);
     } else sessionManager = options.fresh ? SessionManager.create(cwd, dir) : SessionManager.continueRecent(cwd, dir);
 
-    let sections = options.ephemeral ? [] : await this.opts.personaSections();
+    let sections = options.ephemeral ? [] : await this.opts.personaSections(cwd);
     // A complete startup snapshot is mandatory. Later invalid edits must not
     // remove instructions or prevent the operator from asking for a repair.
     const refreshPersona = async () => {
       if (!options.ephemeral) {
-        try { sections = await this.opts.personaSections(); }
+        try { sections = await this.opts.personaSections(cwd); }
         catch (error) { console.error(`Persona reload retained last complete prompt: ${error instanceof Error ? error.message : "invalid persona paths"}`); }
       }
     };
     let skillContext = "";
-    const promptAddendum = () => [...sections, skillContext,
+    const promptAddendum = () => [...sections,
+      context ? `Host execution context (data, not permission expansion): ${JSON.stringify(context)}. Tools and review use the primary cwd; use explicit paths for additional repositories.` : "", skillContext,
       slot.instructions ? `<run_instructions>\n${slot.instructions}\n</run_instructions>` : ""].filter(Boolean).join("\n\n");
     const approvals = this.opts.approvals;
     const requestApproval = this.opts.requestApproval;
@@ -632,7 +638,7 @@ export class PiRuntime implements AgentRuntime {
       additionalSkillPaths: options.ephemeral ? [] : this.opts.skillPaths,
       noExtensions: options.ephemeral,
       noContextFiles: options.ephemeral,
-      noSkills: options.ephemeral || !!this.opts.skillContext,
+      noSkills: options.ephemeral || (!!this.opts.skillContext && cwd === this.opts.cwd),
       noPromptTemplates: options.ephemeral,
       noThemes: options.ephemeral,
       ...(options.ephemeral ? { systemPrompt: options.assessmentPurpose === "dispatch-complexity"
@@ -660,7 +666,7 @@ export class PiRuntime implements AgentRuntime {
                 // see src/tool-args.ts for why (model-emitted double encoding).
                 prepareArguments: (args) => prepareStructuredToolArgs(tool.parameters, args),
                 execute: async (_id, input, signal) => {
-                  let text = await tool.execute(input as Record<string, unknown>, { sessionKey, signal });
+                  let text = await tool.execute(input as Record<string, unknown>, { sessionKey, signal, cwd });
                   if (typeof text !== "string") throw new Error("Plugin tool must return text");
                   // Bound at tool ingress, BEFORE PI persists/serializes or compacts.
                   // Projection of older messages cannot protect the newest result.
@@ -803,7 +809,7 @@ export class PiRuntime implements AgentRuntime {
       if (options.ephemeral || !this.opts.mcp?.enabled || this.opts.tools?.length === 0) return "";
       const hash = createHash("sha256");
       const files = [path.join(getAgentDir(), "mcp.json")];
-      if (session.settingsManager.isProjectTrusted()) files.push(path.join(this.opts.cwd, ".pi", "mcp.json"));
+      if (session.settingsManager.isProjectTrusted()) files.push(path.join(cwd, ".pi", "mcp.json"));
       hash.update(session.settingsManager.isProjectTrusted() ? "trusted\0" : "untrusted\0");
       for (const file of files) {
         let text: string;
@@ -848,7 +854,7 @@ export class PiRuntime implements AgentRuntime {
         await applySelection();
         appliedModelRevision = this.modelRevision;
       }
-      if (!options.ephemeral && this.opts.skillContext) skillContext = await this.opts.skillContext();
+      if (!options.ephemeral && cwd === this.opts.cwd && this.opts.skillContext) skillContext = await this.opts.skillContext();
       // Reload reads project/global defaults again. Reassert the selected owner before
       // a working or advisory prompt can enter the SDK's intra-tool loop.
       settingsManager.applyOverrides({ compaction: { enabled: this.opts.compactionOwner?.() === "agent" } });

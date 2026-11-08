@@ -22,6 +22,20 @@ const defaults = { model: "p/default", thinking: "high" };
 const steps = (...list: Array<[string, string]>) => JSON.stringify({ steps: list.map(([task, role]) => ({ task, role, reason: `${role} suffices`, evidence: `evidence of ${task}` })) });
 
 interface Script { verdictDelayMs?: number; verdict?: string | ((prompt: string) => string); toolEvents?: (prompt: string) => Array<{ name: string; detail: string; result: string }>; plan?: string | (() => string); worker?: (prompt: string, model?: string) => string | Promise<string>; tools?: (prompt: string) => number }
+const fixtureCleanup = new WeakMap<import("node:test").TestContext, Array<{ home: string; stop(): Promise<void> }>>();
+function retainFixture(t: import("node:test").TestContext, fixture: { home: string; stop(): Promise<void> }): void {
+  let fixtures = fixtureCleanup.get(t);
+  if (!fixtures) {
+    fixtures = []; fixtureCleanup.set(t, fixtures);
+    t.after(async () => {
+      // Tests can reopen the same home with a second writer fixture. Every owner
+      // must stop before any of their shared directories can be removed.
+      for (const item of fixtures!) await item.stop();
+      for (const home of new Set(fixtures!.map(item => item.home))) await rm(home, { recursive: true, force: true });
+    });
+  }
+  fixtures.push(fixture);
+}
 /** Real Harness, store and dispatcher; fake model runtime emitting observed selection and tool events. */
 async function setup(t: import("node:test").TestContext, script: Script, opts: { roles?: ModelRoles; unavailable?: string[]; home?: string; file?: string;
   http?: (request: PlannerHttpRequest) => Promise<PlannerHttpOutcome> } = {}) {
@@ -72,7 +86,7 @@ async function setup(t: import("node:test").TestContext, script: Script, opts: {
     events.push(event);
     if (event.type === "result" || (event.type === "status" && ["blocked", "paused"].includes(event.status ?? ""))) settle();
   }, () => {});
-  t.after(async () => { await dispatcher.stop(); await harness.stop(1000); if (!opts.home) await rm(home, { recursive: true, force: true }); });
+  retainFixture(t, { home, stop: async () => { await dispatcher.stop(); await harness.stop(1000); } });
   return { home, file, store, dispatcher, harness, bridge, runtime, calls, events, http,
     async run(input: string, dependency?: { expiresAt?: number }) {
       settled = new Promise<void>(r => { settle = r; });
@@ -100,6 +114,38 @@ test("validator model selection: explicit validator, then review, then default; 
   config.roles!.validator = validator;
   env.runtime.modelPreflight = async () => ({ available: false, thinkingSupported: true });
   assert.match(await validatorRole(env.runtime, { config, review, defaults }) as string, /validator.*unavailable; no silent default model/);
+});
+
+test("planner-derived invariants are corrected in the same worker without repeating publication", async t => {
+  let effects = 0;
+  const env = await setup(t, {
+    plan: steps(["publish reviewed head and prove merge SHA equals reviewed head", "simple"]),
+    worker: prompt => {
+      assert.match(prompt, /planning aids, not additional authority/);
+      if (prompt.startsWith("CONTINUE STEP")) {
+        return "PR head H is merge M's second parent; required source review and tests passed. No repeated push or merge.\nSTEP-STATUS: complete";
+      }
+      effects++;
+      return "PR already merged. Blocked only because merge M is not reviewed head H.\nSTEP-STATUS: blocked: SHA equality";
+    },
+    verdict: prompt => {
+      assert.match(prompt, /correct planner-invented preconditions/);
+      assert.match(prompt, /never repeat it to satisfy a false precondition/);
+      assert.match(prompt, /Never weaken an explicit operator constraint/);
+      return prompt.includes('"reply":"PR already merged.')
+        ? JSON.stringify({ state: "continue", next: "Report the existing PR head, merge parents and checked tree read-only; do not publish again." })
+        : '{"state":"completed"}';
+    },
+  });
+  const mandate = "Publish the reviewed and tested PR with a normal merge; preserve review budget; do not deploy.";
+  assert.match(planPrompt(mandate), /planning aids, not additional authority/);
+  const task = await env.run(mandate);
+  assert.equal(task.status, "completed");
+  assert.equal(effects, 1);
+  assert.equal(env.calls.worker.length, 2);
+  assert.equal(env.calls.review.length, 2);
+  assert.equal(state(task.checkpoint).outcomes.length, 1);
+  assert.match(env.calls.review[0]!, /Publish the reviewed and tested PR with a normal merge/);
 });
 
 test("configured small validator runs instead of the reviewer or default model", async t => {
@@ -157,7 +203,7 @@ test("plan, step index and intent are persisted before the worker turn executes"
 
 test("restart after a settled step neither replans nor repeats the effect", async t => {
   const home = await mkdtemp(path.join(os.tmpdir(), "seq-reload-"));
-  t.after(() => rm(home, { recursive: true, force: true }));
+  retainFixture(t, { home, stop: async () => {} });
   const file = path.join(home, "executions.json");
   let effects = 0; let plans = 0;
   const store = new ExecutionStore(file); await store.load();
@@ -179,7 +225,7 @@ test("restart after a settled step neither replans nor repeats the effect", asyn
 
 test("interrupted step with unsafe intent and no evidence blocks on restart instead of blind replay", async t => {
   const home = await mkdtemp(path.join(os.tmpdir(), "seq-unsafe-"));
-  t.after(() => rm(home, { recursive: true, force: true }));
+  retainFixture(t, { home, stop: async () => {} });
   const file = path.join(home, "executions.json");
   const store = new ExecutionStore(file); await store.load();
   const task = await store.submit("parent", "req", "write", "sequential");
@@ -474,7 +520,7 @@ test("HTTP planner: missing dispatcher role blocks before any request; persisted
   assert.equal(missing.http.length, 0);
   assert.ok(missing.events.some(e => /Model role dispatcher is not configured/.test(e.text)));
   const home = await mkdtemp(path.join(os.tmpdir(), "seq-http-resume-"));
-  t.after(() => rm(home, { recursive: true, force: true }));
+  retainFixture(t, { home, stop: async () => {} });
   const file = path.join(home, "executions.json");
   const first = await setup(t, { plan: steps(["one", "simple"], ["two", "simple"]),
     worker: prompt => /STEP 1\/2/.test(prompt) ? "done one\nSTEP-STATUS: complete" : "partial",
@@ -599,7 +645,7 @@ test("correction is persisted before the corrected worker turn (restart-safe) an
 
   // Fresh process: persisted correction, nothing else; exact step resumes, earlier steps are not replayed.
   const home = await mkdtemp(path.join(os.tmpdir(), "seq-corr-"));
-  t.after(() => rm(home, { recursive: true, force: true }));
+  retainFixture(t, { home, stop: async () => {} });
   const file = path.join(home, "executions.json");
   const store = new ExecutionStore(file); await store.load();
   const task = await store.submit("parent", "req", "two", "sequential");
@@ -639,7 +685,7 @@ test("validator 'blocked' (genuine external) and technical failure never trigger
 test("corrupt persisted correction metadata blocks visibly instead of an unbounded correction loop", async t => {
   for (const correction of [{ index: 0, rounds: "x", note: "n" }, { index: 0, rounds: 99, note: "n" }, { index: 5, rounds: 1, note: "n" }]) {
     const home = await mkdtemp(path.join(os.tmpdir(), "seq-corrupt-"));
-    t.after(() => rm(home, { recursive: true, force: true }));
+    retainFixture(t, { home, stop: async () => {} });
     const file = path.join(home, "executions.json");
     const store = new ExecutionStore(file); await store.load();
     const task = await store.submit("parent", "req", "one", "sequential");
@@ -713,7 +759,7 @@ test("uncertain assessment can request exact read-only facts from the same worke
 
 test("failed inference budget and settled worker evidence survive restart without effect replay", async t => {
   const home = await mkdtemp(path.join(os.tmpdir(), "seq-assessment-"));
-  t.after(() => rm(home, { recursive: true, force: true }));
+  retainFixture(t, { home, stop: async () => {} });
   const file = path.join(home, "executions.json");
   const first = await setup(t, { verdict: '{"state":"uncertain"}' }, { home, file });
   const paused = await first.run("create resource");
@@ -735,7 +781,7 @@ test("failed inference budget and settled worker evidence survive restart withou
 
 test("restart after durable worker result revalidates before running any worker", async t => {
   const home = await mkdtemp(path.join(os.tmpdir(), "seq-settled-"));
-  t.after(() => rm(home, { recursive: true, force: true }));
+  retainFixture(t, { home, stop: async () => {} });
   const file = path.join(home, "executions.json");
   const store = new ExecutionStore(file); await store.load();
   const task = await store.submit("parent", "req", "create once", "sequential");
@@ -757,7 +803,6 @@ test("restart after durable worker result revalidates before running any worker"
 
 test("checkpoint budget is checked before recording a new unsafe effect intent", async t => {
   const home = await mkdtemp(path.join(os.tmpdir(), "seq-fixed-budget-"));
-  t.after(() => rm(home, { recursive: true, force: true }));
   const file = path.join(home, "executions.json");
   const store = new ExecutionStore(file); await store.load();
   const task = await store.submit("parent", "req", "six steps", "sequential");
@@ -766,6 +811,7 @@ test("checkpoint budget is checked before recording a new unsafe effect intent",
     plan: Array.from({ length: 6 }, () => ({ task: "x".repeat(3900), role: "simple", reason: "r", evidence: "e" })),
     outcomes: Array.from({ length: 5 }, () => ({ role: "simple", requested: {}, result: "x".repeat(7300) })) }));
   const env = await setup(t, {}, { home, file });
+  // Shared fixture cleanup stops every owner before removing this home.
   await env.dispatcher.start();
   for (let i = 0; i < 300 && env.store.list()[0]!.status !== "paused"; i++) await new Promise(r => setTimeout(r, 10));
   assert.equal(env.store.list()[0]!.status, "paused");

@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Hayate · WebUI</title>
+  <link rel="stylesheet" href="/style.css">
+  <script type="module" src="/app.js"></script>
+</head>
+<body>
+  <aside aria-label="Conversations">
+    <div class="brand">hayate <span>local</span></div>
+    <button id="new">＋ New conversation</button>
+    <input id="search" type="search" placeholder="Find a conversation" aria-label="Find a conversation">
+    <nav id="chats" aria-label="Conversation list"></nav>
+    <footer>No external services or browser-side keys.</footer>
+  </aside>
+  <main>
+    <header>
+      <h1 id="title">Hayate</h1>
+      <div class="actions">
+        <button id="rename" title="Rename conversation">Rename</button>
+        <button id="export" title="Export conversation as Markdown">Export</button>
+        <button id="theme" aria-label="Switch color scheme">◐</button>
+      </div>
+    </header>
+    <div id="connection" role="status">Connecting…</div>
+    <section id="conversation" tabindex="0" aria-label="Conversation">
+      <div id="messages"></div>
+    </section>
+    <button id="latest" hidden>↓ Jump to latest</button>
+    <section id="panels" aria-label="Extension panels"></section>
+    <div id="activity" role="status" aria-live="polite"></div>
+    <div id="module-actions" class="module-actions" aria-label="Extension actions"></div>
+    <div id="error" role="alert" hidden></div>
+    <form id="composer">
+      <label class="sr-only" for="input">Message</label>
+      <textarea id="input" rows="3" placeholder="Ask Hayate, or use /help…" required></textarea>
+      <div class="compose-actions">
+        <span>Enter to send · Shift+Enter for a new line</span>
+        <button id="help" type="button">/help</button>
+        <button id="stop" type="button" title="Send /stop to this conversation">■ Stop</button>
+        <button id="send" type="submit">Send ↑</button>
+      </div>
+    </form>
+    <footer class="hint">Model and context settings remain owned by Hayate. Use /status, /model and /reasoning.</footer>
+  </main>
+  <dialog id="rename-dialog">
+    <form method="dialog">
+      <label for="rename-input">Conversation title</label>
+      <input id="rename-input" maxlength="120" required>
+      <div class="actions"><button value="cancel" formnovalidate>Cancel</button><button value="save">Save</button></div>
+    </form>
+  </dialog>
+</body>
+</html>
