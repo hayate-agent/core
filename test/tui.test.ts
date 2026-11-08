@@ -87,16 +87,23 @@ test("plugin panels are bounded plain text and rendering failures do not break e
   } finally { await ui.stop(); }
 });
 
-test("fullscreen layout keeps the editor at the bottom after long output", async () => {
+test("fullscreen layout keeps the editor at the bottom after long output", async (t) => {
   const term = terminal();
   const ui = new HarnessTuiChannel({ agent: "test", status: () => "running", quit: () => {}, terminal: term.t });
   try {
     await ui.start(async () => {});
     await ui.send({ channel: "console", target: "local" }, Array.from({ length: 150 }, (_, i) => `Output line ${i}`).join("\n"));
-    await new Promise((r) => setTimeout(r, 30));
+    // The render scheduler may be delayed behind other tests on a busy runner.
+    // Wait for actual output, not a timing assumption; missing output still fails.
+    const screen = await t.waitFor(() => {
+      const lines = (ui as unknown as { tui: { getScreenLines(): string[] } }).tui.getScreenLines();
+      assert.equal(lines.length, term.t.rows);
+      assert.match(lines.join("\n"), /Output line 149/);
+      return lines;
+    }, { interval: 10, timeout: 5000 });
     // Inspect the rendered viewport, not merely presence of terminal escape sequences.
-    const screen = (ui as unknown as { tui: { getScreenLines(): string[] } }).tui.getScreenLines();
     assert.equal(screen.length, term.t.rows);
+    assert.match(screen.join("\n"), /Output line 149/);
     assert.match(screen.slice(0, 3).join("\n"), /Hayate Agent/);
     assert.match(screen.slice(-8).join("\n"), /\/help/);
     assert.ok(!screen.some((line) => /Output line 0$/.test(line)));
