@@ -43,8 +43,9 @@ Ask Hayate to inspect a project, explain code, make a change or run tests. Use
 - **Run ongoing tasks:** heartbeats, cron jobs, recurring loops and standing goals.
 - **Delegate work:** route tasks to model roles and validate sequential steps
   before moving on. Models and reasoning levels are configurable.
-- **Use a browser:** an optional local WebUI plugin with persistent chats,
-  streamed responses and agent-configurable presentation.
+- **Use a browser:** the independently installed [WebUI](https://github.com/hayate-agent/webui)
+  provides projects, conversations and connected-agent management through the
+  agent's backend API.
 - **Connect through Matrix:** DMs and rooms, encrypted conversations, user
   allowlists, mention rules and tool-approval handling.
 - **Integrate with applications:** an HTTP run API with streamed progress,
@@ -71,13 +72,17 @@ Follow the **[terminal, WebUI, Matrix and dispatcher setup guide](docs/gateways.
 | Interface / feature | Activation |
 | --- | --- |
 | Terminal | Run `hayate-agent`; use `/login`, `/model` and `/help` |
-| WebUI | Select the packaged optional plugin under `dist/optional-plugins/webui` (or install it separately); configure `gatewayPlugins.webui.module`; open `http://127.0.0.1:3210` |
+| Standalone WebUI | Follow the [WebUI setup](https://github.com/hayate-agent/webui#readme); install its compatible backend separately |
+| Bundled legacy WebUI | This Core snapshot still packages `dist/optional-plugins/webui`; use `gatewayPlugins.webui.module` and IPv4 loopback only |
 | Matrix | Bundled plugin; inject `MATRIX_HOMESERVER`, bot credentials and sender/room policy |
 | Dispatcher | Optional; verify backend concurrency, then enable `dispatcher` and restart |
 | HTTP run API | Separately enabled with `API_SERVER_KEY` or a private loopback key file |
 
-WebUI remains local-only; do not forward it into a network before authentication
-and user isolation are implemented. Matrix encryption requires persistent device
+The packaged legacy WebUI remains local-only; do not expose that listener to a
+network. The current [standalone WebUI](https://github.com/hayate-agent/webui#readme)
+is a separate frontend with explicit TLS/backend configuration; install its
+compatible authenticated backend from [Plugins](https://github.com/hayate-agent/plugins).
+It does not replace Core's runtime, history or access-control policy. Matrix encryption requires persistent device
 and crypto state. Supply credentials through your secret manager or environment,
 never through a public configuration file. Use a supervisor for always-on use.
 
@@ -113,9 +118,10 @@ confirmation. Plugins run as trusted process code, not inside a sandbox. Queue
 persistence does not make external side effects exactly-once: after an interrupted
 operation, reconcile its actual result before repeating it.
 
-Slack and Telegram adapters are not included. Web chat is available through the
-separately installed [WebUI plugin](https://github.com/hayate-agent/plugins/blob/main/webui/README.md),
-not as a built-in Core web server.
+Slack and Telegram adapters are not bundled with Core. Optional integrations are
+installed separately from [Plugins](https://github.com/hayate-agent/plugins).
+The [standalone WebUI](https://github.com/hayate-agent/webui) is likewise a separate
+project, not a built-in Core web server.
 
 ## Documentation and related projects
 
@@ -127,7 +133,8 @@ not as a built-in Core web server.
 - [Model roles](docs/model-roles.md) · [Dispatcher](docs/dispatcher.md)
 - [MCP](docs/mcp.md) · [Plugin API](docs/plugins.md)
 - [Operations](docs/operations.md) — recovery, delivery and shutdown
-- [hayate-agent/plugins](https://github.com/hayate-agent/plugins) — plugin adapters
+- [hayate-agent/plugins](https://github.com/hayate-agent/plugins) — plugin adapters and backend services
+- [hayate-agent/webui](https://github.com/hayate-agent/webui) — independent browser dashboard and presentation gateway
 - [hayate-agent/deployments](https://github.com/hayate-agent/deployments) — deployment examples
 
 ## Contributing
