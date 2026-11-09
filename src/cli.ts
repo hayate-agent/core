@@ -341,6 +341,7 @@ async function main(argv: string[]): Promise<void> {
     compaction: () => compactionAdapter,
     compactionOwner: () => contextPolicy(settings.effective().contextMaintenance).compactionOwner ?? "harness",
     mcp: settings.effective().mcp,
+    mcpUserManagement: true,
     skillPaths: config.skills.paths,
     skillContext: async () => {
       const mode = settings.effective().skills?.context ?? "auto";
