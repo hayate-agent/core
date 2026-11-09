@@ -4,13 +4,13 @@ export function reviewConfig(input?: Partial<Omit<ReviewConfig, "mandatory" | "s
   if (input !== undefined && (!input || typeof input !== "object" || Array.isArray(input))) throw new Error("Invalid review configuration");
   if (input?.mandatory !== undefined && (!input.mandatory || typeof input.mandatory !== "object" || Array.isArray(input.mandatory))) throw new Error("Invalid review.mandatory");
   const result: ReviewConfig = {
-    enabled: input?.enabled ?? true,
+    enabled: input?.enabled ?? false,
     shellGuard: input?.shellGuard ?? false,
     scope: { mode: "risk", nonBlockingPaths: ["docs/**", "**/*.md", "**/*.txt"], requiredPaths: [".github/**", ".gitlab-ci.yml", "deploy/**", "**/SKILL.md", "**/AGENTS.md", "**/SOUL.md"], ...input?.scope },
     model: input?.model,
     thinking: input?.thinking ?? "medium",
     maxTurns: input?.maxTurns ?? 3,
-    mandatory: { local: true, publish: true, merge: true, ...input?.mandatory },
+    mandatory: { local: false, publish: false, merge: false, ...input?.mandatory },
     baseRef: input?.baseRef,
   };
   if (typeof result.shellGuard !== "boolean" || !["risk", "all"].includes(result.scope.mode) ||

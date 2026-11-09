@@ -20,7 +20,11 @@ does not migrate, erase or grant permission to reset them. The bundled default
 continues using the unchanged ledger and budgets. Review configuration/model
 compatibility still lives in the host; this is not universal settings extraction.
 
-The review plugin ships with the Harness and is enabled by default. No local ESM
+The review plugin ships with the Harness and is **disabled by default**. No
+local, publication or merge gate is enabled unless the operator explicitly configures
+it. Enabling the plugin alone provides advisory review; `mandatory` defaults to
+`{local: false, publish: false, merge: false}`. The configuration below is an
+**opt-in example**, not a starter-profile default. No local ESM
 module or PI extension installation is required. The source plugin repository owns
 the engine, ledger implementation, budget, lifecycle/guards and default composition;
 Core supplies configuration compatibility, generic policy execution and runtime
