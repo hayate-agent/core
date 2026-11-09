@@ -1,5 +1,5 @@
 {
-  "contentDigest": "9e91b406d346628fc364d71d83c1d6c3203f3c1595651a349ce32792c18e446c",
+  "contentDigest": "f8f2ea0fcde026118efc1a8c81d3d877f311d6a6a0e1dfceb0b6af3d9a1b2048",
   "files": [
     {
       "mode": "100644",
@@ -205,6 +205,11 @@
       "mode": "100644",
       "path": "docs/mcp.md",
       "sha256": "2b3c84e7acb5185de0b4aa9f33ae39b8460fff6b698425032deaca9956d13b5d"
+    },
+    {
+      "mode": "100644",
+      "path": "docs/memory-usage-ranking.md",
+      "sha256": "7de018e4ad215ec37d513c693fd9733a34f0a9d8ca07a38b634dd3d4ff710282"
     },
     {
       "mode": "100644",
@@ -749,7 +754,7 @@
     {
       "mode": "100644",
       "path": "src/memory-worker.ts",
-      "sha256": "003730880892adcc8621e822ac7db475369ef26bd473fdddca34a07a930c3a6f"
+      "sha256": "df0657828732fae829b3950969bcfb5d57578cfe5b6c3180a12e2066363898af"
     },
     {
       "mode": "100644",
@@ -1863,13 +1868,18 @@
     },
     {
       "mode": "100644",
+      "path": "test/memory-usage-ranking.test.ts",
+      "sha256": "9f92dae7e5938633a9212d9b333643804d3f491239c7f6840299c903995c9643"
+    },
+    {
+      "mode": "100644",
       "path": "test/memory-write-contract.test.ts",
       "sha256": "972f7ee2277d62ceb2999ed26df0088083fc3e410eb277b757d0265d852441be"
     },
     {
       "mode": "100644",
       "path": "test/memory.test.ts",
-      "sha256": "1b4508604fbc9f07f5305e79a49c32b51417a74639c4ac6ae11385e657d2289d"
+      "sha256": "c630c851af99a9356868a1cbd50682f93bbf370caf243a342b96ddf25083d3b3"
     },
     {
       "mode": "100644",
@@ -2945,5 +2955,5 @@
   "historyPolicy": "fresh-root; no source commits, tags, refs or deleted blobs",
   "pluginSHA": "3c363aed2dbcff361dcb43a4cf3f3f02aedb5da2",
   "schema": 1,
-  "sourceSHA": "fdcf419f55c09d344b4249a5d62dbdf9962f00b6"
+  "sourceSHA": "58164399f49d6c43e267388ab054b45750dcc1d9"
 }
