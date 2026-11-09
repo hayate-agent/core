@@ -36,6 +36,19 @@ for (const extra of [{}, {mcp:{enabled:true},tools:[]}]) {
  await assert.rejects(access(process.env.TEST_DIR+'/pid'));
  await inactive.dispose();
 }
+// Operator management can enable and disable MCP on an already open session.
+const toggledRuntime=new PiRuntime({...options,mcp:{enabled:false}});
+const toggled=await toggledRuntime.open('toggle');
+toggled.session.prompt=async()=>{}; toggled.session.waitForIdle=async()=>{};
+await toggledRuntime.setMcpEnabled(true); await toggled.prompt('operator enabled MCP');
+const toggleDeadline=Date.now()+10000;
+while(!toggled.session.getAllTools().some(t=>t.name==='mcp__fixture__echo') && Date.now()<toggleDeadline) await new Promise(r=>setTimeout(r,20));
+assert.ok(toggled.session.getAllTools().some(t=>t.name==='mcp__fixture__echo'));
+const togglePid=Number(await readFile(process.env.TEST_DIR+'/pid','utf8'));
+await toggledRuntime.setMcpEnabled(false); await toggled.prompt('operator disabled MCP');
+assert.throws(()=>process.kill(togglePid,0));
+assert.ok(!toggled.session.getAllTools().some(t=>t.name==='mcp__fixture__echo'));
+await toggled.dispose();
 const runtime=new PiRuntime({cwd:process.cwd(),sessionsDir:process.env.TEST_DIR+'/sessions',skillPaths:[],personaSections:async()=>[],approvals:{mode:'off',tools:[]},mcp:{enabled:true}});
 const wrapped=await runtime.open('fixture');
 const session=wrapped.session;
