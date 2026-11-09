@@ -27,7 +27,14 @@ function validate(e: MemoryEntry): void {
   if (!validDate(e.reviewAfter)) fail("reviewAfter");
   if (!Array.isArray(e.links) || e.links.length > 20 || e.links.some((x) => typeof x !== "string" || !idPattern.test(x))) fail("links");
 }
-interface Row { entry: MemoryEntry; contentHash: string; inputHash?: string; vector?: number[]; model?: string }
+interface Row { entry: MemoryEntry; contentHash: string; inputHash?: string; vector?: number[]; model?: string; usage?: { count: number; lastUsed: number } }
+
+/** Bounded preference among relevant matches, never an expiry or an access grant. */
+export function memoryUsageWeight(usage: Row["usage"], now: number): number {
+  if (!usage || !Number.isSafeInteger(usage.count) || usage.count < 1 || !Number.isFinite(usage.lastUsed)) return 1;
+  const ageDays = Math.max(0, now - usage.lastUsed) / 86400000;
+  return 1 + Math.min(0.25, Math.log2(1 + usage.count) * 0.025) / (1 + ageDays / 30);
+}
 export class FileMemoryStore implements MemoryProvider {
   readonly capabilities;
   private rows = new Map<string, Row>();
@@ -98,7 +105,7 @@ export class FileMemoryStore implements MemoryProvider {
       entry.revision = hash(raw); // detects manual edits, not just provider-generated revisions
       const old = this.rows.get(id);
       const contentHash = hash(entry.title + "\n" + entry.text);
-      return { entry, contentHash, inputHash: meta.inputHash, ...(old?.contentHash === contentHash ? { vector: old.vector, model: old.model } : {}) };
+      return { entry, contentHash, inputHash: meta.inputHash, ...(old?.contentHash === contentHash ? { vector: old.vector, model: old.model, usage: old.usage } : {}) };
     } catch (err) { if ((err as NodeJS.ErrnoException).code === "ENOENT") return undefined; throw err; }
   }
   private async write(row: Row): Promise<void> {
@@ -221,13 +228,27 @@ export class FileMemoryStore implements MemoryProvider {
     }
     const hits: MemoryHit[] = []; const now = Date.now();
     // Revalidate authoritative source, including deletions, revocations and expiry.
-    for (const [id, score] of [...scores].sort((a, b) => b[1] - a[1]).slice(0, 200)) {
+    const ranked = [...scores].map(([id, score]) => [id, score * memoryUsageWeight(this.rows.get(id)?.usage, now)] as const);
+    for (const [id, score] of ranked.sort((a, b) => b[1] - a[1]).slice(0, 200)) {
       let row: Row | undefined;
       try { row = await this.read(id); } catch { continue; }
       if (!row || row.entry.sessionKey !== ctx.sessionKey || (!options.historical && (row.entry.state !== "active" || (row.entry.expiresAt && Date.parse(row.entry.expiresAt) <= now)))) continue;
       hits.push({ entry: row.entry, score, reviewDue: Boolean(row.entry.reviewAfter && Date.parse(row.entry.reviewAfter) <= now) });
       if (hits.length >= (options.limit ?? 5)) break;
     }
+    // Only returned, source-validated hits count, not every candidate scanned. Derived
+    // usage lives in the index snapshot: source revisions and idempotency stay intact.
+    await this.serial(async () => {
+      for (const hit of hits) {
+        const row = this.rows.get(hit.entry.id);
+        if (!row || row.entry.revision !== hit.entry.revision) continue;
+        const previous = row.usage;
+        row.usage = { count: Math.min(1000000, (previous && Number.isSafeInteger(previous.count) && previous.count > 0 ? previous.count : 0) + 1), lastUsed: now };
+        this.dirty = true;
+      }
+      // Retrieval remains available if the derived snapshot cannot be saved.
+      await this.snapshot().catch(() => { this.error = "Memory usage snapshot unavailable"; });
+    });
     return hits;
   }
   reindex(): Promise<void> {
