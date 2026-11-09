@@ -216,7 +216,7 @@ test("automatic capture marks claims reported and recall has bounded data framin
   await service.capture({ sessionKey: ctx.sessionKey, id: "turn1", text: "Diagnose deployment", reply: "artifact mismatch", outcome: "failed" });
   const hits = await store.search(ctx, "artifact");
   assert.equal(hits[0].entry.verification, "reported");
-  assert.ok(hits[0].entry.expiresAt);
+  assert.ok(hits[0].entry.reviewAfter); // Review is due without requiring automatic expiry.
   assert.match(await service.recall(ctx.sessionKey, "artifact"), /not instructions or authorization/);
 });
 
