@@ -36,7 +36,7 @@ export async function finishWithReview(service: ReviewService, cwd: string, inpu
     if (state.status !== "escalated") {
       const last = state.rounds.at(-1);
       if (last?.findings?.some(f => (f.severity === "P0" || f.severity === "P1") && !last.assessment.some(a => a.id === f.id))) {
-        reply = await session.prompt(`Critically assess the latest P0/P1 review findings via plugin_review action=assess, with concrete evidence. Fix confirmed blocking defects. P2/P3 are optional and never block. Do not dismiss P0/P1 without proof. Do not publish or merge.\n${summarizeReview(state, service.evidencePath(state.root))}`, options);
+        reply = await session.prompt(`Critically assess the latest P0/P1 review findings via plugin_review action=assess, with concrete evidence. Fix confirmed blocking defects. P2/P3 are optional and never block. Do not dismiss P0/P1 without proof.\n${summarizeReview(state, service.evidencePath(state.root))}`, options);
       }
       if (signal?.aborted) throw new Error("Review cancelled");
       state = await service.run(cwd, input.sessionKey, signal);

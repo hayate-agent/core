@@ -15,28 +15,19 @@ existing extension points; introduce a Core hook only when the required capabili
 cannot be expressed through them. This principle does not remove infrastructure
 correctness checks or external access controls.
 
-## Default working rule: vertical slices and KISS
+## Operator-owned workflow
 
-The default CLI supplies **ALWAYS vertical slices. ALWAYS KISS.** through
-`capabilityContext` on every working turn, including dispatcher and managed
-subagent workers. It is independent of persona files, memory, skill discovery,
-tool selection and dispatcher enablement. Core owns this shared instruction path;
-[hayate-agent/plugins](https://github.com/hayate-agent/plugins) owns the dispatcher tool adapter, which has no instruction hook.
-
-Build the smallest simple end-to-end slice from the concrete request to a verified
-result before expanding horizontally. Include persistence, restart, continuation
-and activation when relevant and authorized. Avoid speculative abstractions,
-additional state machines and approval loops; justify added complexity with the
-request and evidence. Tests, merge and image builds are intermediate evidence,
-not proof of live completion. Review and approval working rules belong in the
-operator-managed SOUL.md, not in Core's unconditional working instructions.
-The separately configured review engine and external repository policies remain
-independent mechanisms; this shared default does not establish a review obligation.
-Always make small focused changes and small PRs: one purpose per PR,
-independently deployable increments and explicit real dependencies. Do not batch
-unrelated fixes, hold ready fixes for unrelated work, or ship unusable horizontal
-fragments. This shared default preserves required CI and grants no automatic
-rollout permission. This is a model instruction, not mechanical correctness enforcement.
+Core's capability context reports available tools and host facts. It does not
+prescribe KISS, vertical slices, PR size, review, merge, GitOps, platform-specific
+publication restrictions or a prohibition on merging one's own PRs. These working
+rules belong in an operator-authored initial `SOUL.md` or explicit rollout
+configuration when the operator wants them; the product does not insert them.
+Plugins likewise must not invent an independent workflow policy. The bundled
+review plugin is disabled by default and its mandatory gates are individually
+opt-in. The nightly strategy only reports PR/merge restrictions when explicitly
+configured; missing configuration is not rendered as a prohibition or a grant.
+Technical access controls and actual external repository protections remain in
+force and are separate from model working instructions.
 
 Activation requires shipping the rebuilt Core package/image through the authorized
 rollout and restarting the process; source edits and local builds do not alter a

@@ -18,7 +18,7 @@ export function createReviewEngine(context: {
     policies: context.config.enabled ? [reviewPolicy(service, context.origin)] : [],
     plugins: context.config.enabled ? [reviewPlugin(service, context.cwd, context.cwdFor)] : [],
     required: context.config.enabled ? ["review"] : [],
-    instructions: context.config.enabled ? "Review is enabled. Use plugin_review to inspect, critically assess and review code changes. P0/P1 block publication and completion. Budget cannot be reset by starting another session." : "",
+    instructions: context.config.enabled ? `Configured review capability: ${JSON.stringify({ mandatory: context.config.mandatory, shellGuard: context.config.shellGuard, scope: context.config.scope, maxTurns: context.config.maxTurns })}. plugin_review provides changeset inspection, review and assessment.` : "",
   };
 }
 /** Explicit capability marker: older pinned adapters must not claim correct cwd binding. */

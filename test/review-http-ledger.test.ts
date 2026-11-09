@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { git } from "../src/changeset.js";
-import { reviewConfig } from "../src/review-config.js";
+import { reviewConfig } from "./review-test-config.js";
 import { ReviewService } from "../src/builtin-plugins/review.js";
 import type { DedicatedReviewExecution } from "../src/builtin-plugins/review-executor.js";
 const requested = { model: "fixture/first", thinking: "off" };

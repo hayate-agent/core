@@ -5,7 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import { test, type TestContext } from "node:test";
 import { captureChangeset, git } from "../src/changeset.js";
-import { reviewConfig } from "../src/review-config.js";
+import { reviewConfig as defaultReviewConfig } from "../src/review-config.js";
+import { reviewConfig } from "./review-test-config.js";
 import { ReviewService, parseReview, type ReviewFinding } from "../src/builtin-plugins/review.js";
 import { finishWithReview } from "../src/builtin-plugins/review-lifecycle.js";
 import { guardReviewTool } from "../src/builtin-plugins/review-guard.js";
@@ -36,9 +37,11 @@ async function setup(t: TestContext, maxTurns = 3) {
 }
 
 test("review defaults and invalid configuration", () => {
-  assert.deepEqual(reviewConfig().mandatory, { local: true, publish: true, merge: true });
-  assert.equal(reviewConfig().maxTurns, 3);
-  assert.equal(reviewConfig().enabled, true);
+  assert.deepEqual(defaultReviewConfig().mandatory, { local: false, publish: false, merge: false });
+  assert.equal(defaultReviewConfig().maxTurns, 3);
+  assert.equal(defaultReviewConfig().enabled, false);
+  assert.deepEqual(defaultReviewConfig({ enabled: true }).mandatory, { local: false, publish: false, merge: false });
+  assert.equal(defaultReviewConfig({ enabled: true, mandatory: { merge: true } }).mandatory.merge, true);
   for (const value of [0, -1, 1.5, 21]) assert.throws(() => reviewConfig({ maxTurns: value }));
   assert.throws(() => reviewConfig({ model: "not-a-provider-ref" }));
   assert.throws(() => reviewConfig({ thinking: "invented" }));
