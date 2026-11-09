@@ -83,6 +83,8 @@ export interface PiRuntimeOptions {
   /** Existing snapshot bindings stay on their provider until explicitly migrated. */
   legacySessionProvider?: SessionProvider;
   mcp?: { enabled: boolean };
+  /** Native user management reserves MCP entrypoints; explicit MCP patterns still restrict servers. */
+  mcpUserManagement?: boolean;
   skillPaths: string[];
   adaptiveSkills?: AdaptiveSkills;
   /** Models that accept reasoning_effort "none" for thinking "off" turns (env list is merged at the call site). */
@@ -474,6 +476,18 @@ export class PiRuntime implements AgentRuntime {
     return this.modelsRuntime;
   }
 
+  /** Trusted MCP transport credential resolver; never exposed as a model tool. */
+  async mcpProviderToken(provider: string): Promise<string | undefined> {
+    try { return (await (await this.modelRuntime()).getAuth(provider))?.auth.apiKey; }
+    catch { return undefined; }
+  }
+
+  async setMcpEnabled(enabled: boolean): Promise<void> {
+    if ((this.opts.mcp?.enabled ?? false) === enabled) return;
+    this.opts.mcp = { enabled };
+    this.resourceRevision++;
+  }
+
   async reload(): Promise<void> {
     // Resource reload must not refresh provider/model configuration as a side effect.
     this.resourceRevision++;
@@ -651,9 +665,14 @@ export class PiRuntime implements AgentRuntime {
       appendSystemPromptOverride: (base) => [...base, ...sections],
       extensionFactories: options.ephemeral ? [] : [
         // No MCP process/network connection unless explicitly enabled. Empty tool lists stay inert.
-        ...(this.opts.mcp?.enabled && this.opts.tools?.length !== 0
-          ? [createCodemodeExtension({ mode: "on" }), createToolSearchExtension(), createMcpExtension()]
-          : []),
+        async pi => {
+          // Re-evaluate the operator's MCP setting on reload as well as first open.
+          if (this.opts.mcp?.enabled && this.opts.tools?.length !== 0) {
+            await createCodemodeExtension({ mode: "on" })(pi);
+            await createToolSearchExtension()(pi);
+            await createMcpExtension()(pi);
+          }
+        },
         {
           name: "hayate-agent-plugin-tools",
           factory: (pi) => {
@@ -730,7 +749,9 @@ export class PiRuntime implements AgentRuntime {
       resourceLoader: loader,
       settingsManager,
       sessionManager,
-      tools: options.ephemeral ? [] : this.opts.tools,
+      tools: options.ephemeral ? [] : this.opts.mcpUserManagement && this.opts.tools?.length
+        ? [...new Set([...this.opts.tools, "codemode", "tool_search", ...(this.opts.tools.some(name => name.startsWith("mcp__")) ? [] : ["mcp__*"])])]
+        : this.opts.tools,
       noTools: options.ephemeral || this.opts.tools?.length === 0 ? "all" : undefined,
       // Child sessions never see parent-owned orchestration tools; the host
       // tool guard still enforces the same list if one is called anyway.

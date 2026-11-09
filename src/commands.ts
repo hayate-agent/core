@@ -3,6 +3,7 @@
  * Names and aliases follow hermes_cli/commands.py so operators can keep their habits.
  */
 import { validateModelRoles } from "./model-roles.js";
+import { McpUserError } from "./mcp-management.js";
 import type { PluginCommand, PluginUI } from "./plugins.js";
 import { developmentGuide } from "./development.js";
 import { randomUUID } from "node:crypto";
@@ -17,6 +18,7 @@ export const VERSION = BUILD_INFO.version;
 
 export interface CommandContext {
   harness: Harness;
+  mcp?: import("./mcp-management.js").McpManagement;
   modelSettings?: {
     get: () => import("./model-settings.js").ModelSettings;
     source?: (key: import("./model-settings.js").ModelSetting) => string;
@@ -572,6 +574,22 @@ export const COMMANDS: Command[] = [
       await ctx.harness.runtime.reloadModels();
       const queued = await ctx.harness.retryTopicLabels();
       return `Model catalog reloaded; existing model selections are preserved and refreshed on their next turn. ${queued} queued topic-label retry/retries released.`;
+    },
+  },
+  {
+    name: "mcp",
+    admin: true,
+    help: "Manage MCP servers, connections, tools and OAuth: /mcp help",
+    run: async (args, input, ctx) => {
+      if (!ctx.mcp) return "MCP management is unavailable in this runtime";
+      const op = {
+        owner: JSON.stringify([input.replyTo?.channel ?? "console", input.replyTo?.target ?? "local", input.replyTo?.thread ?? null, input.sender ?? "console:local", input.sessionKey]),
+        cwd: ctx.cwdFor?.(input.sessionKey) ?? process.cwd(),
+        notify: (text: string) => ctx.harness.post(input, text),
+        ui: input.replyTo?.channel === "console" && input.sessionKey === (ctx.localSessionKey?.() ?? "console:local") ? ctx.pluginUI?.() : undefined,
+      };
+      try { return args.trim() ? await ctx.mcp.execute(args, op) : await ctx.mcp.menu(op); }
+      catch (error) { return error instanceof McpUserError ? error.message : "MCP operation failed. Check the server name/configuration and /mcp status. Credential and callback details are withheld. /mcp help lists commands."; }
     },
   },
   {
