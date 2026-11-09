@@ -76,7 +76,7 @@ export class ExperimentEvaluator {
       else {
         const delta = (result.candidate!.score - result.baseline!.score) * (spec.direction === "higher" ? 1 : -1);
         result.verdict = delta > 0 && delta >= spec.minimumDelta ? "improved" : "rejected";
-        result.reason = result.verdict === "improved" ? "Measured improvement meets threshold; review still required before adoption" : "No sufficient measured improvement";
+        result.reason = result.verdict === "improved" ? "Measured improvement meets threshold" : "No sufficient measured improvement";
       }
     } catch { result.verdict = "inconclusive"; result.reason = "Evaluator failed, timed out or returned invalid evidence"; }
     finally {

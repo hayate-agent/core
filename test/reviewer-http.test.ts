@@ -9,7 +9,7 @@ import os from "node:os";
 import path from "node:path";
 import { git } from "../src/changeset.js";
 import { ReviewService } from "../src/builtin-plugins/review.js";
-import { reviewConfig } from "../src/review-config.js";
+import { reviewConfig } from "./review-test-config.js";
 import { ReviewWorkers } from "../src/review-execution.js";
 import { ReviewSubagents } from "../src/review-subagents.js";
 import { handoverWorktreeReview } from "../src/review-worktree.js";

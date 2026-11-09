@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { createReviewEngine } from "../src/builtin-plugins/review-engine.js";
 import { PluginHost } from "../src/plugins.js";
-import { reviewConfig } from "../src/review-config.js";
+import { reviewConfig } from "./review-test-config.js";
 import { testReviewExecution } from "./review-test-executor.js";
 import { git } from "../src/changeset.js";
 

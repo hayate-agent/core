@@ -30,15 +30,16 @@ export interface ImprovementPolicy {
   maxTurns: number;
   timezone: string;
   reportTo?: Address;
-  pullRequest: boolean;
-  merge: boolean;
+  pullRequest?: boolean;
+  merge?: boolean;
   evaluator?: { runner: string; sha256: string };
 }
 export function improvementPolicy(input: Partial<ImprovementPolicy> = {}): ImprovementPolicy {
-  const p = { enabled: true, startHour: 23, endHour: 5, maxTurns: 20, timezone: "UTC", pullRequest: false, merge: false, ...input };
-  for (const key of ["enabled", "pullRequest", "merge"] as const) if (typeof p[key] !== "boolean") throw Error(`Invalid improvement.${key}`);
+  const p = { enabled: true, startHour: 23, endHour: 5, maxTurns: 20, timezone: "UTC", ...input };
+  if (typeof p.enabled !== "boolean") throw Error("Invalid improvement.enabled");
+  for (const key of ["pullRequest", "merge"] as const) if (p[key] !== undefined && typeof p[key] !== "boolean") throw Error(`Invalid improvement.${key}`);
   if (p.evaluator && (!path.isAbsolute(p.evaluator.runner) || !/^[a-f0-9]{64}$/.test(p.evaluator.sha256))) throw Error("Invalid improvement evaluator");
-  if (p.merge && !p.pullRequest) throw Error("Improvement merge requires pullRequest");
+  if (p.merge && p.pullRequest === false) throw Error("Improvement merge conflicts with pullRequest: false");
   for (const h of [p.startHour, p.endHour]) if (!Number.isInteger(h) || h < 0 || h > 23) throw Error("Invalid improvement hours");
   if (p.startHour === p.endHour || !Number.isInteger(p.maxTurns) || p.maxTurns < 1 || p.maxTurns > 1000) throw Error("Invalid improvement budget/window");
   new Intl.DateTimeFormat("en-GB", { timeZone: p.timezone }).format();

@@ -14,13 +14,14 @@ test("improvement defaults on with bounded opt-out; overnight date and DST use l
   assert.equal(defaults.startHour, 23);
   assert.equal(defaults.endHour, 5);
   assert.equal(defaults.timezone, "UTC");
-  assert.equal(defaults.pullRequest, false);
-  assert.equal(defaults.merge, false);
+  assert.equal(defaults.pullRequest, undefined);
+  assert.equal(defaults.merge, undefined);
   assert.equal(defaults.evaluator, undefined);
   assert.equal(defaults.reportTo, undefined);
   assert.equal(improvementPolicy({ enabled: false }).enabled, false);
   assert.throws(() => improvementPolicy({ maxTurns: 0 }));
-  assert.throws(() => improvementPolicy({ merge: true }));
+  assert.equal(improvementPolicy({ merge: true }).merge, true);
+  assert.throws(() => improvementPolicy({ merge: true, pullRequest: false }));
   assert.throws(() => improvementPolicy({ timezone: "invalid" }));
   const p = improvementPolicy({ timezone: "Europe/Berlin" });
   assert.deepEqual(improvementWindow(Date.parse("2026-10-24T22:00:00Z"), p), { night: "2026-10-24", active: true });

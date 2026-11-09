@@ -23,7 +23,7 @@ for (const policy of [undefined, "maxTurns: 1\n", "enabled: false\n"]) {
     assert.equal(p.enabled, policy !== "enabled: false\n");
     assert.equal(p.timezone, "Europe/Berlin");
     assert.equal(p.maxTurns, policy === "maxTurns: 1\n" ? 1 : 20);
-    assert.equal(p.pullRequest, false); assert.equal(p.merge, false);
+    assert.equal(p.pullRequest, undefined); assert.equal(p.merge, undefined);
     assert.equal(p.evaluator, undefined); assert.equal(p.reportTo, undefined);
     const opts = (harness as any).opts;
     opts.beforeTurn = (input: any) => controller.before(input);
