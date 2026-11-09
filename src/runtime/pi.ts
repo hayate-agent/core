@@ -474,6 +474,18 @@ export class PiRuntime implements AgentRuntime {
     return this.modelsRuntime;
   }
 
+  /** Trusted MCP transport credential resolver; never exposed as a model tool. */
+  async mcpProviderToken(provider: string): Promise<string | undefined> {
+    try { return (await (await this.modelRuntime()).getAuth(provider))?.auth.apiKey; }
+    catch { return undefined; }
+  }
+
+  async setMcpEnabled(enabled: boolean): Promise<void> {
+    if ((this.opts.mcp?.enabled ?? false) === enabled) return;
+    this.opts.mcp = { enabled };
+    this.resourceRevision++;
+  }
+
   async reload(): Promise<void> {
     // Resource reload must not refresh provider/model configuration as a side effect.
     this.resourceRevision++;
@@ -651,9 +663,14 @@ export class PiRuntime implements AgentRuntime {
       appendSystemPromptOverride: (base) => [...base, ...sections],
       extensionFactories: options.ephemeral ? [] : [
         // No MCP process/network connection unless explicitly enabled. Empty tool lists stay inert.
-        ...(this.opts.mcp?.enabled && this.opts.tools?.length !== 0
-          ? [createCodemodeExtension({ mode: "on" }), createToolSearchExtension(), createMcpExtension()]
-          : []),
+        async pi => {
+          // Re-evaluate the operator's MCP setting on reload as well as first open.
+          if (this.opts.mcp?.enabled && this.opts.tools?.length !== 0) {
+            await createCodemodeExtension({ mode: "on" })(pi);
+            await createToolSearchExtension()(pi);
+            await createMcpExtension()(pi);
+          }
+        },
         {
           name: "hayate-agent-plugin-tools",
           factory: (pi) => {

@@ -16,6 +16,8 @@ import { validateModelSetting, type ModelSetting } from "./model-settings.js";
 
 /** Explicit runtime-writable allowlist; security policy and secrets are deliberately excluded. */
 export interface LocalSettings {
+  /** Explicit operator MCP management choice; not an LLM setting tool. */
+  mcp?: { enabled: boolean };
   modelRoles?: ModelRoles;
   dispatcher?: Partial<DispatcherConfig>;
   reasoningEffortNoneModels?: string[];
@@ -42,7 +44,9 @@ function validate(value: unknown, defaults: Partial<ContextPolicy> = {}, pruning
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid local settings overlay");
   const data = value as Record<string, unknown>;
   for (const [key, item] of Object.entries(data)) {
-    if (key === "modelRoles") {
+    if (key === "mcp") {
+      if (!item || typeof item !== "object" || Array.isArray(item) || Object.keys(item).length !== 1 || typeof (item as { enabled?: unknown }).enabled !== "boolean") throw Error("Invalid MCP settings");
+    } else if (key === "modelRoles") {
       validateModelRoles(item);
     } else if (key === "reasoningEffortNoneModels") {
       validateReasoningEffortNoneModels(item);
@@ -428,6 +432,16 @@ export class SettingsService {
       updated.gatewayPlugins = { ...updated.gatewayPlugins };
       if (spec) updated.gatewayPlugins[name] = spec; else delete updated.gatewayPlugins[name];
       await this.saveLocal(updated, ["gatewayPlugins", name]);
+    });
+    this.writing = next;
+    return next;
+  }
+  setMcpEnabled(enabled: boolean): Promise<void> {
+    const next = this.writing.catch(() => {}).then(async () => {
+      const updated = await this.localForMutation();
+      updated.mcp = { enabled };
+      validate(updated, this.defaults.contextMaintenance, this.defaults.toolResultPruning, this.defaults.dispatcher);
+      await this.saveLocal(updated, ["mcp"]);
     });
     this.writing = next;
     return next;
