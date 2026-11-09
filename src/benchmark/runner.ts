@@ -50,7 +50,7 @@ export interface BenchmarkRunnerOptions {
   home: string;
   /** Session key the delegated tasks are parented to. */
   parent: string;
-  /** Directory holding run records and materialised fixtures. */
+  /** Directory that holds run records; each run gets one subdirectory with its fixtures and record.json. */
   dir: string;
   caseTimeoutMs: number;
   now?: () => number;
@@ -138,7 +138,7 @@ export class BenchmarkRunner {
       id: `${suite.name}-${new Date(this.stamp()).toISOString().replace(/[:.]/g, "-")}`,
       suite: suite.name, fingerprint, epoch, startedAt: this.stamp(), outcomes: [],
     };
-    const runDir = path.join(this.options.dir, "runs", record.id);
+    const runDir = path.join(this.options.dir, record.id);
     await mkdir(runDir, { recursive: true });
     const mandate: NonNullable<Execution["dependency"]> = { taskId: record.id, depth: 0, original: `Benchmark suite ${suite.name}` };
     for (const schedule of benchmarkRuns(suite)) {

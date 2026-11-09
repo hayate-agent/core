@@ -109,7 +109,7 @@ test("a suite run pins each submission, keeps the answer key out of the task and
     assert.deepEqual(record.outcomes[0]!.fixtureDrift, []);
     assert.deepEqual(progress, ["cache-reset:1:completed", "cache-reset:2:completed"]);
     assert.equal(record.epoch.settingsFingerprint, epoch.settingsFingerprint);
-    const persisted = JSON.parse(await readFile(path.join(env.dir, "runs", record.id, "record.json"), "utf8")) as { outcomes: unknown[]; fingerprint: string };
+    const persisted = JSON.parse(await readFile(path.join(env.dir, record.id, "record.json"), "utf8")) as { outcomes: unknown[]; fingerprint: string };
     assert.equal(persisted.outcomes.length, 2);
     assert.equal(persisted.fingerprint, suiteFingerprint(suite, {}));
   } finally { await env.cleanup(); }
