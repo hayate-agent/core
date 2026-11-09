@@ -2,6 +2,7 @@ import { validatePolicyOverlay, type PolicyOverlay, type PolicyOverride } from "
 import { dispatcherConfig, type DispatcherConfig } from "./dispatcher-config.js";
 import { validateGatewayOverlay, type GatewayOverlay, type GatewayOverride } from "./gateway-provider.js";
 import { memoryConfig, type MemoryConfig } from "./memory.js";
+import { benchmarkConfig, type BenchmarkConfig } from "./benchmark/config.js";
 import { validateGatewayConfig, type GatewayConfig } from "./gateway-settings.js";
 import { mkdir, readFile, readdir, lstat, open } from "node:fs/promises";
 import path from "node:path";
@@ -20,6 +21,7 @@ export interface LocalSettings {
   mcp?: { enabled: boolean };
   modelRoles?: ModelRoles;
   dispatcher?: Partial<DispatcherConfig>;
+  benchmark?: Partial<BenchmarkConfig>;
   reasoningEffortNoneModels?: string[];
   gateways?: GatewayConfig;
   gatewayPlugins?: GatewayOverlay;
@@ -40,7 +42,7 @@ export interface LocalSettings {
 }
 export type SettingPath = "model" | "thinking" | "review.model" | "review.thinking";
 const keys: Record<SettingPath, ModelSetting> = { model: "model", thinking: "thinking", "review.model": "reviewModel", "review.thinking": "reviewThinking" };
-function validate(value: unknown, defaults: Partial<ContextPolicy> = {}, pruningDefaults: Partial<PruningPolicy> = {}, dispatcherDefaults: Partial<DispatcherConfig> = {}): asserts value is LocalSettings {
+function validate(value: unknown, defaults: Partial<ContextPolicy> = {}, pruningDefaults: Partial<PruningPolicy> = {}, dispatcherDefaults: Partial<DispatcherConfig> = {}, benchmarkDefaults: Partial<BenchmarkConfig> = {}): asserts value is LocalSettings {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid local settings overlay");
   const data = value as Record<string, unknown>;
   for (const [key, item] of Object.entries(data)) {
@@ -57,6 +59,9 @@ function validate(value: unknown, defaults: Partial<ContextPolicy> = {}, pruning
     } else if (key === "dispatcher") {
       if (!item || typeof item !== "object" || Array.isArray(item) || Object.keys(item).some(key => !["enabled", "strategy", "concurrentRequests", "capacity", "countAuxiliaryRuns", "retentionDays", "rules"].includes(key))) throw Error("Invalid dispatcher overlay");
       dispatcherConfig({ ...dispatcherDefaults, ...item });
+    } else if (key === "benchmark") {
+      if (!item || typeof item !== "object" || Array.isArray(item) || Object.keys(item).some(key => !["enabled", "capacity", "repeats", "caseTimeoutMs", "runsDir"].includes(key))) throw Error("Invalid benchmark overlay");
+      benchmarkConfig({ ...benchmarkDefaults, ...item });
     } else if (key === "policyPlugins" || key === "extensionPlugins") {
       validatePolicyOverlay(item);
     } else if (key === "gatewayPlugins") {
@@ -105,7 +110,7 @@ export function validateReasoningEffortNoneModels(value: unknown): asserts value
 /** Category-specific layering: arrays replace; only documented maps merge. */
 function mergeSettings(base: LocalSettings, layer: LocalSettings): LocalSettings {
   const result = { ...base, ...layer };
-  for (const key of ["dispatcher", "memory", "review", "skills", "contextMaintenance", "toolResultPruning"] as const) {
+  for (const key of ["dispatcher", "memory", "review", "skills", "contextMaintenance", "toolResultPruning", "benchmark"] as const) {
     if (base[key] !== undefined || layer[key] !== undefined) (result as Record<string, unknown>)[key] = { ...base[key], ...layer[key] };
   }
   for (const key of ["gatewayPlugins", "policyPlugins", "extensionPlugins"] as const) {
@@ -158,7 +163,7 @@ export class SettingsService {
     }
     const previous = this.snapshot() as Record<string, any>;
     const result: Record<string, any> = Object.assign(Object.create(null), live ? structuredClone(previous) : {});
-    const check = (value: unknown) => validate(value, this.defaults.contextMaintenance, this.defaults.toolResultPruning, this.defaults.dispatcher);
+    const check = (value: unknown) => validate(value, this.defaults.contextMaintenance, this.defaults.toolResultPruning, this.defaults.dispatcher, this.defaults.benchmark);
     const object = (v: unknown): v is Record<string, any> => !!v && typeof v === "object" && !Array.isArray(v);
     const livePath = (parts: string[]) => parts[0] === "modelRoles" || parts[0] === "reasoningEffortNoneModels" || ["model", "thinking", "review.model", "review.thinking", "dispatcher.rules"].includes(parts.join("."));
     if (live) {
@@ -231,7 +236,7 @@ export class SettingsService {
   restartPending: string[] = [];
   private layered = false;
   private check(value: unknown): asserts value is LocalSettings {
-    validate(value, this.defaults.contextMaintenance, this.defaults.toolResultPruning, this.defaults.dispatcher);
+    validate(value, this.defaults.contextMaintenance, this.defaults.toolResultPruning, this.defaults.dispatcher, this.defaults.benchmark);
   }
   private async readSettingsFile(file: string, optional = false): Promise<LocalSettings> {
     let handle;
@@ -408,7 +413,7 @@ export class SettingsService {
       const updated = await this.localForMutation();
       updated.extensionPlugins = { ...updated.extensionPlugins };
       if (spec) updated.extensionPlugins[name] = spec; else delete updated.extensionPlugins[name];
-      validate(updated, this.defaults.contextMaintenance, this.defaults.toolResultPruning, this.defaults.dispatcher);
+      validate(updated, this.defaults.contextMaintenance, this.defaults.toolResultPruning, this.defaults.dispatcher, this.defaults.benchmark);
       await this.saveLocal(updated, ["extensionPlugins", name]);
     });
     this.writing = next; return next;
@@ -440,7 +445,7 @@ export class SettingsService {
     const next = this.writing.catch(() => {}).then(async () => {
       const updated = await this.localForMutation();
       updated.mcp = { enabled };
-      validate(updated, this.defaults.contextMaintenance, this.defaults.toolResultPruning, this.defaults.dispatcher);
+      validate(updated, this.defaults.contextMaintenance, this.defaults.toolResultPruning, this.defaults.dispatcher, this.defaults.benchmark);
       await this.saveLocal(updated, ["mcp"]);
     });
     this.writing = next;
@@ -459,7 +464,7 @@ export class SettingsService {
     const next = this.writing.catch(() => {}).then(async () => {
       const updated = await this.localForMutation();
       if (value === undefined) delete updated.compactionStrategy; else updated.compactionStrategy = value;
-      validate(updated, this.defaults.contextMaintenance, this.defaults.toolResultPruning, this.defaults.dispatcher);
+      validate(updated, this.defaults.contextMaintenance, this.defaults.toolResultPruning, this.defaults.dispatcher, this.defaults.benchmark);
       await this.saveLocal(updated, ["compactionStrategy"]);
     });
     this.writing = next;
@@ -469,7 +474,7 @@ export class SettingsService {
     const next = this.writing.catch(() => {}).then(async () => {
       const updated = await this.localForMutation();
       if (value === undefined) delete updated.contextStrategy; else updated.contextStrategy = value;
-      validate(updated, this.defaults.contextMaintenance, this.defaults.toolResultPruning, this.defaults.dispatcher);
+      validate(updated, this.defaults.contextMaintenance, this.defaults.toolResultPruning, this.defaults.dispatcher, this.defaults.benchmark);
       await this.saveLocal(updated, ["contextStrategy"]);
     });
     this.writing = next;
@@ -479,7 +484,7 @@ export class SettingsService {
     const next = this.writing.catch(() => {}).then(async () => {
       const updated = await this.localForMutation();
       if (value === undefined) delete updated.nightlyStrategy; else updated.nightlyStrategy = value;
-      validate(updated, this.defaults.contextMaintenance, this.defaults.toolResultPruning, this.defaults.dispatcher);
+      validate(updated, this.defaults.contextMaintenance, this.defaults.toolResultPruning, this.defaults.dispatcher, this.defaults.benchmark);
       await this.saveLocal(updated, ["nightlyStrategy"]);
     });
     this.writing = next;
@@ -489,7 +494,7 @@ export class SettingsService {
     const next = this.writing.catch(() => {}).then(async () => {
       const updated = await this.localForMutation();
       if (value === undefined) delete updated.completionStrategy; else updated.completionStrategy = value;
-      validate(updated, this.defaults.contextMaintenance, this.defaults.toolResultPruning, this.defaults.dispatcher);
+      validate(updated, this.defaults.contextMaintenance, this.defaults.toolResultPruning, this.defaults.dispatcher, this.defaults.benchmark);
       await this.saveLocal(updated, ["completionStrategy"]);
     });
     this.writing = next;
@@ -499,7 +504,7 @@ export class SettingsService {
     const next = this.writing.catch(() => {}).then(async () => {
       const updated = await this.localForMutation();
       updated.memory = { ...updated.memory, ...value };
-      validate(updated, this.defaults.contextMaintenance, this.defaults.toolResultPruning, this.defaults.dispatcher);
+      validate(updated, this.defaults.contextMaintenance, this.defaults.toolResultPruning, this.defaults.dispatcher, this.defaults.benchmark);
       const targets = Object.keys(value).map(key => ["memory", key]);
       await this.saveLocal(updated, targets[0] ?? [], targets.slice(1));
     });
@@ -529,7 +534,7 @@ export class SettingsService {
     const next = this.writing.catch(() => {}).then(async () => {
       const updated = await this.localForMutation();
       updated.contextMaintenance = { ...updated.contextMaintenance, ...value };
-      validate(updated, this.defaults.contextMaintenance, this.defaults.toolResultPruning, this.defaults.dispatcher);
+      validate(updated, this.defaults.contextMaintenance, this.defaults.toolResultPruning, this.defaults.dispatcher, this.defaults.benchmark);
       contextPolicy({ ...this.defaults.contextMaintenance, ...updated.contextMaintenance });
       const targets = Object.keys(value).map(key => ["contextMaintenance", key]);
       await this.saveLocal(updated, targets[0] ?? [], targets.slice(1));
@@ -551,7 +556,7 @@ export class SettingsService {
         const field = key as "model" | "thinking";
         if (value === undefined) delete updated[field]; else updated[field] = value;
       }
-      validate(updated, this.defaults.contextMaintenance, this.defaults.toolResultPruning, this.defaults.dispatcher);
+      validate(updated, this.defaults.contextMaintenance, this.defaults.toolResultPruning, this.defaults.dispatcher, this.defaults.benchmark);
       await this.saveLocal(updated, key.split("."));
       if (key === "model" || key === "thinking") this.revision++;
     });

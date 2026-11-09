@@ -4,6 +4,10 @@ export const modelRoleNames = ["dispatcher", "simple", "medium", "high", "review
 export type ModelRole = typeof modelRoleNames[number];
 export interface ModelPair { model?: string; thinking?: string }
 export interface ModelRoles { enabled: boolean; roles?: Partial<Record<ModelRole, ModelPair>> }
+export const thinkingLevels = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+export type ThinkingLevel = typeof thinkingLevels[number];
+/** A pinned worker pair is fully specified: no role defaults may fill it in. */
+export interface WorkerPin { model: string; thinking: ThinkingLevel }
 export function validateModelRoles(value: unknown): asserts value is ModelRoles {
   const object = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
   if (!object(value) || Object.keys(value).some(k => !["enabled", "roles"].includes(k)) || typeof value.enabled !== "boolean") throw Error("Invalid modelRoles");
@@ -12,7 +16,7 @@ export function validateModelRoles(value: unknown): asserts value is ModelRoles 
   for (const [role, pair] of Object.entries(value.roles)) {
     if (!modelRoleNames.includes(role as ModelRole) || !object(pair) || Object.keys(pair).some(k => !["model", "thinking"].includes(k))) throw Error("Invalid model role");
     if (pair.model !== undefined && (typeof pair.model !== "string" || pair.model.length > 200 || !/^[^/\s]+\/[^\s]+$/.test(pair.model))) throw Error("Invalid role model ref");
-    if (pair.thinking !== undefined && !["off", "minimal", "low", "medium", "high", "xhigh", "max"].includes(pair.thinking as string)) throw Error("Invalid role thinking");
+    if (pair.thinking !== undefined && !thinkingLevels.includes(pair.thinking as ThinkingLevel)) throw Error("Invalid role thinking");
   }
 }
 /** Pair fallback is atomic. Never probe by making a provider request. */
@@ -25,6 +29,29 @@ export async function resolveModelRole(runtime: AgentRuntime, config: ModelRoles
     return result.available && result.thinkingSupported ? pair : { ...defaults };
   } catch { return { ...defaults }; }
 }
+/** Host-only pin: unlike a role pair, both halves are mandatory. Used by the
+ * benchmark runner so a measured run cannot drift onto a role default. */
+export function validateWorkerPin(value: unknown): asserts value is WorkerPin {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw Error("Invalid worker pin");
+  const pin = value as Record<string, unknown>;
+  if (Object.keys(pin).some(key => !["model", "thinking"].includes(key))) throw Error("Invalid worker pin");
+  if (typeof pin.model !== "string" || !pin.model.trim() || pin.model.length > 200 || !/^[^/\s]+\/[^\s]+$/.test(pin.model)) throw Error("Invalid worker pin model ref");
+  if (!thinkingLevels.includes(pin.thinking as ThinkingLevel)) throw Error("Invalid worker pin thinking");
+}
+/**
+ * Strict counterpart to resolveModelRole. A role pair may silently fall back to
+ * the main model when a level is unsupported; a benchmark pin must not, because
+ * the whole point is knowing which model and level actually produced the numbers.
+ */
+export async function resolveWorkerPin(runtime: AgentRuntime, pin: WorkerPin): Promise<WorkerPin> {
+  validateWorkerPin(pin);
+  if (!runtime.modelPreflight) throw Error("Worker pin requires model preflight");
+  const result = await runtime.modelPreflight(pin.model, pin.thinking);
+  if (!result.available) throw Error("Pinned worker model unavailable");
+  if (!result.thinkingSupported) throw Error("Pinned worker thinking level unsupported");
+  return { model: pin.model, thinking: pin.thinking };
+}
+
 export type Complexity = "simple" | "medium" | "high";
 export function parseComplexity(text: string): Complexity | undefined {
   if (text.length > 2048) return;
