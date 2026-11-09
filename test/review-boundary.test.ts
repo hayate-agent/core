@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { test, type TestContext } from "node:test";
 import { git } from "../src/changeset.js";
-import { reviewConfig } from "../src/review-config.js";
+import { reviewConfig } from "./review-test-config.js";
 import { ReviewService } from "../src/builtin-plugins/review.js";
 import { finishWithReview } from "../src/builtin-plugins/review-lifecycle.js";
 

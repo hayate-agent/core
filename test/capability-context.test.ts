@@ -18,9 +18,7 @@ test("configured, ready, exposed and session-allowed are separate host facts", (
 test("Core adds no unconditional review or approval rule when no review engine supplies one", () => {
   for (const sessionKey of ["mem:room1", "dispatch:child", "subagent:child"]) {
     const text = capabilityContext({...facts, sessionKey, reviewInstructions: ""});
-    assert.match(text, /ALWAYS vertical slices\. ALWAYS KISS\./);
-    assert.doesNotMatch(text, /required review|review is mandatory/i);
-    assert.match(text, /Preserve safety and authorization; never perform an unauthorized activation\./);
+    assert.doesNotMatch(text, /ALWAYS|KISS|vertical slices|required review|review is mandatory|small PRs|GitOps|do not merge|own PRs/i);
     assert.equal(data(text).review.registered, true);
   }
   assert.match(capabilityContext(facts), /Dedicated review is mandatory/);
@@ -41,10 +39,10 @@ test("selected review instructions and fresh capability facts reach working turn
     await h.submit(msg("first"));await h.drained();revision=2;
     await h.submit(msg("second"));await h.drained();
     const opts=runtime.sessions.get("mem:room1")!.options;
-    assert.match(opts[0].instructions!,/ALWAYS vertical slices\. ALWAYS KISS\./);
+    assert.doesNotMatch(opts[0].instructions!,/ALWAYS vertical slices|ALWAYS KISS/);
     assert.match(opts[0].instructions!,/Dedicated review is mandatory/);
     assert.equal(data(opts[0].instructions!).revision,1);
     assert.equal(data(opts[1].instructions!).revision,2);
-    assert.match(opts[1].instructions!,/ALWAYS vertical slices\. ALWAYS KISS\./);
+    assert.doesNotMatch(opts[1].instructions!,/ALWAYS vertical slices|ALWAYS KISS/);
   }finally{await h.stop(0);}
 });

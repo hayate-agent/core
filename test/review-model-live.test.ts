@@ -4,7 +4,7 @@ import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { git } from "../src/changeset.js";
-import { reviewConfig } from "../src/review-config.js";
+import { reviewConfig } from "./review-test-config.js";
 import { ReviewService } from "../src/builtin-plugins/review.js";
 import { testReviewExecution } from "./review-test-executor.js";
 import { SettingsService } from "../src/settings.js";

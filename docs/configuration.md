@@ -249,7 +249,8 @@ query, so late-discovered skills are usable without a session restart.
 
 ## Built-in review
 
-Changeset review ships enabled by default, with a three-round persistent budget and
+Changeset review is disabled by default, with no mandatory local/publish/merge gates.
+When explicitly enabled, it offers a three-round persistent budget and
 configurable reviewer model/reasoning. See [review.md](review.md) for configuration,
 False-Positive assessment, operator escalation and publication enforcement limits.
 
