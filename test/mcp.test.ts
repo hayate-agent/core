@@ -37,13 +37,15 @@ for (const extra of [{}, {mcp:{enabled:true},tools:[]}]) {
  await inactive.dispose();
 }
 // Operator management can enable and disable MCP on an already open session.
-const toggledRuntime=new PiRuntime({...options,mcp:{enabled:false}});
+const toggledRuntime=new PiRuntime({...options,tools:['read'],mcpUserManagement:true,mcp:{enabled:false}});
 const toggled=await toggledRuntime.open('toggle');
 toggled.session.prompt=async()=>{}; toggled.session.waitForIdle=async()=>{};
 await toggledRuntime.setMcpEnabled(true); await toggled.prompt('operator enabled MCP');
 const toggleDeadline=Date.now()+10000;
 while(!toggled.session.getAllTools().some(t=>t.name==='mcp__fixture__echo') && Date.now()<toggleDeadline) await new Promise(r=>setTimeout(r,20));
 assert.ok(toggled.session.getAllTools().some(t=>t.name==='mcp__fixture__echo'));
+assert.ok(toggled.session.getActiveToolNames().includes('mcp__fixture__echo'),'user-connected direct MCP tool is actually exposed, not merely probed');
+assert.ok(!toggled.session.getAllTools().some(t=>t.name==='bash'),'MCP management cannot expand unrelated tools');
 const togglePid=Number(await readFile(process.env.TEST_DIR+'/pid','utf8'));
 await toggledRuntime.setMcpEnabled(false); await toggled.prompt('operator disabled MCP');
 assert.throws(()=>process.kill(togglePid,0));
@@ -114,6 +116,11 @@ assert.equal(untrusted.session.settingsManager.isProjectTrusted(),false);
 untrusted.session.prompt=async()=>{}; untrusted.session.waitForIdle=async()=>{};
 await untrusted.prompt('untrusted project cannot block user configuration');
 await untrusted.dispose();
+const explicitRuntime=new PiRuntime({...options,mcp:{enabled:true},mcpUserManagement:true,tools:['read','mcp__only_allowed__*']});
+const explicit=await explicitRuntime.open('explicit-pattern');
+await new Promise(r=>setTimeout(r,100));
+assert.ok(!explicit.session.getAllTools().some(t=>t.name==='mcp__changed__echo'),'explicit MCP namespace restriction is retained');
+await explicit.dispose();
 const restrictedRuntime=new PiRuntime({...options,mcp:{enabled:true},tools:['read']});
 const restricted=await restrictedRuntime.open('restricted');
 const restrictedSession=restricted.session;

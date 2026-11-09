@@ -75,9 +75,10 @@ mcp:
 
 Without configuration or an explicit user management action, no built-in MCP
 extension is installed. `tools: []` also skips model MCP activation; management
-remains available. Existing explicit tool allowlists still apply; select the
-allowed MCP/codemode tools in your rollout when you restrict tools. Registering a
-server is not a bypass of that actual configured allowlist. Trusted third-party
+remains available. The native user manager reserves MCP/codemode/tool-search entrypoints so a
+server you connect is usable without manually editing the starter tool list.
+Explicit `mcp__...` tool/namespace patterns still restrict MCP tools; `tools: []`
+still exposes none. Unrelated non-MCP tools are not added to the allowlist. Trusted third-party
 plugins/extensions can independently open connections; this setting is not a
 process sandbox or network policy.
 
@@ -107,8 +108,9 @@ see the bundled PI MCP documentation for advanced field definitions. Do not plac
 credentials in public Harness files.
 The adapter installs MCP, codemode and tool-search extensions together. MCP tool
 names are `mcp__<server>__<tool>` and use the runtime tool/approval pipeline.
-Explicit Harness `tools` lists restrict active tools: include exact direct MCP
-tool names or the codemode/tool_search entrypoints you intend to expose.
+Native CLI user management exposes configured MCP tools through their selected
+exposure and retains explicit `mcp__...` patterns. SDK embedders that do not enable
+the user-management integration retain their original explicit tool selection.
 Discovery can finish asynchronously; only direct-tool readiness gates prompts.
 
 New sessions read current configuration. `/reload-mcp` (an alias of

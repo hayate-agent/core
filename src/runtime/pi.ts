@@ -83,6 +83,8 @@ export interface PiRuntimeOptions {
   /** Existing snapshot bindings stay on their provider until explicitly migrated. */
   legacySessionProvider?: SessionProvider;
   mcp?: { enabled: boolean };
+  /** Native user management reserves MCP entrypoints; explicit MCP patterns still restrict servers. */
+  mcpUserManagement?: boolean;
   skillPaths: string[];
   adaptiveSkills?: AdaptiveSkills;
   /** Models that accept reasoning_effort "none" for thinking "off" turns (env list is merged at the call site). */
@@ -747,7 +749,9 @@ export class PiRuntime implements AgentRuntime {
       resourceLoader: loader,
       settingsManager,
       sessionManager,
-      tools: options.ephemeral ? [] : this.opts.tools,
+      tools: options.ephemeral ? [] : this.opts.mcpUserManagement && this.opts.tools?.length
+        ? [...new Set([...this.opts.tools, "codemode", "tool_search", ...(this.opts.tools.some(name => name.startsWith("mcp__")) ? [] : ["mcp__*"])])]
+        : this.opts.tools,
       noTools: options.ephemeral || this.opts.tools?.length === 0 ? "all" : undefined,
       // Child sessions never see parent-owned orchestration tools; the host
       // tool guard still enforces the same list if one is called anyway.
