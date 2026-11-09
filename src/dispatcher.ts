@@ -50,6 +50,7 @@ export class Dispatcher {
     /** Trusted strategies that only continue existing tasks after a strategy switch; new work uses `strategy`. */
     retained: readonly DispatcherStrategy[] = [],
     private readonly parentEnabled: (parent: string) => boolean = () => true,
+    private readonly parallelAdmission?: import("./parallel-admission.js").ParallelAdmission,
   ) {
     if (!Number.isSafeInteger(capacity) || capacity < 1) throw Error("Invalid dispatcher capacity");
     for (const item of [strategy, ...retained])
@@ -164,7 +165,7 @@ export class Dispatcher {
         await this.store.releaseUnstartedClaim(task.id, token, task.claimedRecoveryAction);
         return;
       }
-      const result = await strategy.execute(task, {
+      const execute = () => strategy.execute(task, {
         signal: abort.signal,
         status: async text => {
           check();
@@ -183,6 +184,7 @@ export class Dispatcher {
         intent: (key, replay, route) => { check(); return this.store.intent(task.id, token, key, replay, route); },
         settleIntent: (key, result, checkpoint) => { check(); return this.store.settleIntent(task.id, token, key, result, checkpoint); },
       });
+      const result = await (this.parallelAdmission ? this.parallelAdmission.run(async () => { check(); return execute(); }, abort.signal) : execute());
       check();
       await this.store.complete(task.id, token, result);
     } catch (error) {

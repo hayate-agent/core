@@ -1,3 +1,4 @@
+import { validateConsolidation, type ConsolidationConfig } from "./memory-consolidation-host.js";
 import type { TurnOutcome } from "./types.js";
 
 /** Conversation identity is supplied by the host, never by model arguments. */
@@ -59,6 +60,7 @@ export interface MemoryConfig {
   provider: string;
   /** Startup-selected recall/capture implementation; none disables orchestration only. */
   orchestration?: string;
+  consolidation?: ConsolidationConfig;
   autoCapture: boolean;
   autoRecall: boolean;
   scanSeconds: number;
@@ -70,6 +72,7 @@ export interface MemoryConfig {
 }
 export function memoryConfig(input: Partial<MemoryConfig> = {}): MemoryConfig {
   const config: MemoryConfig = { enabled: true, provider: "local", orchestration: "default", autoCapture: true, autoRecall: true, scanSeconds: 60, maxEntries: 10000, maxIndexBytes: 64 * 1024 * 1024, recallLimit: 3, ...input };
+  if (config.consolidation !== undefined) validateConsolidation(config.consolidation);
   for (const key of ["enabled", "autoCapture", "autoRecall"] as const) if (typeof config[key] !== "boolean") throw Error(`Invalid memory.${key}`);
   if (config.orchestration !== undefined && (typeof config.orchestration !== "string" || !/^[a-z][a-z0-9_-]*$/.test(config.orchestration))) throw Error("Invalid memory.orchestration");
   if (!/^[a-z][a-z0-9_-]*$/.test(config.provider)) throw Error("Invalid memory.provider");
