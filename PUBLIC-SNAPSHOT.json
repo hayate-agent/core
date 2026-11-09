@@ -1,5 +1,5 @@
 {
-  "contentDigest": "6caf25971a27e9045b4fb54c10e8ad459cf369cac0bdd19400a11d3f2306398d",
+  "contentDigest": "9e91b406d346628fc364d71d83c1d6c3203f3c1595651a349ce32792c18e446c",
   "files": [
     {
       "mode": "100644",
@@ -204,7 +204,7 @@
     {
       "mode": "100644",
       "path": "docs/mcp.md",
-      "sha256": "58048f9155b9f8619539edcbfea8c7fbd226cd70d1cb5ce2d5e6f1ffe150405a"
+      "sha256": "2b3c84e7acb5185de0b4aa9f33ae39b8460fff6b698425032deaca9956d13b5d"
     },
     {
       "mode": "100644",
@@ -529,12 +529,12 @@
     {
       "mode": "100644",
       "path": "src/cli.ts",
-      "sha256": "fe360a5397a6a988d8f86c1de021f485c306506d4dad3cfacbb9651f84f66f72"
+      "sha256": "bb180f20fff5650a947714aecc73896ae4d67dd68a315a34c2bccd4f6f1155d0"
     },
     {
       "mode": "100644",
       "path": "src/commands.ts",
-      "sha256": "400283f49dfc16aba02c68a6e2ee146e7585f83782829b3f58fe59e47fd2aa4e"
+      "sha256": "3c77930322c9d3055aaf370c7402a85687cab48959289fe9f8c03a598ea8a956"
     },
     {
       "mode": "100644",
@@ -723,6 +723,11 @@
     },
     {
       "mode": "100644",
+      "path": "src/mcp-management.ts",
+      "sha256": "c433e421fa1907e9af9b13f103d93a7f778440f72af46409f175ad2f5155ccf6"
+    },
+    {
+      "mode": "100644",
       "path": "src/memguard.ts",
       "sha256": "faaaf6af5b8c59f2f9e6e6fa0023e01baf1f17052701b2701637e9fee58afb37"
     },
@@ -878,8 +883,13 @@
     },
     {
       "mode": "100644",
+      "path": "src/runtime/pi-mcp-management.ts",
+      "sha256": "155be9e2ecaa83c8eb08e13f79c91d41632466f8444ef37e4794f0325d832064"
+    },
+    {
+      "mode": "100644",
       "path": "src/runtime/pi.ts",
-      "sha256": "f426567d9a9e3e501e69870653fc41688d55648edfd4590d6b13d45ecf9bfc38"
+      "sha256": "407793eff1317708e4bc7eee0a1c24e8c4d970f87afa7ee35e35a391f79c5e46"
     },
     {
       "mode": "100644",
@@ -919,7 +929,7 @@
     {
       "mode": "100644",
       "path": "src/settings.ts",
-      "sha256": "852ecf008bc6c9a087db67e2abcdcee98d076d0b7a3ea414df07dbd113639db8"
+      "sha256": "1258791bea4e974ad9cd85d60ab572fd2b7f1da11cc7f5592aee00df49f06859"
     },
     {
       "mode": "100644",
@@ -1803,8 +1813,13 @@
     },
     {
       "mode": "100644",
+      "path": "test/mcp-management.test.ts",
+      "sha256": "d6b19f86f921f33d462b6e90d21556d6b859cc4a395f7ac4cf9e8fdb152f2b77"
+    },
+    {
+      "mode": "100644",
       "path": "test/mcp.test.ts",
-      "sha256": "99ec41d7f64312fb3d04c03a5379a32e62e6240dbc0f243ac97e6acccaa56096"
+      "sha256": "69aa9b402a5b9347b5e3814ef36f6a0dbc469ec0d693cd8f039b7ffa77db6fae"
     },
     {
       "mode": "100644",
@@ -2930,5 +2945,5 @@
   "historyPolicy": "fresh-root; no source commits, tags, refs or deleted blobs",
   "pluginSHA": "3c363aed2dbcff361dcb43a4cf3f3f02aedb5da2",
   "schema": 1,
-  "sourceSHA": "085e8b89065bf8570d92310be9f94b4093e7422f"
+  "sourceSHA": "fdcf419f55c09d344b4249a5d62dbdf9962f00b6"
 }

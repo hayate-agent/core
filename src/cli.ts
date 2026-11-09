@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { reasoningEffortNoneModels } from "./product-paths.js";
+import { McpManagement } from "./mcp-management.js";
 import { workingTreeEvidence } from "./repetition-budget.js";
 import { ToolGuardError } from "./tool-guard-error.js";
 import { improvementPlugin } from "./builtin-plugins/improvement-plugin.js";
@@ -238,6 +239,7 @@ async function main(argv: string[]): Promise<void> {
   }) : undefined;
   const settings = new SettingsService(path.join(config.home, "settings.local.yaml"), {
     model: config.model, thinking: config.thinking,
+    mcp: config.mcp,
     dispatcher: config.dispatcher,
     modelRoles: config.modelRoles,
     reasoningEffortNoneModels: config.reasoningEffortNoneModels,
@@ -258,6 +260,7 @@ async function main(argv: string[]): Promise<void> {
       reloadError = message;
     }
     updateReviewDefaults();
+    await runtime.setMcpEnabled(settings.effective().mcp?.enabled ?? false);
   };
   const completion = await completionStrategyHolder(config.home, config.completionStrategy,
     { apiVersion: 1, prompt: completionPrompt }, settings.snapshot().completionStrategy);
@@ -337,7 +340,8 @@ async function main(argv: string[]): Promise<void> {
     legacySessionProvider: new FilesystemSessionProvider(path.join(config.home, "session-store")),
     compaction: () => compactionAdapter,
     compactionOwner: () => contextPolicy(settings.effective().contextMaintenance).compactionOwner ?? "harness",
-    mcp: config.mcp,
+    mcp: settings.effective().mcp,
+    mcpUserManagement: true,
     skillPaths: config.skills.paths,
     skillContext: async () => {
       const mode = settings.effective().skills?.context ?? "auto";
@@ -367,6 +371,12 @@ async function main(argv: string[]): Promise<void> {
     },
     approvals,
     requestApproval: (key, tool, input) => harness.requestApproval(key, tool, input),
+  });
+  const mcp = new McpManagement({ agentDir: getAgentDir(),
+    providerToken: provider => runtime.mcpProviderToken(provider),
+    enabled: () => settings.effective().mcp?.enabled ?? false,
+    setEnabled: async enabled => { await settings.setMcpEnabled(enabled); await runtime.setMcpEnabled(enabled); },
+    changed: () => runtime.reload(),
   });
   const reviewWorkers = new ReviewWorkers(runtime, new ExecutionStore(path.join(config.home, "review-executions.json")), dispatchPolicy.capacity);
   const reviewSubagents = new ReviewSubagents(runtime, path.join(config.home, "review-subagents"));
@@ -803,7 +813,7 @@ async function main(argv: string[]): Promise<void> {
     }
     if (!persisted) { console.error("[state] shutdown snapshot was NOT saved; previous durable inbox retained"); code = 1; }
     if (unfinished.length) console.error(`[harness] ${unfinished.length} pending input(s) retained for their owning conversations`);
-    const cleanup = Promise.allSettled([owners, memoryProvider.close(), extensionManager.stop(), policyManager.stop(), sessionProviderOwner?.close(), plugins.stop().then(() => executionContexts.drain())]);
+    const cleanup = Promise.allSettled([owners, mcp.close(), memoryProvider.close(), extensionManager.stop(), policyManager.stop(), sessionProviderOwner?.close(), plugins.stop().then(() => executionContexts.drain())]);
     let cleanupTimer: NodeJS.Timeout | undefined;
     await Promise.race([cleanup, new Promise<void>(resolve => { cleanupTimer = setTimeout(resolve, 3000); })]);
     clearTimeout(cleanupTimer);
@@ -821,6 +831,7 @@ async function main(argv: string[]): Promise<void> {
   } });
   installCommands({
     harness,
+    mcp,
     scheduler,
     updater: new OverlayUpdater(() => protectedContent.verify(), { skills: async () => {
       if (config.skillUpdateSource) {
