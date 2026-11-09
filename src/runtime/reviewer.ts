@@ -1,3 +1,4 @@
+import { auxiliaryAdmission } from "../parallel-admission.js";
 import type { AgentRuntime } from "../types.js";
 import type { AssessmentBackend as ReviewBackend } from "../assessment-backend.js";
 
@@ -5,6 +6,7 @@ import type { AssessmentBackend as ReviewBackend } from "../assessment-backend.j
 export function runtimeReviewer(runtime: AgentRuntime, purpose: "code-review" | "supervisor" = "code-review"): ReviewBackend {
   return {
     async review(prompt, model, thinking, signal) {
+      return auxiliaryAdmission(runtime, async () => {
       const reviewer = await runtime.open(`review:${Date.now()}`, { ephemeral: true, assessmentPurpose: purpose });
       // Abort is best-effort; runtime failures must not escape the event callback as
       // unhandled rejections. Prompt/dispose errors still propagate to the review gate.
@@ -22,6 +24,7 @@ export function runtimeReviewer(runtime: AgentRuntime, purpose: "code-review" | 
         signal?.removeEventListener("abort", abort);
         await reviewer.dispose();
       }
+      }, signal);
     },
   };
 }

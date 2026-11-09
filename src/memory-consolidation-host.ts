@@ -1,3 +1,4 @@
+import { auxiliaryAdmission } from "./parallel-admission.js";
 import { randomUUID } from "node:crypto";
 import type { AgentRuntime } from "./types.js";
 import type { PluginModule } from "./plugins.js";
@@ -29,8 +30,8 @@ export function memoryConsolidationHost(config: ConsolidationConfig, runtime: Ag
       summarize(request: { sessionKey: string; requestId: string; instruction: string; sources: unknown[] }) {
         if (stopped) throw Error("Memory consolidation stopped");
         const controller = new AbortController(); controllers.add(controller);
-        const work = (async () => {
-          const timer = setTimeout(() => controller.abort(), config.timeoutMs ?? 120000);
+        const timer = setTimeout(() => controller.abort(), config.timeoutMs ?? 120000);
+        const work = auxiliaryAdmission(runtime, async () => {
           let session: Awaited<ReturnType<AgentRuntime["open"]>> | undefined;
           const abort = () => { void session?.abort().catch(() => {}); };
           controller.signal.addEventListener("abort", abort, { once: true });
@@ -46,9 +47,9 @@ export function memoryConsolidationHost(config: ConsolidationConfig, runtime: Ag
             controller.signal.removeEventListener("abort", abort);
             await session?.dispose();
           }
-        })();
+        }, controller.signal);
         pending.add(work);
-        void work.finally(() => { pending.delete(work); controllers.delete(controller); }).catch(() => {});
+        void work.finally(() => { clearTimeout(timer); pending.delete(work); controllers.delete(controller); }).catch(() => {});
         return work;
       },
     });
