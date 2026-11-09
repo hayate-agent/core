@@ -55,7 +55,7 @@ function validate(value: unknown, defaults: Partial<ContextPolicy> = {}, pruning
     } else if (key === "completionStrategy" || key === "nightlyStrategy" || key === "contextStrategy") {
       if (item !== null && (typeof item !== "string" || !item.trim())) throw Error(`Invalid ${key === "nightlyStrategy" ? "nightly" : key === "contextStrategy" ? "context" : "completion"} strategy selection`);
     } else if (key === "dispatcher") {
-      if (!item || typeof item !== "object" || Array.isArray(item) || Object.keys(item).some(key => !["enabled", "strategy", "concurrentRequests", "capacity", "retentionDays", "rules"].includes(key))) throw Error("Invalid dispatcher overlay");
+      if (!item || typeof item !== "object" || Array.isArray(item) || Object.keys(item).some(key => !["enabled", "strategy", "concurrentRequests", "capacity", "countAuxiliaryRuns", "retentionDays", "rules"].includes(key))) throw Error("Invalid dispatcher overlay");
       dispatcherConfig({ ...dispatcherDefaults, ...item });
     } else if (key === "policyPlugins" || key === "extensionPlugins") {
       validatePolicyOverlay(item);
@@ -63,7 +63,7 @@ function validate(value: unknown, defaults: Partial<ContextPolicy> = {}, pruning
       validateGatewayOverlay(item);
     } else if (key === "memory") {
       if (!item || typeof item !== "object" || Array.isArray(item)) throw Error("Invalid memory overlay");
-      if (Object.keys(item).some((k) => !["enabled", "provider", "orchestration", "autoCapture", "autoRecall", "scanSeconds", "maxEntries", "maxIndexBytes", "recallLimit", "embedding"].includes(k))) throw Error("Unsupported memory setting");
+      if (Object.keys(item).some((k) => !["enabled", "provider", "orchestration", "autoCapture", "autoRecall", "scanSeconds", "maxEntries", "maxIndexBytes", "recallLimit", "embedding", "consolidation"].includes(k))) throw Error("Unsupported memory setting");
       memoryConfig(item);
     } else if (key === "gateways") {
       validateGatewayConfig(item);

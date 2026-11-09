@@ -7,7 +7,7 @@ test("dispatcher stays off without explicit concurrency support", () => {
   assert.equal(dispatcherConfig().enabled, false);
   assert.throws(() => defaultConfig({ dispatcher: { enabled: true } }), /concurrentRequests/);
   const config = defaultConfig({ dispatcher: { enabled: true, concurrentRequests: true, capacity: 7, strategy: "custom" } });
-  assert.deepEqual(config.dispatcher, { enabled: true, concurrentRequests: true, capacity: 7, strategy: "custom", retentionDays: 7 });
+  assert.deepEqual(config.dispatcher, { enabled: true, concurrentRequests: true, capacity: 7, strategy: "custom", retentionDays: 7, countAuxiliaryRuns: false });
 });
 test("dispatcher rejects invalid capacity and policy", () => {
   for (const capacity of [0, -1, 1.5, Infinity]) assert.throws(() => dispatcherConfig({ capacity }), /Invalid/);

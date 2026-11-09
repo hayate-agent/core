@@ -29,6 +29,8 @@ import { compactionStrategyPlugin } from "./builtin-plugins/compaction-strategy-
 import { FilesystemSessionProvider, type SessionProvider } from "./sessions.js";
 import { SessionProviderLifecycle } from "./session-provider-lifecycle.js";
 import { memoryConfig } from "./memory.js";
+import { ParallelAdmission, bindParallelAdmission } from "./parallel-admission.js";
+import { memoryConsolidationHost } from "./memory-consolidation-host.js";
 import { LocalMemory } from "./memory-local.js";
 import { MemoryService } from "./builtin-plugins/memory-service.js";
 import { MemoryProviderLifecycle } from "./memory-provider-lifecycle.js";
@@ -265,6 +267,7 @@ async function main(argv: string[]): Promise<void> {
   const completion = await completionStrategyHolder(config.home, config.completionStrategy,
     { apiVersion: 1, prompt: completionPrompt }, settings.snapshot().completionStrategy);
   const dispatchPolicy = dispatcherConfig(settings.effective().dispatcher);
+  const parallelAdmission = dispatchPolicy.countAuxiliaryRuns ? new ParallelAdmission(dispatchPolicy.capacity) : undefined;
   config.memory = memoryConfig(settings.effective().memory);
   memory = new MemoryService(config.memory, log, config.home);
   plugins.memoryOrchestration.register("default", memory);
@@ -378,6 +381,7 @@ async function main(argv: string[]): Promise<void> {
     setEnabled: async enabled => { await settings.setMcpEnabled(enabled); await runtime.setMcpEnabled(enabled); },
     changed: () => runtime.reload(),
   });
+  if (parallelAdmission) bindParallelAdmission(runtime, parallelAdmission);
   const reviewWorkers = new ReviewWorkers(runtime, new ExecutionStore(path.join(config.home, "review-executions.json")), dispatchPolicy.capacity);
   const reviewSubagents = new ReviewSubagents(runtime, path.join(config.home, "review-subagents"));
   const reviewEngine = reviewModule ? await createPolicyEngine(reviewModule, { home: config.home, cwd: config.cwd, cwdFor, config: reviewSettings,
@@ -670,7 +674,7 @@ async function main(argv: string[]): Promise<void> {
       }
       const mandate = await harness.operatorTaskMandate(parent, requestId, input);
       return dispatcher.submitScheduled(parent, requestId, input, mandate);
-    }), subagentPlugin(subagents,async()=>{await persist();}), ...(reloadableTools ? [reloadableToolsPlugin(reloadableTools)] : []), wasmToolsPlugin(config.home, config.wasmTools ?? []), continuationPlugin(harness), loopPlugin(harness), improvementPlugin(improvement!), protectedContentPlugin(protectedContent), gatewayManagerPlugin(gatewayManager, settings), policyManagerPlugin(policyManager, settings), extensionManagerPlugin(extensionManager, settings), gatewayPlugin(settings, harness), contextPlugin(maintenance, settings), ...(config.memory.enabled ? [memoryPlugin(memory)] : []), skillSearchPlugin(skillCatalog), ...(adaptiveSkills ? [adaptiveSkills.plugin()] : []), ...reviewEngine.plugins]);
+    }), subagentPlugin(subagents,async()=>{await persist();}), ...(reloadableTools ? [reloadableToolsPlugin(reloadableTools)] : []), wasmToolsPlugin(config.home, config.wasmTools ?? []), continuationPlugin(harness), loopPlugin(harness), improvementPlugin(improvement!), protectedContentPlugin(protectedContent), gatewayManagerPlugin(gatewayManager, settings), policyManagerPlugin(policyManager, settings), extensionManagerPlugin(extensionManager, settings), gatewayPlugin(settings, harness), contextPlugin(maintenance, settings), ...(config.memory.enabled ? [memoryPlugin(memory), ...(config.memory.consolidation ? [memoryConsolidationHost(config.memory.consolidation, runtime, memory, log)] : [])] : []), skillSearchPlugin(skillCatalog), ...(adaptiveSkills ? [adaptiveSkills.plugin()] : []), ...reviewEngine.plugins]);
   if (dispatchPolicy.enabled) {
     dispatchRuntime = new DispatcherRuntime(harness, executions, async () => {
       await reloadRuntimeSettings();
@@ -709,7 +713,7 @@ async function main(argv: string[]): Promise<void> {
         replyTo: event.parent.startsWith("cron-followup:") ? undefined : target });
     }, error => log(`[dispatcher] ${String(error)}`), key => harness.dependencyCheckpoint(key), undefined, () => harness.updateFenced || harness.stopping,
     // Built-ins stay registered so tasks queued before a strategy switch are not stranded.
-    [dispatchRuntime.strategy, dispatchRuntime.sequential], sessionEnabled);
+    [dispatchRuntime.strategy, dispatchRuntime.sequential], sessionEnabled, parallelAdmission);
   }
   plugins.memoryOrchestration.select(config.memory.enabled ? config.memory.orchestration ?? "default" : "none");
   const memoryProvider = new MemoryProviderLifecycle(async () => {

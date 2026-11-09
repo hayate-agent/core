@@ -17,6 +17,8 @@ export interface DispatcherConfig {
   concurrentRequests: boolean;
   /** Active slots, not a limit on the number of persistent workers/tasks. */
   capacity: number;
+  /** Share productive dispatcher slots with memory and validator model work. */
+  countAuxiliaryRuns: boolean;
   /** Automatic archive age for delivered terminal task records. */
   retentionDays: number;
   /** Per-task model routing rules (first match wins; at most one empty-match fallback, last). */
@@ -24,8 +26,8 @@ export interface DispatcherConfig {
 }
 export function dispatcherConfig(value?: Partial<DispatcherConfig>): DispatcherConfig {
   if (value !== undefined && (!value || typeof value !== "object" || Array.isArray(value))) throw Error("Invalid dispatcher configuration");
-  const config = { enabled: false, strategy: "direct", concurrentRequests: false, capacity: 1, retentionDays: 7, ...value };
-  if (typeof config.enabled !== "boolean" || typeof config.concurrentRequests !== "boolean" ||
+  const config = { enabled: false, strategy: "direct", concurrentRequests: false, capacity: 1, countAuxiliaryRuns: false, retentionDays: 7, ...value };
+  if (typeof config.countAuxiliaryRuns !== "boolean" || typeof config.enabled !== "boolean" || typeof config.concurrentRequests !== "boolean" ||
       typeof config.strategy !== "string" || !/^[a-z][a-z0-9_-]*$/.test(config.strategy) ||
       !Number.isSafeInteger(config.capacity) || config.capacity < 1 ||
       !Number.isSafeInteger(config.retentionDays) || config.retentionDays < 1 || config.retentionDays > 3650) throw Error("Invalid dispatcher configuration");
