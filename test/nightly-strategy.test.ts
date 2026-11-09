@@ -9,25 +9,38 @@ import { ImprovementController } from "../src/improvement.js";
 import { Harness } from "../src/harness.js";
 import { FakeRuntime } from "./fakes.js";
 
-test("custom nightly strategy selects prompt, conclusions and report without changing host reservation", async t => {
+for (const verdict of ["confirmed", "rejected", "unavailable"] as const) {
+test(`custom strategy completion is independently ${verdict} without changing host reservation`, async t => {
   const home = await mkdtemp(path.join(os.tmpdir(), "nightly-selection-"));
   t.after(() => rm(home, { recursive: true, force: true }));
-  await writeFile(path.join(home, "custom.mjs"), `export default {apiVersion:1,label:'custom',prompt(){return this.label},completed(state){state.turns=0;state.pending='forged';state.done=true},receipts(){return []},unique(r){return r},report(){return this.label+' report'}}`);
+  await writeFile(path.join(home, "custom.mjs"), `export default {apiVersion:1,label:'custom',prompt(){return this.label},completed(state){state.turns=0;state.pending='forged';state.done=true;state.experiments=[{execution:'performed',hypothesis:'custom experiment',baseline:'measured before',candidate:'tried change',evidence:'test result',outcome:'inconclusive'}]},receipts(){return []},unique(r){return r},report(){return this.label+' report'}}`);
   const strategy = await nightlyStrategy(home, "custom.mjs", bundled);
   assert.equal(strategy.prompt({} as any, 1), "custom");
   const runtime = new FakeRuntime(() => "result");
   const harness = new Harness({ runtime, tickMs: 60000 });
   t.after(() => harness.stop(0));
   const now = Date.parse("2026-10-24T23:00:00Z");
-  await writeFile(path.join(home, "improvement.yaml"), "enabled: true\nmaxTurns: 1\ntimezone: UTC\n");
-  const controller = new ImprovementController(home, harness, "UTC", () => now, strategy);
+  await writeFile(path.join(home, "improvement.yaml"), "enabled: true\nmaxTurns: 3\ntimezone: UTC\n");
+  let checks = 0;
+  const controller = new ImprovementController(home, harness, "UTC", () => now, strategy, async request => {
+    checks++;
+    assert.equal(request.input.sessionKey, "improvement:nightly");
+    assert.equal(request.turn, 1, "the strategy cannot forge host turn reservations");
+    assert.equal(request.experiments[0]?.execution, "performed");
+    if (verdict === "unavailable") return undefined;
+    return verdict === "confirmed" ? { state: "completed" } : { state: "continue", next: "Inspect a missing plugin feature" };
+  });
   (harness as any).opts.beforeTurn = (input: any) => controller.before(input);
   (harness as any).opts.afterTurn = async (input: any, reply: string) => { await controller.completed(input, reply); return reply; };
   await controller.tick(true); await harness.drained();
   const state = JSON.parse(await readFile(path.join(home, "improvement/state.json"), "utf8"));
-  assert.equal(state.turns, 1); assert.equal(state.pending, undefined); assert.equal(state.done, true);
+  assert.equal(state.turns, 1); assert.equal(state.pending, undefined); assert.equal(state.done, verdict === "confirmed");
+  assert.equal(checks, 1, "a strategy's done proposal must reach the independent validator");
+  if (verdict === "rejected") assert.match(state.closureFeedback, /missing plugin feature/);
+  if (verdict === "unavailable") assert.equal(state.closureFailures, 1);
   assert.ok(runtime.sessions.get("improvement:nightly")!.prompts[0].startsWith("custom"));
 });
+}
 test("holder binds all five methods, pins generations and retains selection on invalid replacement", async t => {
   const home = await mkdtemp(path.join(os.tmpdir(), "nightly-holder-")); t.after(() => rm(home, { recursive: true, force: true }));
   const module = (label: string) => `export default {apiVersion:1,label:${JSON.stringify(label)},prompt(){return this.label},completed(s){s.results=[this.label]},receipts(){return [{label:this.label}]},unique(r){return r.filter(x=>x.label===this.label)},report(){return this.label}}`;
