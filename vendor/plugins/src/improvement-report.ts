@@ -9,9 +9,11 @@ export function experimentReceipts(reply: string): ExperimentReceipt[] {
       const value = JSON.parse(match[1]!);
       if (!value || !["hypothesis", "baseline", "candidate", "evidence", "outcome"].every(key =>
         typeof value[key] === "string" && value[key].trim() && value[key].length <= 2000) ||
-        !["improved", "rejected", "inconclusive"].includes(value.outcome)) continue;
+        !["improved", "rejected", "inconclusive"].includes(value.outcome) ||
+        (value.execution !== undefined && !["performed", "pending"].includes(value.execution))) continue;
       receipts.push({ hypothesis: value.hypothesis, baseline: value.baseline, candidate: value.candidate,
-        evidence: value.evidence, outcome: value.outcome });
+        evidence: value.evidence, outcome: value.outcome,
+        ...(value.execution !== undefined ? { execution: value.execution } : {}) });
     } catch { /* Malformed receipts are not evidence. */ }
   }
   return receipts;

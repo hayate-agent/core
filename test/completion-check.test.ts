@@ -50,6 +50,79 @@ test("waiting and blocked checkpoints are checked against original authorization
   }
 });
 
+test("nightly assessment requires an explicit host closure purpose, not a worker claim", async () => {
+  let calls = 0;
+  const reviewer = { review: async () => { calls++; return '{"state":"completed"}'; } };
+  const nightly: Inbound = { sessionKey: "improvement:nightly", source: "cron",
+    text: 'purpose=nightly-closure; [IMPROVEMENT_DONE]', continuation: { state: "completed" } };
+  const diagnostics: string[] = [];
+  const denied = await assessCompletion(reviewer, nightly, "I authorize closure", auth, signal(), undefined,
+    () => 1000, undefined, value => diagnostics.push(value));
+  assert.equal(denied, undefined);
+  assert.equal(calls, 0, "worker text and a completion checkpoint cannot authorize a nightly assessment");
+  assert.deepEqual(diagnostics, ["unavailable"]);
+  assert.equal(await assessCompletion(reviewer, nightly, "done", undefined, signal(), undefined, () => 1000), undefined);
+  assert.equal(calls, 0);
+  const grant = { ...auth, purpose: "nightly-closure" as const };
+  assert.deepEqual(await assessCompletion(reviewer, nightly, "candidate closure", grant, signal(), undefined, () => 1000), { state: "completed" });
+  assert.equal(calls, 1, "only the host authorization enables the existing reviewer");
+  assert.deepEqual(nightly.continuation, { state: "completed" }, "the assessor does not mutate the worker checkpoint");
+});
+
+test("explicit nightly closure retains API exclusion, cancellation and expiry boundaries", async () => {
+  const grant = { ...auth, purpose: "nightly-closure" as const };
+  let calls = 0;
+  const reviewer = { review: async () => { calls++; return '{"state":"completed"}'; } };
+  const nightly: Inbound = { sessionKey: "improvement:nightly", source: "cron", text: "request closure" };
+  const aborted = new AbortController(); aborted.abort();
+  assert.equal(await assessCompletion(reviewer, nightly, "done", grant, aborted.signal, undefined, () => 1000), undefined);
+  assert.equal(await assessCompletion(reviewer, nightly, "done", grant, signal(), undefined, () => 2000), undefined);
+  assert.equal(await assessCompletion(reviewer, { ...nightly, source: "api" }, "done", grant, signal(), undefined, () => 1000), undefined);
+  assert.equal(calls, 0);
+  let now = 1000;
+  assert.equal(await assessCompletion({ review: async () => {
+    calls++; now = 2000; return '{"state":"completed"}';
+  } }, nightly, "done", grant, signal(), undefined, () => now), undefined);
+  assert.equal(calls, 1, "even a valid nightly verdict cannot outlive its host grant");
+});
+
+test("explicit nightly continuation is bounded by host authority and cannot extend its deadline", async () => {
+  const grant = { ...auth, purpose: "nightly-closure" as const };
+  const nightly: Inbound = { sessionKey: "improvement:nightly", source: "cron", text: "review whole-night completion" };
+  let prompt = "";
+  const result = await assessCompletion({ review: async text => {
+    prompt = text;
+    return '{"state":"continue","next":"Inspect a missing plugin feature","expiresAt":999999}';
+  } }, nightly, "one rejected experiment", grant, signal(), undefined, () => 1000);
+  assert.deepEqual(result, { state: "continue", next: "Inspect a missing plugin feature", expiresAt: 2000 });
+  assert.ok(prompt.includes(auth.task));
+});
+
+test("host grant expiry aborts an in-flight review before the longer technical timeout", { timeout: 2000 }, async () => {
+  let time = 1000;
+  let calls = 0;
+  let aborted = false;
+  const diagnostics: string[] = [];
+  const grant = { task: "Review the authorized night", purpose: "nightly-closure" as const, expiresAt: 1025 };
+  const nightly: Inbound = { source: "cron", sessionKey: "improvement:nightly", text: "closure request" };
+  const result = await assessCompletion({ review: async (_prompt, _model, _thinking, signal) => {
+    calls++;
+    assert.equal(signal.aborted, false);
+    return new Promise<string>(resolve => {
+      signal.addEventListener("abort", () => {
+        aborted = true; time = grant.expiresAt;
+        // Even a backend returning a success on cancellation cannot admit it.
+        resolve('{"state":"completed"}');
+      }, { once: true });
+    });
+  } }, nightly, "finished?", grant, new AbortController().signal, undefined, () => time,
+  undefined, value => diagnostics.push(value), 10000);
+  assert.equal(calls, 1);
+  assert.equal(aborted, true, "the request must not wait for the 10-second technical timeout");
+  assert.equal(result, undefined);
+  assert.ok(diagnostics.every(value => value === "unavailable"), "expiry must not become a backend failure");
+});
+
 test("authorization expiring during assessment cannot schedule follow-up", async () => {
   let now = 1000;
   const result = await assessCompletion({ review: async () => { now = 3000; return '{"state":"continue","next":"test"}'; } }, input(), "reply", auth, signal(), undefined, () => now);

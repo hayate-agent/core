@@ -10,6 +10,19 @@ import { ExperimentEvaluator, type ExperimentSpec } from "./improvement-experime
 import type { Harness } from "./harness.js";
 import type { Address, Inbound } from "./types.js";
 
+export interface NightlyClosureRequest {
+  signal: AbortSignal;
+  /** Host-owned end of this authorized work window, including timezone/DST. */
+  expiresAt: number;
+  input: Inbound;
+  reply: string;
+  night: string;
+  turn: number;
+  maxTurns: number;
+  experiments: ExperimentReceipt[];
+}
+export type NightlyCompletionValidator = (request: NightlyClosureRequest) => Promise<Inbound["continuation"]>;
+
 export interface ImprovementPolicy {
   enabled: boolean;
   startHour: number;
@@ -40,6 +53,16 @@ export function improvementWindow(now: number, p: ImprovementPolicy): { night: s
   if (p.startHour > p.endHour && hour < p.endHour) date.setUTCDate(date.getUTCDate() - 1);
   return { night: date.toISOString().slice(0, 10), active: p.startHour < p.endHour ? hour >= p.startHour && hour < p.endHour : hour >= p.startHour || hour < p.endHour };
 }
+export function improvementDeadline(now: number, policy: ImprovementPolicy): number {
+  if (!improvementWindow(now, policy).active) return now;
+  const end = new Cron(`0 ${policy.endHour} * * *`, { timezone: policy.timezone, paused: true });
+  try {
+    const next = end.nextRun(new Date(now));
+    if (!next) throw Error("No nightly window deadline");
+    return next.getTime();
+  } finally { end.stop(); }
+}
+
 export interface NightState {
   /** Absent on legacy/baseline nights; path identity, not an immutable code digest. */
   strategySelection?: string;
@@ -48,6 +71,11 @@ export interface NightState {
   turns: number;
   pending?: string;
   done?: boolean;
+  closureFeedback?: string;
+  closureFailures?: number;
+  closureAssessment?: { night: string; inputId: string; turn: number; phase: "claimed" | "decided";
+    cancelled?: boolean;
+    verdict?: { state: "completed" } | { state: "continue"; next: string } }; 
   results: string[];
   reportQueued?: boolean;
   nextNightRequested?: string;
@@ -133,7 +161,7 @@ export class ImprovementController {
   async committed(input: Inbound): Promise<void> {
     if (input.sessionKey === KEY) setImmediate(() => { this.scheduledTick(false); });
   }
-  constructor(private home: string, private harness: Harness, private timezone: string, private now: () => number, private readonly strategy: NightlyStrategy) {}
+  constructor(private home: string, private harness: Harness, private timezone: string, private now: () => number, private readonly strategy: NightlyStrategy, private readonly validateClosure?: NightlyCompletionValidator) {}
   private get file(): string { return path.join(this.home, "improvement", "state.json"); }
   async policy(): Promise<ImprovementPolicy> {
     try { return improvementPolicy({ timezone: this.timezone, ...parse(await readFile(path.join(this.home, "improvement.yaml"), "utf8")) }); }
@@ -144,12 +172,23 @@ export class ImprovementController {
     try {
       const s = JSON.parse(await readFile(this.file, "utf8")) as NightState;
       if (s.version !== 1 || !/^\d{4}-\d{2}-\d{2}$/.test(s.night) || !Number.isInteger(s.turns) || s.turns < 0 || !Array.isArray(s.results) || s.results.some((r) => typeof r !== "string")) throw Error("Invalid improvement state");
+      if (s.closureFailures !== undefined && (!Number.isSafeInteger(s.closureFailures) ||
+          s.closureFailures < 0 || s.closureFailures > 3)) throw Error("Invalid nightly closure failure counter");
+      const c = s.closureAssessment;
+      if (c && (c.night !== s.night || typeof c.inputId !== "string" || !c.inputId || c.inputId !== s.pending ||
+          c.turn !== s.turns || !["claimed", "decided"].includes(c.phase) ||
+          (c.phase === "claimed" && c.verdict !== undefined) ||
+          (c.cancelled !== undefined && typeof c.cancelled !== "boolean") ||
+          (c.cancelled === true && c.verdict !== undefined) ||
+          (c.verdict !== undefined && c.verdict.state !== "completed" &&
+            !(c.verdict.state === "continue" && typeof c.verdict.next === "string" && c.verdict.next.trim() && c.verdict.next.length <= 4000))))
+        throw Error("Invalid nightly closure assessment");
       this.state = s;
     } catch (err) { if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err; }
   }
-  private async save(): Promise<void> {
+  private async save(beforeCommit?: () => void): Promise<void> {
     await mkdir(path.dirname(this.file), { recursive: true, mode: 0o700 });
-    await writeFileDurable(this.file, JSON.stringify(this.state));
+    await writeFileDurable(this.file, JSON.stringify(this.state), 0o600, beforeCommit);
   }
   async evaluate(sessionKey: string, cwd: string, input: ExperimentSpec): Promise<string> {
     const p = await this.policy();
@@ -172,7 +211,7 @@ export class ImprovementController {
     this.state.turns++; // durable reservation before working-model execution, crashes count
     await this.save();
   }
-  async completed(input: Inbound, reply: string): Promise<void> {
+  async completed(input: Inbound, reply: string, signal: AbortSignal = new AbortController().signal): Promise<void> {
     if (input.sessionKey !== KEY || !this.state || this.state.pending !== input.id) return;
     this.state.results.push(reply.slice(0, 4000));
     if (this.state.results.length > 200) this.state.results.shift();
@@ -184,10 +223,69 @@ export class ImprovementController {
     this.state.experiments = progress.experiments;
     this.state.recentHypotheses = progress.recentHypotheses;
     this.state.noExperimentTurns = progress.noExperimentTurns;
-    this.state.done = progress.done;
+    // The strategy may end an unproductive loop, but a model marker alone is
+    // never authority to finish the entire nightly mandate.
+    this.state.done = (progress.noExperimentTurns ?? 0) >= 3;
     this.state.results = progress.results;
+    if ((progress.done === true || reply.includes("[IMPROVEMENT_DONE]")) && !this.state.done &&
+        (this.state.experiments?.length ?? 0) > 0) {
+      const p = await this.policy();
+      const w = improvementWindow(this.now(), p);
+      let verdict: Inbound["continuation"];
+      if (p.enabled && w.active && w.night === this.state.night && !this.harness.stopping &&
+          !this.harness.paused && !signal.aborted && (this.state.closureFailures ?? 0) < 3) {
+        this.state.closureAssessment = { night: this.state.night, inputId: input.id!, turn: this.state.turns, phase: "claimed" };
+        // Reserve before inference, including receipts and the consumed attempt.
+        this.state.closureFailures = (this.state.closureFailures ?? 0) + 1;
+        await this.save();
+        try {
+          verdict = await this.validateClosure?.({ signal, expiresAt: improvementDeadline(this.now(), p), input, reply, night: this.state.night,
+            turn: this.state.turns, maxTurns: p.maxTurns, experiments: structuredClone(this.state.experiments ?? []) });
+        } catch { /* Persist a bounded technical non-decision, never a success. */ }
+        const cancelled = signal.aborted;
+        const normalized = cancelled ? undefined : verdict?.state === "completed" ? { state: "completed" as const } :
+          verdict?.state === "continue" && verdict.next?.trim() ? { state: "continue" as const, next: verdict.next.trim().slice(0, 4000) } : undefined;
+        this.state.closureAssessment = { ...this.state.closureAssessment!, phase: "decided", verdict: normalized,
+          ...(cancelled ? { cancelled: true } : {}) };
+        await this.save(); // Decision is durable before admission; recovery never calls the reviewer again.
+      }
+      const current = await this.policy();
+      const window = improvementWindow(this.now(), current);
+      if (current.enabled && window.active && window.night === this.state.night &&
+          this.state.turns <= current.maxTurns &&
+          !this.harness.stopping && !this.harness.paused && !signal.aborted && this.state.pending === input.id) {
+        if (verdict?.state === "completed") {
+          this.state.done = true;
+          this.state.closureFeedback = undefined;
+          this.state.closureFailures = 0;
+        } else if (verdict?.state === "continue" && verdict.next?.trim()) {
+          this.state.closureFeedback = verdict.next.trim().slice(0, 4000);
+          this.state.closureFailures = 0;
+        } else {
+          this.state.results.push("Nachtabschluss-Validierung ohne gültige Entscheidung; kein bestätigter Abschluss.");
+          this.state.closureFeedback = "Nachtabschluss nicht bestätigt. Prüfe die offenen sicheren Kandidaten des gesamten Agenten; wiederhole keine abgeschlossenen Effekte.";
+        }
+      } else if (this.state.closureAssessment) {
+        // Revocation is not a technical failure, but retains the consumed work turn.
+        this.state.closureFailures = Math.max(0, (this.state.closureFailures ?? 0) - 1);
+      }
+    }
+    const admitsVerdict = this.state.done === true || this.state.closureFeedback !== undefined;
+    this.state.closureAssessment = undefined;
     this.state.pending = undefined;
-    await this.save();
+    try {
+      await this.save(() => {
+        if (admitsVerdict && signal.aborted) throw Error("Nightly completion commit cancelled");
+      });
+    } catch (error) {
+      // A rename may already have succeeded even when directory sync fails.
+      // Discard speculative memory and load the validated published snapshot;
+      // never roll back blindly or repeat the reviewer to reconstruct it.
+      this.state = undefined;
+      try { await this.load(); }
+      catch { /* Keep memory unloaded and preserve the original write error. */ }
+      throw error;
+    }
   }
   async tick(cronStart = true): Promise<void> {
     if (this.harness.stopping || this.harness.updateFenced) return;
@@ -245,7 +343,20 @@ export class ImprovementController {
       if (this.harness.paused || busy || [...this.harness.sessions.values()].some((s) => s.running || s.queue.length)) return;
       // An adopted night is closed even if wall time re-enters its old window.
       // Never resume it under a newly selected strategy generation.
-      if (this.state.reportQueued || this.state.done || this.state.turns >= p.maxTurns) return;
+      const assessment = this.state.closureAssessment;
+      if (assessment) {
+        // A saved decision is evidence, not a committed admission. Its write may
+        // have raced with cancellation of the originating turn, whose AbortSignal
+        // cannot be reconstructed here. Only the final completed() snapshot commits
+        // done/feedback after the authority recheck. Never adopt an orphan verdict.
+        // Retain its consumed attempt and receipts; do not replay reviewer/worker.
+        this.state.results.push("Unterbrochene Nachtabschluss-Prüfung ohne bestätigte Übernahme; gespeichertes Urteil nicht angewendet. Keine abgeschlossenen Effekte wiederholen.");
+        this.state.closureAssessment = undefined;
+        this.state.pending = undefined;
+        await this.save();
+      }
+      if (this.state.reportQueued || this.state.done || this.state.turns >= p.maxTurns ||
+          (this.state.closureFailures ?? 0) >= 3) return;
       if (this.state.pending) {
         this.state.results.push("Vorheriger Versuch unterbrochen oder fehlgeschlagen; vor Fortsetzung tatsächlichen Zustand prüfen.");
         this.state.pending = undefined;
@@ -253,7 +364,7 @@ export class ImprovementController {
       const id = `improvement:${w.night}:${this.state.turns + 1}`;
       this.state.pending = id;
       await this.save();
-      this.harness.enqueue({ id, sessionKey: KEY, source: "cron", text: strategy.prompt(p, this.state.turns + 1) + `\nBereits untersuchte Hypothesen (nicht wiederholen): ${JSON.stringify(this.state.recentHypotheses ?? [])}\nBisher neue protokollierte Experimente dieser Nacht: ${this.state.experiments?.length ?? 0}. Turns ohne neues Experiment: ${this.state.noExperimentTurns ?? 0}.` });
+      this.harness.enqueue({ id, sessionKey: KEY, source: "cron", text: strategy.prompt(p, this.state.turns + 1) + (this.state.closureFeedback ? `\nVALIDATOR CORRECTION (keine neue Berechtigung): ${this.state.closureFeedback}\n` : "") + `\nBereits untersuchte Hypothesen (nicht wiederholen): ${JSON.stringify(this.state.recentHypotheses ?? [])}\nBisher neue protokollierte Experimente dieser Nacht: ${this.state.experiments?.length ?? 0}. Turns ohne neues Experiment: ${this.state.noExperimentTurns ?? 0}.` });
     } finally { this.checking = false; }
   }
 }
