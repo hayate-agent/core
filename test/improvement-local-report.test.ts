@@ -37,7 +37,7 @@ test('no report destination preserves results locally and allows the next night 
 test('remote human report survives restart and archives full receipts before outbox publication',async(t)=>{
  const home=await mkdtemp(path.join(os.tmpdir(),'improvement-remote-'));
  let now=Date.parse('2026-10-24T23:00:00Z');
- const receipt={hypothesis:'complete experiment',baseline:'failed',candidate:'passed',evidence:'test command',outcome:'improved'};
+ const receipt={execution:'performed',hypothesis:'complete experiment',baseline:'failed',candidate:'passed',evidence:'test command',outcome:'improved'};
  const block='```improvement-experiment\n'+JSON.stringify(receipt)+'\n```';
  const reply='p'.repeat(3990)+'\n'+block+'\n'+block+'\n```improvement-experiment\n{unfinished';
  const harness=new Harness({runtime:new FakeRuntime(()=>reply),tickMs:60000,log:()=>{}});

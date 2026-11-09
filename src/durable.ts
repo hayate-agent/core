@@ -7,7 +7,8 @@ import path from "node:path";
  * fsync the directory. When this resolves the new content survives power loss, so
  * acknowledgements (state inbox before Matrix cursor) keep their order on disk.
  */
-export async function writeFileDurable(file: string, data: string | Uint8Array, mode = 0o600): Promise<void> {
+export async function writeFileDurable(file: string, data: string | Uint8Array, mode = 0o600,
+  beforeCommit?: () => void | Promise<void>): Promise<void> {
   // Each call owns its staging inode, including overlapping replacements of one target.
   const tmp = `${file}.${process.pid}.${randomUUID()}.tmp`;
   const fh = await open(tmp, "wx", mode);
@@ -17,6 +18,12 @@ export async function writeFileDurable(file: string, data: string | Uint8Array, 
       await fh.sync();
     } finally {
       await fh.close();
+    }
+    // Callers may reject publication after staging is durable. The synchronous
+    // guard/rename submission is the commit boundary; later aborts cannot undo it.
+    if (beforeCommit) {
+      const pending = beforeCommit();
+      if (pending) await pending;
     }
     await rename(tmp, file);
     await syncDir(path.dirname(file));

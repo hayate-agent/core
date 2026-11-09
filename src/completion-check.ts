@@ -6,6 +6,8 @@ export interface CompletionAuthorization {
   /** Trusted caller supplies the existing task boundary; never derive from reply. */
   task: string;
   expiresAt?: number;
+  /** Only an explicit host-owned nightly closure request may enter this assessor. */
+  purpose?: "nightly-closure";
 }
 
 /** Bounded host diagnostic only; never contains provider output or errors. */
@@ -22,17 +24,23 @@ export async function assessCompletion(backend: ReviewBackend, input: Inbound, r
   model: string | undefined = undefined, now = Date.now, promptStrategy?: CompletionPrompt, diagnostic?: CompletionDiagnosticSink, timeoutMs = 10000): Promise<NonNullable<Inbound["continuation"]> | undefined> {
   if (!promptStrategy) { diagnostic?.("unavailable"); return; }
   const checkpoint = input.continuation;
-  if (input.source === "api" || input.sessionKey === "improvement:nightly" ||
+  if (input.source === "api" || (input.sessionKey === "improvement:nightly" && authorization?.purpose !== "nightly-closure") ||
       signal.aborted || !authorization ||
       !authorization.task.trim() ||
       (authorization.expiresAt !== undefined && (!Number.isSafeInteger(authorization.expiresAt) || authorization.expiresAt <= now()))) { diagnostic?.("unavailable"); return; }
   const controller = new AbortController();
   const abort = () => controller.abort(); signal.addEventListener("abort", abort, { once: true });
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => { controller.abort(); reject(Error("Completion assessment timed out")); }, timeoutMs);
-  });
+  const lifetime = authorization.expiresAt === undefined ? Infinity : Math.max(0, authorization.expiresAt - now());
+  const grantLimited = lifetime <= timeoutMs;
   let failure: CompletionDiagnostic = "technical";
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      if (grantLimited) failure = "unavailable";
+      controller.abort();
+      reject(Error("Completion assessment timed out"));
+    }, Math.min(timeoutMs, lifetime));
+  });
   try {
     let prompt: string | undefined;
     try { prompt = renderCompletionPrompt(promptStrategy, input, reply, authorization, now); }

@@ -463,7 +463,7 @@ async function main(argv: string[]): Promise<void> {
     afterTurn: async (input, reply, session, options, signal) => {
       await reloadRuntimeSettings();
       const result = await plugins.policies.finish(cwdFor(input.sessionKey), input, reply, session, options, signal);
-      await improvement?.completed(input, result);
+      await improvement?.completed(input, result, signal);
       return result;
     },
     tickMs: config.loop.tickMs,
@@ -486,7 +486,17 @@ async function main(argv: string[]): Promise<void> {
   const admins = config.admins.length ? config.admins : gatewayApprovers;
   const approvers = config.approvers.length ? config.approvers : gatewayApprovers.length ? gatewayApprovers : admins;
   const nightly = await nightlyStrategyHolder(config.home, config.nightlyStrategy, nightlyDefault);
-  improvement = new ImprovementController(config.home, harness, config.timezone, Date.now, nightly.current!);
+  improvement = new ImprovementController(config.home, harness, config.timezone, Date.now, nightly.current!, async request => {
+    const task = "Prüfe den Abschluss der GESAMTEN autorisierten Nachtarbeit, nicht nur eines Experiments. " +
+      "Ein verworfener Versuch oder fehlende Skill-Ideen belegen keine Erschöpfung. Berücksichtige Core, Plugins, " +
+      "Integrationen, bestehende und fehlende Features sowie erlaubte öffentliche Ansätze anderer Agenten. " +
+      "Bestätige completed nur bei fachlich begründetem Ende; sonst continue mit einem konkreten sicheren nächsten Schritt. " +
+      JSON.stringify({ night: request.night, turns: request.turn, maxTurns: request.maxTurns,
+        expiresAt: request.expiresAt, experiments: request.experiments });
+    return assessCompletion(supervisorReviewer(), request.input, request.reply,
+      { task, purpose: "nightly-closure", expiresAt: request.expiresAt }, request.signal, effectiveModels().reviewModel,
+      Date.now, completion.current, undefined, config.completionCheck?.timeoutMs ?? 30000);
+  });
   await improvement.initializeStrategy(nightly, settings.snapshot().nightlyStrategy);
   let nextLedgerCompact = 0;
   let ledgerRecoveryReady = false;
