@@ -1,4 +1,5 @@
 import type { ExecutionRecoveryPolicy } from "./execution-recovery.js";
+import { validateWorkerPin } from "./model-roles.js";
 import { ExecutionClaimConflict, ExecutionWorkerFailure, type Execution, type ExecutionEvent, type ExecutionStore } from "./execution.js";
 
 export interface DispatchContext {
@@ -87,11 +88,12 @@ export class Dispatcher {
     await this.kick();
   }
   /** Host-only scheduled submission; never expose mandate as a model tool argument. */
-  async submitScheduled(parent: string, requestId: string, input: string, mandate: NonNullable<Execution["dependency"]>): Promise<Execution> {
+  async submitScheduled(parent: string, requestId: string, input: string, mandate: NonNullable<Execution["dependency"]>, pinned?: Execution["pinned"]): Promise<Execution> {
     if (!this.recovered || this.stopped || this.admissionFenced()) throw Error("Dispatcher unavailable");
+    if (pinned !== undefined) validateWorkerPin(pinned);
     this.submitting++;
     try {
-      const task = await this.store.submit(parent, requestId, input, this.strategy.name, this.strategy.version, mandate);
+      const task = await this.store.submit(parent, requestId, input, this.strategy.name, this.strategy.version, mandate, pinned);
       await this.kick();
       return task;
     } finally { this.submitting--; }

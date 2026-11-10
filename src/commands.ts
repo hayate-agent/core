@@ -14,6 +14,7 @@ import { type SkillInfo, skillInvocationPrompt } from "./skills.js";
 import type { BusyMode, Inbound } from "./types.js";
 
 import { BUILD_INFO } from "./build-info.js";
+import { renderBenchmarkReport } from "./benchmark/report.js";
 export const VERSION = BUILD_INFO.version;
 
 export interface CommandContext {
@@ -49,6 +50,8 @@ export interface CommandContext {
   localSessionKey?: () => string;
   /** Graceful restart (supervisor brings the process back). */
   restart: () => Promise<void>;
+  /** Pinned model/reasoning benchmarking; absent when the dispatcher is not enabled. */
+  benchmark?: import("./benchmark/index.js").BenchmarkService;
 }
 
 interface Command {
@@ -197,6 +200,41 @@ export const COMMANDS: Command[] = [
         }
       }
       return rows.join("\n");
+    },
+  },
+  // -- Benchmark
+  {
+    name: "benchmark", admin: true, help: "Pinned model benchmarks: /benchmark [list|status|report [suite]|<suite>]",
+    run: async (args, input, ctx) => {
+      const service = ctx.benchmark;
+      if (!service) return "Benchmarking ist hier nicht verfügbar (Dispatcher aktiviert sein).";
+      const parts = args.trim().split(/\s+/).filter(Boolean);
+      const sub = (parts[0] ?? "").toLowerCase();
+      const status = service.status();
+      const summary = [
+        `Benchmark ${status.enabled ? "aktiv" : "deaktiviert"} · capacity ${status.config.capacity} · repeats ${status.config.repeats} · Fall-Budget ${Math.round(status.config.caseTimeoutMs / 60_000)} min`,
+        `Suites: ${status.suitesDir}`,
+        status.running ? `Läuft: ${status.running.suite} seit ${new Date(status.running.startedAt).toISOString()}` : "",
+      ].filter(Boolean).join("\n");
+      if (!sub || sub === "list") {
+        const suites = await service.suites();
+        return `${summary}\n${suites.length ? `Bekannte Suites: ${suites.join(", ")}` : "Noch keine Suite angelegt."}\nStart: /benchmark <suite> · Bericht: /benchmark report [suite]`;
+      }
+      if (sub === "status") return summary;
+      if (sub === "report") return await service.report(parts[1]);
+      if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(sub)) return "usage: /benchmark [list|status|report [suite]|<suite>]";
+      if (!status.enabled) return `Benchmark "${sub}" ist deaktiviert. benchmark.enabled in den Settings setzen.`;
+      const report = (text: string) => ctx.harness.deliver(undefined, text).catch(() => undefined);
+      const running = service.run(sub, input.sessionKey, outcome => void report(
+        `Benchmark ${outcome.caseId}#${outcome.repeat} [${outcome.pin.thinking}] ${outcome.status} · `
+        + `${outcome.attempts.length} Attempt(s) · `
+        + `${outcome.fixed.length ? `fixed: ${outcome.fixed.join(",")}` : "nichts gefixt"}`
+        + `${outcome.tampered.length ? ` · manipuliert: ${outcome.tampered.join(",")}` : ""} · `
+        + `${outcome.thinkingLevel ? `gesehen ${outcome.model}/${outcome.thinkingLevel} · ` : ""}`
+        + (outcome.verified ? "verifiziert" : "NICHT verifiziert")));
+      void running.then(record => report(renderBenchmarkReport([record])),
+        error => report(`Benchmark ${sub} fehlgeschlagen: ${error instanceof Error ? error.message : String(error)}`));
+      return `Benchmark "${sub}" gestartet. Fortschritt und Bericht kommen, während die lokalen Worker laufen. Aufzeichnung: ${status.runsDir}`;
     },
   },
   {
