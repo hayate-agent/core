@@ -39,13 +39,17 @@ privileged user command. This does not add an independent review/approval gate.
 `/mcp login <name>` starts sign-in and returns immediately. The authorization link
 and final outcome are delivered to the same conversation. Approve access in your
 browser. If its loopback callback reaches the agent, sign-in completes directly.
-For a remote agent, copy the browser's final loopback redirect URL and send:
+For a remote agent, copy the browser's final loopback redirect URL and send
+it with the configured MCP server name (no need to copy a separate login ID):
 
 ```text
-/mcp auth <login-id> <redirect-url>
-/mcp cancel <login-id>
+/mcp auth <server-name> <redirect-url>
+/mcp cancel <server-name>
 ```
 
+The login ID remains accepted instead of the server name for compatibility.
+Names resolve only pending sign-ins owned by this actor and conversation; they
+never select another user's sign-in. An ambiguous name requires the login ID.
 Only the original authenticated actor **and conversation** can finish/cancel that
 login. PI performs OAuth discovery, PKCE/state/issuer validation, token exchange
 and refresh; Hayate does not create a competing token store. Access/refresh tokens
