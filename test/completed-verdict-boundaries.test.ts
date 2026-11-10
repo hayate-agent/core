@@ -33,7 +33,8 @@ for (const state of ["waiting", "blocked", "continue"] as const) {
 
 for (const mode of ["inconclusive", "failed"] as const) {
   test(`${mode} assessment never implies completed`, async () => {
-    const h = new Harness({ runtime: new FakeRuntime(() => "Work might remain"), tickMs: 60000,
+    let now = 1000;
+    const h = new Harness({ runtime: new FakeRuntime(() => "Work might remain"), tickMs: 60000, now: () => now,
       completionCheck: async () => { if (mode === "failed") throw Error("provider unavailable"); return undefined; } });
     h.addChannel(new MemoryChannel()); h.onStateChange = async () => {};
     try {
@@ -42,7 +43,14 @@ for (const mode of ["inconclusive", "failed"] as const) {
       await h.recoverTasks(); h.releaseRestored(); await h.drained();
       assert.equal(h.state("mem:room1").task?.state, "active");
       assert.equal(h.state("mem:room1").task?.recoveryRetry?.attempts, 1);
-      assert.equal(h.state("mem:room1").task?.recoveryAttentionId, undefined);
+      // main already reserves technical retries at normal-turn settlement.
+      // Diagnose the next due failure, not an intentionally suppressed early call.
+      now = h.state("mem:room1").task!.recoveryRetry!.nextAt;
+      await h.recoverTasks();
+      assert.equal(h.state("mem:room1").task?.recoveryRetry?.attempts, 2);
+      assert.match(h.state("mem:room1").task?.recoveryAttentionId!, /^task-recovery:/);
+      assert.equal(h.state("mem:room1").task?.termination, undefined);
+      assert.equal(h.outboxEntries().length, 0, "diagnostics are default-off");
     } finally { await h.stop(0); }
   });
 }

@@ -61,7 +61,7 @@ test("startup uncertainty releases reservation without consuming existing techni
 });
 
 for (const [output, category] of [[new Error("PRIVATE failure"), "technisch"], ["not JSON", "ungültige"], ["", "ungültige"]] as const) {
-  test(`real wrapper failure retains evidence and technical bound for working reconciliation: ${category}/${String(output)}`, async () => {
+  test(`real wrapper failure retains evidence and deferred assessment for working reconciliation: ${category}/${String(output)}`, async () => {
     let now = Date.now();
     const h = new Harness({ runtime: new FakeRuntime(() => {
       h.planContinuation(key, { state: "blocked", next: "Registry authentication missing" });
@@ -70,13 +70,17 @@ for (const [output, category] of [[new Error("PRIVATE failure"), "technisch"], [
     const ch = new MemoryChannel(); h.addChannel(ch); h.onStateChange = async () => {};
     try {
       await h.submit(msg("Deliver existing PR through GitOps")); await h.drained();
-      for (let i = 1; i <= 3; i++) { await h.recoverTasks(); assert.equal(h.state(key).task!.recoveryRetry!.attempts, i); now += 60001; }
-      // Exhaustion remains terminal, but internal assessment errors respect default-off.
+      for (let i = 1; i <= 5; i++) {
+        await h.recoverTasks(); assert.equal(h.state(key).task!.recoveryRetry!.attempts, i);
+        now = h.state(key).task!.recoveryRetry!.nextAt;
+      }
+      // Read-only assessments continue, but default-off diagnostics and productive fences remain.
       assert.equal(h.outboxEntries().length, 0);
-      assert.match(h.state(key).task!.recoveryAttentionId!, /^task-recovery-exhausted:/);
+      assert.match(h.state(key).task!.recoveryAttentionId!, /^task-recovery:/);
       const task = h.state(key).task!;
-      assert.equal(task.termination, "recovery_assessment_failed");
-      assert.equal(task.state, "blocked"); assert.match(task.next!, /Independent supervisor admission unavailable/);
+      assert.equal(task.termination, undefined);
+      assert.equal(task.state, "active");
+      assert.equal(task.next, undefined, "failed inference must not invent a next step");
       assert.equal(task.recoveryAdmission, undefined); assert.equal(h.pendingInputs().length, 0);
       assert.match(task.lastReply!, /registry authentication missing/i);
       assert.equal(task.recoveryRetry?.diagnostic, output instanceof Error ? "technical" : "invalid_response");

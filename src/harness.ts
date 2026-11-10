@@ -5,6 +5,7 @@
  * "alive" between messages.
  */
 import { loadAttachments, validateAttachmentAdmission } from "./attachments.js";
+import { assessmentRetryDelay } from "./assessment-retry.js";
 import { gatewaySettings, type GatewayConfig } from "./gateway-settings.js";
 import { createHash, randomUUID } from "node:crypto";
 import { naturalBudgetReset, type OperatorBudgetGrant } from "./natural-budget-reset.js";
@@ -81,8 +82,8 @@ export interface DurableTask {
   preexistingUnscoped?: string[];
   /** Persist before inference; legacy claims without retry metadata remain fail-closed. */
   recoveryAssessment?: "claimed" | "decided";
-  /** Consecutive technical failures, including an in-flight crash reservation.
-   * Normal turns and valid semantic uncertainty do not consume this budget. */
+  /** Consecutive unusable assessments, including an in-flight crash reservation.
+   * Used only for persisted backoff, never as a total attempt/authority limit. */
   recoveryRetry?: { attempts: number; nextAt: number; diagnostic?: import("./completion-check.js").CompletionDiagnostic };
   wait?: { reason: string; nextAt: number; deadline: number };
   /** Monotonic scheduler claims, independent of productive follow-up depth. */
@@ -1632,7 +1633,8 @@ export class Harness {
     }
   }
 
-  /** Reconstruct checkpointed work, or assess a retained mandate once. No polling. */
+  /** Reconstruct checkpointed work, or assess a retained mandate when due.
+   * No productive work without persisted admission, no status-polling inference. */
   async recoverTasks(): Promise<void> {
     if (this.gatewayChanging) return;
     for (const s of this.sessions.values()) {
@@ -1678,14 +1680,14 @@ export class Harness {
       !!task.id && !!task.original.trim() && task.original.length <= 8000 &&
       (!task.anchor || task.anchor.task === task.original) &&
       Number.isSafeInteger(task.depth) && task.depth >= 0 && repetitions(task) < 20 && !task.termination &&
-      !(betweenTurns && (task.recoveryRetry?.attempts ?? 0) >= 3) &&
       (task.expiresAt === undefined || (Number.isSafeInteger(task.expiresAt) && task.expiresAt > this.now())) &&
       !s.current && (betweenTurns ? s.running && s.queue.every(input => input.taskId !== task.id) : !s.queue.length && !s.running) &&
       !this.paused && !this.stopping && !this.gatewayChanging && !this.updateFenced &&
       s.key !== "improvement:nightly" && !this.stoppingHostParents.has(s.key) &&
       !this.opts.externallyRecoveredSession?.(s.key);
     const previous = task.supervisorDecision;
-    const technicalRetry = previous?.dependencyHold?.reason === "global-hold" && previous.diagnostic === "technical";
+    const technicalRetry = previous?.dependencyHold?.reason === "global-hold" && !!previous.diagnostic ||
+      !!task.recoveryRetry && previous?.dependencyHold?.reason === "assessment-claimed";
     if (!this.onStateChange || !eligible() || this.recoveringTasks.has(task)) return;
     // Missing legacy provenance is not permission to replay a child, but must
     // not prevent the existing read-only assessment of an independent step.
@@ -1700,14 +1702,8 @@ export class Harness {
       const evidence = createHash("sha256").update(snapshot()).digest("hex");
       if (previous.dependencyHold.evidence === evidence) return;
     }
-    // A technical hold that already consumed its budget is terminal, not silently parked.
-    if (technicalRetry && Number.isSafeInteger(task.recoveryRetry?.attempts) && task.recoveryRetry!.attempts >= 3) {
-      this.recoveryAttention(s, task, "exhausted");
-      await this.onStateChange();
-      return;
-    }
     // Retry only read-only inference, never a worker's uncertain effects.
-    if (technicalRetry && task.recoveryRetry && (!Number.isSafeInteger(task.recoveryRetry.attempts) ||
+    if (task.recoveryRetry && (!Number.isSafeInteger(task.recoveryRetry.attempts) ||
         task.recoveryRetry.attempts < 1 ||
         !Number.isSafeInteger(task.recoveryRetry.nextAt) || task.recoveryRetry.nextAt > this.now())) return;
     const pending = children();
@@ -1717,7 +1713,8 @@ export class Harness {
       const executions = snapshot();
       const evidence = createHash("sha256").update(executions).digest("hex");
       task.supervisorDecision = { verdict: "unresolved", dependencyHold: { evidence, reason: "assessment-claimed" } };
-      task.recoveryRetry = { attempts: (task.recoveryRetry?.attempts ?? 0) + 1, nextAt: this.now() + 60000 };
+      const attempts = Math.min(Number.MAX_SAFE_INTEGER, (task.recoveryRetry?.attempts ?? 0) + 1);
+      task.recoveryRetry = { attempts, nextAt: this.now() + assessmentRetryDelay(attempts) };
       const authority = JSON.stringify(task);
       await this.onStateChange(); // no inference before the durable one-shot claim
       const unchanged = () => eligible() && JSON.stringify(task) === authority && snapshot() === executions;
@@ -1744,7 +1741,12 @@ export class Harness {
           (task.expiresAt === undefined || plan.expiresAt <= task.expiresAt))) ? plan.next.trim() : undefined;
       task.supervisorDecision = { verdict: next ? "continue" : "blocked", diagnostic,
         dependencyHold: { evidence, reason: next ? "independent-next-proposed" : "global-hold", ...(next ? { next } : {}) } };
-      if (diagnostic === "technical") task.recoveryRetry!.diagnostic = diagnostic;
+      if (!plan && !diagnostic) diagnostic = "invalid_response";
+      if (diagnostic) {
+        task.supervisorDecision.diagnostic = diagnostic;
+        task.recoveryRetry!.diagnostic = diagnostic;
+        task.recoveryRetry!.nextAt = this.now() + assessmentRetryDelay(task.recoveryRetry!.attempts);
+      }
       else task.recoveryRetry = undefined;
       if (next) {
         task.state = "active";
@@ -1755,9 +1757,8 @@ export class Harness {
         task.recoveryAdmission = { id: this.taskQueueId(task, task.depth + 1), depth: task.depth + 1,
           next, original: task.original, expiresAt: task.expiresAt,
           independent: { evidence, taskId: task.id, sessionKey: s.key } };
-      } else if (diagnostic === "technical" && task.recoveryRetry!.attempts >= 3) this.recoveryAttention(s, task, "exhausted");
-      else if (legacyHold && diagnostic !== "technical") await this.unscopedDependencyBlocker(s, task, children());
-      else this.recoveryAttention(s, task, diagnostic === "technical" ? "technical" : diagnostic === "unavailable" ? "unavailable" : "inconclusive");
+      } else if (legacyHold && !diagnostic) await this.unscopedDependencyBlocker(s, task, children());
+      else this.recoveryAttention(s, task, diagnostic === "technical" ? "technical" : diagnostic === "unavailable" ? "unavailable" : "inconclusive", !!task.recoveryRetry);
       try { await this.onStateChange(); }
       catch (error) {
         // Keep the durable assessment claim, but never release an unsaved permit.
@@ -1819,14 +1820,6 @@ export class Harness {
       await this.outbox.barrier();
       return;
     }
-    if (retry && retry.attempts >= 3) {
-      // Exhausted assessment budget is terminal: persist the reason and one
-      // operator notice so the supported budget reset applies. No work starts.
-      this.reconcileUnassessedTask(task, true);
-      this.recoveryAttention(s, task, "exhausted");
-      await this.outbox.barrier();
-      return;
-    }
     if (!this.opts.completionCheck || (task.recoveryAssessment && !retry)) {
       // Assessor outage consumes assessment attempts, not the mandate.
       // Retain the proposal for diagnosis; no productive fallback on outage.
@@ -1837,7 +1830,8 @@ export class Harness {
     if (retry && this.now() < retry.nextAt) return;
     // Reserve and save before inference. A crash consumes this attempt, not authority.
     // A usable decision releases the reservation and ends this failure sequence.
-    task.recoveryRetry = { attempts: (retry?.attempts ?? 0) + 1, nextAt: this.now() + 60000,
+    const attempts = Math.min(Number.MAX_SAFE_INTEGER, (retry?.attempts ?? 0) + 1);
+    task.recoveryRetry = { attempts, nextAt: this.now() + assessmentRetryDelay(attempts),
       ...(retry?.diagnostic ? { diagnostic: retry.diagnostic } : {}) };
     task.recoveryAssessment = "claimed";
     const claimedAuthority = JSON.stringify(task);
@@ -1859,7 +1853,7 @@ export class Harness {
     try { plan = await this.opts.completionCheck(input, evidence, new AbortController().signal, value => {
       if (["technical", "invalid_response", "inconclusive", "unavailable"].includes(value)) diagnostic = value;
     }); }
-    catch { diagnostic = "technical"; this.log("retained task assessment failed; bounded retry retained"); }
+    catch { diagnostic = "technical"; this.log("retained task assessment failed; deferred retry retained"); }
     if (!unchanged()) return;
     if (diagnostic) task.recoveryRetry.diagnostic = diagnostic;
     task.recoveryAssessment = "decided";
@@ -1888,10 +1882,8 @@ export class Harness {
       task.recoveryRetry = undefined;
     } else {
       task.recoveryRetry.diagnostic ??= "invalid_response";
-      if (task.recoveryRetry.attempts >= 3) {
-        this.reconcileUnassessedTask(task, true);
-        this.recoveryAttention(s, task, "exhausted");
-      }
+      task.recoveryRetry.nextAt = this.now() + assessmentRetryDelay(task.recoveryRetry.attempts);
+      this.recoveryAttention(s, task, task.recoveryRetry.diagnostic === "technical" ? "technical" : "invalid", true);
     }
     await this.outbox.barrier();
   }
@@ -1927,21 +1919,19 @@ export class Harness {
   }
 
   private recoveryAttention(s: SessionState, task: DurableTask,
-    reason: "interrupted" | "unavailable" | "technical" | "inconclusive" | "mismatched" | "invalid" | "exhausted"): void {
-    task.state = "blocked";
-    if ((reason === "exhausted" || reason === "interrupted") && (task.recoveryRetry?.attempts ?? 0) >= 3)
-      task.termination = "recovery_assessment_failed";
-    // Terminal exhaustion is distinct from an earlier per-epoch diagnostic notice.
+    reason: "interrupted" | "unavailable" | "technical" | "inconclusive" | "mismatched" | "invalid" | "exhausted", retrying = false): void {
+    // Diagnostics grant neither a semantic stop nor productive replay permission.
+    if (!retrying) task.state = "blocked";
+    // One host diagnostic per task/epoch, independent of retry count.
     const id = `task-recovery${reason === "exhausted" ? "-exhausted" : ""}:${s.key}:${task.id}${task.budgetEpoch ? `:${task.budgetEpoch}` : ""}`;
     if (task.recoveryAttentionId && (reason !== "exhausted" || task.recoveryAttentionId === id)) return;
     task.recoveryAttentionId = id;
     const to = s.replyTo ?? this.home;
     // Filter only this host-generated diagnostic, before the shared outbox.
-    // Keep the blocked task, diagnostic marker, persistence and log even when silent.
-    // Exhausting internal inference is not proof of a failed operation and must
-    // not override the operator's diagnostic opt-out. Keep the terminal state.
+    // Keep the diagnostic marker, persistence and log even when silent.
     if (to && gatewaySettings(this.opts.gateways, to.channel).recoveryDiagnostics) {
-      const entry = { ...this.outbox.create(s.key, to, this.recoveryNotice(s.key, task, reason)), id };
+      const entry = { ...this.outbox.create(s.key, to, this.recoveryNotice(s.key, task, reason) +
+        (retrying ? "\nRead-only assessment will be retried with backoff; worker effects will not be replayed." : "")), id };
       s.outbox.push(entry);
     }
     // Retry a failed save through the normal pump barrier, including a notice
@@ -1974,9 +1964,11 @@ export class Harness {
       if (!diagnostic) { s.outbox.push(entry); continue; }
       const task = this.tasks(s).find(task => task.recoveryAttentionId === entry.id);
       s.unsaved = true; // the pump must save the migration before delivering anything
-      if (!task || task.state !== "blocked" || !gatewaySettings(this.opts.gateways, entry.to.channel).recoveryDiagnostics) continue;
+      if (!task || !(task.state === "blocked" || task.state === "active" && task.recoveryRetry && !task.termination) ||
+          !gatewaySettings(this.opts.gateways, entry.to.channel).recoveryDiagnostics) continue;
       s.outbox.push({ ...entry, text: this.recoveryNotice(s.key, task,
-        entry.id!.startsWith(`task-recovery-exhausted:${s.key}:`) ? "exhausted" : "retained") });
+        entry.id!.startsWith(`task-recovery-exhausted:${s.key}:`) ? "exhausted" : "retained") +
+        (task.recoveryRetry && !task.termination ? "\nRead-only assessment will be retried with backoff; worker effects will not be replayed." : "") });
     }
   }
 
@@ -2803,7 +2795,10 @@ export class Harness {
         if (s.unsaved) { void this.pump(s); break; }
       }
       await this.reconcileBlockedDependency(s, task);
-      if (task.state === "active" && (!task.next || task.recoveryRetry)) await this.assessStartupTask(s, task);
+      // Reconcile orphaned open tasks through the existing admission path,
+      // including saved next steps whose queue/admission was lost. No second
+      // scheduler or inference for running, queued, admitted or not-due work.
+      if (task.state === "active" && !task.recoveryAdmission) await this.assessStartupTask(s, task);
       if (this.queueRunnableTask(s)) break;
       if (this.hasPendingDependency(s.key, task.id)) continue;
       if (task?.state === "waiting" && task.wait && (!Number.isSafeInteger(task.wait.nextAt) || !Number.isSafeInteger(task.wait.deadline) || at >= task.wait.nextAt || at >= task.wait.deadline || (task.expiresAt !== undefined && at >= task.expiresAt)) && this.onStateChange &&

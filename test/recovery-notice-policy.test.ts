@@ -12,7 +12,7 @@ function retained(): DurableTask {
 }
 
 for (const enabled of [undefined, false, true]) {
-  test(`exhausted assessment obeys channel diagnostic policy ${enabled}, with no fourth attempt or worker`, async () => {
+  test(`deferred assessment obeys channel diagnostic policy ${enabled}, allowing fourth check but no worker`, async () => {
     let checks = 0;
     const runtime = new FakeRuntime();
     const h = new Harness({ runtime, tickMs: 60000,
@@ -24,18 +24,19 @@ for (const enabled of [undefined, false, true]) {
     try {
       await h.recoverTasks(); await h.recoverTasks();
       const saved = h.snapshotSessions()[0].task!;
-      assert.equal(saved.state, "blocked");
-      assert.equal(saved.termination, "recovery_assessment_failed");
-      assert.equal(saved.recoveryRetry?.attempts, 3);
+      assert.equal(saved.state, "active");
+      assert.equal(saved.termination, undefined);
+      assert.equal(saved.recoveryRetry?.attempts, 4);
       assert.equal(saved.original, original.original);
       assert.equal(saved.lastReply, original.lastReply);
       assert.equal(saved.expiresAt, original.expiresAt);
       assert.equal(saved.depth, 2);
-      assert.equal(checks, 0); assert.equal(runtime.opened.length, 0); assert.equal(h.pendingInputs().length, 0);
+      assert.equal(checks, 1); assert.equal(runtime.opened.length, 0); assert.equal(h.pendingInputs().length, 0);
       assert.equal(h.outboxEntries().length, enabled === true ? 1 : 0);
       if (enabled === true) {
         const entry = h.outboxEntries()[0]!;
-        assert.match(entry.text, /^Recovery assessment paused:.*budget is exhausted \(technical\)/);
+        assert.match(entry.text, /^Recovery assessment paused:.*technical/);
+        assert.match(entry.text, /retried with backoff/);
         assert.match(entry.text, /\/task-budget inspect/);
         assert.ok(entry.text.length < 600);
         assert.doesNotMatch(entry.text, /PRIVATE_|angehalten|Auftrag|Setze das Budget|⚠/);

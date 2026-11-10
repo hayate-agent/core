@@ -12,16 +12,11 @@ import type { ModelRoles } from "../src/model-roles.js";
 import type { OpenSessionOptions, PromptOptions } from "../src/types.js";
 import { FakeRuntime, MemoryChannel } from "./fakes.js";
 
-/* Reproduces live execution d2494ffb (2026-11-05): a sequential step whose worker
- * reported "STEP-STATUS: complete" three times (initial + c1 + c2) while the
- * independent validator kept answering "continue". After STEP_CONTINUATIONS the
- * strategy throws, Dispatcher.fail() records the generic "runtime-failure" and,
- * because settleIntent already cleared the intent, the child is "paused" (not
- * "blocked") with outcomes 0, prior.index 0 and settledEffect step 0.
- * The bound parent waits on it. Host supervision (reconcileBlockedDependency)
- * only considers "blocked" children and hasPendingDependency skips the parent's
- * wait recheck, so nobody owns the paused child: no assessment, no bounded
- * continuation, no actionable notice. This is the stall to fix. */
+/* Reproduces the paused-child diagnostic shape of live execution d2494ffb.
+ * Successful validator continuations no longer exhaust a fixed budget. Instead,
+ * five independent continuations precede a genuine technical validator failure.
+ * The settled step is paused with no outcome; the bound parent must retain an
+ * actionable owner without replaying effects or silently resuming the child. */
 
 const roles: ModelRoles = { enabled: true, roles: {
   reviewer: { model: "p/review", thinking: "off" }, dispatcher: { model: "p/disp", thinking: "low" },
@@ -44,10 +39,14 @@ async function pausedLikeD2494ffb(home: string) {
     const prompt = session.prompt.bind(session);
     session.prompt = async (text: string, o: PromptOptions = {}) => {
       o.onEvent?.({ type: "execution", selection: { model: o.model ?? "p/default", thinking: o.thinking ?? "high" } } as never);
-      if (options.assessmentPurpose === "supervisor") return `{"state":"continue","next":"inventory the remaining legacy executions (${++continues})"}`;
+      if (options.assessmentPurpose === "supervisor") return ++continues <= 5
+        ? `{"state":"continue","next":"inventory the remaining legacy executions (${continues})"}`
+        : "technical validator failure";
       await prompt(text, o);
       if (key.startsWith("plan:")) return plan;
       workerTurns++;
+      o.onEvent?.({ type: "tool", phase: "start", name: "read", callId: `receipt${workerTurns}`, detail: "inventory" } as never);
+      o.onEvent?.({ type: "tool", phase: "end", name: "read", callId: `receipt${workerTurns}`, detail: `verified inventory receipt ${workerTurns}` } as never);
       return "inventory recorded\nSTEP-STATUS: complete";
     };
     return session;
@@ -65,7 +64,8 @@ async function pausedLikeD2494ffb(home: string) {
   try {
     await dispatcher.start();
     const child = await dispatcher.submitScheduled(SESSION, "fleet-rollout", ORIGINAL, { taskId: "parent", depth: 0, original: ORIGINAL });
-    await settled;
+    await dispatcher.waitForExecution(child.id);
+    await dispatcher.flushEvents();
     return { file, id: child.id, workerTurns };
   } finally { await dispatcher.stop(); await harness.stop(1000); }
 }
@@ -88,21 +88,22 @@ async function restartedHost(t: import("node:test").TestContext, file: string) {
   return { h, store, channel, runtime, assessments: () => assessments };
 }
 
-test("d2494ffb: validator-exhausted step pause is not orphaned by host supervision", async t => {
+test("d2494ffb: technical validator failure after five continuations keeps a durable scheduler owner", async t => {
   const home = await mkdtemp(path.join(os.tmpdir(), "paused-child-"));
   t.after(() => rm(home, { recursive: true, force: true }));
   const phase1 = await pausedLikeD2494ffb(home);
   // Exact live diagnostic shape of d2494ffb.
   const raw = JSON.parse(await readFile(phase1.file, "utf8")) as { executions: Array<Record<string, unknown>> };
   const child = raw.executions.find(e => e.id === phase1.id)!;
-  assert.equal(child.status, "paused");
-  assert.equal(child.diagnosticCode, "runtime-failure");
-  assert.equal(child.intent, undefined);
-  assert.match((child.settledEffect as { key: string }).key, /^step:.+:0:medium$/);
+  assert.equal(child.status, "ready");
+  assert.ok(child.assessmentRetryAt);
+  assert.equal(child.diagnosticCode, undefined);
+  assert.match((child.intent as { key: string }).key, /^step:.+:0:medium$/);
   const checkpoint = JSON.parse(child.checkpoint as string) as SequentialState;
   assert.equal(checkpoint.outcomes.length, 0);
-  assert.equal(checkpoint.prior?.index, 0);
-  assert.equal(phase1.workerTurns, 3, "initial turn + 2 bounded continuations");
+  assert.equal(checkpoint.assessment?.index, 0);
+  assert.equal(checkpoint.assessment?.diagnostic, "invalid_response");
+  assert.equal(phase1.workerTurns, 6, "initial turn + five successful continuations before technical failure");
 
   const host = await restartedHost(t, phase1.file);
   const before = await readFile(phase1.file, "utf8");
@@ -110,14 +111,12 @@ test("d2494ffb: validator-exhausted step pause is not orphaned by host supervisi
   await host.h.tick(); await host.h.tick();
   // No rerun of completed effects and no silent auto-resume of the child.
   assert.equal(host.runtime.sessions.size, 0);
-  assert.equal(host.store.list().find(e => e.id === phase1.id)!.status, "paused");
+  assert.equal(host.store.list().find(e => e.id === phase1.id)!.status, "ready");
   assert.equal(await readFile(phase1.file, "utf8"), before);
-  // Required: the host keeps an actionable owner — the existing bounded independent
-  // assessment runs (at most once) or an actionable notice names the paused child.
-  const noticed = host.channel.sent.some(m => m.text.includes(phase1.id.slice(0, 8)));
-  assert.ok(host.assessments() <= 1, "assessment must stay bounded");
-  assert.ok(host.assessments() === 1 || noticed,
-    `paused child ${phase1.id} orphaned: no assessment, no continuation, no notice (parent ${host.h.snapshotSessions()[0]!.task?.state})`);
+  // The dispatcher already owns the persisted retry. No second parent assessor.
+  assert.equal(host.assessments(), 0);
+  assert.equal(host.h.pendingInputs().length, 0);
+  assert.equal(host.h.snapshotSessions()[0]!.task?.state, "waiting");
 });
 
 test("explicit manual pause and open question stay binding for host supervision", async t => {

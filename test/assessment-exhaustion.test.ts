@@ -6,7 +6,7 @@ const key = "mem:room1";
 const retained = (): DurableTask => ({ id: "authorized", original: "Inspect receipt; never republish", state: "active", depth: 1 });
 
 for (const mode of ["throw", "empty", "invalid"] as const)
-test(`${mode}: three bounded assessments hold durable work without admission or a fourth assessment`, async () => {
+test(`${mode}: repeated failed assessments retain durable work without productive admission`, async () => {
   let now = 100, checks = 0;
   const h = new Harness({ runtime: new FakeRuntime(), tickMs: 60000, now: () => now,
     completionCheck: async (_i, _r, _s, diagnostic) => {
@@ -25,12 +25,13 @@ test(`${mode}: three bounded assessments hold durable work without admission or 
         assert.equal(h.state(key).task!.next, undefined);
         await h.recoverTasks(); assert.equal(checks, i, "reserved backoff must not spend another attempt");
       }
-      now += 400000;
+      now = h.state(key).task!.recoveryRetry!.nextAt;
     }
-    assert.equal(h.state(key).task!.state, "blocked");
-    assert.match(h.state(key).task!.next!, /Independent supervisor admission unavailable/);
+    assert.equal(h.state(key).task!.state, "active");
+    assert.equal(h.state(key).task!.termination, undefined);
+    assert.equal(h.state(key).task!.next, undefined);
     assert.equal(h.state(key).task!.recoveryAdmission, undefined);
-    await h.recoverTasks(); assert.equal(checks, 3);
+    await h.recoverTasks(); assert.equal(checks, 4);
     assert.equal(h.pendingInputs().length, 0);
     assert.equal(h.outboxEntries().length, 0);
   } finally { await h.stop(0); }
