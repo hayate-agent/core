@@ -1,5 +1,5 @@
 {
-  "contentDigest": "37d5e5bae2fc0d652c7206709c71ca2218cdb128ba456b9ff98f89e726cfadbd",
+  "contentDigest": "a74fc25aa2134c7714e0b2b40cfd6c87e72887bf209e33fcc4590e1e883dbee9",
   "files": [
     {
       "mode": "100644",
@@ -424,7 +424,7 @@
     {
       "mode": "100644",
       "path": "plugins.lock.json",
-      "sha256": "47ae08e30a614d7058d7d6c04b2cd7c9f25a9bf7376859c2b1555a7abba17bb5"
+      "sha256": "f10e14bdc47f8acda1e372481c17fc85fafffa7f40db18c98060ed8c15ec46a9"
     },
     {
       "mode": "100644",
@@ -2984,7 +2984,7 @@
     {
       "mode": "100644",
       "path": "vendor/plugins/src/memory-service.ts",
-      "sha256": "04cbbfd77a4a03021c15ddb1039314facf2bbf9f6839afdd49db47d52f8cbd7d"
+      "sha256": "9c6ee6c2a052e4e366bef8d7972d154df3e60d2942fb8fde0f7a239429cbe48b"
     },
     {
       "mode": "100644",
@@ -3088,7 +3088,7 @@
     }
   ],
   "historyPolicy": "fresh-root; no source commits, tags, refs or deleted blobs",
-  "pluginSHA": "3c363aed2dbcff361dcb43a4cf3f3f02aedb5da2",
+  "pluginSHA": "de6cdf7cff50b3061168d34031d9af4a02f331a5",
   "schema": 1,
-  "sourceSHA": "6e131bc68fbf91f9845378c546c787c7a0976b71"
+  "sourceSHA": "c1a1eb229927e8b055e7fbc74b48e82b909b9bd0"
 }
