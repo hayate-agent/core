@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -320,5 +320,109 @@ test("added files are reported without disqualifying, a foreign thinking level d
     assert.equal(second.outcomes[0]!.pinMatches, false);
     assert.equal(second.outcomes[0]!.verified, false, "a run at another level proves nothing about this level");
     assert.match(second.outcomes[0]!.diagnostic ?? "", /Pin-Abgleich/);
+  } finally { await env.cleanup(); }
+});
+
+/** All files below a directory, recursively. */
+async function tree(root: string): Promise<string[]> {
+  const entries = await readdir(root, { withFileTypes: true }).catch(() => []);
+  const files: string[] = [];
+  for (const entry of entries) {
+    const target = path.join(root, entry.name);
+    if (entry.isDirectory()) files.push(...await tree(target));
+    else files.push(target);
+  }
+  return files;
+}
+
+test("preflight material never appears inside the run tree while a worker runs", async () => {
+  const env = await environment();
+  try {
+    const dispatcher = new FakeDispatcher();
+    const seen: string[] = [];
+    const seenContents: string[] = [];
+    dispatcher.onWait = async (taskId, workspace) => {
+      const runDir = path.dirname(path.dirname(workspace));
+      seen.push(...await tree(runDir));
+      for (const file of await tree(runDir)) seenContents.push(await readFile(file, "utf8"));
+      await writeFile(path.join(workspace, "store.js"), FIXED_STORE);
+      await seedSession(env.home, taskId, "a1");
+    };
+    const runner = new BenchmarkRunner(dispatcher, {
+      home: env.home, parent: "matrix:test", dir: env.dir, caseTimeoutMs: 5_000,
+      now: () => 1_700_000_000_000,
+    });
+    const record = await runner.run(codingSuite(BROKEN_STORE), "fp", await benchmarkEpoch(env.home));
+    assert.equal(record.outcomes[0]!.verified, true);
+    assert.ok(!seen.some(file => file.includes(`${path.sep}preflight${path.sep}`)),
+      "preflight material is reachable from the worker's run tree");
+    const evidence = await tree(path.join(path.dirname(env.dir), "evidence", record.id));
+    assert.ok(!evidence.some(file => file.includes(`${path.sep}preflight${path.sep}`)),
+      "preflight material leaves nothing behind in evidence either");
+    assert.ok(!seenContents.some(text => text.includes("this.#m.clear()")),
+      "no reference solution text is reachable from the worker's run tree");
+    assert.ok(!evidence.some(file => file.includes(`${path.sep}preflight${path.sep}`)),
+      "the preflight copy of the reference solution is deleted after grading");
+  } finally { await env.cleanup(); }
+});
+
+test("a later case cannot read an earlier case's solved workspace", async () => {
+  const env = await environment();
+  try {
+    const twoCases = () => parseBenchmarkSuite({
+      name: "twocase", repeats: 1,
+      cases: [
+        {
+          id: "case-a", thinking: "xhigh",
+          task: "Eine der Operationen in store.js ist fehlerhaft; node test.js muss ALL PASS ausgeben.",
+          model: "homelab/qwen3.8-27b-coder",
+          fixtures: [{ path: "store.js", contents: BROKEN_STORE }, { path: "test.js", contents: CONTRACT_TEST }],
+          deliverables: ["store.js"], acceptance: "node test.js",
+          verifier: 'node -e \'const s=require("fs").readFileSync(process.argv[1],"utf8");if(!s.includes("this.#m.clear()"))process.exit(1)\' "{workspace}/store.js"',
+          referenceSolution: [{ path: "store.js", contents: FIXED_STORE }],
+        },
+        {
+          id: "case-b", thinking: "medium",
+          task: "Eine der Operationen in store.js ist fehlerhaft; node test.js muss ALL PASS ausgeben.",
+          model: "homelab/qwen3.8-27b-coder",
+          fixtures: [{ path: "store.js", contents: BROKEN_STORE }, { path: "test.js", contents: CONTRACT_TEST }],
+          deliverables: ["store.js"], acceptance: "node test.js",
+          verifier: 'node -e \'const s=require("fs").readFileSync(process.argv[1],"utf8");if(!s.includes("this.#m.clear()"))process.exit(1)\' "{workspace}/store.js"',
+          referenceSolution: [{ path: "store.js", contents: FIXED_STORE }],
+        },
+      ],
+    }, "twocase");
+    const dispatcher = new FakeDispatcher();
+    const siblingsDuringRun: string[][] = [];
+    const solvedContentsDuringRun: string[] = [];
+    dispatcher.onWait = async (taskId, workspace) => {
+      const runDir = path.dirname(path.dirname(workspace));
+      siblingsDuringRun.push((await readdir(path.join(runDir, "workspace")).catch(() => ["<kein Ordner>"])).sort());
+      for (const file of await tree(runDir)) solvedContentsDuringRun.push(`${file}::${await readFile(file, "utf8")}`);
+      await writeFile(path.join(workspace, "store.js"), FIXED_STORE);
+      await seedSession(env.home, taskId, "a1", 1, workspace.includes("case-b") ? "medium" : "xhigh");
+    };
+    const runner = new BenchmarkRunner(dispatcher, {
+      home: env.home, parent: "matrix:test", dir: env.dir, caseTimeoutMs: 5_000,
+      now: () => 1_700_000_000_000,
+    });
+    const record = await runner.run(twoCases(), "fp", await benchmarkEpoch(env.home));
+    assert.deepEqual(record.outcomes.map(outcome => outcome.caseId), ["case-a", "case-b"]);
+    assert.ok(record.outcomes.every(outcome => outcome.verified), record.outcomes.map(o => o.diagnostic).join(" | "));
+    assert.deepEqual(siblingsDuringRun, [["case-a-1"], ["case-b-1"]],
+      "while a case runs, its workspace parent holds exactly its own directory");
+    const predecessor = path.join(path.dirname(env.dir), "evidence", record.id, "workspace", "case-a-1", "store.js");
+    assert.equal(await readFile(predecessor, "utf8"), FIXED_STORE, "the finished case is preserved as evidence");
+    assert.ok(!(await tree(path.join(path.dirname(env.dir), "state", record.id, "workspace", "case-a-1"))).length,
+      "the finished case is gone from the live run tree");
+    const persisted = await readFile(path.join(path.dirname(env.dir), "state", `${record.id}`, "record.json"), "utf8").catch(async () => {
+      for (const entry of await tree(path.join(env.dir))) if (entry.endsWith("record.json")) return readFile(entry, "utf8");
+      return "";
+    });
+    assert.ok(persisted.length > 0, "the run record exists");
+    assert.ok(!persisted.includes("this.#m.clear()"), "the persisted record must not contain the verifier command");
+    assert.match(persisted, /"command": "sha256:/, "the verifier is recorded by fingerprint only");
+    assert.ok(!solvedContentsDuringRun.some(text => text.includes("this.#m.clear()")),
+      "leak: " + solvedContentsDuringRun.filter(t => t.includes("this.#m.clear()")).map(t => t.slice(0, 400)).join("\n---\n"));
   } finally { await env.cleanup(); }
 });

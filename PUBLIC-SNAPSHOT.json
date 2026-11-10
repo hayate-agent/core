@@ -1,5 +1,5 @@
 {
-  "contentDigest": "a74fc25aa2134c7714e0b2b40cfd6c87e72887bf209e33fcc4590e1e883dbee9",
+  "contentDigest": "a1a2a0bbdce3f46b258c511734f079f3cc5c18fe942135f093fdd9063c3780f0",
   "files": [
     {
       "mode": "100644",
@@ -59,7 +59,7 @@
     {
       "mode": "100644",
       "path": "docs/benchmark.md",
-      "sha256": "dce5e92f5a8754b75c5d61f608cfbdbd91b491657975554df51f9cfe18b7c425"
+      "sha256": "97eaae6fae5708d337dbf8ee4922b9556284e72790b7ba763b066e7136869e8b"
     },
     {
       "mode": "100644",
@@ -534,7 +534,7 @@
     {
       "mode": "100644",
       "path": "src/benchmark/runner.ts",
-      "sha256": "aafc74c942b1c24068aee727d57a5ab749810411a2959f8ab0b5c5c1ba2d5a1e"
+      "sha256": "81f529a203315e78f92f24a5c3ab11a103a9d086a48110af80e1d363377c2074"
     },
     {
       "mode": "100644",
@@ -1194,7 +1194,7 @@
     {
       "mode": "100644",
       "path": "test/benchmark-runner.test.ts",
-      "sha256": "adb5fc516c4ef73210fa3b6b8fd059bb3dd104b61a1e13a13549c4370ab2dbb8"
+      "sha256": "76e3d93531efd118d6f081113b885e9c096edcc9bcb3610dacd7c93245e2a9dd"
     },
     {
       "mode": "100644",
@@ -3090,5 +3090,5 @@
   "historyPolicy": "fresh-root; no source commits, tags, refs or deleted blobs",
   "pluginSHA": "de6cdf7cff50b3061168d34031d9af4a02f331a5",
   "schema": 1,
-  "sourceSHA": "c1a1eb229927e8b055e7fbc74b48e82b909b9bd0"
+  "sourceSHA": "76bfa0e12d12e038c6b343ea8dc5b8ba224dcbf9"
 }
