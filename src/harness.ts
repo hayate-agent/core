@@ -791,7 +791,9 @@ export class Harness {
     if (!this.onStateChange || this.paused || this.stopping || s.queue.length || s.current ||
         s.key === "improvement:nightly" || this.stoppingHostParents.has(s.key) ||
         this.opts.externallyRecoveredSession?.(s.key)) return false;
-    const task = this.tasks(s).find(task => task.state === "active" && task.next?.trim() && !this.supersededByNewerTopic(s, task) && !this.hasPendingDependency(s.key, task.id) &&
+    // A retained proposal without admission must not starve later admitted work.
+    const task = this.tasks(s).find(task => task.state === "active" && task.recoveryAdmission && task.next?.trim() &&
+      !this.supersededByNewerTopic(s, task) && !this.hasPendingDependency(s.key, task.id) &&
       Number.isSafeInteger(task.depth) && task.depth >= 0 && repetitions(task) < 20 &&
       (task.expiresAt === undefined || (Number.isSafeInteger(task.expiresAt) && task.expiresAt > this.now())));
     if (!task) return false;
@@ -2597,6 +2599,11 @@ export class Harness {
         });
         // Independent assessment may change the plan, never its selected scope.
         const plan = assessed && { ...assessed, taskId: checkpoint?.taskId };
+        // Replacing a wait with productive work removes its timer, not its
+        // registered scheduling window. A first-turn wait is still only on
+        // the input, so settlement cannot inherit this deadline from the task.
+        if (plan?.state === "continue" && checkpoint?.state === "waiting" && checkpoint.wait)
+          plan.expiresAt = Math.min(plan.expiresAt ?? Infinity, checkpoint.wait.deadline);
         if (assessmentEligible() && !this.paused && !this.stopping && !s.queue.length &&
             !assessmentAbort.signal.aborted && s.cancelling !== input && plan?.progress)
           this.assessedProgress.set(input, structuredClone(plan.progress));
