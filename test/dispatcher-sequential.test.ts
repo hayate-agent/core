@@ -1120,6 +1120,10 @@ for (const decision of ["approve", "deny"] as const) {
     assert.equal(env.harness.approvals.size, 1);
     entry.resolve(decision === "approve");
     if (decision === "approve") {
+      // This fixture reports no tool receipt, so the completed correction is
+      // retained and paced before its next independent assessment.
+      await env.dispatcher.waitForExecution(submitted.id);
+      if (find().status === "ready") await env.retry(submitted.id);
       await until(() => find().status === "completed");
       assert.deepEqual(effects, ["corrected-effect"]);
       assert.equal(step2, 1);
