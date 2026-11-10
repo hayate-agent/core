@@ -2559,6 +2559,11 @@ export class Harness {
         });
         // Independent assessment may change the plan, never its selected scope.
         const plan = assessed && { ...assessed, taskId: checkpoint?.taskId };
+        // Replacing a wait with productive work removes its timer, not its
+        // registered scheduling window. A first-turn wait is still only on
+        // the input, so settlement cannot inherit this deadline from the task.
+        if (plan?.state === "continue" && checkpoint?.state === "waiting" && checkpoint.wait)
+          plan.expiresAt = Math.min(plan.expiresAt ?? Infinity, checkpoint.wait.deadline);
         if (assessmentEligible() && !this.paused && !this.stopping && !s.queue.length &&
             !assessmentAbort.signal.aborted && s.cancelling !== input && plan?.progress)
           this.assessedProgress.set(input, structuredClone(plan.progress));
