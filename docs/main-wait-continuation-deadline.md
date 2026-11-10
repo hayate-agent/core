@@ -14,12 +14,26 @@ previous implementation three fail; with the fix all four pass.
 
 Verification on main 76bfa0e:
 - npm run build: passed.
-- Transitive targeted suite after build, excluding the independently failing
-  benchmark-runner.test.ts: 1367 tests, 1366 pass, 0 fail, 1 skip.
+- Transitive targeted suite after build, including the starvation correction below,
+  excluding the independently failing benchmark-runner.test.ts: 1369 tests,
+  1368 pass, 0 fail, 1 skip.
 - benchmark-runner.test.ts on unchanged 76bfa0e and the candidate: 4 pass,
   9 cancelled (unreferenced timeout leaves a pending promise without an event-loop
   handle). This pre-existing failure is not fixed or hidden by this patch.
 - Original validator branch transitive suite: 1340 tests, 1339 pass, 0 fail, 1 skip.
+
+## Independent review correction: admitted-task starvation
+
+Review found that queue selection picked the first active proposal before checking
+its admission. A deferred assessment on task A could therefore prevent a later,
+already admitted task B from executing indefinitely. Selection now skips proposals
+without an admission; all existing admission validation, pause, dependency, budget
+and expiry gates remain unchanged. Two regressions (with and without restart)
+fail on unchanged main and pass with the correction. They verify B runs once,
+A stays unchanged and fenced, and repeated ticks do not duplicate work.
+Independent follow-up review found no blocking findings for this correction.
+This demonstrates a general scheduling defect, not attribution of a particular
+remote incident without its persisted records.
 
 These are build/test results, not deployment activation evidence. The previously
 merged validator retry changes (PR318) and this deadline correction are distinct

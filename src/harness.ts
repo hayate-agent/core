@@ -791,7 +791,8 @@ export class Harness {
     if (!this.onStateChange || this.paused || this.stopping || s.queue.length || s.current ||
         s.key === "improvement:nightly" || this.stoppingHostParents.has(s.key) ||
         this.opts.externallyRecoveredSession?.(s.key)) return false;
-    const task = this.tasks(s).find(task => task.state === "active" && task.next?.trim() && !this.hasPendingDependency(s.key, task.id) &&
+    // A retained proposal without admission must not starve later admitted work.
+    const task = this.tasks(s).find(task => task.state === "active" && task.recoveryAdmission && task.next?.trim() && !this.hasPendingDependency(s.key, task.id) &&
       Number.isSafeInteger(task.depth) && task.depth >= 0 && repetitions(task) < 20 &&
       (task.expiresAt === undefined || (Number.isSafeInteger(task.expiresAt) && task.expiresAt > this.now())));
     if (!task) return false;
