@@ -59,8 +59,14 @@ export function dispatcherPlugin(get: () => Dispatcher | undefined): PluginModul
           if (input.field !== undefined) {
             if (!["input", "checkpoint", "result"].includes(String(input.field)) || rows.length !== 1 || (!input.id && !input.requestId)) throw Error("Field retrieval requires one exact task");
             const charOffset = integer("charOffset", 0, Number.MAX_SAFE_INTEGER);
-            const value = rows[0]![input.field as "input" | "checkpoint" | "result"] ?? "";
-            return JSON.stringify({ id: rows[0]!.id, field: input.field, charOffset, text: value.slice(charOffset, charOffset + 8000),
+            const row = rows[0]!;
+            const value = row[input.field as "input" | "checkpoint" | "result"] ?? "";
+            // An empty final result is not evidence that the execution is running.
+            // Keep lifecycle evidence on every paginated field read, including
+            // paused/blocked records whose useful outcome is in the checkpoint.
+            return JSON.stringify({ id: row.id, status: row.status, diagnostic: diagnostic(row),
+              checkpointAvailable: !!row.checkpoint, resultAvailable: !!row.result,
+              field: input.field, charOffset, text: value.slice(charOffset, charOffset + 8000),
               totalChars: value.length, nextCharOffset: charOffset + 8000 < value.length ? charOffset + 8000 : null });
           }
           const offset = integer("offset", 0, Number.MAX_SAFE_INTEGER), limit = integer("limit", 10, 20);
