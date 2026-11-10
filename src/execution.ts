@@ -26,6 +26,12 @@ export interface Execution {
   strategyVersion: number;
   status: ExecutionStatus;
   execution?: ExecutionMetadata;
+  /**
+   * Host-pinned worker model pair, set only by trusted host submitters (the
+   * benchmark runner). It bypasses dispatcher rules and complexity
+   * classification and is honoured strictly, without role fallback.
+   */
+  pinned?: import("./model-roles.js").WorkerPin;
   classifier?: { requested: ExecutionMetadata; actual?: ExecutionMetadata };
   /** Retained across claims. Unknown sends require explicit reconciliation, never replay. */
   classifierReceipt?: import("./classifier-http.js").ClassifierReceipt & { token: string };
@@ -321,17 +327,18 @@ export class ExecutionStore {
       draft.waitAuthorityDenials = [...(draft.waitAuthorityDenials ?? []), safe].slice(-100);
     });
   }
-  submit(parent: string, requestId: string, input: string, strategy: string, strategyVersion = 1, dependency?: Execution["dependency"]): Promise<Execution> {
+  submit(parent: string, requestId: string, input: string, strategy: string, strategyVersion = 1, dependency?: Execution["dependency"], pinned?: Execution["pinned"]): Promise<Execution> {
     return this.mutate(async draft => {
       if (![parent, requestId, input, strategy].every(value => typeof value === "string" && value.trim()) || input.length > 1024 * 1024 ||
           !Number.isSafeInteger(strategyVersion) || strategyVersion < 1) throw Error("Invalid execution submission");
       const old = draft.executions.find(item => item.parent === parent && item.requestId === requestId) ?? await this.archived(parent, requestId);
       if (old) {
-        if (old.input !== input || old.strategy !== strategy || old.strategyVersion !== strategyVersion) throw Error("Conflicting execution request ID");
+        if (old.input !== input || old.strategy !== strategy || old.strategyVersion !== strategyVersion ||
+            JSON.stringify(old.pinned ?? null) !== JSON.stringify(pinned ?? null)) throw Error("Conflicting execution request ID");
         return old;
       }
       if (draft.executions.length >= 2000) throw Error("Retained execution limit reached; archive only after reconciliation");
-      const task: Execution = { dependency: structuredClone(dependency), id: randomUUID(), parent, requestId, input, strategy, strategyVersion, status: "ready", restarts: 0 };
+      const task: Execution = { dependency: structuredClone(dependency), pinned: structuredClone(pinned), id: randomUUID(), parent, requestId, input, strategy, strategyVersion, status: "ready", restarts: 0 };
       draft.executions.push(task);
       this.event(draft, task, "accepted", "Auftrag angenommen");
       return task;

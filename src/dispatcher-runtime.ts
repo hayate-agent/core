@@ -1,4 +1,4 @@
-import { classifyComplexity, resolveModelRole, type ModelRoles, type ModelPair } from "./model-roles.js";
+import { classifyComplexity, resolveModelRole, resolveWorkerPin, type ModelRoles, type ModelPair } from "./model-roles.js";
 import { taskContextLabel } from "./builtin-plugins/execution-metadata.js";
 import { TurnActivity } from "./activity.js";
 import { labelOutput } from "./hashtags.js";
@@ -82,10 +82,15 @@ export class DispatcherRuntime {
       const intentKey = task.intent?.key ?? `turn:${key}`;
       let selected: ModelPair = task.intent?.route ?? {};
       if (!task.intent) {
-        const rules = typeof this.rules === "function" ? await this.rules() : this.rules;
-        const rule = pickModelRule(task.input, rules);
-        if (rule) selected = { model: rule.model, thinking: rule.thinking };
+        // A host pin is the only route that neither rules nor the complexity
+        // classifier may override; an unusable pin fails the task instead of
+        // quietly measuring the role default.
+        if (task.pinned) selected = await resolveWorkerPin(this.harness.runtime, task.pinned);
         else {
+          const rules = typeof this.rules === "function" ? await this.rules() : this.rules;
+          const rule = pickModelRule(task.input, rules);
+          if (rule) selected = { model: rule.model, thinking: rule.thinking };
+          else {
           const snapshot = this.roleSettings?.();
           if (snapshot?.config?.enabled) {
             if (task.classifierReceipt && task.classifierReceipt.phase !== "observed") {
@@ -136,6 +141,7 @@ export class DispatcherRuntime {
             }
             selected = complexity ? await resolveModelRole(this.harness.runtime, snapshot.config, complexity, snapshot.defaults) : {};
           }
+        }
         }
       }
       if (context.signal.aborted) throw Error("Execution aborted");
