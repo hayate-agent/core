@@ -1,5 +1,5 @@
 {
-  "contentDigest": "a1a2a0bbdce3f46b258c511734f079f3cc5c18fe942135f093fdd9063c3780f0",
+  "contentDigest": "6d944197d9fb786be0dddf230877c43bb8b4a1d1d7b30e3c5beba58f236d239c",
   "files": [
     {
       "mode": "100644",
@@ -200,6 +200,11 @@
       "mode": "100644",
       "path": "docs/main-result-mandate.md",
       "sha256": "29d00e63cd012e8aaafccc3151b3a8724c58beb9996be6bad02e2ecd37d20c45"
+    },
+    {
+      "mode": "100644",
+      "path": "docs/main-wait-continuation-deadline.md",
+      "sha256": "fd9d3755bef7111088ecd86b068588e28d9b82b4176cb4383c83d285ce8c23c9"
     },
     {
       "mode": "100644",
@@ -534,7 +539,7 @@
     {
       "mode": "100644",
       "path": "src/benchmark/runner.ts",
-      "sha256": "81f529a203315e78f92f24a5c3ab11a103a9d086a48110af80e1d363377c2074"
+      "sha256": "51038e2a5c26e4ab60416b2403252168332d169908e018d82ac155554b51b38e"
     },
     {
       "mode": "100644",
@@ -744,7 +749,7 @@
     {
       "mode": "100644",
       "path": "src/harness.ts",
-      "sha256": "a1f4fcd8da7087c91bb3c58546080a1582c9ad532015838368afe9cf922418bb"
+      "sha256": "f8b0e61604206b7aa4309c4ac20b52c3b3c29184cbfff41f57cff6b2196e7774"
     },
     {
       "mode": "100644",
@@ -1130,6 +1135,11 @@
       "mode": "100644",
       "path": "test/adaptive-skills.test.ts",
       "sha256": "27c7b0a145e15621e4d027958e9a3e386351afa8812ccd51f1274918e1677cbd"
+    },
+    {
+      "mode": "100644",
+      "path": "test/admitted-task-starvation.test.ts",
+      "sha256": "62e2d3170cc33489065b9a68ef08119a86fadb08b60ee558a78bccc50e3b9e13"
     },
     {
       "mode": "100644",
@@ -1794,7 +1804,7 @@
     {
       "mode": "100644",
       "path": "test/independent-parent-admission.test.ts",
-      "sha256": "34b88439f67043457c2ad6f775058f6fb827af13dbaf764fecb8b844c26b32a5"
+      "sha256": "3f097344285270b66cc2bbe142d7cd56a6fdf926bbadb3eadefaba03b4708b9c"
     },
     {
       "mode": "100644",
@@ -1850,6 +1860,11 @@
       "mode": "100644",
       "path": "test/main-validator-action.test.ts",
       "sha256": "e4e72d5648eb3ef2ff7abdd2c0bdaacd49b2721e9c8cb759316ef6a12590e106"
+    },
+    {
+      "mode": "100644",
+      "path": "test/main-wait-continue-deadline.test.ts",
+      "sha256": "60ca132e8eea450304343aafc928bb844dfcd452f9f7468d57931038a6a3adb7"
     },
     {
       "mode": "100644",
@@ -2573,6 +2588,11 @@
     },
     {
       "mode": "100644",
+      "path": "test/stale-wait-foreground.test.ts",
+      "sha256": "89b3b17d2c7d717c015b403e7e2ee15c8e5be226058a7e86940e216cecf80abf"
+    },
+    {
+      "mode": "100644",
       "path": "test/starter-documentation.test.ts",
       "sha256": "0a66bce3588882a3a189814a32a85b3d1b8a5c479dc5098bc3027e84685b568e"
     },
@@ -3090,5 +3110,5 @@
   "historyPolicy": "fresh-root; no source commits, tags, refs or deleted blobs",
   "pluginSHA": "de6cdf7cff50b3061168d34031d9af4a02f331a5",
   "schema": 1,
-  "sourceSHA": "76bfa0e12d12e038c6b343ea8dc5b8ba224dcbf9"
+  "sourceSHA": "dee3537d5b863bfc03a558be8e389e150dc6688d"
 }

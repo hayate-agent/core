@@ -791,7 +791,9 @@ export class Harness {
     if (!this.onStateChange || this.paused || this.stopping || s.queue.length || s.current ||
         s.key === "improvement:nightly" || this.stoppingHostParents.has(s.key) ||
         this.opts.externallyRecoveredSession?.(s.key)) return false;
-    const task = this.tasks(s).find(task => task.state === "active" && task.next?.trim() && !this.hasPendingDependency(s.key, task.id) &&
+    // A retained proposal without admission must not starve later admitted work.
+    const task = this.tasks(s).find(task => task.state === "active" && task.recoveryAdmission && task.next?.trim() &&
+      !this.supersededByNewerTopic(s, task) && !this.hasPendingDependency(s.key, task.id) &&
       Number.isSafeInteger(task.depth) && task.depth >= 0 && repetitions(task) < 20 &&
       (task.expiresAt === undefined || (Number.isSafeInteger(task.expiresAt) && task.expiresAt > this.now())));
     if (!task) return false;
@@ -837,8 +839,15 @@ export class Harness {
       if (!input || input.id !== independentTask.recoveryAdmission.id || this.hasPendingDependency(key, independentTask.id) ||
           this.paused || this.stopping || independentTask.state !== "active")
         throw new ToolGuardError("authority_revoked", "Independent parent admission no longer matches host authority");
-      if (["plugin_dispatch", "plugin_worker_tasks", "plugin_subagent", "plugin_loop"].includes(tool))
-        throw new ToolGuardError("worker_orchestration_denied", "Independent parent step cannot replay or control blocked workers");
+      const action = args && typeof args === "object" ? (args as { action?: unknown }).action : undefined;
+      const allowed: Record<string, readonly string[]> = {
+        plugin_dispatch: ["submit", "status"],
+        plugin_worker_tasks: ["submit", "status"],
+        plugin_subagent: ["start", "list", "result"],
+        plugin_loop: ["status"],
+      };
+      if (tool in allowed && (typeof action !== "string" || !allowed[tool].includes(action)))
+        throw new ToolGuardError("worker_orchestration_denied", "Independent parent step may delegate new work or inspect status, but cannot replay or control retained workers");
     }
     if (!input?.waitCheck) return;
     const assertAuthorized = () => {
@@ -1648,7 +1657,7 @@ export class Harness {
           (task.expiresAt !== undefined && (!Number.isSafeInteger(task.expiresAt) || task.expiresAt <= this.now())) ||
           s.current || s.queue.length || s.key === "improvement:nightly" || this.hasPendingDependency(s.key, task.id)) continue;
       const admission = task.recoveryAdmission;
-      if (!admission) continue;
+      if (!admission || this.supersededByNewerTopic(s, task)) continue;
       if (admission.depth !== task.depth + 1 || admission.next !== task.next ||
           admission.original !== task.original || admission.expiresAt !== task.expiresAt) {
         this.recoveryAttention(s, task, "mismatched");
@@ -1667,6 +1676,32 @@ export class Harness {
     }
   }
 
+  /** Foreground priority by deterministic topic ownership, bounded in time. A scheduler
+   * permit (`independent`, minted only from a model plan in reconcileBlockedDependency) of an
+   * older, tagged mandate yields the foreground only while the operator has a NEWER, STILL
+   * OPEN task with disjoint host-captured topic tags in this session. Operator context is
+   * authenticated by ingress: only channel input creates tasks with outputTags (untagged
+   * explicit/scheduled mandates never qualify). Nothing is cancelled or rewritten; the
+   * continuation runs as soon as the newer topic is no longer active. Explicit operator
+   * resume (admission without `independent`) and untagged tasks are never deferred. */
+  private supersededByNewerTopic(s: SessionState, task: DurableTask): boolean {
+    const at = task.anchor?.receivedAt, tags = task.anchor?.outputTags;
+    if (!task.recoveryAdmission?.independent || !Number.isFinite(at) || !tags?.length) return false;
+    return this.tasks(s).some(o => o.id !== task.id && (o.state === "active" ||
+      (o.state === "blocked" && o.recoveryAssessment === "decided" && o.explicitBlocked === false)) && o.anchor?.task === o.original &&
+      Number.isFinite(o.anchor.receivedAt) && o.anchor.receivedAt > at! &&
+      !!o.anchor.outputTags?.length && !o.anchor.outputTags.some(tag => tags.includes(tag)));
+  }
+
+  /** A wait whose operator-granted window has passed grants no automatic work.
+   * Deterministic task state only: no relevance guess, no cancellation. */
+  private waitExpired(task: DurableTask): boolean {
+    return [task.wait, task.lastWait].some(wait => !!wait && (
+      !Number.isSafeInteger(wait.deadline) || wait.deadline <= this.now() ||
+      !Number.isSafeInteger(wait.nextAt) || typeof wait.reason !== "string" ||
+      !wait.reason.trim() || wait.reason.length > 1000));
+  }
+
   /** A blocked worker is not running work, but its effects are still uncertain.
    * The tool-free supervisor can admit one independent parent step against an
    * exact child snapshot. This does not grant worker replay permission. Persist
@@ -1680,6 +1715,7 @@ export class Harness {
       !!task.id && !!task.original.trim() && task.original.length <= 8000 &&
       (!task.anchor || task.anchor.task === task.original) &&
       Number.isSafeInteger(task.depth) && task.depth >= 0 && repetitions(task) < 20 && !task.termination &&
+      !this.waitExpired(task) &&
       (task.expiresAt === undefined || (Number.isSafeInteger(task.expiresAt) && task.expiresAt > this.now())) &&
       !s.current && (betweenTurns ? s.running && s.queue.every(input => input.taskId !== task.id) : !s.queue.length && !s.running) &&
       !this.paused && !this.stopping && !this.gatewayChanging && !this.updateFenced &&
@@ -1751,9 +1787,13 @@ export class Harness {
       if (next) {
         task.state = "active";
         task.next = next;
+        // An independent admission cannot outlive the wait that authorized it.
+        const deadlines = [task.expiresAt, plan?.expiresAt, task.wait?.deadline, task.lastWait?.deadline]
+          .filter((deadline): deadline is number => deadline !== undefined);
+        if (task.wait) task.lastWait = task.wait;
         task.wait = undefined;
         task.explicitBlocked = false;
-        if (plan?.expiresAt !== undefined) task.expiresAt = plan.expiresAt;
+        if (deadlines.length) task.expiresAt = Math.min(...deadlines);
         task.recoveryAdmission = { id: this.taskQueueId(task, task.depth + 1), depth: task.depth + 1,
           next, original: task.original, expiresAt: task.expiresAt,
           independent: { evidence, taskId: task.id, sessionKey: s.key } };
@@ -2559,6 +2599,11 @@ export class Harness {
         });
         // Independent assessment may change the plan, never its selected scope.
         const plan = assessed && { ...assessed, taskId: checkpoint?.taskId };
+        // Replacing a wait with productive work removes its timer, not its
+        // registered scheduling window. A first-turn wait is still only on
+        // the input, so settlement cannot inherit this deadline from the task.
+        if (plan?.state === "continue" && checkpoint?.state === "waiting" && checkpoint.wait)
+          plan.expiresAt = Math.min(plan.expiresAt ?? Infinity, checkpoint.wait.deadline);
         if (assessmentEligible() && !this.paused && !this.stopping && !s.queue.length &&
             !assessmentAbort.signal.aborted && s.cancelling !== input && plan?.progress)
           this.assessedProgress.set(input, structuredClone(plan.progress));
