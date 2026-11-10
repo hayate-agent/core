@@ -42,7 +42,7 @@ import { sessionObserverPlugin, attachObserver } from "./builtin-plugins/session
 import { gatewayPlugin } from "./builtin-plugins/gateway-plugin.js";
 import { PluginHost } from "./plugins.js";
 import { Subagents } from "./subagents.js";
-import { ExecutionStore } from "./execution.js";
+import { ExecutionStore, executionTarget } from "./execution.js";
 import { Dispatcher, stopDispatcherParent } from "./dispatcher.js";
 import { DispatcherRuntime } from "./dispatcher-runtime.js";
 import { attentionRequired } from "./notification-routing.js";
@@ -690,7 +690,7 @@ async function main(argv: string[]): Promise<void> {
     dispatcher = new Dispatcher(executions, strategy, dispatchPolicy.capacity, async event => {
       const task = executions.list(event.parent).find(item => item.id === event.executionId);
       // Execution-owned trusted destination; legacy records use configured home.
-      const target = task?.dependency?.anchor?.replyTo ?? harness.home;
+      const target = executionTarget(task, harness.home);
       // Results use durable Harness inbox acceptance and stable event IDs.
       // Status is inspectable without a model call through /dispatch.
       if (event.type !== "result") {
@@ -715,7 +715,7 @@ async function main(argv: string[]): Promise<void> {
         replyTo: event.parent.startsWith("cron-followup:") ? undefined : target });
     }, error => log(`[dispatcher] ${String(error)}`), key => harness.dependencyCheckpoint(key), undefined, () => harness.updateFenced || harness.stopping,
     // Built-ins stay registered so tasks queued before a strategy switch are not stranded.
-    [dispatchRuntime.strategy, dispatchRuntime.sequential], sessionEnabled, parallelAdmission);
+    [dispatchRuntime.strategy, dispatchRuntime.sequential], sessionEnabled, parallelAdmission, key => harness.dispatchOrigin(key));
   }
   plugins.memoryOrchestration.select(config.memory.enabled ? config.memory.orchestration ?? "default" : "none");
   const memoryProvider = new MemoryProviderLifecycle(async () => {

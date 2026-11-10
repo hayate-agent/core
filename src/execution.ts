@@ -19,6 +19,8 @@ export interface Execution {
   id: string;
   /** Host-captured parent mandate; never accepted from model tool arguments. */
   dependency?: { taskId: string; depth: number; original: string; expiresAt?: number; anchor?: import("./types.js").Inbound["completionAnchor"] };
+  /** Host-captured address of the submitting turn (room/thread); never from model tool arguments. */
+  origin?: import("./types.js").Address;
   requestId: string;
   parent: string;
   input: string;
@@ -143,6 +145,7 @@ export class ExecutionStore {
             (item.question.answer !== undefined && (typeof item.question.answer !== "string" || item.question.answer.length > 8000)))) throw Error("Invalid execution question");
         if (item.terminalAt !== undefined && (!Number.isSafeInteger(item.terminalAt) || item.terminalAt < 0)) throw Error("Invalid terminal timestamp");
         if (item.parentStopped !== undefined && typeof item.parentStopped !== "boolean") throw Error("Invalid parent stop marker");
+        if (item.origin !== undefined && !validAddress(item.origin)) throw Error("Invalid execution origin");
         if (item.checkpointNotices !== undefined && (!Array.isArray(item.checkpointNotices) || item.checkpointNotices.length > 32 ||
             item.checkpointNotices.some(k => typeof k !== "string" || !k || k.length > 100))) throw Error("Invalid checkpoint notice receipts");
         if (item.assessmentRetryAt !== undefined && (!Number.isSafeInteger(item.assessmentRetryAt) || item.assessmentRetryAt < 0))
@@ -327,7 +330,7 @@ export class ExecutionStore {
       draft.waitAuthorityDenials = [...(draft.waitAuthorityDenials ?? []), safe].slice(-100);
     });
   }
-  submit(parent: string, requestId: string, input: string, strategy: string, strategyVersion = 1, dependency?: Execution["dependency"], pinned?: Execution["pinned"]): Promise<Execution> {
+  submit(parent: string, requestId: string, input: string, strategy: string, strategyVersion = 1, dependency?: Execution["dependency"], pinned?: Execution["pinned"], origin?: Execution["origin"]): Promise<Execution> {
     return this.mutate(async draft => {
       if (![parent, requestId, input, strategy].every(value => typeof value === "string" && value.trim()) || input.length > 1024 * 1024 ||
           !Number.isSafeInteger(strategyVersion) || strategyVersion < 1) throw Error("Invalid execution submission");
@@ -338,7 +341,8 @@ export class ExecutionStore {
         return old;
       }
       if (draft.executions.length >= 2000) throw Error("Retained execution limit reached; archive only after reconciliation");
-      const task: Execution = { dependency: structuredClone(dependency), pinned: structuredClone(pinned), id: randomUUID(), parent, requestId, input, strategy, strategyVersion, status: "ready", restarts: 0 };
+      if (origin !== undefined && !validAddress(origin)) throw Error("Invalid execution origin");
+      const task: Execution = { dependency: structuredClone(dependency), ...(origin ? { origin: structuredClone(origin) } : {}), pinned: structuredClone(pinned), id: randomUUID(), parent, requestId, input, strategy, strategyVersion, status: "ready", restarts: 0 };
       draft.executions.push(task);
       this.event(draft, task, "accepted", "Auftrag angenommen");
       return task;
@@ -633,4 +637,15 @@ export class ExecutionStore {
   ack(eventId: string): Promise<void> {
     return this.mutate(draft => { draft.events = draft.events.filter(event => event.id !== eventId); });
   }
+}
+
+function validAddress(value: unknown): value is import("./types.js").Address {
+  const a = value as import("./types.js").Address;
+  return !!a && typeof a === "object" && typeof a.channel === "string" && !!a.channel && typeof a.target === "string" && !!a.target &&
+    (a.thread === undefined || typeof a.thread === "string") && Object.keys(a).every(k => ["channel", "target", "thread"].includes(k));
+}
+
+/** Delivery target of an execution: task anchor, else submitting turn's origin, else configured home. Never another session's address. */
+export function executionTarget(task: Pick<Execution, "dependency" | "origin"> | undefined, home: import("./types.js").Address | undefined): import("./types.js").Address | undefined {
+  return task?.dependency?.anchor?.replyTo ?? task?.origin ?? home;
 }
