@@ -193,7 +193,8 @@ export class BenchmarkRunner {
   private async settle(taskId: string): Promise<ExecutionStatus | "timeout"> {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const deadline = new Promise<"timeout">((resolve) => { timer = setTimeout(() => resolve("timeout"), this.options.caseTimeoutMs); });
-    timer?.unref?.();
+    // This deadline is part of the awaited operation: keep the loop alive until
+    // either execution settles or cancellation completes. finally clears it.
     try {
       const settled = await Promise.race([this.dispatcher.waitForExecution(taskId).then(() => "settled" as const), deadline]);
       if (settled === "timeout") {
