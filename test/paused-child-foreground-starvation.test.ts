@@ -91,6 +91,8 @@ for (const hold of ["manual-pause", "operator-stop", "approval", "exhausted", "s
     const parent: DurableTask = { id: "parent", original: "Inspect deployment", state: "waiting", depth: 0 };
     if (hold === "operator-stop") { parent.state = "stopped"; parent.termination = "operator_stop"; }
     if (hold === "exhausted") {
+      // Legacy terminal records are not silently reactivated by removing caps.
+      parent.termination = "recovery_assessment_failed";
       parent.recoveryRetry = { attempts: 3, nextAt: 0, diagnostic: "technical" };
       parent.supervisorDecision = { verdict: "blocked", diagnostic: "technical" };
     }

@@ -43,7 +43,7 @@ for (const prior of [0, 2]) test(`successful recovery nudge clears failure reser
   } finally { await h.stop(0); }
 });
 
-for (const failure of ['undefined', 'error'] as const) test(`actual ${failure} recovery failures retain three-attempt limit and 60s backoff across restart`, async () => {
+for (const failure of ['undefined', 'error'] as const) test(`actual ${failure} recovery failures retain exponential backoff without attempt exhaustion across restart`, async () => {
   let now = 1000, calls = 0;
   let sessions = [{ key, tasks: [retained()] }];
   for (let attempt = 1; attempt <= 3; attempt++) {
@@ -56,18 +56,21 @@ for (const failure of ['undefined', 'error'] as const) test(`actual ${failure} r
       await h.recoverTasks(); assert.equal(calls, attempt);
       const saved = h.snapshotSessions()[0].tasks![0];
       assert.equal(saved.recoveryRetry?.attempts, attempt);
-      assert.equal(saved.recoveryRetry?.nextAt, now + 60000);
-      assert.equal(saved.state, attempt === 3 ? 'blocked' : 'active');
-      if (attempt === 3) assert.match(saved.next!, /supervisor admission unavailable/);
+      assert.equal(saved.recoveryRetry?.nextAt, now + 60000 * 2 ** (attempt - 1));
+      assert.equal(saved.state, 'active');
+      assert.equal(saved.termination, undefined);
       assert.equal(h.pendingInputs().length, 0);
       sessions = JSON.parse(JSON.stringify(h.snapshotSessions()));
     } finally { await h.stop(0); }
-    now += 60000;
+    now = sessions[0]!.tasks![0]!.recoveryRetry!.nextAt;
   }
   const h = new Harness({ runtime: new FakeRuntime(), now: () => now,
     completionCheck: async () => { calls++; return { state: 'continue', next: 'not authorized by exhaustion' }; } });
   h.onStateChange = async () => {};
-  try { h.restoreSessions(sessions); await h.recoverTasks(); assert.equal(calls, 3); assert.equal(h.pendingInputs().length, 0); }
+  try {
+    h.restoreSessions(sessions); await h.recoverTasks(); assert.equal(calls, 4);
+    assert.ok(h.state(key).tasks![0]!.recoveryAdmission, 'healthy fourth assessment independently admits next step');
+  }
   finally { await h.stop(0); }
 });
 

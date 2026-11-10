@@ -42,7 +42,9 @@ for (const mode of ["inconclusive", "failed"] as const) {
       await h.recoverTasks(); h.releaseRestored(); await h.drained();
       assert.equal(h.state("mem:room1").task?.state, "active");
       assert.equal(h.state("mem:room1").task?.recoveryRetry?.attempts, 1);
-      assert.equal(h.state("mem:room1").task?.recoveryAttentionId, undefined);
+      assert.match(h.state("mem:room1").task?.recoveryAttentionId!, /^task-recovery:/);
+      assert.equal(h.state("mem:room1").task?.termination, undefined);
+      assert.equal(h.outboxEntries().length, 0, "diagnostics are default-off");
     } finally { await h.stop(0); }
   });
 }

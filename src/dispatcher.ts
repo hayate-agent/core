@@ -3,7 +3,9 @@ import { ExecutionClaimConflict, ExecutionWorkerFailure, type Execution, type Ex
 
 export interface DispatchContext {
   readonly signal: AbortSignal;
-  checkpoint(value: string): Promise<void>;
+  checkpoint(value: string, notice?: { key: string; text: string }): Promise<void>;
+  /** Release the slot until a persisted assessment retry is due. No worker replay. */
+  deferAssessment?(nextAt: number): Promise<never>;
   workerSession?(key: string): Promise<void>;
   /** Optional only for source compatibility with existing strategy test adapters. */
   status?(text: string): Promise<void>;
@@ -127,7 +129,7 @@ export class Dispatcher {
     void this.flushEvents().catch(this.report);
     for (const task of this.store.list()) {
       if (this.stopped || this.active.size >= this.capacity) break;
-      if (task.status !== "ready" || this.active.has(task.id) || !this.parentEnabled(task.parent)) continue;
+      if (task.status !== "ready" || !this.store.assessmentDue(task) || this.active.has(task.id) || !this.parentEnabled(task.parent)) continue;
       const strategy = this.strategyFor(task);
       if (!strategy) continue;
       let claimed: Execution;
@@ -179,7 +181,11 @@ export class Dispatcher {
           void this.flushEvents().catch(this.report);
           throw new ExecutionClaimConflict("Execution waiting for answer");
         },
-        checkpoint: value => { check(); return this.store.checkpoint(task.id, token, value); },
+        deferAssessment: async nextAt => {
+          check(); await this.store.deferAssessment(task.id, token, nextAt);
+          throw new ExecutionClaimConflict("Assessment deferred");
+        },
+        checkpoint: (value, notice) => { check(); return this.store.checkpoint(task.id, token, value, notice); },
         workerSession: key => { check(); return this.store.workerSession(task.id, token, key); },
         intent: (key, replay, route) => { check(); return this.store.intent(task.id, token, key, replay, route); },
         settleIntent: (key, result, checkpoint) => { check(); return this.store.settleIntent(task.id, token, key, result, checkpoint); },

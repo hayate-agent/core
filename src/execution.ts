@@ -30,6 +30,10 @@ export interface Execution {
   /** Retained across claims. Unknown sends require explicit reconciliation, never replay. */
   classifierReceipt?: import("./classifier-http.js").ClassifierReceipt & { token: string };
   checkpoint?: string;
+  /** Host-scheduled read-only assessment retry, never a worker replay grant. */
+  assessmentRetryAt?: number;
+  /** Bounded host event dedup receipts, committed atomically with checkpoints. */
+  checkpointNotices?: string[];
   result?: string;
   token?: string;
   restarts: number;
@@ -133,6 +137,10 @@ export class ExecutionStore {
             (item.question.answer !== undefined && (typeof item.question.answer !== "string" || item.question.answer.length > 8000)))) throw Error("Invalid execution question");
         if (item.terminalAt !== undefined && (!Number.isSafeInteger(item.terminalAt) || item.terminalAt < 0)) throw Error("Invalid terminal timestamp");
         if (item.parentStopped !== undefined && typeof item.parentStopped !== "boolean") throw Error("Invalid parent stop marker");
+        if (item.checkpointNotices !== undefined && (!Array.isArray(item.checkpointNotices) || item.checkpointNotices.length > 32 ||
+            item.checkpointNotices.some(k => typeof k !== "string" || !k || k.length > 100))) throw Error("Invalid checkpoint notice receipts");
+        if (item.assessmentRetryAt !== undefined && (!Number.isSafeInteger(item.assessmentRetryAt) || item.assessmentRetryAt < 0))
+          throw Error("Invalid assessment retry timestamp");
         for (const value of [item.checkpoint, item.result, item.token]) {
           if (value !== undefined && (typeof value !== "string" || value.length > 64000)) throw Error("Invalid execution field");
         }
@@ -331,20 +339,39 @@ export class ExecutionStore {
   }
   /** Current policy is supplied by the trusted host registry, never by model input.
    * Recovery is not itself a replay grant: policy is checked again at claim time. */
+  assessmentDue(task: Readonly<Execution>): boolean {
+    return task.assessmentRetryAt === undefined || task.assessmentRetryAt <= this.now();
+  }
   claim(id: string, current?: RecoveryStrategy & { strategy: string }, policy?: ExecutionRecoveryPolicy): Promise<Execution> {
     return this.mutate(draft => {
       const task = this.find(draft, id);
-      if (task.status !== "ready") throw new ExecutionClaimConflict("Execution not ready");
+      if (task.status !== "ready" || !this.assessmentDue(task))
+        throw new ExecutionClaimConflict("Execution not ready");
       const reason = task.intent ? recoveryBlock(task, current?.strategy === task.strategy ? current : undefined, policy) : undefined;
       if (reason) throw Error(reason);
       const claimedRecoveryAction = task.recoveryGrant?.restarts === task.restarts ? task.recoveryGrant.action : undefined;
       delete task.recoveryGrant;
       delete task.execution; // A new attempt has no observed selection yet.
       delete task.classifier;
+      const assessmentRetry = task.assessmentRetryAt !== undefined;
+      delete task.assessmentRetryAt;
       task.token = randomUUID();
       task.status = "running";
-      this.event(draft, task, "status", "Ausführung gestartet");
+      if (!assessmentRetry) this.event(draft, task, "status", "Ausführung gestartet");
       return { ...task, claimedRecoveryAction };
+    });
+  }
+  /** Trusted strategy yields its slot while retaining settled evidence and intent.
+   * The next claim must reconcile, never start an opaque worker again. */
+  deferAssessment(id: string, token: string, nextAt: number): Promise<void> {
+    return this.mutate(draft => {
+      const task = this.owned(draft, id, token);
+      if (!Number.isSafeInteger(nextAt) || nextAt <= this.now() || !task.checkpoint || !task.intent)
+        throw Error("Invalid assessment deferral");
+      task.assessmentRetryAt = nextAt;
+      task.recoverySession ??= `dispatch:${task.id}:${token}`;
+      task.status = "ready";
+      delete task.token;
     });
   }
   /** Roll back only a scheduler claim that never reached its strategy. */
@@ -375,10 +402,20 @@ export class ExecutionStore {
       task.classifierReceipt = { ...receipt, token };
     });
   }
-  checkpoint(id: string, token: string, checkpoint: string): Promise<void> {
+  checkpoint(id: string, token: string, checkpoint: string, notice?: { key: string; text: string }): Promise<void> {
     return this.mutate(draft => {
       if (typeof checkpoint !== "string" || checkpoint.length > 64000) throw Error("Invalid checkpoint");
       const task = this.owned(draft, id, token);
+      if (notice) {
+        if (typeof notice.key !== "string" || !notice.key || notice.key.length > 100 ||
+            typeof notice.text !== "string" || !notice.text || notice.text.length > 8000) throw Error("Invalid checkpoint notice");
+        const receipts = task.checkpointNotices ??= [];
+        if (!receipts.includes(notice.key)) {
+          if (receipts.length >= 32) throw Error("Checkpoint notice receipt limit exceeded");
+          receipts.push(notice.key);
+          this.event(draft, task, "status", notice.text);
+        }
+      }
       task.checkpoint = checkpoint;
       task.restarts = 0;
     });

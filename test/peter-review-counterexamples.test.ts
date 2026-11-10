@@ -97,7 +97,7 @@ test("an assessed global hold blocks a previously active task instead of leaving
   assert.equal(a.calls(), 1);
 });
 
-test("third technical error at 60s spacing is terminal: persisted, one distinct exhausted notice, reset path usable, deadline not extended", async t => {
+test("technical errors back off across restarts without replay; legacy reset and original deadline stay fenced", async t => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "peter-exhausted-"));
   t.after(() => rm(dir, { recursive: true, force: true }));
   const store = new ExecutionStore(path.join(dir, "executions.json")); await store.load();
@@ -108,7 +108,11 @@ test("third technical error at 60s spacing is terminal: persisted, one distinct 
   let assess: () => Promise<unknown> = async () => { throw Error("backend unavailable"); };
   let a = harness(store, clock, () => assess(), true);
   let saved: ReturnType<Harness["snapshotSessions"]> = [];
-  const persist = (h: Harness) => { h.onStateChange = async () => { saved = JSON.parse(JSON.stringify(h.snapshotSessions())); }; };
+  let outbox: ReturnType<Harness["outboxEntries"]> = [];
+  const persist = (h: Harness) => { h.onStateChange = async () => {
+    saved = JSON.parse(JSON.stringify(h.snapshotSessions()));
+    outbox = JSON.parse(JSON.stringify(h.outboxEntries()));
+  }; };
   persist(a.h);
   a.h.restoreSessions([{ key, replyTo: to, tasks: [{ id: "parent", original, state: "blocked", depth: 0, expiresAt: 5000000 }] }]);
   t.after(() => a.h.stop(0));
@@ -118,28 +122,31 @@ test("third technical error at 60s spacing is terminal: persisted, one distinct 
     await a.h.stop(0);
     a = harness(store, clock, () => assess(), true); persist(a.h); a.h.restoreSessions(structuredClone(saved.length ? saved :
       [{ key, replyTo: to, tasks: [{ id: "parent", original, state: "blocked", depth: 0, expiresAt: 5000000 }] }]));
+    a.h.restoreOutbox(outbox);
     t.after(() => a.h.stop(0));
     await a.h.recoverTasks(); await a.h.recoverTasks(); // second call within 60s must not assess
     attempts.push(a.calls());
-    clock.now += 60000;
+    clock.now = saved[0]!.tasks![0]!.recoveryRetry!.nextAt;
   }
   assert.deepEqual(attempts, [1, 1, 1]);
   const task = saved[0]!.tasks![0]!;
   assert.equal(task.recoveryRetry?.attempts, 3);
   assert.equal(task.state, "blocked");
-  assert.equal(task.termination, "recovery_assessment_failed");
+  assert.equal(task.termination, undefined);
   assert.equal(task.expiresAt, 5000000);
   await a.h.start(); a.h.releaseRestored();
-  for (let i = 0; i < 20; i++) { clock.now += 60000; await a.h.tick(); await a.h.drained(); await a.h.recoverTasks(); }
-  assert.equal(a.calls(), 1, "no fourth assessment");
-  const exhausted = a.ch.sent.filter(m => m.text.includes("budget is exhausted"));
-  assert.equal(exhausted.length, 1);
-  assert.match(exhausted[0]!.text, /\/task-budget inspect/);
-  assert.match(String(exhausted[0]!.meta?.deliveryId), /^task-recovery-exhausted:/);
+  await a.h.tick(); await a.h.drained(); await a.h.recoverTasks();
+  assert.equal(a.calls(), 2, "fourth read-only assessment is permitted, second call is not due");
+  const notices = a.ch.sent.filter(m => m.text.includes("Recovery assessment paused:"));
+  assert.equal(notices.length, 1);
+  assert.match(notices[0]!.text, /\/task-budget inspect/);
+  assert.match(String(notices[0]!.meta?.deliveryId), /^task-recovery:/);
   assert.equal(a.runtime.opened.length, 0);
   assert.equal(JSON.stringify(store.list(key)), before);
 
-  // Reset path: previously rejected because termination stayed undefined.
+  // Upgrade coverage: only a legacy terminal record needs the reset path.
+  const legacy = structuredClone(task); legacy.termination = "recovery_assessment_failed";
+  a.h.restoreSessions([{ key, replyTo: to, tasks: [legacy] }]);
   const { token } = a.h.taskBudgetStatus(key, "parent");
   assert.match(await a.h.controlTaskBudget(key, "parent", "reset-resume", token, "req1", "mem:owner"), /^Committed/);
   const reset = a.h.snapshotSessions()[0]!.tasks![0]!;
@@ -148,7 +155,7 @@ test("third technical error at 60s spacing is terminal: persisted, one distinct 
   assert.equal(reset.expiresAt, 5000000, "reset does not extend the deadline");
   assess = async () => ({ state: "continue", next: "Check a different read-only host inventory", expiresAt: 9000000 });
   await a.h.recoverTasks();
-  assert.equal(a.calls(), 2, "exactly one new bounded assessment after reset");
+  assert.equal(a.calls(), 3, "exactly one new assessment after explicit legacy reset");
   // A proposal beyond the original deadline is not admitted.
   assert.equal(a.h.snapshotSessions()[0]!.tasks![0]!.expiresAt, 5000000);
   assert.equal(a.h.snapshotSessions()[0]!.tasks![0]!.recoveryAdmission?.independent, undefined);
