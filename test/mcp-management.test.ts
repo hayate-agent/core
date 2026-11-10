@@ -65,7 +65,7 @@ test("/mcp routes authenticated user management without model/skill turns, inclu
   assert.equal(runtime.sessions.size, 0, "no model session was opened");
 });
 
-test("real HTTP MCP OAuth manual redirect, PKCE, durable credentials, restart and logout", async t => {
+for (const selector of ["server-name", "login-id"] as const) test(`real HTTP MCP OAuth by ${selector}: manual redirect, PKCE, durable credentials, restart and logout`, async t => {
   const f = await fixture(t);
   const token = randomBytes(24).toString("hex");
   let base = "", challenge = "", expectedRedirect = "", exchanges = 0, deletes = 0;
@@ -109,19 +109,25 @@ test("real HTTP MCP OAuth manual redirect, PKCE, durable credentials, restart an
   const started = await f.manager.execute("login fixture", f.op); const id = /Login ([\w-]+)\./.exec(started)![1];
   await t.waitFor(() => assert.ok(f.notifications.some(text => text.includes("/authorize?")), f.notifications.join("\n")), { timeout: 10000 });
   const message = f.notifications.find(text => text.includes("/authorize?"))!;
+  assert.ok(message.includes("/mcp auth fixture <redirect-url>"));
+  assert.ok(message.includes("/mcp cancel fixture"));
   const auth = new URL(message.split("\n").find(line => line.startsWith(base))!);
   challenge = auth.searchParams.get("code_challenge")!; expectedRedirect = auth.searchParams.get("redirect_uri")!;
   const callback = new URL(expectedRedirect); callback.searchParams.set("code", "browser-code"); callback.searchParams.set("state", auth.searchParams.get("state")!); callback.searchParams.set("iss", base);
-  await assert.rejects(f.manager.execute(`auth ${id} ${callback}`, { ...f.op, owner: "different/user" }), /not found/);
+  for (const target of [id, "fixture"]) {
+    await assert.rejects(f.manager.execute(`auth ${target} ${callback}`, { ...f.op, owner: "different/user" }), /not found/);
+    await assert.rejects(f.manager.execute(`auth ${target} ${callback}`, { ...f.op, owner: "owner/different-session" }), /not found/);
+  }
+  await assert.rejects(f.manager.execute(`auth unknown ${callback}`, f.op), /not found/);
   assert.equal(exchanges, 0);
-  await f.manager.execute(`auth ${id} ${callback}`, f.op);
+  await f.manager.execute(`auth ${selector === "server-name" ? "fixture" : id} ${callback}`, f.op);
   await t.waitFor(() => assert.ok(f.notifications.some(text => /Login .*: complete/.test(text)), f.notifications.join("\n")), { timeout: 10000 });
   assert.equal(exchanges, 1);
   await t.waitFor(() => assert.ok(deletes > 0), { timeout: 5000 });
   assert.doesNotMatch(f.notifications.join("\n"), new RegExp(token + "|private-refresh|browser-code"));
   assert.equal((await stat(path.join(f.home, "mcp-auth.json"))).mode & 0o777, 0o600);
   assert.ok((await readFile(path.join(f.home, "mcp-auth.json"), "utf8")).includes(token));
-  await assert.rejects(f.manager.execute(`auth ${id} ${callback}`, f.op), /no longer pending/);
+  for (const target of [id, "fixture"]) await assert.rejects(f.manager.execute(`auth ${target} ${callback}`, f.op), /no longer pending/);
   const restarted = new McpManagement({ agentDir: f.home, enabled: () => true, setEnabled: async () => {}, changed: async () => {} }); t.after(() => restarted.close());
   assert.match(await restarted.execute("tools fixture", f.op), /connected[\s\S]*hello/);
   await restarted.execute("logout fixture", f.op);
@@ -143,8 +149,8 @@ test("real HTTP MCP OAuth manual redirect, PKCE, durable credentials, restart an
 
   const cancelStart = await restarted.execute("login fixture", f.op); const cancelId = /Login ([\w-]+)\./.exec(cancelStart)![1];
   await t.waitFor(() => assert.ok(f.notifications.some(text => text.includes(`Login: ${cancelId}`))), { timeout: 10000 });
-  await assert.rejects(restarted.execute(`cancel ${cancelId}`, { ...f.op, owner: "other-conversation" }), /not found/);
-  await restarted.execute(`cancel ${cancelId}`, f.op);
+  for (const target of [cancelId, "fixture"]) await assert.rejects(restarted.execute(`cancel ${target}`, { ...f.op, owner: "other-conversation" }), /not found/);
+  await restarted.execute(`cancel ${selector === "server-name" ? "fixture" : cancelId}`, f.op);
   await t.waitFor(() => assert.ok(f.notifications.some(text => text.includes(`Login ${cancelId}.`) && text.includes("cancelled"))), { timeout: 10000 });
   assert.equal(exchanges, 2, "cancelled sign-in performs no token exchange");
   assert.ok(!(await readFile(path.join(f.home, "mcp-auth.json"), "utf8")).includes(token));

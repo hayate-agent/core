@@ -1,5 +1,5 @@
 {
-  "contentDigest": "829294a0e4d0c4ff6e4f7faa1f29ecb312eab4aba09564036f0eb2749757f504",
+  "contentDigest": "eca1e3469bb164aef85c760f3e01645c75c467425053b1a5f0322a53f1180b7b",
   "files": [
     {
       "mode": "100644",
@@ -209,7 +209,7 @@
     {
       "mode": "100644",
       "path": "docs/mcp.md",
-      "sha256": "2b3c84e7acb5185de0b4aa9f33ae39b8460fff6b698425032deaca9956d13b5d"
+      "sha256": "41f7c016bc461a9b555ebe36a553148f19fb5ac7faf8cc11cb7320bf91e8027a"
     },
     {
       "mode": "100644",
@@ -739,7 +739,7 @@
     {
       "mode": "100644",
       "path": "src/mcp-management.ts",
-      "sha256": "c433e421fa1907e9af9b13f103d93a7f778440f72af46409f175ad2f5155ccf6"
+      "sha256": "cd059a2369622387e995728522238bd6d91affe6ac5141b981046df08781d693"
     },
     {
       "mode": "100644",
@@ -1839,7 +1839,7 @@
     {
       "mode": "100644",
       "path": "test/mcp-management.test.ts",
-      "sha256": "d6b19f86f921f33d462b6e90d21556d6b859cc4a395f7ac4cf9e8fdb152f2b77"
+      "sha256": "2175c306bab53fa501441f30ca5ae50338a4aded4146ca0c719fcaaa593c92a0"
     },
     {
       "mode": "100644",
@@ -2985,5 +2985,5 @@
   "historyPolicy": "fresh-root; no source commits, tags, refs or deleted blobs",
   "pluginSHA": "3c363aed2dbcff361dcb43a4cf3f3f02aedb5da2",
   "schema": 1,
-  "sourceSHA": "c0d77e778b755d8eb2ac6230102894e8efd1742b"
+  "sourceSHA": "212961fc9cbb265036cb0918cfbed78e83fdf37d"
 }

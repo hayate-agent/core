@@ -33,8 +33,8 @@ const HELP = `MCP management (no model turn):
 /mcp tools <name>
 /mcp exposure <name> direct|codemode|deferred|hidden
 /mcp login|logout <name>
-/mcp auth <login-id> <browser-redirect-url>
-/mcp cancel <login-id>
+/mcp auth <server-name|login-id> <browser-redirect-url>
+/mcp cancel <server-name|login-id>
 /mcp help
 HTTP and stdio are supported. Use environment references for credentials, not chat messages.`;
 
@@ -174,7 +174,7 @@ export class McpManagement {
             prompt: {
               showAuthorizationUrl: url => {
                 flow.state = "waiting";
-                notify(`MCP sign-in: ${name}\n${url.href}\nLogin: ${flow.id}\nApprove in your browser. If its callback cannot reach this agent, send /mcp auth ${flow.id} <redirect-url>. /mcp cancel ${flow.id} cancels.`);
+                notify(`MCP sign-in: ${name}\n${url.href}\nLogin: ${flow.id}\nApprove in your browser. If its callback cannot reach this agent, send /mcp auth ${name} <redirect-url>. /mcp cancel ${name} cancels. The login ID is also accepted.`);
               },
               promptForRedirectUrl: signal => new Promise(resolve => {
                 if (signal.aborted) { resolve(undefined); return; }
@@ -207,10 +207,16 @@ export class McpManagement {
       return this.status(name, op, action === "tools");
     }
     if (action === "auth" || action === "cancel") {
-      const flow = name ? this.logins.get(name) : undefined;
-      if (!flow || flow.owner !== op.owner) throw new McpUserError("MCP login not found for this operator and conversation");
+      // Resolve only this authenticated actor/conversation's flows. Exact IDs
+      // remain compatible; names select a pending sign-in, never another owner.
+      const own = [...this.logins.values()].filter(f => f.owner === op.owner);
+      const byId = own.find(f => f.id === name);
+      const named = own.filter(f => f.name === name && ["starting", "waiting"].includes(f.state));
+      if (!byId && named.length > 1) throw new McpUserError("Multiple MCP sign-ins match; use the login ID");
+      const flow = byId ?? named[0] ?? own.find(f => f.name === name);
+      if (!name || !flow) throw new McpUserError("MCP login not found for this operator and conversation");
       if (!["starting", "waiting"].includes(flow.state)) throw new McpUserError("MCP login is no longer pending");
-      if (action === "cancel") { if (rest) throw Error("Use /mcp cancel <login-id>"); this.abortLogin(flow); return "MCP sign-in cancellation requested"; }
+      if (action === "cancel") { if (rest) throw Error("Use /mcp cancel <server-name|login-id>"); this.abortLogin(flow); return "MCP sign-in cancellation requested"; }
       if (!rest || rest.length > 8192 || !flow.finishRedirect) throw new McpUserError("MCP login is not waiting for a browser redirect");
       let url: URL; try { url = new URL(rest); } catch { throw new McpUserError("Invalid redirect URL"); }
       if (!/^(https?:)$/.test(url.protocol) || !["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)) throw new McpUserError("Expected the browser's loopback redirect URL");
