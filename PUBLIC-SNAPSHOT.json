@@ -1,5 +1,5 @@
 {
-  "contentDigest": "6d944197d9fb786be0dddf230877c43bb8b4a1d1d7b30e3c5beba58f236d239c",
+  "contentDigest": "cddec731879c642bd46ebde2e5aef130685dd27a17c0405d7d5eec6a0bf27bc6",
   "files": [
     {
       "mode": "100644",
@@ -429,7 +429,7 @@
     {
       "mode": "100644",
       "path": "plugins.lock.json",
-      "sha256": "f10e14bdc47f8acda1e372481c17fc85fafffa7f40db18c98060ed8c15ec46a9"
+      "sha256": "4bb4710974596219fc66c8cad117234120f7f202551f3a9839d8fc00e8563003"
     },
     {
       "mode": "100644",
@@ -2919,7 +2919,7 @@
     {
       "mode": "100644",
       "path": "vendor/plugins/src/dispatcher-plugin.ts",
-      "sha256": "71319afefb4051fa9ff575c5c393b2d8321ad1a41509b613e378317f7aa309cb"
+      "sha256": "d89b63d45c80cb75125ef310ddf2015f6fe92fefa6672e268bdfdf00e5637521"
     },
     {
       "mode": "100644",
@@ -3108,7 +3108,7 @@
     }
   ],
   "historyPolicy": "fresh-root; no source commits, tags, refs or deleted blobs",
-  "pluginSHA": "de6cdf7cff50b3061168d34031d9af4a02f331a5",
+  "pluginSHA": "4941c9f558f9c8541fbada847c685e5b866e8272",
   "schema": 1,
-  "sourceSHA": "dee3537d5b863bfc03a558be8e389e150dc6688d"
+  "sourceSHA": "c67221dfaccc00e8e75f25b3e20e1108a72bc273"
 }
