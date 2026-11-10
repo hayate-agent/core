@@ -1,5 +1,5 @@
 {
-  "contentDigest": "9741f06239ff5db0bc2bc495979fde432760b21138a8e43fa896d2e24810686e",
+  "contentDigest": "37d5e5bae2fc0d652c7206709c71ca2218cdb128ba456b9ff98f89e726cfadbd",
   "files": [
     {
       "mode": "100644",
@@ -9,7 +9,7 @@
     {
       "mode": "100644",
       "path": ".gitignore",
-      "sha256": "77b0db8cd11bdd8439feaa593f44731772ef13f7b18e0eab4f79d7395114a60e"
+      "sha256": "27661dd11c631fdf35030a3eb45bdafc68e7002ec9e0e98856dc166db52e0cfe"
     },
     {
       "mode": "100644",
@@ -55,6 +55,11 @@
       "mode": "100644",
       "path": "docs/assets/hayate-agent.jpg",
       "sha256": "58a3df23d85b610e6e30b3e17e33fbd13984f148a94786d5756b7031a732f577"
+    },
+    {
+      "mode": "100644",
+      "path": "docs/benchmark.md",
+      "sha256": "dce5e92f5a8754b75c5d61f608cfbdbd91b491657975554df51f9cfe18b7c425"
     },
     {
       "mode": "100644",
@@ -503,6 +508,41 @@
     },
     {
       "mode": "100644",
+      "path": "src/benchmark/config.ts",
+      "sha256": "974cba9c0a9458051a7a527834cbf277bf694fda3f9e068d11d545c32ddd89ed"
+    },
+    {
+      "mode": "100644",
+      "path": "src/benchmark/epoch.ts",
+      "sha256": "c2ceac4d1a0cea91ebebaee95123edb2c20e755c45f1ae19285772489386fa2f"
+    },
+    {
+      "mode": "100644",
+      "path": "src/benchmark/index.ts",
+      "sha256": "60de00cb5924f058252b8caa956ed1cb11cb587254397929c6d9f9b52273544d"
+    },
+    {
+      "mode": "100644",
+      "path": "src/benchmark/metrics.ts",
+      "sha256": "b6907b812fdf6b45017c5c6cfa544dda33470d36029a7da017627ed04788a847"
+    },
+    {
+      "mode": "100644",
+      "path": "src/benchmark/report.ts",
+      "sha256": "5da48dc2b6781588b7056a2c6e8e88d6acfd3ea57b8e6c97910f5dca7abbeb10"
+    },
+    {
+      "mode": "100644",
+      "path": "src/benchmark/runner.ts",
+      "sha256": "aafc74c942b1c24068aee727d57a5ab749810411a2959f8ab0b5c5c1ba2d5a1e"
+    },
+    {
+      "mode": "100644",
+      "path": "src/benchmark/suite.ts",
+      "sha256": "d0152f31966deeca0af72372eb404b357a75a9a337da8c98dd2931a7088946bf"
+    },
+    {
+      "mode": "100644",
       "path": "src/build-info.ts",
       "sha256": "5d96e3b1147cea62a85ea335b7cb01ac18d4d8209c6d9b165686737a20445f9d"
     },
@@ -554,12 +594,12 @@
     {
       "mode": "100644",
       "path": "src/cli.ts",
-      "sha256": "2b3365119f87c749a415875fede4c59c44dd912b2ba1eddf2052360dbb0bc08d"
+      "sha256": "02765c0d55d5b5c8791fb4435291ea385e373457746a68f7ebeb5e98ac91e2de"
     },
     {
       "mode": "100644",
       "path": "src/commands.ts",
-      "sha256": "3c77930322c9d3055aaf370c7402a85687cab48959289fe9f8c03a598ea8a956"
+      "sha256": "d057610f9d45fa0b0efb521a8ac6e8f6aa60fa4c196a3296ab6b18bc86216d9b"
     },
     {
       "mode": "100644",
@@ -639,7 +679,7 @@
     {
       "mode": "100644",
       "path": "src/dispatcher-runtime.ts",
-      "sha256": "7372a40f87f00ead3e2cafa91a7e863b83af2f9458c1b38c106ac92071ff5646"
+      "sha256": "a5ca9ad1a9d000e6b32f4044bac989041367bb2ac9db2ed759e9f3a30bf51921"
     },
     {
       "mode": "100644",
@@ -654,7 +694,7 @@
     {
       "mode": "100644",
       "path": "src/dispatcher.ts",
-      "sha256": "3637c4622521c20d87f1506ae25e330efa7179a99ad5f95afc793732ad9f2f87"
+      "sha256": "bf8f0d43d269134845ed21e978041d72eccda7a0a90637590c72d4db6b513f20"
     },
     {
       "mode": "100644",
@@ -674,7 +714,7 @@
     {
       "mode": "100644",
       "path": "src/execution.ts",
-      "sha256": "af6e5a419623af96414beeb0a383497cca8e1abb5de37dff164b4affc950d5f7"
+      "sha256": "7c1b8646173c4c329922db7214aa51a3bd4abb44832d4b11c26d9499323b3fa4"
     },
     {
       "mode": "100644",
@@ -789,7 +829,7 @@
     {
       "mode": "100644",
       "path": "src/model-roles.ts",
-      "sha256": "388cf398bce98217e0dd9caffcdc06fcd03e3db873a11bc5220222eca84ee32d"
+      "sha256": "fba7af5676aac140c68984fe799555fb79488d186241478475064dc61285ea27"
     },
     {
       "mode": "100644",
@@ -964,7 +1004,7 @@
     {
       "mode": "100644",
       "path": "src/settings.ts",
-      "sha256": "9b10a95c7bf068db40f8e3640860dc65c00a1f0425f80f5303a161c624bd4c46"
+      "sha256": "ffb1cb477bdeefa23093cf9fa1233e6445740dfdcc711cc1d9d38eecd6a31782"
     },
     {
       "mode": "100644",
@@ -1125,6 +1165,46 @@
       "mode": "100644",
       "path": "test/attachments.test.ts",
       "sha256": "1cf9db0dd54d64b7b40ea35be4b5938527c47835cbfb490c54eb4072ab7ec992"
+    },
+    {
+      "mode": "100644",
+      "path": "test/benchmark-command.test.ts",
+      "sha256": "3c27c0e2b6dc18ad9634bffe9d2d016866e89675861283261bc8efe64c19131a"
+    },
+    {
+      "mode": "100644",
+      "path": "test/benchmark-config.test.ts",
+      "sha256": "86d8db31b29afe2f326ab6a3d8980ec0f6d8c1d51fc95f2dd35a0f1670d2de15"
+    },
+    {
+      "mode": "100644",
+      "path": "test/benchmark-epoch.test.ts",
+      "sha256": "ee695cdd759cc9c873ba29cda3452e44b530a70b3cea9c96d381909d319303e3"
+    },
+    {
+      "mode": "100644",
+      "path": "test/benchmark-metrics.test.ts",
+      "sha256": "bc209ee79424c5bb2f074cace755b6362ddb306e966be6f0c0a0ced5a13be3fc"
+    },
+    {
+      "mode": "100644",
+      "path": "test/benchmark-report.test.ts",
+      "sha256": "43725ff9688eec6d93953505bd9dff7f85f42986cbfcd0977db73acb4ff706fa"
+    },
+    {
+      "mode": "100644",
+      "path": "test/benchmark-runner.test.ts",
+      "sha256": "adb5fc516c4ef73210fa3b6b8fd059bb3dd104b61a1e13a13549c4370ab2dbb8"
+    },
+    {
+      "mode": "100644",
+      "path": "test/benchmark-service.test.ts",
+      "sha256": "cef44669707ec4f7139a72d03b1f8c0101106b4bf21112b6a170419a7b991e1b"
+    },
+    {
+      "mode": "100644",
+      "path": "test/benchmark-suite.test.ts",
+      "sha256": "04af35dbd8cc3c251c0e0740b9cae6813ca85f996d072b2c7cced200ce0ec712"
     },
     {
       "mode": "100644",
@@ -1470,6 +1550,11 @@
       "mode": "100644",
       "path": "test/dispatcher-overlay.test.ts",
       "sha256": "545ce4bf0ead3c106e01a10b49c2ec38a6365a0ee58479bf33340ed45158176d"
+    },
+    {
+      "mode": "100644",
+      "path": "test/dispatcher-pinned.test.ts",
+      "sha256": "a76fca0e9ad7df05c9c6b31804e00073546be92be26f0c81bfb33fa846f55a7b"
     },
     {
       "mode": "100644",
@@ -3005,5 +3090,5 @@
   "historyPolicy": "fresh-root; no source commits, tags, refs or deleted blobs",
   "pluginSHA": "3c363aed2dbcff361dcb43a4cf3f3f02aedb5da2",
   "schema": 1,
-  "sourceSHA": "f916986d73281f01b183bd213e60bed8fb98d2c9"
+  "sourceSHA": "6e131bc68fbf91f9845378c546c787c7a0976b71"
 }

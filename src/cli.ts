@@ -73,6 +73,8 @@ import { nightlyStrategyPlugin } from "./builtin-plugins/nightly-strategy-plugin
 import { PiRuntime } from "./runtime/pi.js";
 import { launchMode } from "./launch.js";
 import { Scheduler } from "./scheduler.js";
+import { BenchmarkService } from "./benchmark/index.js";
+import type { BenchmarkSubmitter } from "./benchmark/runner.js";
 import { cronReportPlugin } from "./builtin-plugins/cron-report-plugin.js";
 import { StateStore } from "./state.js";
 import type { Inbound } from "./types.js";
@@ -833,8 +835,21 @@ async function main(argv: string[]): Promise<void> {
     await reloadRuntimeSettings();
     return reviewCommand.run(...args);
   } });
+  // Benchmarks reuse the dispatcher so a measured run goes through the same
+  // queue, policy and session logs as any other delegated worker task.
+  const activeDispatcher = dispatcher;
+  const benchmarkService = activeDispatcher
+    ? new BenchmarkService({
+      submitScheduled: (parent, requestId, text, mandate, pinned) => activeDispatcher.submitScheduled(parent, requestId, text, mandate, pinned),
+      waitForExecution: id => activeDispatcher.waitForExecution(id),
+      control: (parent, id, action) => activeDispatcher.control(parent, id, action),
+      list: parent => executions.list(parent),
+    } satisfies BenchmarkSubmitter, { home: config.home, config: () => settings.effective().benchmark })
+    : undefined;
+
   installCommands({
     harness,
+    benchmark: benchmarkService,
     mcp,
     scheduler,
     updater: new OverlayUpdater(() => protectedContent.verify(), { skills: async () => {
