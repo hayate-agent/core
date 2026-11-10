@@ -38,7 +38,9 @@ function retainFixture(t: import("node:test").TestContext, fixture: { home: stri
 }
 /** Real Harness, store and dispatcher; fake model runtime emitting observed selection and tool events. */
 async function setup(t: import("node:test").TestContext, script: Script, opts: { roles?: ModelRoles; unavailable?: string[]; home?: string; file?: string;
-  http?: (request: PlannerHttpRequest) => Promise<PlannerHttpOutcome> } = {}) {
+  manualProgress?: boolean; retainedTranscript?: string; http?: (request: PlannerHttpRequest) => Promise<PlannerHttpOutcome> } = {}) {
+  let now = Date.now();
+  t.mock.method(Date, "now", () => now);
   const home = opts.home ?? await mkdtemp(path.join(os.tmpdir(), "seq-dispatch-"));
   const file = opts.file ?? path.join(home, "executions.json");
   const calls = { reviewModels: [] as Array<string | undefined>, review: [] as string[], plan: [] as Array<{ options: OpenSessionOptions; model?: string }>, worker: [] as Array<{ prompt: string; model?: string; thinking?: string }> };
@@ -49,6 +51,12 @@ async function setup(t: import("node:test").TestContext, script: Script, opts: {
   const open = runtime.open.bind(runtime);
   runtime.open = async (key: string, options: OpenSessionOptions = {}) => {
     const session = await open(key, options);
+    // Retained-session recovery is a real requirement after a deferred check.
+    Object.assign(session, {
+      archiveEntries: () => (opts.retainedTranscript ? [{ prompt: opts.retainedTranscript }] : calls.worker)
+        .map(call => ({ type: "message", role: "assistant", content: call.prompt })),
+      seedHandover: async (_text: string) => {},
+    });
     const prompt = session.prompt.bind(session);
     session.prompt = async (text: string, o: PromptOptions = {}) => {
       o.onEvent?.({ type: "execution", selection: { model: o.model ?? "p/default", thinking: o.thinking ?? "high" } } as never);
@@ -88,13 +96,35 @@ async function setup(t: import("node:test").TestContext, script: Script, opts: {
   }, () => {});
   retainFixture(t, { home, stop: async () => { await dispatcher.stop(); await harness.stop(1000); } });
   return { home, file, store, dispatcher, harness, bridge, runtime, calls, events, http,
+    async tickAt(at: number) { now = at; await dispatcher.kick(); },
+    async retry(id: string) {
+      const task = store.list().find(item => item.id === id)!;
+      assert.equal(task.status, "ready"); assert.ok(task.assessmentRetryAt! > now);
+      now = task.assessmentRetryAt! - 1;
+      const checks = calls.review.length;
+      for (let i = 0; i < 10; i++) await dispatcher.kick();
+      assert.equal(calls.review.length, checks, "cheap ticks never assess before due");
+      now++; await dispatcher.kick(); await dispatcher.waitForExecution(id); await dispatcher.flushEvents();
+      return store.list().find(item => item.id === id)!;
+    },
     async run(input: string, dependency?: { expiresAt?: number }) {
       settled = new Promise<void>(r => { settle = r; });
       await dispatcher.start();
       const task = dependency
         ? await dispatcher.submitScheduled("parent", "req", input, { taskId: "t", depth: 0, original: input, ...dependency })
         : await dispatcher.submit("parent", "req", input);
-      await settled;
+      await dispatcher.waitForExecution(task.id);
+      await dispatcher.flushEvents();
+      // Finite legacy fixtures may contain tool-free analytical corrections.
+      // Advance their fake clock explicitly; production never skips these waits.
+      for (let i = 0; !opts.manualProgress && i < 100; i++) {
+        const current = store.list().find(item => item.id === task.id)!;
+        const checkpoint = current.checkpoint ? state(current.checkpoint) : undefined;
+        if (current.status !== "ready" || !current.assessmentRetryAt || !checkpoint?.progress?.stalls ||
+            checkpoint.assessment?.attempts !== 0) break;
+        now = current.assessmentRetryAt;
+        await dispatcher.kick(); await dispatcher.waitForExecution(task.id); await dispatcher.flushEvents();
+      }
       return store.list().find(item => item.id === task.id)!;
     } };
 }
@@ -246,37 +276,50 @@ test("worker STEP-STATUS cannot admit a successor without independent completion
   for (const verdict of ['{"state":"blocked"}', '{"state":"uncertain"}', 'invalid']) {
     const env = await setup(t, { plan: steps(["first", "simple"], ["second", "simple"]), verdict });
     const task = await env.run("two steps");
-    assert.equal(task.status, "paused");
+    assert.equal(task.status, verdict.includes("blocked") ? "paused" : "ready");
     assert.equal(env.calls.worker.length, 1);
     assert.equal((JSON.parse(task.checkpoint!) as SequentialState).outcomes.length, 0);
   }
 });
 
-test("validator continue resumes the SAME step in its session, bounded, without successor until completed", async t => {
-  const verdicts = ['{"state":"continue","next":"inspect PR 265"}', '{"state":"completed"}'];
+test("five independent validator continuations resume the SAME step before any successor", async t => {
+  const verdicts = [...Array.from({ length: 5 }, (_, i) => JSON.stringify({ state: "continue", next: `inspect PR ${265 + i}` })), '{"state":"completed"}'];
   const env = await setup(t, { plan: steps(["reconcile", "simple"], ["report", "simple"]), verdict: () => verdicts.shift() ?? '{"state":"completed"}' });
   const task = await env.run("two steps");
   assert.equal(task.status, "completed");
-  assert.equal(env.calls.worker.length, 3);
+  assert.equal(env.calls.worker.length, 7);
+  assert.equal(env.calls.review.length, 7);
+  for (const call of env.calls.worker.slice(1, 6)) {
+    assert.match(call.prompt, /^CONTINUE STEP 1\/2/);
+    assert.equal(call.model, "p/cheap");
+    assert.equal(call.thinking, "off");
+  }
   assert.match(env.calls.worker[1]!.prompt, /^CONTINUE STEP 1\/2/);
   assert.match(env.calls.worker[1]!.prompt, /inspect PR 265/);
   assert.equal(env.calls.worker[1]!.model, "p/cheap");
-  assert.match(env.calls.worker[2]!.prompt, /STEP 2\/2:\nreport/);
+  assert.match(env.calls.worker[6]!.prompt, /STEP 2\/2:\nreport/);
   assert.equal(state(task.checkpoint).outcomes.length, 2);
 });
 
-test("validator continue is bounded; blocked and technical failures are distinguished", async t => {
-  const env = await setup(t, { plan: steps(["first", "simple"], ["second", "simple"]), verdict: (() => { let n = 0; return () => `{"state":"continue","next":"more ${++n}"}`; })() });
-  const task = await env.run("two steps");
-  assert.equal(task.status, "paused");
-  assert.equal(env.calls.worker.length, 3);
-  assert.equal(state(task.checkpoint).outcomes.length, 0);
-  assert.ok(env.events.some(e => /weiterhin unvollständig/.test(JSON.stringify(e))));
+test("five continuations stop on semantic block but defer technical validator failures", async t => {
+  for (const finalVerdict of ['{"state":"blocked"}', 'invalid']) {
+    let reviews = 0;
+    const env = await setup(t, { plan: steps(["first", "simple"], ["second", "simple"]),
+      verdict: () => ++reviews <= 5 ? JSON.stringify({ state: "continue", next: `more ${reviews}` }) : finalVerdict });
+    const task = await env.run("two steps");
+    assert.equal(task.status, finalVerdict === 'invalid' ? "ready" : "paused");
+    assert.equal(env.calls.worker.length, 6);
+    assert.equal(state(task.checkpoint).outcomes.length, 0);
+    if (finalVerdict === 'invalid') assert.ok(task.assessmentRetryAt);
+    else assert.ok(env.events.some(e => /externe Blockade/.test(JSON.stringify(e))));
+    assert.equal(reviews, 6);
+  }
   for (const [verdict, text] of [['{"state":"blocked"}', /externe Blockade/], ['invalid', /technisch fehlgeschlagen/]] as const) {
     const other = await setup(t, { plan: steps(["first", "simple"]), verdict });
     await other.run("one step");
     assert.equal(other.calls.worker.length, 1);
-    assert.ok(other.events.some(e => text.test(JSON.stringify(e))));
+    if (verdict === 'invalid') assert.ok(other.store.list()[0]!.assessmentRetryAt);
+    else assert.ok(other.events.some(e => text.test(JSON.stringify(e))));
   }
 });
 
@@ -304,21 +347,23 @@ test("true external blocked holds: no continuation, no successor; invalid/uncert
     ['{"state":"completed"}', /ohne vollständigen Nachweis \(blocked\)/], ['invalid', /technisch fehlgeschlagen/], ['{"state":"uncertain"}', /technisch fehlgeschlagen/]] as const) {
     const env = await setup(t, { plan: steps(["first", "simple"], ["second", "simple"]), worker: blockedWorker, verdict });
     const task = await env.run("two steps");
-    assert.equal(task.status, "paused", verdict);
+    assert.equal(task.status, verdict === 'invalid' || verdict.includes("uncertain") ? "ready" : "paused", verdict);
     assert.equal(env.calls.worker.length, 1, verdict);
     assert.equal(state(task.checkpoint).outcomes.length, 0, verdict);
-    assert.ok(env.events.some(e => text.test(JSON.stringify(e))), verdict);
+    if (task.status === "paused") assert.ok(env.events.some(e => text.test(JSON.stringify(e))), verdict);
+    else assert.ok(task.assessmentRetryAt);
   }
 });
 
-test("blocked claim continuation is bounded and never completes without independent completion", async t => {
+test("blocked claim survives five corrections but never completes without independent completion", async t => {
+  let reviews = 0;
   const env = await setup(t, { plan: steps(["first", "simple"], ["second", "simple"]), worker: () => "still stuck\nSTEP-STATUS: blocked: stuck",
-    verdict: (() => { let n = 0; return () => `{"state":"continue","next":"more ${++n}"}`; })() });
+    verdict: () => ++reviews <= 5 ? JSON.stringify({ state: "continue", next: `more ${reviews}` }) : '{"state":"blocked"}' });
   const task = await env.run("two steps");
   assert.equal(task.status, "paused");
-  assert.equal(env.calls.worker.length, 3);
+  assert.equal(env.calls.worker.length, 6);
   assert.equal(state(task.checkpoint).outcomes.length, 0);
-  assert.ok(env.events.some(e => /weiterhin unvollständig/.test(JSON.stringify(e))));
+  assert.ok(env.events.some(e => /externe Blockade/.test(JSON.stringify(e))));
 });
 
 test("blocked claim: parent stop and expired deadline preserved", async t => {
@@ -346,15 +391,16 @@ test("step validator tolerates a slow but valid reviewer instead of a 10s techni
   assert.equal(state(task.checkpoint).outcomes.length, 1);
 });
 
-test("technical validator failure retains a bounded host diagnostic in the checkpoint", async t => {
+test("technical validator failure retains evidence and schedules a read-only retry", async t => {
   const env = await setup(t, { plan: steps(["first", "simple"]), verdict: "not json" });
   const task = await env.run("one step");
-  assert.equal(task.status, "paused");
+  assert.equal(task.status, "ready");
   const s = state(task.checkpoint);
   assert.equal(s.outcomes.length, 0);
-  assert.equal(s.prior?.validation?.diagnostic, "invalid_response");
-  assert.equal(s.prior?.validation?.timeoutMs, 120000);
-  assert.ok(env.events.some(e => /technisch fehlgeschlagen oder unklar \(invalid_response\)/.test(JSON.stringify(e))));
+  assert.equal(s.assessment?.diagnostic, "invalid_response");
+  assert.equal(s.assessment?.attempts, 1);
+  assert.equal(s.assessment?.nextAt, task.assessmentRetryAt);
+  assert.ok(env.events.some(e => /erneute Prüfung mit Backoff/.test(JSON.stringify(e))));
 });
 
 test("missing independent reviewer blocks after worker proposal, without successor", async t => {
@@ -421,7 +467,9 @@ test("worker approvals keep trusted parent routing", async t => {
 });
 
 test("final result requires complete step evidence", async t => {
-  const env = await setup(t, { worker: () => "I think it worked", verdict: '{"state":"continue","next":"report actual evidence"}' });
+  let assessments = 0;
+  const env = await setup(t, { worker: () => "I think it worked",
+    verdict: () => ++assessments <= 5 ? '{"state":"continue","next":"report actual evidence"}' : '{"state":"blocked"}' });
   const task = await env.run("read");
   assert.equal(task.status, "paused");
   assert.equal(task.result, undefined);
@@ -556,7 +604,7 @@ test("planner chooses lowest sufficient capability without operational-risk infl
   assert.ok(prompt.endsWith(JSON.stringify({ task: "x" })));
 });
 
-test("multi-step: completed step survives a technical validator pause and restart continues the bounded step", async t => {
+test("multi-step: completed step survives deferred assessment, restart does not create a second owner", async t => {
   // Step 1 completes with an independent validator "completed". Step 2's validator returns a
   // technical (invalid) answer, so the strategy pauses without a successor. After restart the
   // host owner continues only step 2 in its retained session; step 1 is never re-executed.
@@ -564,11 +612,11 @@ test("multi-step: completed step survives a technical validator pause and restar
   const verdict = () => { verdicts++; return verdicts === 1 ? '{"state":"completed"}' : "not json"; };
   const env = await setup(t, { plan: steps(["first", "simple"], ["second", "simple"]), verdict });
   const task = await env.run("two steps");
-  assert.equal(task.status, "paused");
+  assert.equal(task.status, "ready");
   const before = state(task.checkpoint);
   assert.equal(before.outcomes.length, 1, "step 1 completed and persisted");
-  assert.equal(before.prior?.index, 1, "pause is at step 2");
-  assert.equal(before.prior?.validation?.diagnostic, "invalid_response");
+  assert.equal(before.assessment?.index, 1, "deferred assessment is at step 2");
+  assert.equal(before.assessment?.diagnostic, "invalid_response");
   const workerTurnsBefore = env.calls.worker.length;
   // Restart: new store, new host, same file. Only the supervision owner may act.
   const store2 = new ExecutionStore(env.file); await store2.load();
@@ -582,9 +630,9 @@ test("multi-step: completed step survives a technical validator pause and restar
     wait: { reason: "dispatcher owns the rollout", nextAt: 1_000, deadline: 1_793_995_200_000 } }, replyTo: undefined }] as never);
   t.after(() => h2.stop(0));
   await h2.recoverTasks(); await h2.tick();
-  assert.equal(assessments, 1, "technical pause gets exactly one bounded owner assessment");
+  assert.equal(assessments, 0, "ready child already owns recovery; parent must not create a second owner");
   const after = store2.list().find(item => item.id === task.id)!;
-  assert.equal(after.status, "paused", "no silent auto-resume; owner assessment only");
+  assert.equal(after.status, "ready", "persisted deferred assessment remains scheduled");
   assert.equal(state(after.checkpoint).outcomes.length, 1, "completed step 1 not repeated");
   assert.equal(env.calls.worker.length, workerTurnsBefore, "no worker turn replayed by restart");
 });
@@ -653,37 +701,42 @@ test("correction is persisted before the corrected worker turn (restart-safe) an
   await store.checkpoint(task.id, running.token!, JSON.stringify({ v: 1, planner: { requested: {} },
     plan: JSON.parse(steps(["a", "simple"], ["b", "simple"])).steps,
     outcomes: [{ role: "simple", requested: {}, result: "a done\nSTEP-STATUS: complete" }],
-    correction: { index: 1, rounds: 1, note: "use --source internal" } }));
+    correction: { index: 1, rounds: 5, note: "use --source internal" } }));
   const again = await setup(t, { worker: () => "b done\nSTEP-STATUS: complete" }, { home, file });
   await again.dispatcher.start();
-  while (again.store.list()[0]!.status !== "completed") await new Promise(r => setTimeout(r, 10));
+  while (["ready", "running"].includes(again.store.list()[0]!.status)) await new Promise(r => setTimeout(r, 10));
+  assert.equal(again.store.list()[0]!.status, "completed");
   assert.equal(again.calls.plan.length, 0);
   assert.equal(again.calls.worker.length, 1);
-  assert.match(again.calls.worker[0]!.prompt, /STEP 2\/2:\nb[\s\S]*PENDING VALIDATOR CORRECTION \(round 1[^\n]*\n"use --source internal"/);
+  assert.match(again.calls.worker[0]!.prompt, /STEP 2\/2:\nb[\s\S]*PENDING VALIDATOR CORRECTION \(round 5[^\n]*\n"use --source internal"/);
   assert.ok(!again.calls.worker[0]!.prompt.includes("STEP 1/2:"));
 });
 
-test("repeated identical wrong-assumption correction stops with one short actionable notice", async t => {
-  const env = await setup(t, { plan: steps(["only", "simple"]), worker: () => "stuck\nSTEP-STATUS: blocked: x",
-    verdict: '{"state":"continue","next":"use --source internal"}' });
+test("identical correction wording does not override five independent continuation decisions", async t => {
+  let assessments = 0;
+  let turns = 0;
+  const env = await setup(t, { plan: steps(["only", "simple"]),
+    worker: () => ++turns < 6 ? `batch ${turns} read\nSTEP-STATUS: blocked: remaining batches` : "all batches read\nSTEP-STATUS: complete",
+    verdict: () => ++assessments <= 5
+      ? '{"state":"continue","next":"read the next batch"}'
+      : '{"state":"completed"}' });
   const task = await env.run("one");
-  assert.equal(task.status, "paused");
-  assert.equal(env.calls.worker.length, 2); // original + one correction; identical second correction not re-sent
-  const notice = env.events.map(e => e.text ?? "").find(x => /nicht umgesetzt/.test(x));
-  assert.ok(notice && notice.length < 600);
+  assert.equal(task.status, "completed");
+  assert.equal(env.calls.worker.length, 6);
+  assert.equal(assessments, 6);
 });
 
 test("validator 'blocked' (genuine external) and technical failure never trigger a correction", async t => {
   for (const verdict of ['{"state":"blocked"}', "not json", '{"state":"uncertain"}']) {
     const env = await setup(t, { plan: steps(["only", "simple"]), worker: () => "x\nSTEP-STATUS: blocked: x", verdict });
     const task = await env.run("one");
-    assert.equal(task.status, "paused");
+    assert.equal(task.status, verdict.includes("blocked") ? "paused" : "ready");
     assert.equal(env.calls.worker.length, 1);
   }
 });
 
 test("corrupt persisted correction metadata blocks visibly instead of an unbounded correction loop", async t => {
-  for (const correction of [{ index: 0, rounds: "x", note: "n" }, { index: 0, rounds: 99, note: "n" }, { index: 5, rounds: 1, note: "n" }]) {
+  for (const correction of [{ index: 0, rounds: "x", note: "n" }, { index: 0, rounds: -1, note: "n" }, { index: 5, rounds: 1, note: "n" }]) {
     const home = await mkdtemp(path.join(os.tmpdir(), "seq-corrupt-"));
     retainFixture(t, { home, stop: async () => {} });
     const file = path.join(home, "executions.json");
@@ -740,43 +793,184 @@ test("uncertain or invalid assessment retries only inference, never the worker e
   for (const failure of ['{"state":"uncertain"}', 'invalid']) {
     let reviews = 0;
     const env = await setup(t, { verdict: () => ++reviews === 1 ? failure : '{"state":"completed"}' });
-    const task = await env.run("one step");
+    let task = await env.run("one step");
+    assert.equal(task.status, "ready");
+    task = await env.retry(task.id);
     assert.equal(task.status, "completed");
     assert.equal(reviews, 2);
     assert.equal(env.calls.worker.length, 1);
   }
 });
 
+test("identical no-tool continues are durably paced without terminalizing or repeated early inference", async t => {
+  let checks = 0;
+  const env = await setup(t, { worker: () => "Still working\nSTEP-STATUS: blocked: inspecting",
+    verdict: () => ++checks < 13 ? '{"state":"continue","next":"Inspect the receipt"}' : '{"state":"blocked"}' }, { manualProgress: true });
+  let task = await env.run("inspect only");
+  for (let stalled = 1; stalled <= 12; stalled++) {
+    assert.equal(task.status, "ready");
+    assert.equal(state(task.checkpoint).progress?.stalls, stalled);
+    assert.equal(task.assessmentRetryAt! - Date.now(), Math.min(3600000, 60000 * 2 ** (stalled - 1)));
+    assert.equal(checks, stalled);
+    assert.equal(env.calls.worker.length, stalled + 1);
+    const disk = new ExecutionStore(env.file); await disk.load();
+    assert.equal(disk.list()[0]!.assessmentRetryAt, task.assessmentRetryAt);
+    task = await env.retry(task.id);
+  }
+  assert.equal(task.status, "paused", "only the genuine blocked verdict stops work, not repetition count");
+  assert.equal(checks, 13);
+});
+
+test("more than 64 novel successful tool receipts keep legitimate continuations unthrottled", async t => {
+  let checks = 0;
+  const env = await setup(t, { toolEvents: () => [{ name: "read", detail: "receipt", result: `verified receipt ${checks}` }],
+    verdict: () => ++checks <= 70 ? '{"state":"continue","next":"Inspect the receipt"}' : '{"state":"completed"}' }, { manualProgress: true });
+  const task = await env.run("inspect distinct receipts");
+  assert.equal(task.status, "completed", JSON.stringify({ checks, task, events: env.events.slice(-3) })); assert.equal(checks, 71);
+  assert.equal(env.calls.worker.length, 71); assert.equal(task.assessmentRetryAt, undefined);
+});
+
+test("only a novel successful receipt resets pacing, not new prose, call arguments or validator wording", async t => {
+  let turns = 0, checks = 0;
+  const env = await setup(t, {
+    toolEvents: () => [{ name: "read", detail: `different query ${++turns}`, result: turns < 4 ? "receipt A" : "receipt B" }],
+    worker: () => `Different prose ${turns}\nSTEP-STATUS: complete`,
+    verdict: () => ++checks < 5 ? JSON.stringify({ state: "continue", next: `Different request ${checks}` }) : '{"state":"completed"}',
+  }, { manualProgress: true });
+  let task = await env.run("read existing receipts only");
+  assert.equal(state(task.checkpoint).progress?.stalls, 1);
+  task = await env.retry(task.id);
+  assert.equal(state(task.checkpoint).progress?.stalls, 2);
+  task = await env.retry(task.id);
+  assert.equal(turns, 5, "novel receipt permits the next correction immediately");
+  assert.equal(state(task.checkpoint).progress?.stalls, 1, "repeated new receipt starts a fresh one-minute backoff");
+  assert.equal(task.assessmentRetryAt! - Date.now(), 60000);
+  task = await env.retry(task.id); assert.equal(task.status, "completed");
+});
+
+test("no-progress pacing survives restart; due continuation executes once and manual cancellation wins", async t => {
+  const home = await mkdtemp(path.join(os.tmpdir(), "seq-stall-restart-"));
+  t.after(() => rm(home, { recursive: true, force: true, maxRetries: 3 }));
+  const file = path.join(home, "executions.json");
+  const script: Script = { worker: () => "No new receipt\nSTEP-STATUS: blocked: inspecting",
+    verdict: '{"state":"continue","next":"Inspect the receipt"}' };
+  const first = await setup(t, script, { home, file, manualProgress: true });
+  const pending = await first.run("inspect only");
+  assert.equal(state(pending.checkpoint).progress?.stalls, 1);
+  await first.dispatcher.stop(); await first.harness.stop(1000);
+  const second = await setup(t, script, { home, file, manualProgress: true, retainedTranscript: state(pending.checkpoint).assessment!.reply });
+  await second.dispatcher.start();
+  assert.equal(second.calls.review.length, 0); assert.equal(second.calls.worker.length, 0);
+  const again = await second.retry(pending.id);
+  assert.equal(state(again.checkpoint).progress?.stalls, 2);
+  assert.equal(second.calls.worker.length, 1); assert.equal(second.calls.review.length, 1);
+  await second.dispatcher.control("parent", again.id, "cancel");
+  await second.tickAt(again.assessmentRetryAt! + 1);
+  assert.equal(second.store.list()[0]!.status, "cancelled");
+  assert.equal(second.calls.worker.length, 1); assert.equal(second.calls.review.length, 1);
+});
+
+test("six failed assessments retain one worker effect, release capacity and eventually complete", async t => {
+  let checks = 0;
+  const env = await setup(t, { verdict: () => ++checks <= 6 ? 'invalid' : '{"state":"completed"}' });
+  let task = await env.run("create exactly once");
+  const workerSession = task.recoverySession;
+  for (let i = 1; i <= 6; i++) {
+    assert.equal(task.status, "ready");
+    assert.equal(env.store.list().filter(e => e.status === "running").length, 0, "backoff retains no running execution");
+    assert.equal(state(task.checkpoint).assessment?.attempts, i);
+    assert.equal(env.calls.worker.length, 1, "assessment retry does not replay the worker");
+    assert.equal(task.recoverySession, workerSession, "preserve the actual worker transcript, not empty retry sessions");
+    const reloaded = new ExecutionStore(env.file); await reloaded.load();
+    assert.equal(reloaded.list()[0]!.assessmentRetryAt, task.assessmentRetryAt);
+    task = await env.retry(task.id);
+  }
+  assert.equal(task.status, "completed");
+  assert.equal(checks, 7);
+  assert.equal(env.calls.worker.length, 1);
+  assert.equal(env.events.filter(e => /erneute Prüfung mit Backoff/.test(e.text)).length, 1);
+});
+
+test("deferred assessment releases capacity for unrelated work; pause still fences its retry", async t => {
+  let checks = 0;
+  const env = await setup(t, { verdict: () => ++checks === 1 ? 'invalid' : '{"state":"completed"}' });
+  const first = await env.run("first");
+  assert.equal(first.status, "ready");
+  const second = await env.dispatcher.submit("other-parent", "other-request", "independent second task");
+  await env.dispatcher.waitForExecution(second.id);
+  assert.equal(env.store.list().find(e => e.id === second.id)!.status, "completed", "capacity1 is available during backoff");
+  assert.equal(env.calls.worker.length, 2);
+  await env.dispatcher.control("parent", first.id, "pause");
+  for (let i = 0; i < 10; i++) await env.dispatcher.kick();
+  assert.equal(checks, 2);
+  assert.equal(env.store.list().find(e => e.id === first.id)!.status, "blocked", "manual pause retains unsafe intent fence");
+  assert.equal(env.store.list().find(e => e.id === first.id)!.diagnosticCode, "manual-pause");
+  assert.equal(env.calls.worker.length, 2);
+});
+
 test("uncertain assessment can request exact read-only facts from the same worker", async t => {
   let reviews = 0;
   const env = await setup(t, { verdict: () => ++reviews === 1 ? '{"state":"uncertain"}'
     : reviews === 2 ? '{"state":"continue","next":"Read the existing receipt, no mutation"}' : '{"state":"completed"}' });
-  const task = await env.run("verify receipt");
+  let task = await env.run("verify receipt");
+  task = await env.retry(task.id);
+  assert.equal(task.status, "ready", "tool-free correction is paced even after independent admission");
+  task = await env.retry(task.id);
   assert.equal(task.status, "completed");
   assert.equal(env.calls.worker.length, 2);
   assert.match(env.calls.worker[1]!.prompt, /Read the existing receipt, no mutation/);
 });
 
-test("failed inference budget and settled worker evidence survive restart without effect replay", async t => {
+test("failed inference backoff and settled evidence survive restart without effect replay", async t => {
   const home = await mkdtemp(path.join(os.tmpdir(), "seq-assessment-"));
   retainFixture(t, { home, stop: async () => {} });
   const file = path.join(home, "executions.json");
   const first = await setup(t, { verdict: '{"state":"uncertain"}' }, { home, file });
   const paused = await first.run("create resource");
-  assert.equal(paused.status, "paused");
-  assert.equal(first.calls.review.length, 2);
-  assert.equal(state(paused.checkpoint).assessment?.attempts, 2);
+  assert.equal(paused.status, "ready");
+  assert.equal(first.calls.review.length, 1);
+  assert.equal(state(paused.checkpoint).assessment?.attempts, 1);
   assert.equal(state(paused.checkpoint).assessment?.diagnostic, "inconclusive");
   await first.dispatcher.stop(); await first.harness.stop(1000);
-  const store = new ExecutionStore(file); await store.load();
-  await store.control(paused.id, "resume");
   const second = await setup(t, {}, { home, file });
   await second.dispatcher.start();
-  for (let i = 0; i < 300 && second.store.list()[0]!.status !== "paused"; i++) await new Promise(r => setTimeout(r, 10));
-  assert.equal(second.store.list()[0]!.status, "paused");
+  assert.equal(second.store.list()[0]!.status, "ready");
+  assert.equal(second.calls.review.length, 0, "restart does not bypass persisted due time");
+  const done = await second.retry(paused.id);
+  assert.equal(done.status, "completed");
   assert.equal(second.calls.worker.length, 0);
-  assert.equal(second.calls.review.length, 0, "restart does not reset inference budget");
-  assert.equal(state(second.store.list()[0]!.checkpoint).prior?.validation?.diagnostic, "inconclusive");
+  assert.equal(second.calls.review.length, 1, "only retained evidence is reassessed");
+});
+
+test("crash after failed assessment commit retains exactly one diagnostic, backoff and settled effect", async t => {
+  const home = await mkdtemp(path.join(os.tmpdir(), "seq-reserved-crash-"));
+  t.after(() => rm(home, { recursive: true, force: true, maxRetries: 3 }));
+  const file = path.join(home, "executions.json");
+  const store = new ExecutionStore(file); await store.load();
+  const task = await store.submit("parent", "req", "verify existing resource", "sequential");
+  const claim = await store.claim(task.id);
+  await store.intent(task.id, claim.token!, `step:${task.id}:0:simple`, "unsafe", { model: "p/cheap" });
+  const workerSession = `dispatch:${task.id}:${claim.token}`;
+  await store.workerSession(task.id, claim.token!, workerSession);
+  const nextAt = Date.now() + 60000;
+  await store.checkpoint(task.id, claim.token!, JSON.stringify({ v: 1, planner: { requested: {} },
+    plan: JSON.parse(steps(["verify resource", "simple"])).steps, outcomes: [],
+    assessment: { index: 0, reply: "already created\nSTEP-STATUS: complete", tools: 1,
+      evidence: [{ name: "bash", error: false, result: "receipt17" }], attempts: 1, nextAt, diagnostic: "invalid_response" } }),
+      { key: "step-assessment:0", text: "Technische Schrittprüfung ausstehend; erneute Prüfung mit Backoff, ohne Worker-Wiederholung." });
+  const env = await setup(t, {}, { home, file });
+  await env.dispatcher.start(); await env.dispatcher.waitForExecution(task.id);
+  const deferred = env.store.list()[0]!;
+  assert.equal(deferred.status, "ready"); assert.equal(deferred.assessmentRetryAt, nextAt);
+  assert.equal(deferred.recoverySession, workerSession);
+  await env.dispatcher.flushEvents();
+  assert.equal(env.events.filter(e => /erneute Prüfung mit Backoff/.test(e.text)).length, 1,
+    "crash between failed checkpoint and deferral cannot lose the durable diagnostic");
+  assert.equal(env.calls.review.length, 0); assert.equal(env.calls.worker.length, 0);
+  const done = await env.retry(task.id);
+  assert.equal(done.status, "completed"); assert.equal(env.calls.review.length, 1);
+  assert.equal(env.events.filter(e => /erneute Prüfung mit Backoff/.test(e.text)).length, 1);
+  assert.equal(env.calls.worker.length, 0, "restart may assess settled evidence, never replay its effect");
 });
 
 test("restart after durable worker result revalidates before running any worker", async t => {
@@ -837,7 +1031,7 @@ test("retained assessment bounds reports and tool entries to the reloadable chec
     checkpoint: value => env.store.checkpoint(task.id, claim.token!, value),
     intent: (key, replay, route) => env.store.intent(task.id, claim.token!, key, replay, route),
     settleIntent: (key, result, checkpoint) => env.store.settleIntent(task.id, claim.token!, key, result, checkpoint),
-  } as import("../src/dispatcher.js").DispatchContext), /inconclusive/);
+  } as import("../src/dispatcher.js").DispatchContext), /Assessment retry scheduler unavailable/);
   const checkpoint = env.store.list()[0]!.checkpoint!;
   assert.ok(checkpoint.length <= 64000);
   const a = state(checkpoint).assessment!;
@@ -864,18 +1058,24 @@ test("Matrix status delivery failure cannot pause a persisted sequential plan", 
   assert.match(result as string, /Sequenzieller Plan abgeschlossen/);
 });
 
-test("manual pause during validation: correction never reaches the worker and is not auto-resumed", async t => {
+test("manual pause after five continuations prevents further worker turns and successor", async t => {
   let env!: Awaited<ReturnType<typeof setup>>;
+  let reviews = 0;
   env = await setup(t, { plan: steps(["only", "simple"], ["two", "simple"]), worker: () => "x\nSTEP-STATUS: blocked: x",
-    verdict: () => { const id = env.store.list()[0]!.id; void env.dispatcher.control("parent", id, "pause"); return '{"state":"continue","next":"use --source internal"}'; } });
+    toolEvents: () => [{ name: "read", detail: "receipt", result: `verified receipt ${reviews}` }],
+    verdict: () => {
+      if (++reviews > 5) { const id = env.store.list()[0]!.id; void env.dispatcher.control("parent", id, "pause"); }
+      return JSON.stringify({ state: "continue", next: `inspect remaining item ${reviews}` });
+    } });
   await env.dispatcher.start();
   await env.dispatcher.submit("parent", "req", "two");
   // Pause with an open unsafe intent is held as "blocked" by ExecutionStore.control (execution.ts:487).
   for (let i = 0; i < 300 && !["paused", "blocked"].includes(env.store.list()[0]!.status); i++) await new Promise(r => setTimeout(r, 10));
   await new Promise(r => setTimeout(r, 100));
   assert.ok(["paused", "blocked"].includes(env.store.list()[0]!.status));
-  assert.equal(env.calls.worker.length, 1);
-  assert.ok(!env.calls.worker.some(w => /VALIDATOR CORRECTION|STEP 2\/2/.test(w.prompt)));
+  assert.equal(env.calls.worker.length, 6);
+  assert.equal(reviews, 6);
+  assert.ok(!env.calls.worker.some(w => /STEP 2\/2/.test(w.prompt)));
   assert.ok(!env.events.some(e => e.type === "result"));
 });
 
@@ -920,6 +1120,10 @@ for (const decision of ["approve", "deny"] as const) {
     assert.equal(env.harness.approvals.size, 1);
     entry.resolve(decision === "approve");
     if (decision === "approve") {
+      // This fixture reports no tool receipt, so the completed correction is
+      // retained and paced before its next independent assessment.
+      await env.dispatcher.waitForExecution(submitted.id);
+      if (find().status === "ready") await env.retry(submitted.id);
       await until(() => find().status === "completed");
       assert.deepEqual(effects, ["corrected-effect"]);
       assert.equal(step2, 1);

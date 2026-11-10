@@ -52,7 +52,8 @@ test("failed retry claim persistence never calls provider or executes; later tic
   try {
     await assert.rejects(h.tick(), /disk offline/); assert.equal(calls, 0); assert.equal(turns, 0);
     offline = false; await h.tick(); assert.equal(calls, 0);
-    now += 60000; await h.tick(); await h.drained();
+    now += 60000; await h.tick(); assert.equal(calls, 0, "persisted second claim backs off two minutes");
+    now = h.state(key).task!.recoveryRetry!.nextAt; await h.tick(); await h.drained();
     assert.equal(turns, 1); // one reconciliation, no replay of an external effect
     assert.equal(h.state(key).task?.depth, 3);
   } finally { await h.stop(0); }

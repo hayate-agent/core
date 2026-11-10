@@ -31,7 +31,7 @@ async function fixture(t: { after(fn: () => Promise<void>): void }, original = "
     assess: (fn: typeof assess) => { assess = fn; }, task: () => h.snapshotSessions()[0].tasks![0] };
 }
 
-test("technical dependency hold retries only bounded durable assessment; successful admission runs one approved next step", async t => {
+test("technical dependency hold retries durable read-only assessment; successful admission runs one approved next step", async t => {
   const f = await fixture(t);
   await f.h.recoverTasks(); assert.equal(f.calls(), 1);
   assert.equal(f.task().supervisorDecision?.diagnostic, "technical");
@@ -56,7 +56,7 @@ test("technical dependency hold retries only bounded durable assessment; success
   assert.equal(f.store.list("mem:room1")[0].restarts, 0);
 });
 
-test("legacy technical hold without retry metadata gets a bounded assessment, not worker replay", async t => {
+test("legacy technical hold without retry metadata gets a deferred assessment, not worker replay", async t => {
   const f = await fixture(t);
   const task = structuredClone(f.task());
   task.supervisorDecision = { verdict: "blocked", diagnostic: "technical", dependencyHold: { reason: "global-hold", evidence: "legacy" } };
@@ -69,18 +69,50 @@ test("legacy technical hold without retry metadata gets a bounded assessment, no
   assert.equal(f.runtime.opened.length, 0);
 });
 
-test("missing completion backend is visible once, stops after three attempts, never replays worker", async t => {
+test("missing completion backend is visible once, backs off without terminal exhaustion, never replays worker", async t => {
   const f = await fixture(t);
   for (let i = 0; i < 6; i++) { await f.h.recoverTasks(); f.advance(); }
   assert.equal(f.calls(), 3);
   assert.equal(f.task().recoveryRetry?.attempts, 3);
   const notices = [...f.h.outboxEntries().map(x => x.text), ...f.ch.texts()].filter(x => x.includes("Recovery assessment paused:"));
-  // One technical diagnostic, then one distinct terminal exhaustion notice.
-  assert.equal(notices.length, 2);
-  assert.equal(notices.filter(x => x.includes("budget is exhausted")).length, 1);
-  assert.equal(f.task().termination, "recovery_assessment_failed");
+  // Six one-minute ticks produce only three checks (1m, 2m, 4m backoff), not six.
+  assert.equal(notices.length, 1);
+  assert.equal(notices.filter(x => x.includes("budget is exhausted")).length, 0);
+  assert.equal(f.task().termination, undefined);
   assert.equal(f.runtime.opened.length, 0);
   assert.equal(f.store.list("mem:room1")[0].status, "blocked");
+});
+
+test("five failed dependency checks survive restart; sixth admits independent work without replaying child", async t => {
+  const f = await fixture(t);
+  const initial = f.task(); initial.expiresAt = 10_000_000;
+  f.h.restoreSessions([{ key: "mem:room1", task: initial }]);
+  for (let i = 0; i < 31; i++) { await f.h.recoverTasks(); f.advance(); }
+  assert.equal(f.calls(), 5);
+  assert.equal(f.task().termination, undefined);
+  const due = f.task().recoveryRetry!.nextAt;
+  const original = f.task().original;
+  const sessions = JSON.parse(JSON.stringify(f.h.snapshotSessions()));
+  const child = JSON.stringify(f.store.list());
+  await f.h.stop(0);
+  let now = due - 1, checks = 0, turns = 0;
+  let h: Harness;
+  h = new Harness({ runtime: new FakeRuntime(() => {
+    turns++; h.planContinuation("mem:room1", { state: "waiting" }); return "Independent authorized evidence checked";
+  }), executionStore: f.store, now: () => now, tickMs: 600000,
+    completionCheck: async input => {
+      checks++; assert.equal(input.completionAnchor?.task, original);
+      if (turns) return { state: "waiting" };
+      return { state: "continue", next: "Read independent host evidence; do not import or replay child" };
+    } });
+  h.addChannel(f.ch); h.onStateChange = async () => {};
+  h.restoreSessions(sessions);
+  try {
+    await h.recoverTasks(); assert.equal(checks, 0);
+    now = due; await h.recoverTasks(); h.releaseRestored(); await h.drained();
+    assert.equal(checks, 2); assert.equal(turns, 1);
+    assert.equal(JSON.stringify(f.store.list()), child, "unknown child effects remain execution-fenced");
+  } finally { await h.stop(0); }
 });
 
 for (const boundary of ["approval", "expiry", "stop"] as const) test(`${boundary} remains binding after a technical hold`, async t => {
