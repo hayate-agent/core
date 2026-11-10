@@ -66,3 +66,32 @@ test("a case may not carry its expectation inside the worker task text", () => {
   const leaked = parseBenchmarkSuite({ ...base(), cases: [{ ...base().cases[0], task: "Sorge dafuer, dass am Ende ALL PASS steht." }] });
   assert.throws(() => assertTaskIsolation(leaked.cases[0]), /leaks its expectation/);
 });
+
+test("deliverables and the reference solution have to be declared fixtures", () => {
+  const ok = { ...base().cases[0], deliverables: ["store.js"], referenceSolution: [{ path: "store.js", contents: "fixed\n" }] };
+  assert.doesNotThrow(() => parseBenchmarkSuite({ ...base(), cases: [ok] }));
+  assert.throws(() => parseBenchmarkSuite({ ...base(), cases: [{ ...base().cases[0], deliverables: ["test.js"] }] }), /is not a fixture/);
+  assert.throws(() => parseBenchmarkSuite({ ...base(), cases: [{ ...base().cases[0], deliverables: [] }] }), /Invalid benchmark deliverables/);
+  assert.throws(() => parseBenchmarkSuite({ ...base(), cases: [{ ...base().cases[0], referenceSolution: [{ path: "fremd.js", contents: "x" }] }] }), /is not a fixture/);
+  assert.throws(() => parseBenchmarkSuite({ ...base(), cases: [{ ...base().cases[0], referenceSolution: [{ path: "store.js", contents: "x", mode: 420 }] }] }), /unknown setting/);
+});
+
+test("the fingerprint covers the grading side, not only the task text", () => {
+  const epoch = { revision: "abc" };
+  const print = (patch: Record<string, unknown>) => suiteFingerprint(parseBenchmarkSuite({ ...base(), cases: [{ ...base().cases[0], ...patch }] }), epoch);
+  const plain = print({});
+  const reference = print({ referenceSolution: [{ path: "store.js", contents: "fix\n" }] });
+  assert.notEqual(plain, print({ verifier: "node -e 1" }));
+  assert.notEqual(plain, print({ deliverables: ["store.js"] }));
+  assert.notEqual(plain, reference);
+  assert.equal(reference, print({ referenceSolution: [{ path: "store.js", contents: "fix\n" }] }), "same content stays comparable");
+  assert.notEqual(reference, print({ referenceSolution: [{ path: "store.js", contents: "anderer fix\n" }] }));
+});
+
+test("the hidden contract check stays out of the task while the acceptance may be named", () => {
+  const leak = { ...base().cases[0], verifier: 'node -e "process.exit(0)"', task: 'Der Verifier prueft so: node -e "process.exit(0)"' };
+  assert.throws(() => assertTaskIsolation(parseBenchmarkSuite({ ...base(), cases: [leak] }).cases[0]), /leaks its verifier/);
+  const named = { ...base().cases[0], task: "Repariere store.js; das eingefrorene test.js muss danach durchlaufen." };
+  assert.doesNotThrow(() => assertTaskIsolation(parseBenchmarkSuite({ ...base(), cases: [named] }).cases[0]),
+    "naming the frozen test is how a coding task is stated");
+});

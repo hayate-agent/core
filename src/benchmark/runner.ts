@@ -5,7 +5,7 @@ import { spawn } from "node:child_process";
 import type { Execution, ExecutionStatus } from "../execution.js";
 import type { BenchmarkEpoch } from "./epoch.js";
 import { locateWorkerSessionDirs, readWorkerMetrics, type WorkerMetrics } from "./metrics.js";
-import { assertTaskIsolation, benchmarkRuns, type BenchmarkCase, type BenchmarkSuite } from "./suite.js";
+import { assertTaskIsolation, benchmarkRuns, type BenchmarkCase, type BenchmarkFixtureFile, type BenchmarkSuite } from "./suite.js";
 
 /** Structurally satisfied by Dispatcher plus ExecutionStore; narrow so a run is testable without a GPU. */
 export interface BenchmarkSubmitter {
@@ -23,14 +23,24 @@ export interface BenchmarkRunOutcome {
   taskId: string;
   requestId: string;
   pin: { model: string; thinking: string };
-  status: ExecutionStatus | "timeout";
+  status: ExecutionStatus | "timeout" | "preflight-failed";
   /** Wall clock including queueing; metrics durationMs is model time only. */
   wallMs: number;
   workspace: string;
   attempts: WorkerMetrics[];
   acceptance?: BenchmarkAcceptance;
-  /** Files the worker changed that the suite declared; always reported, never silently accepted. */
-  fixtureDrift: string[];
+  verifier?: BenchmarkAcceptance;
+  /** Fixture the worker changed as intended, i.e. the declared deliverable. */
+  fixed: string[];
+  /** Frozen fixture the worker changed. Disqualifies the run on its own. */
+  tampered: string[];
+  /** Files the worker added. Reported, not disqualifying: acceptance and verifier decide. */
+  extra: string[];
+  /** Observed in the worker session log; has to match the pin or the run proves nothing. */
+  model?: string;
+  thinkingLevel?: string;
+  pinMatches: boolean;
+  preflight?: { status: "ok" | "skipped" | "failed"; reason?: string };
   verified: boolean;
   diagnostic?: string;
 }
@@ -93,10 +103,12 @@ export class BenchmarkRunner {
     return `${item.task}\n\nArbeitsverzeichnis: ${workspace}\nAlle Dateien dieses Falls liegen dort; arbeite ausschließlich in diesem Verzeichnis.`;
   }
 
-  private async materialize(item: BenchmarkCase, workspace: string): Promise<Map<string, string>> {
+  private async materialize(item: BenchmarkCase, workspace: string, override: readonly BenchmarkFixtureFile[] = []): Promise<Map<string, string>> {
     await mkdir(workspace, { recursive: true });
+    const contents = new Map(item.fixtures.map(fixture => [fixture.path, fixture.contents] as const));
+    for (const file of override) contents.set(file.path, file.contents);
     const declared = new Map<string, string>();
-    for (const fixture of item.fixtures) {
+    for (const fixture of item.fixtures.map(file => ({ path: file.path, contents: contents.get(file.path)! }))) {
       const target = path.join(workspace, fixture.path);
       await mkdir(path.dirname(target), { recursive: true });
       await writeFile(target, fixture.contents);
@@ -105,16 +117,62 @@ export class BenchmarkRunner {
     return declared;
   }
 
-  private async drift(workspace: string, declared: Map<string, string>): Promise<string[]> {
-    const changed: string[] = [];
+  /**
+   * Splits what the worker touched into intended and unintended. A coding case has to
+   * change its deliverable, so "nothing changed" is not a validity criterion; only a
+   * change to a frozen file is. Extra files are reported, not disqualifying.
+   */
+  private async drift(workspace: string, declared: Map<string, string>, deliverables: ReadonlySet<string>): Promise<{ fixed: string[]; tampered: string[]; extra: string[] }> {
+    const fixed: string[] = [];
+    const tampered: string[] = [];
+    const extra: string[] = [];
     for (const [fixture, expected] of declared) {
-      try {
-        if (digest(await readFile(path.join(workspace, fixture), "utf8")) !== expected) changed.push(fixture);
-      } catch {
-        changed.push(`${fixture} (missing)`);
-      }
+      let actual: string | undefined;
+      try { actual = digest(await readFile(path.join(workspace, fixture), "utf8")); } catch { actual = undefined; }
+      if (actual === expected) continue;
+      (deliverables.has(fixture) ? fixed : tampered).push(fixture);
     }
-    return changed;
+    const declaredPaths = new Set(declared.keys());
+    const list = async (dir: string): Promise<string[]> => {
+      const { readdirSync } = await import("node:fs");
+      const found: string[] = [];
+      for (const entry of readdirSync(dir, { withFileTypes: true }) as unknown as Array<{ name: string; isDirectory(): boolean; isFile(): boolean }>) {
+        if (entry.isDirectory()) found.push(...await list(path.join(dir, entry.name)));
+        else if (entry.isFile()) found.push(path.relative(workspace, path.join(dir, entry.name)));
+      }
+      return found;
+    };
+    try { extra.push(...(await list(workspace)).filter(file => !declaredPaths.has(file))); } catch { /* workspace gone */ }
+    return { fixed, tampered, extra };
+  }
+
+  /**
+   * Proves the instrument before any worker time is spent: a case that already passes
+   * measures nothing, and a case the reference fix cannot solve is unmeasurable. Both
+   * were observed failures of a hand-built fixture, not hypothetical ones.
+   */
+  private async preflight(item: BenchmarkCase, dir: string): Promise<{ ok: boolean; reason?: string }> {
+    const execute = this.options.execute ?? defaultExecute;
+    const contract = item.acceptance ?? item.verifier;
+    if (!contract) return { ok: true, reason: "keine harness-seitige Prüfung deklariert" };
+    const broken = path.join(dir, "broken");
+    await this.materialize(item, broken);
+    const before = await execute(contract.replaceAll("{workspace}", broken), broken, this.options.caseTimeoutMs);
+    if (before.exitCode === 0) return { ok: false, reason: "Fall ist ohne Worker-Änderung bereits gelöst - er misst nichts" };
+    if (!item.referenceSolution) return { ok: true, reason: "Referenzlösung fehlt: Löslbarkeit ungeprüft" };
+    const solved = path.join(dir, "solved");
+    await this.materialize(item, solved, item.referenceSolution);
+    if (item.acceptance) {
+      const result = await execute(item.acceptance.replaceAll("{workspace}", solved), solved, this.options.caseTimeoutMs);
+      if (result.exitCode !== 0) return { ok: false, reason: `Referenzlösung besteht acceptance nicht (Exit ${result.exitCode}): ${result.output.slice(-200)}` };
+    }
+    if (item.verifier) {
+      const verifyDir = path.join(dir, "verifier");
+      await mkdir(verifyDir, { recursive: true });
+      const result = await execute(item.verifier.replaceAll("{workspace}", solved), verifyDir, this.options.caseTimeoutMs);
+      if (result.exitCode !== 0) return { ok: false, reason: `Referenzlösung besteht Verifier nicht (Exit ${result.exitCode}): ${result.output.slice(-200)}` };
+    }
+    return { ok: true };
   }
 
   private async settle(taskId: string): Promise<ExecutionStatus | "timeout"> {
@@ -145,16 +203,28 @@ export class BenchmarkRunner {
       const item = suite.cases.find(candidate => candidate.id === schedule.caseId)!;
       assertTaskIsolation(item);
       const workspace = path.join(runDir, "workspace", `${item.id}-${schedule.repeat}`);
+      const privateRoot = path.join(runDir, "verify", `${item.id}-${schedule.repeat}`);
       const declared = await this.materialize(item, workspace);
       const requestId = `benchmark:${item.id}:${schedule.repeat}:${record.id}`;
       const started = this.stamp();
       const outcome: BenchmarkRunOutcome = {
         caseId: item.id, repeat: schedule.repeat, taskId: "", requestId,
         pin: { model: schedule.pin.model, thinking: schedule.pin.thinking },
-        status: "ready", wallMs: 0, workspace, attempts: [], fixtureDrift: [], verified: false,
+        status: "ready", wallMs: 0, workspace, attempts: [], fixed: [], tampered: [], extra: [],
+        pinMatches: false, verified: false,
       };
       record.outcomes.push(outcome);
       try {
+        if (item.task.includes(runDir)) throw Error(`Benchmark case ${item.id} nennt den Laufordner im Task-Text`);
+        const pre = await this.preflight(item, path.join(runDir, "preflight", `${item.id}-${schedule.repeat}`));
+        outcome.preflight = { status: pre.ok ? "ok" : "failed", reason: pre.reason };
+        if (!pre.ok) {
+          outcome.status = "preflight-failed";
+          outcome.diagnostic = `Preflight: ${pre.reason}`;
+          onProgress?.(structuredClone(outcome));
+          await this.save(record, runDir);
+          continue;
+        }
         const task = await this.dispatcher.submitScheduled(this.options.parent, requestId, this.taskText(item, workspace), mandate, schedule.pin);
         outcome.taskId = task.id;
         outcome.status = await this.settle(task.id);
@@ -163,16 +233,41 @@ export class BenchmarkRunner {
         outcome.diagnostic = error instanceof Error ? error.message : String(error);
       }
       outcome.wallMs = this.stamp() - started;
-      outcome.fixtureDrift = await this.drift(workspace, declared);
+      const drift = await this.drift(workspace, declared, new Set(item.deliverables ?? []));
+      outcome.fixed = drift.fixed;
+      outcome.tampered = drift.tampered;
+      outcome.extra = drift.extra;
       for (const sessionDir of locateWorkerSessionDirs(this.options.home, outcome.taskId))
         outcome.attempts.push(readWorkerMetrics(sessionDir));
+      const bareModel = item.model.split("/").pop() ?? item.model;
+      outcome.model = outcome.attempts[0]?.model;
+      outcome.thinkingLevel = outcome.attempts[0]?.thinkingLevel;
+      outcome.pinMatches = outcome.attempts.length > 0 && outcome.attempts.every(
+        attempt => attempt.model === bareModel && attempt.thinkingLevel === item.thinking);
+      const execute = this.options.execute ?? defaultExecute;
       if (item.acceptance) {
-        const execute = this.options.execute ?? defaultExecute;
-        const result = await execute(item.acceptance, workspace, this.options.caseTimeoutMs);
+        const result = await execute(item.acceptance.replaceAll("{workspace}", workspace), workspace, this.options.caseTimeoutMs);
         outcome.acceptance = { command: item.acceptance, exitCode: result.exitCode, outputTail: result.output.slice(-1_000) };
       }
-      outcome.verified = outcome.status === "completed" && outcome.fixtureDrift.length === 0
-        && (outcome.acceptance ? outcome.acceptance.exitCode === 0 : Boolean(this.dispatcher.list(this.options.parent).find(task => task.id === outcome.taskId)?.result));
+      if (item.verifier) {
+        // Runs from a private directory outside the workspace: the worker never reads the contract check.
+        const privateDir = privateRoot;
+        await mkdir(privateDir, { recursive: true });
+        const result = await execute(item.verifier.replaceAll("{workspace}", workspace), privateDir, this.options.caseTimeoutMs);
+        outcome.verifier = { command: item.verifier, exitCode: result.exitCode, outputTail: result.output.slice(-1_000) };
+      }
+      const acceptanceOk = item.acceptance
+        ? outcome.acceptance?.exitCode === 0
+        : Boolean(this.dispatcher.list(this.options.parent).find(task => task.id === outcome.taskId)?.result);
+      const verifierOk = item.verifier ? outcome.verifier?.exitCode === 0 : true;
+      outcome.verified = outcome.status === "completed" && outcome.tampered.length === 0
+        && outcome.pinMatches && acceptanceOk && verifierOk;
+      if (!outcome.verified && !outcome.diagnostic) {
+        if (!outcome.pinMatches) outcome.diagnostic = `Pin-Abgleich: beobachtet ${outcome.model ?? "unbekannt"}/${outcome.thinkingLevel ?? "unbekannt"}, erwartet ${bareModel}/${item.thinking}`;
+        else if (outcome.tampered.length) outcome.diagnostic = `eingefrorene Dateien geändert: ${outcome.tampered.join(", ")}`;
+        else if (!verifierOk) outcome.diagnostic = `Verifier Exit ${outcome.verifier?.exitCode ?? "unbekannt"}`;
+        else if (!acceptanceOk) outcome.diagnostic = `Acceptance Exit ${outcome.acceptance?.exitCode ?? "ohne Ergebnis"}`;
+      }
       onProgress?.(structuredClone(outcome));
       await this.save(record, runDir);
     }

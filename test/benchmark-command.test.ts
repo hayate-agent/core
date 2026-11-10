@@ -9,7 +9,7 @@ import { FakeRuntime, MemoryChannel, msg } from "./fakes.js";
 function outcome(over: Partial<BenchmarkRunRecord["outcomes"][number]> = {}) {  return {
     caseId: "cache-reset", repeat: 1, taskId: "t1", requestId: "r1",
     pin: { model: "homelab/qwen3.8-27b-coder", thinking: "xhigh" }, status: "completed" as const,
-    wallMs: 1500, workspace: "/tmp/w", attempts: [], fixtureDrift: [], verified: true, ...over,
+    wallMs: 1500, workspace: "/tmp/w", attempts: [], fixed: [], tampered: [], extra: [], pinMatches: true, verified: true, ...over,
   };
 }
 
@@ -51,8 +51,8 @@ function fakeService(over: Partial<BenchmarkService> = {}): Partial<BenchmarkSer
     }),
     run: async (_name, _parent, onProgress) => {
       onProgress?.(outcome());
-      onProgress?.(outcome({ repeat: 2, verified: false, status: "timeout", fixtureDrift: ["test.js"] }));
-      return { id: "levels-1", suite: "levels", fingerprint: "fp", epoch: EPOCH, startedAt: 1, finishedAt: 2, outcomes: [outcome(), outcome({ repeat: 2, verified: false, status: "timeout", fixtureDrift: ["test.js"] })] };
+      onProgress?.(outcome({ repeat: 2, verified: false, status: "timeout", tampered: ["test.js"] }));
+      return { id: "levels-1", suite: "levels", fingerprint: "fp", epoch: EPOCH, startedAt: 1, finishedAt: 2, outcomes: [outcome(), outcome({ repeat: 2, verified: false, status: "timeout", tampered: ["test.js"] })] };
     },
     report: async (suite?: string) => `Bericht${suite ? ` für ${suite}` : ""}`,
     latest: async () => [],
@@ -108,8 +108,8 @@ test("a started run answers immediately and reports progress while the workers r
   await until(() => env.delivered.some(text => /### levels — levels-1/.test(text)), "Abschlusstabellen-Bericht");
   const progress = env.delivered.filter(text => text.startsWith("Benchmark cache-reset#"));
   assert.equal(progress.length, 2, "one progress line per outcome");
-  assert.match(progress[0]!, /cache-reset#1 \[xhigh\] completed · 0 Attempt\(s\) · Fixtures unverändert · verifiziert/);
-  assert.match(progress[1]!, /Drift: test\.js · NICHT verifiziert/);
+  assert.match(progress[0]!, /cache-reset#1 \[xhigh\] completed · 0 Attempt\(s\) · nichts gefixt · verifiziert/);
+  assert.match(progress[1]!, /manipuliert: test\.js · NICHT verifiziert/);
   assert.match(env.delivered.find(text => /### levels/.test(text))!, /Nicht verifiziert:/);
 });
 

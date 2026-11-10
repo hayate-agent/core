@@ -14,7 +14,7 @@ function outcome(over: Partial<BenchmarkRunOutcome> = {}): BenchmarkRunOutcome {
   return {
     caseId: "cache-reset", repeat: 1, taskId: "t", requestId: "r",
     pin: { model: "homelab/qwen3.8-27b-coder", thinking: "medium" }, status: "completed",
-    wallMs: 2000, workspace: "/tmp/w", attempts: [attempt()], fixtureDrift: [], verified: true, ...over,
+    wallMs: 2000, workspace: "/tmp/w", attempts: [attempt()], fixed: [], tampered: [], extra: [], pinMatches: true, verified: true, ...over,
   };
 }
 
@@ -44,17 +44,18 @@ test("a level is summarised with medians and p95 over its runs", () => {
   assert.deepEqual([off.wallMedianMs, off.wallP95Ms], [2000, 2000]);
 });
 
-test("unverified, drifting, timed out and restarted runs are counted, not hidden", () => {
+test("a fixed deliverable counts, a tampered fixture does not, and neither is hidden", () => {
   const summaries = summarizeRecord(record("r2", [
     outcome({ verified: false, status: "timeout", attempts: [] }),
-    outcome({ fixtureDrift: ["test.js"] }),
+    outcome({ tampered: ["test.js"], verified: false }),
+    outcome({ fixed: ["store.js"] }),
     outcome({ attempts: [attempt(), attempt()] }),
     outcome({ verified: false, diagnostic: "Pinned worker thinking level unsupported: xhigh" }),
   ]));
   assert.equal(summaries.length, 1);
   const summary = summaries[0]!;
-  assert.deepEqual([summary.runs, summary.verified, summary.attempts], [4, 2, 4]);
-  assert.deepEqual([summary.driftedRuns, summary.timedOutRuns], [1, 1]);
+  assert.deepEqual([summary.runs, summary.verified, summary.attempts], [5, 2, 5]);
+  assert.deepEqual([summary.fixedRuns, summary.tamperedRuns, summary.timedOutRuns], [1, 1, 1]);
 });
 
 test("the report renders a table for runs of the current epoch", () => {

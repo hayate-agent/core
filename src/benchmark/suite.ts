@@ -16,8 +16,21 @@ export interface BenchmarkCase {
   model: string;
   thinking: ThinkingLevel;
   fixtures: BenchmarkFixtureFile[];
-  /** Harness-side shell check; exit code 0 means the case passed. */
+  /** Harness-side shell check; exit code 0 means the case passed. {workspace} expands to the worker directory. */
   acceptance?: string;
+  /** Files the worker is expected to change. A change to any other fixture is tampering. */
+  deliverables?: string[];
+  /**
+   * Contract check executed from a private directory outside the worker workspace, so a
+   * worker that can reach the shared filesystem still cannot read how it is graded.
+   * {workspace} expands to the worker directory.
+   */
+  verifier?: string;
+  /**
+   * Reference fix applied only during the preflight to prove the case is solvable. Never
+   * materialised into the worker workspace.
+   */
+  referenceSolution?: BenchmarkFixtureFile[];
   /** Expected observable outcome, kept out of the worker task text. */
   expectation?: string;
   repeats?: number;
@@ -61,7 +74,7 @@ export function parseBenchmarkSuite(value: unknown): BenchmarkSuite {
   const cases = suite.cases.map(item => {
     if (!item || typeof item !== "object" || Array.isArray(item)) throw Error("Invalid benchmark case");
     const entry = item as Record<string, unknown>;
-    const allowed = ["id", "task", "model", "thinking", "fixtures", "acceptance", "expectation", "repeats"];
+    const allowed = ["id", "task", "model", "thinking", "fixtures", "acceptance", "deliverables", "verifier", "referenceSolution", "expectation", "repeats"];
     if (Object.keys(entry).some(key => !allowed.includes(key))) throw Error("Invalid benchmark case: unknown setting");
     const id = safeId(entry.id);
     if (seen.has(id)) throw Error(`Duplicate benchmark case id: ${id}`);
@@ -82,6 +95,28 @@ export function parseBenchmarkSuite(value: unknown): BenchmarkSuite {
     if (new Set(paths).size !== paths.length) throw Error(`Duplicate benchmark fixture in ${id}`);
     const caseRepeats = entry.repeats;
     if (caseRepeats !== undefined && (!Number.isInteger(caseRepeats) || (caseRepeats as number) < 1 || (caseRepeats as number) > LIMITS.repeats)) throw Error(`Invalid benchmark repeats of ${id}`);
+    // A deliverable has to be a declared fixture: otherwise a run could "fix" a file nobody owns.
+    let deliverables: string[] | undefined;
+    if (entry.deliverables !== undefined) {
+      if (!Array.isArray(entry.deliverables) || !entry.deliverables.length) throw Error(`Invalid benchmark deliverables of ${id}`);
+      deliverables = entry.deliverables.map(value => relativePath(value, id));
+      if (new Set(deliverables).size !== deliverables.length) throw Error(`Duplicate benchmark deliverable of ${id}`);
+      for (const file of deliverables) if (!paths.includes(file)) throw Error(`Benchmark deliverable ${file} of ${id} is not a fixture`);
+    }
+    // The reference fix may only touch declared fixtures, and has to be a real solution.
+    let referenceSolution: BenchmarkFixtureFile[] | undefined;
+    if (entry.referenceSolution !== undefined) {
+      if (!Array.isArray(entry.referenceSolution) || !entry.referenceSolution.length) throw Error(`Invalid benchmark reference solution of ${id}`);
+      referenceSolution = entry.referenceSolution.map(file => {
+        if (!file || typeof file !== "object" || Array.isArray(file)) throw Error(`Invalid benchmark reference solution file of ${id}`);
+        const record = file as Record<string, unknown>;
+        if (Object.keys(record).some(key => !(["path", "contents"] as string[]).includes(key))) throw Error(`Invalid benchmark reference solution of ${id}: unknown setting`);
+        return { path: relativePath(record.path, id), contents: typeof record.contents === "string" ? record.contents : "" };
+      });
+      const refPaths = referenceSolution.map(file => file.path);
+      if (new Set(refPaths).size !== refPaths.length) throw Error(`Duplicate benchmark reference solution file of ${id}`);
+      for (const file of refPaths) if (!paths.includes(file)) throw Error(`Benchmark reference solution file ${file} of ${id} is not a fixture`);
+    }
     return {
       id,
       task: text(entry.task, `task of ${id}`, LIMITS.task),
@@ -89,6 +124,9 @@ export function parseBenchmarkSuite(value: unknown): BenchmarkSuite {
       thinking: pin.thinking,
       fixtures,
       ...(entry.acceptance === undefined ? {} : { acceptance: text(entry.acceptance, `acceptance of ${id}`, LIMITS.acceptance) }),
+      ...(deliverables === undefined ? {} : { deliverables }),
+      ...(entry.verifier === undefined ? {} : { verifier: text(entry.verifier, `verifier of ${id}`, LIMITS.acceptance) }),
+      ...(referenceSolution === undefined ? {} : { referenceSolution }),
       ...(entry.expectation === undefined ? {} : { expectation: text(entry.expectation, `expectation of ${id}`, LIMITS.task) }),
       ...(caseRepeats === undefined ? {} : { repeats: caseRepeats as number }),
     } satisfies BenchmarkCase;
@@ -109,6 +147,8 @@ export function benchmarkRuns(suite: BenchmarkSuite): BenchmarkRun[] {
 export function suiteFingerprint(suite: BenchmarkSuite, epoch: Record<string, string | number> = {}): string {
   const canonical = JSON.stringify({ suite: suite.name, repeats: suite.repeats, epoch, cases: suite.cases.map(item => [
     item.id, item.task, item.model, item.thinking, item.acceptance ?? "", item.expectation ?? "", item.repeats ?? suite.repeats,
+    item.deliverables ?? [], item.verifier ?? "",
+    (item.referenceSolution ?? []).map(file => [file.path, createHash("sha256").update(file.contents).digest("hex")]),
     item.fixtures.map(file => [file.path, createHash("sha256").update(file.contents).digest("hex")]),
   ]) });
   return createHash("sha256").update(canonical).digest("hex");
@@ -120,7 +160,13 @@ export function suiteFingerprint(suite: BenchmarkSuite, epoch: Record<string, st
  * must therefore never carry the expected outcome.
  */
 export function assertTaskIsolation(item: BenchmarkCase): void {
-  if (!item.expectation) return;
-  const needle = item.expectation.trim().toLowerCase();
-  if (needle && item.task.toLowerCase().includes(needle)) throw Error(`Benchmark case ${item.id} leaks its expectation into the task text`);
+  if (item.expectation) {
+    const needle = item.expectation.trim().toLowerCase();
+    if (needle && item.task.toLowerCase().includes(needle)) throw Error(`Benchmark case ${item.id} leaks its expectation into the task text`);
+  }
+  // The verifier is the hidden grader: quoting it would let a worker special-case it.
+  // The acceptance command is different - telling the worker "make node test.js pass" is
+  // the normal way to state a coding task, and that test is frozen either way.
+  if (item.verifier && item.task.includes(item.verifier))
+    throw Error(`Benchmark case ${item.id} leaks its verifier into the task text`);
 }

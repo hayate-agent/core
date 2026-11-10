@@ -22,17 +22,30 @@ cases:
     expectation: ALL PASS
 `;
 
+/** Same shape as a real dispatch_* worker session, so a run can prove its pin. */
+async function seedSession(home: string, taskId: string) {
+  const dir = path.join(home, "sessions", `dispatch_${taskId}_a1`);
+  await mkdir(dir, { recursive: true });
+  await writeFile(path.join(dir, "2026-11-10T00-00-00-000Z_session.jsonl"), JSON.stringify({
+    type: "message",
+    message: { role: "assistant", model: "qwen3.8-27b-coder", thinkingLevel: "xhigh", durationMs: 1_500,
+      usage: { input: 100, output: 40, totalTokens: 140 }, content: [{ type: "text", text: "fertig" }] },
+  }) + "\n");
+}
+
 class FakeSubmitter implements BenchmarkSubmitter {
   inputs: string[] = [];
   pinned: unknown[] = [];
   ids: string[] = [];
   release: (() => void) | undefined;
   gate = false;
+  constructor(private readonly home: string) { }
   async submitScheduled(_parent: string, requestId: string, input: string, _mandate: unknown, pinned?: unknown) {
     this.inputs.push(input);
     this.pinned.push(pinned);
     const id = `task-${requestId}`;
     this.ids.push(id);
+    await seedSession(this.home, id);
     return { id };
   }
   async waitForExecution() { if (this.gate) { this.gate = false; await new Promise<void>(resolve => { this.release = resolve; }); } }
@@ -42,10 +55,14 @@ class FakeSubmitter implements BenchmarkSubmitter {
 
 async function environment(enabled = true) {
   const home = await mkdtemp(path.join(os.tmpdir(), "benchmark-service-"));
-  const dispatcher = new FakeSubmitter();
+  const dispatcher = new FakeSubmitter(home);
   const service = new BenchmarkService(dispatcher, {
     home, config: () => ({ enabled, capacity: 1, repeats: 3, caseTimeoutMs: 60_000 }),
-    now: () => 1_700_000_000_000, execute: async () => ({ exitCode: 0, output: "ALL PASS" }),
+    now: () => 1_700_000_000_000,
+    // Faithful to the fixture: the untouched case is broken, the finished one passes.
+    execute: async (_command: string, cwd: string) => ({
+      exitCode: cwd.includes(`${path.sep}preflight${path.sep}`) ? 1 : 0, output: "ALL PASS",
+    }),
   });
   return { home, dispatcher, service, cleanup: () => rm(home, { recursive: true, force: true }) };
 }

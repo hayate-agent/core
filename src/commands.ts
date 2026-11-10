@@ -227,7 +227,10 @@ export const COMMANDS: Command[] = [
       const report = (text: string) => ctx.harness.deliver(undefined, text).catch(() => undefined);
       const running = service.run(sub, input.sessionKey, outcome => void report(
         `Benchmark ${outcome.caseId}#${outcome.repeat} [${outcome.pin.thinking}] ${outcome.status} · `
-        + `${outcome.attempts.length} Attempt(s) · ${outcome.fixtureDrift.length ? `Drift: ${outcome.fixtureDrift.join(",")}` : "Fixtures unverändert"} · `
+        + `${outcome.attempts.length} Attempt(s) · `
+        + `${outcome.fixed.length ? `fixed: ${outcome.fixed.join(",")}` : "nichts gefixt"}`
+        + `${outcome.tampered.length ? ` · manipuliert: ${outcome.tampered.join(",")}` : ""} · `
+        + `${outcome.thinkingLevel ? `gesehen ${outcome.model}/${outcome.thinkingLevel} · ` : ""}`
         + (outcome.verified ? "verifiziert" : "NICHT verifiziert")));
       void running.then(record => report(renderBenchmarkReport([record])),
         error => report(`Benchmark ${sub} fehlgeschlagen: ${error instanceof Error ? error.message : String(error)}`));

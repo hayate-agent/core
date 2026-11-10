@@ -31,7 +31,10 @@ export interface BenchmarkLevelSummary {
   modelTimeP95Ms: number;
   wallMedianMs: number;
   wallP95Ms: number;
-  driftedRuns: number;
+  /** Runs where the worker changed its declared deliverable (expected for coding cases). */
+  fixedRuns: number;
+  /** Runs where the worker touched a frozen file - these never count as verified. */
+  tamperedRuns: number;
   timedOutRuns: number;
 }
 
@@ -85,7 +88,8 @@ export function summarizeRecord(record: BenchmarkRunRecord): BenchmarkLevelSumma
       modelTimeP95Ms: p95(costs.map(cost => cost.durationMs)),
       wallMedianMs: median(outcomes.map(outcome => outcome.wallMs)),
       wallP95Ms: p95(outcomes.map(outcome => outcome.wallMs)),
-      driftedRuns: outcomes.filter(outcome => outcome.fixtureDrift.length).length,
+      fixedRuns: outcomes.filter(outcome => outcome.fixed.length).length,
+      tamperedRuns: outcomes.filter(outcome => outcome.tampered.length).length,
       timedOutRuns: outcomes.filter(outcome => outcome.status === "timeout").length,
     };
   }).sort((left, right) => left.model.localeCompare(right.model) || left.thinking.localeCompare(right.thinking));
@@ -94,7 +98,7 @@ export function summarizeRecord(record: BenchmarkRunRecord): BenchmarkLevelSumma
 function row(summary: BenchmarkLevelSummary): string {
   const flags = [
     summary.verified < summary.runs ? `unverifiziert:${summary.runs - summary.verified}` : "",
-    summary.driftedRuns ? `fixtureDrift:${summary.driftedRuns}` : "",
+    summary.tamperedRuns ? `manipuliert:${summary.tamperedRuns}` : "",
     summary.timedOutRuns ? `timeout:${summary.timedOutRuns}` : "",
     summary.attempts > summary.runs ? `restarts:${summary.attempts - summary.runs}` : "",
   ].filter(Boolean).join(" ");
@@ -138,7 +142,8 @@ export function renderBenchmarkReport(records: BenchmarkRunRecord[], current?: B
       lines.push("Nicht verifiziert:");
       for (const outcome of unverified.slice(0, 10))
         lines.push(`- ${outcome.caseId}#${outcome.repeat} [${outcome.pin.thinking}] ${outcome.status}`
-          + `${outcome.fixtureDrift.length ? ` drift:${outcome.fixtureDrift.join(",")}` : ""}`
+          + `${outcome.tampered.length ? ` tampered:${outcome.tampered.join(",")}` : ""}`
+          + `${outcome.model && outcome.thinkingLevel ? ` gesehen:${outcome.model}/${outcome.thinkingLevel}` : ""}`
           + `${outcome.acceptance && outcome.acceptance.exitCode !== 0 ? ` acceptance:${outcome.acceptance.exitCode}` : ""}`
           + `${outcome.diagnostic ? ` ${outcome.diagnostic}` : ""}`);
       if (unverified.length > 10) lines.push(`- … und ${unverified.length - 10} weitere`);
