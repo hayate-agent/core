@@ -2,7 +2,7 @@ import { classifyComplexity, resolveModelRole, resolveWorkerPin, type ModelRoles
 import { taskContextLabel } from "./builtin-plugins/execution-metadata.js";
 import { TurnActivity } from "./activity.js";
 import { labelOutput } from "./hashtags.js";
-import { ExecutionWorkerFailure, type Execution, type ExecutionEvent } from "./execution.js";
+import { ExecutionWorkerFailure, executionTarget, type Execution, type ExecutionEvent } from "./execution.js";
 import { ToolGuardError } from "./tool-guard-error.js";
 import { childDeniedTools } from "./child-tools.js";
 import { pickModelRule, type DispatchModelRule } from "./dispatcher-config.js";
@@ -36,7 +36,7 @@ export class DispatcherRuntime {
   approvalTarget(key: string): Address | undefined {
     const task = this.taskForSession(key);
     if (!task) return undefined;
-    const target = task.dependency?.anchor?.replyTo ?? this.harness.home;
+    const target = executionTarget(task, this.harness.home);
     return target?.channel === "dispatch" || target?.channel === "subagents" ? undefined : target;
   }
   /** Exact persisted parent+execution lookup, never current conversation focus. */
@@ -99,7 +99,7 @@ export class DispatcherRuntime {
             const dispatcher = await resolveModelRole(this.harness.runtime, snapshot.config, "dispatcher", snapshot.defaults);
             const requested = snapshot.config.roles?.dispatcher ?? snapshot.defaults;
             await this.store.observeClassifier(task.id, task.token!, requested);
-            const target = task.dependency?.anchor?.replyTo ?? this.harness.home;
+            const target = executionTarget(task, this.harness.home);
             const activity = new TurnActivity({ id: `classifier-${task.id}-${task.token}`, role: "dispatcher-classifier",
               parent: task.id, context: "host", outputTags: task.dependency?.anchor?.outputTags }, event => {
               if (target) this.harness.channels.get(target.channel)?.taskActivity?.(target, { ...event, snapshot: { ...event.snapshot, parent: task.id } }, {

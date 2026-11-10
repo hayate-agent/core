@@ -54,6 +54,8 @@ export class Dispatcher {
     retained: readonly DispatcherStrategy[] = [],
     private readonly parentEnabled: (parent: string) => boolean = () => true,
     private readonly parallelAdmission?: import("./parallel-admission.js").ParallelAdmission,
+    /** Host-captured address of the parent's current turn; persisted so results return to the requesting room. */
+    private readonly origin?: (parent: string) => Execution["origin"],
   ) {
     if (!Number.isSafeInteger(capacity) || capacity < 1) throw Error("Invalid dispatcher capacity");
     for (const item of [strategy, ...retained])
@@ -93,7 +95,7 @@ export class Dispatcher {
     if (pinned !== undefined) validateWorkerPin(pinned);
     this.submitting++;
     try {
-      const task = await this.store.submit(parent, requestId, input, this.strategy.name, this.strategy.version, mandate, pinned);
+      const task = await this.store.submit(parent, requestId, input, this.strategy.name, this.strategy.version, mandate, pinned, this.origin?.(parent));
       await this.kick();
       return task;
     } finally { this.submitting--; }
@@ -102,7 +104,7 @@ export class Dispatcher {
     if (!this.recovered || this.stopped || this.admissionFenced()) throw Error("Dispatcher unavailable");
     this.submitting++;
     try {
-      const task = await this.store.submit(parent, requestId, input, this.strategy.name, this.strategy.version, this.checkpoint?.(parent));
+      const task = await this.store.submit(parent, requestId, input, this.strategy.name, this.strategy.version, this.checkpoint?.(parent), undefined, this.origin?.(parent));
       await this.kick();
       return task;
     } finally { this.submitting--; }

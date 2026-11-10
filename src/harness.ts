@@ -13,6 +13,7 @@ import { TurnActivity } from "./activity.js";
 import { continuationProvenance, continuationRequest } from "./continuation-provenance.js";
 import { deliverTaskStatus, routineWait, taskStatusId } from "./notification-routing.js";
 import type { PersistedSession } from "./state.js";
+import { executionTarget } from "./execution.js";
 import type { Address, AgentRuntime, BusyMode, Channel, Inbound, PromptOptions, RuntimeSession, SendMeta, TurnEvent, TurnOutcome } from "./types.js";
 import { InboxLedger, idsOf, replayable } from "./delivery/inbox.js";
 import { parseHashtags, selectHashtagContext, hashtagContext } from "./hashtags.js";
@@ -991,6 +992,15 @@ export class Harness {
     }
     await this.onStateChange();
     return { taskId: task.id, original: task.original, depth: task.depth, anchor: task.anchor };
+  }
+
+  /** Address the parent's current turn replies to (same rule as its own reply), without home fallback.
+   * Captured at dispatch submission so delayed results return to the requesting room/thread. */
+  dispatchOrigin(key: string): Address | undefined {
+    const s = this.sessions.get(key), input = s?.current;
+    if (!s || !input) return;
+    const to = input.source === "host" || input.source === "cron" ? input.replyTo : input.replyTo ?? s.replyTo;
+    return to ? structuredClone(to) : undefined;
   }
 
   /** Capture trusted parent state, never model tool arguments. */
@@ -2072,7 +2082,7 @@ export class Harness {
           // Routing is execution provenance, independent of current parent authority.
           // Legacy records fall back to home, never the latest conversation topic.
           const execution = this.opts.executionStore?.list(s.key).find(e => e.id === input.hostEvent?.executionId);
-          input.replyTo = structuredClone(execution?.dependency?.anchor?.replyTo ?? this.home);
+          input.replyTo = structuredClone(executionTarget(execution, this.home));
           const mandate = this.resultMandate(input);
           input.taskId = mandate?.taskId;
           input.completionAnchor = structuredClone(mandate?.anchor);
