@@ -120,11 +120,37 @@ Five checks decide whether a number may appear in the report:
    nothing.
 3. **Acceptance outside the worker** — `acceptance` runs in the prepared workspace after
    the worker is done; the worker's own claim of "tests pass" is never sufficient.
-4. **Verifier outside the workspace** — the hidden contract check runs with a private
-   directory as working directory, so grading logic is not readable where the worker is.
+4. **Verifier outside the workspace and out of the record** — the hidden contract check
+   runs with a private directory as working directory, and the persisted record stores
+   the command only as `sha256:<fingerprint>`. Neither the workspace nor `record.json`
+   (reachable from it via `../../record.json`) reveals how the case is graded.
 5. **Pin match** — the worker session log has to show the pinned model and thinking
    level. A run that silently executed at another level is excluded rather than averaged
    in; this caught a run submitted as `off` that actually ran `medium`.
+
+### Where the answer key must never be
+
+The first campaign produced a worker that reconstructed its own fixture from the parent
+transcript, so isolation is treated as a measured property, not an assumption. Three
+leak classes are closed by construction, each with a regression test:
+
+- The **preflight** materializes the reference solution. It runs in
+  `<home>/benchmark/evidence/<run>/preflight/<case>-<repeat>/` and is deleted in a
+  `finally` block, so no `solved/` copy ever sits inside the run tree where a worker
+  could reach it with `../preflight/…`.
+- A **finished workspace** is moved to `<home>/benchmark/evidence/<run>/workspace/…`
+  once acceptance, verifier and drift are computed, and `outcome.workspace` points
+  there. With `capacity: 1` the cases of a suite run one after another on the same
+  fixture; without this, the second worker would find the first worker's fix at
+  `../<other-case>-<repeat>/`.
+- **Directories are created `0700`** and a new case clears any leftover from an aborted
+  predecessor out of its own tree before submitting.
+
+This is defence against a worker that stays inside the directory it was given. Worker and
+harness share one OS user, so a worker that deliberately walks the filesystem can still
+find material it was not shown; the gates above make such a run detectable (tampered,
+pin mismatch, verifier) but not physically impossible. Suites with a `verifier` are
+therefore treated as confidential even though they are stored world-readably by the OS.
 
 Unverified, tampered, preflight-failed, timed-out and cancelled outcomes are listed
 separately and excluded from `OK`.
