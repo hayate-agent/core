@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import type { Execution, ExecutionStatus } from "../execution.js";
@@ -99,12 +99,27 @@ export class BenchmarkRunner {
   private stamp(): number { return this.options.now?.() ?? Date.now(); }
 
   /** Task text deliberately carries the workspace path and nothing that reveals the expected outcome. */
+  /** Remove a directory tree; used to keep answer keys away from a running worker. */
+  private async purge(dir: string): Promise<void> {
+    await rm(dir, { recursive: true, force: true });
+  }
+
+  /**
+   * Move a finished workspace into private evidence. The next worker must not find a
+   * solved neighbour at ../<other>-<n>/, but the solved files stay on disk for forensics.
+   */
+  private async stash(src: string, dest: string): Promise<void> {
+    await mkdir(path.dirname(dest), { recursive: true, mode: 0o700 });
+    await this.purge(dest);
+    try { await rename(src, dest); } catch { await this.purge(src); }
+  }
+
   private taskText(item: BenchmarkCase, workspace: string): string {
     return `${item.task}\n\nArbeitsverzeichnis: ${workspace}\nAlle Dateien dieses Falls liegen dort; arbeite ausschließlich in diesem Verzeichnis.`;
   }
 
   private async materialize(item: BenchmarkCase, workspace: string, override: readonly BenchmarkFixtureFile[] = []): Promise<Map<string, string>> {
-    await mkdir(workspace, { recursive: true });
+    await mkdir(workspace, { recursive: true, mode: 0o700 });
     const contents = new Map(item.fixtures.map(fixture => [fixture.path, fixture.contents] as const));
     for (const file of override) contents.set(file.path, file.contents);
     const declared = new Map<string, string>();
@@ -197,13 +212,20 @@ export class BenchmarkRunner {
       suite: suite.name, fingerprint, epoch, startedAt: this.stamp(), outcomes: [],
     };
     const runDir = path.join(this.options.dir, record.id);
-    await mkdir(runDir, { recursive: true });
+    await mkdir(runDir, { recursive: true, mode: 0o700 });
+    // Evidence lives beside the runs tree, never as a sibling of a live workspace.
+    const evidenceRoot = path.join(path.dirname(this.options.dir), "evidence", record.id);
     const mandate: NonNullable<Execution["dependency"]> = { taskId: record.id, depth: 0, original: `Benchmark suite ${suite.name}` };
     for (const schedule of benchmarkRuns(suite)) {
       const item = suite.cases.find(candidate => candidate.id === schedule.caseId)!;
       assertTaskIsolation(item);
       const workspace = path.join(runDir, "workspace", `${item.id}-${schedule.repeat}`);
       const privateRoot = path.join(runDir, "verify", `${item.id}-${schedule.repeat}`);
+      // Nothing from a previous case may still be reachable from this case's directory
+      // tree: with capacity 1 the predecessor's fix would sit at ../<other>-<n>/. Cases
+      // are already stashed after grading; this is the belt for aborted runs.
+      await this.purge(path.join(runDir, "workspace"));
+      await this.purge(path.join(runDir, "verify"));
       const declared = await this.materialize(item, workspace);
       const requestId = `benchmark:${item.id}:${schedule.repeat}:${record.id}`;
       const started = this.stamp();
@@ -216,7 +238,15 @@ export class BenchmarkRunner {
       record.outcomes.push(outcome);
       try {
         if (item.task.includes(runDir)) throw Error(`Benchmark case ${item.id} nennt den Laufordner im Task-Text`);
-        const pre = await this.preflight(item, path.join(runDir, "preflight", `${item.id}-${schedule.repeat}`));
+        // Preflight materializes the reference solution. It must therefore never live
+        // inside runDir, where a worker could walk up one level and read the answer key.
+        const preDir = path.join(evidenceRoot, "preflight", `${item.id}-${schedule.repeat}`);
+        let pre;
+        try {
+          pre = await this.preflight(item, preDir);
+        } finally {
+          await this.purge(preDir);
+        }
         outcome.preflight = { status: pre.ok ? "ok" : "failed", reason: pre.reason };
         if (!pre.ok) {
           outcome.status = "preflight-failed";
@@ -254,7 +284,10 @@ export class BenchmarkRunner {
         const privateDir = privateRoot;
         await mkdir(privateDir, { recursive: true });
         const result = await execute(item.verifier.replaceAll("{workspace}", workspace), privateDir, this.options.caseTimeoutMs);
-        outcome.verifier = { command: item.verifier, exitCode: result.exitCode, outputTail: result.output.slice(-1_000) };
+        // The record lives inside the run tree, so a worker could reach it via
+        // ../../record.json. The verifier is the hidden grader: only its fingerprint
+        // is persisted, the command itself stays in the suite.
+        outcome.verifier = { command: `sha256:${digest(item.verifier).slice(0, 16)}`, exitCode: result.exitCode, outputTail: result.output.slice(-1_000) };
       }
       const acceptanceOk = item.acceptance
         ? outcome.acceptance?.exitCode === 0
@@ -268,6 +301,12 @@ export class BenchmarkRunner {
         else if (!verifierOk) outcome.diagnostic = `Verifier Exit ${outcome.verifier?.exitCode ?? "unbekannt"}`;
         else if (!acceptanceOk) outcome.diagnostic = `Acceptance Exit ${outcome.acceptance?.exitCode ?? "ohne Ergebnis"}`;
       }
+      // Grading is done. Move the solved workspace out of the live run tree so no later
+      // worker can read an earlier worker's fix, and point the record at its resting place.
+      const stashed = path.join(evidenceRoot, "workspace", `${item.id}-${schedule.repeat}`);
+      await this.stash(workspace, stashed);
+      outcome.workspace = stashed;
+      await this.purge(privateRoot);
       onProgress?.(structuredClone(outcome));
       await this.save(record, runDir);
     }
