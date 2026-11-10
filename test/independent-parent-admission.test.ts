@@ -26,7 +26,7 @@ for (const proposal of ['blocked','waiting'] as const) test(`semantic continue o
    session.prompt=async()=>{
      await h.guardWaitTool(key,'bash',{command:'write separate acceptance document'});
      for(const tool of ['plugin_dispatch','plugin_worker_tasks','plugin_subagent']) {
-       await assert.rejects(h.guardWaitTool(key,tool,{action:'resume',id:child.id}),/cannot replay or control blocked workers/); denied++;
+       await assert.rejects(h.guardWaitTool(key,tool,{action:'resume',id:child.id}),/cannot replay or control (blocked|retained) workers/); denied++;
      }
      runs++; writeFileSync(path.join(home,`criteria-${runs}.txt`),'Acceptance: preserve routing identity');
      h.planContinuation(key,{state:proposal,next:'Child is blocked'});
