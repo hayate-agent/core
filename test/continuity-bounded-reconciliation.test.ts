@@ -52,7 +52,7 @@ test("transient assessment survives real tick/snapshot/restore and admits exactl
   } finally { await first.stop(0); }
 });
 
-test("unusable assessments exhaust persisted bounded attempts without admitting work", async () => {
+test("unusable assessments retain persisted backoff without admitting productive work", async () => {
   let now = 1000, calls = 0;
   const channel = new MemoryChannel();
   let saved: ReturnType<Harness["snapshotSessions"]> = [{ key, task: task(), replyTo: { channel: "mem", target: "room1" } }];
@@ -65,13 +65,14 @@ test("unusable assessments exhaust persisted bounded attempts without admitting 
       await h.recoverTasks();
       saved = clone(h.snapshotSessions());
       assert.equal(runtime.sessions.size, 0); assert.equal(h.state(key).task?.depth, 2);
-      assert.equal(h.state(key).task?.state, restart < 2 ? "active" : "blocked");
+      assert.equal(h.state(key).task?.state, "active");
+      assert.equal(h.state(key).task?.termination, undefined);
       assert.equal(h.pendingInputs().length, 0);
       assert.equal(h.state(key).task?.recoveryAdmission, undefined);
     } finally { await h.stop(0); }
-    now += 60000;
+    now = saved[0]!.tasks![0]!.recoveryRetry!.nextAt;
   }
-  assert.equal(calls, 3); assert.equal(channel.sent.length, 0);
+  assert.equal(calls, 5); assert.equal(channel.sent.length, 0);
 });
 
 test("a persisted interrupted claim retries only after backoff and retains its attempt budget", async () => {
@@ -91,7 +92,9 @@ test("a persisted interrupted claim retries only after backoff and retains its a
   try {
     await next.recoverTasks(); assert.equal(calls, 0);
     now += 60000; await next.recoverTasks(); assert.equal(calls, 1); assert.equal(next.state(key).task?.state, "active");
-    now += 60000; await next.recoverTasks(); assert.equal(calls, 2); assert.equal(next.state(key).task?.state, "blocked");
+    now += 60000; await next.recoverTasks(); assert.equal(calls, 1, "second failure backs off two minutes");
+    now = next.state(key).task!.recoveryRetry!.nextAt;
+    await next.recoverTasks(); assert.equal(calls, 2); assert.equal(next.state(key).task?.state, "active");
     assert.equal(next.pendingInputs().length, 0);
     assert.equal(next.state(key).task?.recoveryAdmission, undefined);
   } finally { release(); await pending; await first.stop(0); await next.stop(0); }
