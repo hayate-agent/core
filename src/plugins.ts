@@ -222,11 +222,12 @@ export class PluginHost {
               if (!registering) throw new Error("Plugin registration is closed");
               if (!strategy || typeof strategy.name !== "string" || !/^[a-z][a-z0-9_-]*$/.test(strategy.name) ||
                   !Number.isSafeInteger(strategy.version) || strategy.version < 1 || typeof strategy.replaySafe !== "boolean" ||
-                  typeof strategy.execute !== "function") throw new Error("Invalid dispatcher strategy");
+                  typeof strategy.execute !== "function" || (strategy.decisionBoundary !== undefined && typeof strategy.decisionBoundary !== "function")) throw new Error("Invalid dispatcher strategy");
               if (strategy.name === "direct" || strategy.name === "sequential" || this.dispatchers.has(strategy.name)) throw new Error(`Dispatcher conflict: ${strategy.name}`);
               this.dispatchers.set(strategy.name, Object.freeze({
                 name: strategy.name, version: strategy.version, replaySafe: strategy.replaySafe,
                 execute: strategy.execute.bind(strategy),
+                ...(strategy.decisionBoundary ? { decisionBoundary: strategy.decisionBoundary.bind(strategy) } : {}),
               }));
             },
             registerCompaction: (name: string, strategy: CompactionStrategy) => {
