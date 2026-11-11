@@ -103,6 +103,7 @@ import { contextStrategyHolder, disabledContextStrategies, diagnosedBoundaryAsse
 import { contextStrategyPlugin } from "./builtin-plugins/context-strategy-plugin.js";
 import { guardResultOrchestration } from "./result-orchestration.js";
 import { assessCompletion } from "./completion-check.js";
+import { validatorPlugin } from "./builtin-plugins/completion-validator-plugin.js";
 import { semanticTopicLabeler } from "./topic-labels.js";
 import { completionPrompt } from "./builtin-plugins/completion-prompt.js";
 import { completionStrategyHolder } from "./completion-strategy.js";
@@ -204,6 +205,7 @@ async function main(argv: string[]): Promise<void> {
   await reloadSkills();
 
   const plugins = new PluginHost();
+  plugins.validators.select(config.completionCheck?.provider ?? "legacy-llm");
   const initialReloadableTools: PluginHost["tools"] = new Map();
   const reloadableTools = config.reloadableToolPlugins?.length
     ? new ReloadableTools({home:config.home,cwd:config.cwd,agent:config.agent},config.reloadableToolPlugins,log,true, tools => {
@@ -480,7 +482,7 @@ async function main(argv: string[]): Promise<void> {
     completionCheck: async (input, reply, signal, diagnostic) => {
       const grant = config.completionCheck?.authorizations?.[input.sessionKey] ??
         (input.completionAnchor ? { task: input.completionAnchor.task } : undefined);
-      return assessCompletion(supervisorReviewer(), input, reply, grant, signal, effectiveModels().reviewModel, Date.now, completion.current, diagnostic, config.completionCheck?.timeoutMs ?? 30000);
+      return assessCompletion(supervisorReviewer(), input, reply, grant, signal, effectiveModels().reviewModel, Date.now, completion.current, diagnostic, config.completionCheck?.timeoutMs ?? 30000, plugins.validators);
     },
     afterTurn: async (input, reply, session, options, signal) => {
       await reloadRuntimeSettings();
@@ -517,7 +519,7 @@ async function main(argv: string[]): Promise<void> {
         expiresAt: request.expiresAt, experiments: request.experiments });
     return assessCompletion(supervisorReviewer(), request.input, request.reply,
       { task, purpose: "nightly-closure", expiresAt: request.expiresAt }, request.signal, effectiveModels().reviewModel,
-      Date.now, completion.current, undefined, config.completionCheck?.timeoutMs ?? 30000);
+      Date.now, completion.current, undefined, config.completionCheck?.timeoutMs ?? 30000, plugins.validators);
   });
   await improvement.initializeStrategy(nightly, settings.snapshot().nightlyStrategy);
   let nextLedgerCompact = 0;
@@ -679,7 +681,7 @@ async function main(argv: string[]): Promise<void> {
     admit: (id: string, request: import("./context-maintenance.js").MaintenanceRequest, version: number) => maintenance.admit(values["--maintenance-session"]!, id, request, version),
     cancel: (id: string, version: number) => maintenance.cancelAdmission(values["--maintenance-session"]!, id, version),
     maintain: () => harness.maintainIdle(values["--maintenance-session"]!),
-  }), path.resolve(values["--maintenance-directory"]))] : []), ...(values["--observe-directory"] ? [sessionObserverPlugin(Object.freeze({ observeSession: (key: string) => harness.observeSession(key) }), path.resolve(values["--observe-directory"]), values["--observe-session"]!)] : []), memoryOrchestrationPlugin(plugins.memoryOrchestration, settings, harness, config.memory.enabled), completionStrategyPlugin(completion, settings, harness), contextStrategyPlugin(strategies, settings, harness, maintenance), compactionStrategyPlugin(selectedCompaction, settings, harness, maintenance), nightlyStrategyPlugin(nightly, settings, improvement), reportPlugin, dispatcherPlugin(() => dispatcher), workerTasksPlugin(config.home, () => dispatcher, async (parent, requestId, input) => {
+  }), path.resolve(values["--maintenance-directory"]))] : []), ...(values["--observe-directory"] ? [sessionObserverPlugin(Object.freeze({ observeSession: (key: string) => harness.observeSession(key) }), path.resolve(values["--observe-directory"]), values["--observe-session"]!)] : []), validatorPlugin, memoryOrchestrationPlugin(plugins.memoryOrchestration, settings, harness, config.memory.enabled), completionStrategyPlugin(completion, settings, harness), contextStrategyPlugin(strategies, settings, harness, maintenance), compactionStrategyPlugin(selectedCompaction, settings, harness, maintenance), nightlyStrategyPlugin(nightly, settings, improvement), reportPlugin, dispatcherPlugin(() => dispatcher), workerTasksPlugin(config.home, () => dispatcher, async (parent, requestId, input) => {
       if (!dispatcher || harness.paused) throw Error("Dispatcher unavailable or Harness paused");
       const existing = await executions.findRequest(parent, requestId);
       if (existing) {
@@ -695,7 +697,7 @@ async function main(argv: string[]): Promise<void> {
       return settings.effective().dispatcher?.rules;
     }, () => ({ config: settings.effective().modelRoles,
       defaults: { model: effectiveModels().model, thinking: effectiveModels().thinking },
-      review: settings.effective().review?.model ? { model: settings.effective().review!.model, thinking: settings.effective().review?.thinking ?? "medium" } : undefined }));
+      review: settings.effective().review?.model ? { model: settings.effective().review!.model, thinking: settings.effective().review?.thinking ?? "medium" } : undefined }), plugins.validators);
     harness.addChannel(dispatchRuntime.channel);
     const strategy = dispatchPolicy.strategy === "direct" ? dispatchRuntime.strategy : dispatchPolicy.strategy === "sequential" ? dispatchRuntime.sequential : plugins.dispatchers.get(dispatchPolicy.strategy);
     if (!strategy) throw Error("Configured dispatcher strategy unavailable");
