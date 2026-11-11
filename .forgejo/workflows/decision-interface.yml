@@ -1,0 +1,61 @@
+name: decision-interface-ci
+on:
+  push:
+    branches:
+      - fix/parent-execution-decisions
+  pull_request:
+    paths:
+      - '.forgejo/workflows/decision-interface.yml'
+      - 'src/dispatcher*.ts'
+      - 'src/execution.ts'
+      - 'src/plugins.ts'
+      - 'plugins.lock.json'
+      - 'test/dispatcher*.test.ts'
+      - 'test/execution*.test.ts'
+concurrency:
+  group: decision-interface-${{ github.sha }}
+  cancel-in-progress: false
+jobs:
+  full-validation:
+    runs-on: harness-agent-checks
+    timeout-minutes: 40
+    steps:
+      - name: Fetch exact Core head without credentials
+        run: |
+          set -eu
+          work="$(mktemp -d)"
+          printf 'CHECK_WORK=%s\n' "$work" >> "$GITHUB_ENV"
+          git init -q "$work/core"
+          for delay in 0 2 5; do
+            sleep "$delay"
+            if timeout 60 git -C "$work/core" fetch -q --depth=1 "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git" "$GITHUB_SHA"; then break; fi
+          done
+          git -C "$work/core" checkout -q --detach FETCH_HEAD
+          test "$(git -C "$work/core" rev-parse HEAD)" = "$GITHUB_SHA"
+          echo "core=$GITHUB_SHA"
+      - name: Typecheck, build and full tests on the exact head
+        run: |
+          set -eu
+          image="decision-interface-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          trap 'rm -rf "$CHECK_WORK"; docker image rm "$image" >/dev/null 2>&1 || true' EXIT
+          printf '%s\n' 'FROM node:24.22.1-bookworm-slim@sha256:55fb5f5a527ea2c5c4a95f963e48ef90aa38c7b346054fdc8ee9957a2b55d205' 'RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates python3 util-linux openssl curl && rm -rf /var/lib/apt/lists/*' | docker build -q -t "$image" -
+          tar -C "$CHECK_WORK" --exclude=.git -cf - core | docker run --init --rm -i --mount type=bind,source=/var/cache/forgejo-public-dependencies,target=/tmp/public-dependencies,readonly --user 1000:1000 --memory 4g --cpus 2 --pids-limit 512 --cap-drop ALL --security-opt no-new-privileges -e HOME=/tmp -w /tmp "$image" timeout 2100 sh -ec '
+            umask 0022
+            mkdir /tmp/source; tar -xf - -C /tmp/source; cd /tmp/source/core
+            npm ci --include=dev --ignore-scripts
+            native_dir=node_modules/@matrix-org/matrix-sdk-crypto-nodejs
+            native_version=$(node -p "require(\"./$native_dir/package.json\").version")
+            native_name="matrix-sdk-crypto.linux-$(node -p process.arch)-gnu.node"
+            native_cache=/tmp/public-dependencies/matrix-crypto-0.4.0-linux-x64-gnu.node
+            if test "$native_version/$native_name" = "0.4.0/matrix-sdk-crypto.linux-x64-gnu.node" && test -f "$native_cache"; then
+              printf "7078d4dd987128f79afd192c4f621f64adece37e43f2a8756f1d0a9f034de718  %s\n" "$native_cache" | sha256sum -c -
+              cp "$native_cache" "$native_dir/$native_name"
+            else
+              curl --fail --location --retry 3 --retry-all-errors --connect-timeout 15 --max-time 120 --user-agent Hayate-Build-Dependency-Check --output "$native_dir/$native_name" "https://github.com/matrix-org/matrix-rust-sdk-crypto-nodejs/releases/download/v$native_version/$native_name"
+            fi
+            node -e "require(\"@matrix-org/matrix-sdk-crypto-nodejs\")"
+            npm run typecheck
+            npm run build
+            # Every test file, bounded concurrency, no test-name exclusions.
+            node --import tsx --test --test-concurrency=4 test/*.test.ts
+          '

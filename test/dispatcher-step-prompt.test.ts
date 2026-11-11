@@ -30,7 +30,8 @@ test("derived evidence cannot invent runtime-state or merge-SHA gates or waive r
   assert.match(prompt, /tree equivalence does not prove a missing check ran or waive an explicit exact-commit requirement/);
   assert.match(prompt, /If publication already happened, reconcile it read-only, never repeat it/);
   assert.match(prompt, /return continue requesting the corrected final report from existing evidence, not completed/);
-  assert.match(prompt, /host requires the worker to reconcile its blocked status explicitly before completion/);
+  assert.match(prompt, /authenticated parent decision data explicitly accepts that documented deviation within the original mandate/);
+  assert.match(prompt, /never overrides missing required review\/CI, safety, authority or ambiguous effects/);
 });
 
 test("step validator prompt remains budgeted; raw worker data cannot change host authority", () => {
