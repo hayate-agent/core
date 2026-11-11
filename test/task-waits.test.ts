@@ -51,6 +51,7 @@ test("expiry and malformed checkpoints retain diagnosis without generic operator
   for (const malformed of [false, true]) {
     const f = fixture(); f.time(301000);
     if (malformed) f.h.state("mem:room1").task!.depth = -1;
+    else f.h.state("mem:room1").task!.expiresAt = 301000;
     try {
       await f.h.tick(); await f.h.drained();
       const task = f.h.state("mem:room1").task!;

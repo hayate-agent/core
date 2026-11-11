@@ -34,13 +34,15 @@ test("fresh session never executes, delivers or charges historical unfinished in
 
 test("parked dispatcher work is not claimed/delivered until explicit parent selection, including a claim race", async t => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "fresh-dispatch-"));
-  t.after(() => rm(dir, { recursive: true, force: true }));
   let enabled = false, runs = 0, delivered = 0;
   const store = new ExecutionStore(path.join(dir, "executions.json")); await store.load();
   const task = await store.submit("local-old", "old", "preserve original", "test");
   const dispatcher = new Dispatcher(store, { name: "test", version: 1, replaySafe: true, execute: async () => { runs++; return "done"; } },
     1, async () => { delivered++; }, () => {}, undefined, undefined, () => false, [], () => enabled);
-  t.after(() => dispatcher.stop());
+  t.after(async () => {
+    await dispatcher.stop();
+    await rm(dir, { recursive: true, force: true });
+  });
   await dispatcher.start(); await settle();
   assert.equal(store.list()[0]!.status, "ready"); assert.equal(delivered, 0); assert.equal(runs, 0);
   const claim = store.claim.bind(store);

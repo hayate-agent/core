@@ -27,6 +27,24 @@ test("dispatcher strategies preserve class receiver and freeze registration meta
   assert.throws(() => register(strategy), /closed/);
 });
 
+test("decision boundary is an explicit validated host strategy opt-in with bound receiver", async t => {
+  const host = new PluginHost(); t.after(() => host.stop());
+  class Strategy {
+    name = "decisions"; version = 1; replaySafe = false;
+    #safe = "retained assessment";
+    decisionBoundary(task: { checkpoint?: string }) { return task.checkpoint === this.#safe; }
+    async execute() { return "done"; }
+  }
+  await host.load([], context, [], [], [{ apiVersion: 1, activate(api) { api.registerDispatcher(new Strategy()); } }]);
+  const strategy = host.dispatchers.get("decisions")!;
+  assert.equal(strategy.decisionBoundary!({ checkpoint: "retained assessment" } as never), true);
+  assert.equal(strategy.decisionBoundary!({ checkpoint: "ambiguous intent" } as never), false);
+  const invalid = new PluginHost();
+  await assert.rejects(invalid.load([], context, [], [], [{ apiVersion: 1, activate(api) {
+    api.registerDispatcher({ name: "invalid", version: 1, replaySafe: false, execute: async () => "done", decisionBoundary: true } as never);
+  } }]), /Invalid dispatcher strategy/);
+});
+
 test("built-in direct strategy name cannot be registered by plugins", async () => {
   const host = new PluginHost();
   await assert.rejects(host.load([], context, [], [], [{ apiVersion: 1, activate(api) {

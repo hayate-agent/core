@@ -1,5 +1,52 @@
 # Optional durable dispatcher
 
+## Routing and recovery guarantees
+
+With an enabled, ready dispatcher, Main orchestrates; shell execution and file
+mutation (`bash`, `write`, `edit`) run in dispatcher workers. A runtime tool guard
+enforces this even after worker failure. Native read/search and dispatcher status
+remain available to Main. Starting a separate subagent is not a way around this
+routing rule. Main fallback is available only when dispatcher mode is disabled or
+the dispatcher is unavailable.
+
+Both `worker-failed` (for example a provider EOF) and the broader
+`runtime-failure` strategy/validator interruption have a durable automatic
+recovery owner. An internal `paused` or `blocked` state is not a terminal
+lifecycle state: its stored `workerRetry.nextAt` is consumed by the existing
+scheduler, including after host restart and for diagnosed legacy internal pauses.
+Cheap ticks never renew that due time. Explicit user pause (`manual-pause`),
+cancellation, deadline expiry and unanswered questions are different holds and
+are never auto-resumed.
+
+A typed `worker-failed` outcome is a technical interruption, not a semantic blocker. The scheduler requeues the **same execution
+ID** with durable exponential backoff (15 seconds up to 5 minutes), retaining its
+intent, original mandate and worker transcript. The matching strategy must support
+reconciliation; no opaque effect is blindly replayed. Manual pauses, cancellation,
+unanswered questions, authentic mandate expiry and trusted recovery-policy holds
+remain binding. Technical retries have no total-attempt cutoff. Generic strategy exceptions are classified as `runtime-failure`, without
+inferring permission or diagnosis from exception text. With a reconciliation-capable
+strategy, they receive the same durable backoff. A retained sequential assessment
+is rechecked independently before any new worker effects; a genuine blocked verdict
+does not start a successor or repeat settled effects. A reviewer-confirmed completed
+step overrides the worker's own `blocked` label without an extra parent decision.
+Real policy holds take ownership back and clear automatic retry metadata. Scheduled
+pauses are projected as timed automatic recovery, not repeated requests for human
+intervention.
+
+Sequential execution yields capacity at committed step boundaries when another
+execution is ready. Round-robin admission lets a queued review run before the
+publisher claims its next step, including with capacity 1. An in-flight worker is
+not preempted and its work is never duplicated to free a slot.
+
+A model-selected wait deadline bounds polling, **not** the operator mandate.
+Only the task's authentic `expiresAt` limits task authority. While a child is
+running, a parent wait retains its read-only monitor even when the validator
+proposes productive continuation. The host renews that nonproductive polling
+window as necessary, without extending any authentic task expiry. Parent monitors
+cannot mutate or control the child. Once the child settles, the original task is
+independently assessed for the next deliverable. Historical task expiries are not
+automatically cleared: their original provenance must be reconciled separately.
+
 The dispatcher is a host scheduler, not another model loop. Main submits a scoped
 operator task and receives a durable result event. A trusted strategy owns its
 execution; Main does not have to create or poll workers. Ordinary operator turns
@@ -17,7 +64,8 @@ claim/effect/event records. Main is not redirected through a background worker.
 The [starter profile](examples/hayate-agent.yaml) keeps dispatch disabled.
 For a minimal first activation, see the
 [direct/sequential setup walkthrough](gateways.md#4-optional-background-delegation-enable-the-dispatcher).
-Use `direct` with `capacity: 1` after confirming backend concurrency, then restart
+Use `direct` with the default `capacity: 4` (or an explicit lower backend limit)
+after confirming backend concurrency, then restart
 and check `/dispatch status`. `sequential` additionally needs real registered
 model-role selections; model IDs, context capacities and supported reasoning
 levels are not prescribed by the starter. Ordinary terminal/WebUI/Matrix chat
@@ -42,11 +90,34 @@ dispatcher:
 ```
 
 Defaults are `enabled: false`, `strategy: direct`, `concurrentRequests: false`,
-`capacity: 1`, `retentionDays: 7` (integer, 1–3650). Enabling requires the operator's explicit declaration that the
+`capacity: 4`, `retentionDays: 7` (integer, 1–3650). Enabling requires the operator's explicit declaration that the
 configured runtime/backend supports concurrent requests. This declaration does
 not probe or configure the backend. Capacity limits active strategy executions,
 not the number of retained tasks or configured persistent workers. The runtime
 must also have headroom for Main, approvals and review requests.
+
+Capacity is the **worker execution limit**, not a dispatcher execution slot.
+The scheduler accepts multiple durable tasks, fills available worker capacity and
+handles independent completions while other tasks are still running. It does not
+wait for an unrelated publisher before starting an independent review if worker
+capacity is available. A genuinely dependent review must still wait for its input.
+Pending tasks are bounded by the ledger's storage limits, not by worker capacity.
+
+Main answers short questions, known facts and simple status requests directly and
+uses its available tools for bounded lookups, local inspection and short research.
+Enabling the dispatcher does not make delegation mandatory or remove Main's tools.
+Delegate substantial, long-running or independently parallel work when useful;
+keep existing authority, tool allowlists and review requirements intact. Current
+worker capacity, active executions and runnable queue length are supplied as host
+facts on each turn; do not infer that the dispatcher itself is busy or single-slot.
+
+The default applies to **every installation** that leaves capacity unspecified.
+Explicit installation, settings and drop-in values (including `capacity: 1`) remain
+binding; upgrading Core does not silently override a backend/operator limit. Audit
+those layers fleet-wide when rolling out, choose a backend-supported worker limit,
+and restart each process to activate it. Existing persona instructions that demand
+delegation of all work should be narrowed to substantial tasks, not short questions
+and bounded information requests. No automatic live rollout is performed.
 
 `direct` is the reserved built-in strategy: one ordinary isolated Harness turn
 per task. It uses the configured runtime rather than calling PI directly. It
@@ -269,6 +340,66 @@ task snapshot across restarts; a plugin must recognize it where replay matters.
 A `safe` intent is replayable only when the currently registered matching strategy
 version also declares `replaySafe: true`. Do not declare safety for an opaque
 model/tool turn or an external operation lacking an idempotency contract.
+
+## Parent decision delivery (source interface)
+
+A compatible bundled dispatcher plugin exposes `plugin_dispatch` action `decide`
+with `id`, a stable `requestId`, and `decision` text, and the admin command:
+
+```
+/dispatch decide <execution-id> <decision-request-id> Accept the documented temporary-file deviation; retain all original constraints.
+```
+
+The authenticated host session supplies the parent scope; model arguments cannot
+select another parent. Nested dispatcher/subagent workers cannot record decisions.
+The command uses the host's admin authentication gate (including for other
+`/dispatch` command actions). Model-tool access remains the existing parent-session
+tool policy, not an independent permission or authority grant.
+
+`Dispatcher.decide` and `ExecutionStore.recordDecision` durably append an audit
+receipt. The reply's `recorded: true` means acceptance only. `state: pending` means
+not yet consumed at a strategy boundary; `applied` means delivered to strategy code,
+NOT approval of a deviation, evidence, effects or task completion. Inspect bounded
+`status` with `id` and `field: decisions` for exact text and receipt readback, or
+ordinary status for receipt summaries. `/dispatch status` also includes receipts.
+`appliedClaim` is a hash for correlation, not a live ownership token.
+
+Request IDs are 1–128 ASCII letters/digits/`._:-`, starting with a letter/digit;
+text must be nonblank and at most 4,000 UTF-8 bytes. Each execution retains at most
+32 decisions and 16,000 UTF-8 bytes of JSON decision input. Reusing an ID with
+byte-identical text returns its existing receipt without another event or wake;
+changed text conflicts. IDs are scoped to that execution. Cancelled, completed,
+parent-stopped and foreign executions reject all writes, including retries; read
+the retained receipt instead. Audits survive reload and terminal compaction.
+
+Only opted-in trusted strategies accept this interface. Sequential execution opts
+in with `decisionBoundary(task)`, which proves a matching retained settled step
+assessment before waking a deferred/blocked assessment. A bare ambiguous intent,
+recovery-policy block, manual pause or unanswered question is not bypassed. Other
+strategies reject `decide` explicitly rather than pretending to consume it.
+
+`DispatchContext.decisions()` delivers and durably marks receipts under the owned
+claim. New decisions never revoke an active token, steal a claim, abort a worker,
+or clear intent. Workers drain normally. `fenceDecisions(revision)`, revision-aware
+`intent` and `settleIntent`, and the host's completion/deferral checks discard stale
+verdicts at assessment/claim boundaries. The dispatcher yields only its own drained
+claim, retaining evidence and intent for re-assessment, not replay.
+
+Sequential worker and assessment prompts include parent decisions as scoped data
+under the original mandate. The independent assessor may accept an explicitly
+documented planning deviation using retained evidence; it must still check actual
+evidence and every original permission, safety and review/CI constraint. It may
+then complete that same original step and run its original successor without
+replaying settled effects. An applied decision may still leave a task blocked.
+`resume` is control only: task text is rejected; use `decide` for scoped steering.
+
+Cross-repository development: use the new core and plugins sources together via
+the documented local materializer lock. Production publication must pin the
+immutable plugins revision/hash in `plugins.lock.json`; an old adapter lacks the
+new surface, and a new adapter on an old running host rejects decisions with a
+compatible-host-upgrade error. The adapter's optional-capability projection also typechecks against older host
+contracts; it never emulates a missing decision API. Builds do not activate this feature: rollout and restart belong to an
+external authorized operator, not this source-only worker.
 
 A strategy may perform work itself or use a separately configured external system.
 The current context does not expose a Harness object or a managed-subagent API;

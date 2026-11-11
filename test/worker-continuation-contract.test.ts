@@ -45,7 +45,7 @@ let catalog=['plugin_task_continuation','plugin_loop','plugin_subagent','plugin_
 for(const tools of [undefined,['read','bash','plugin_task_continuation','plugin_loop','plugin_subagent','plugin_dispatch','plugin_worker_tasks','plugin_improvement_evaluate','plugin_memory']]) {
  const runtime=new PiRuntime({cwd:process.env.TEST_HOME,sessionsDir:process.env.TEST_HOME+'/sessions',skillPaths:[],personaSections:async()=>[],approvals:{mode:'off',tools:[]},tools,pluginTools:()=>catalog});
  for(const [key,hidden,visible] of [
-   ['main',[],['plugin_task_continuation','plugin_loop','plugin_dispatch','plugin_memory']],
+   ['main',[],['read','bash','plugin_task_continuation','plugin_loop','plugin_dispatch','plugin_memory']],
    ['dispatch:x:y',['plugin_task_continuation','plugin_loop','plugin_subagent','plugin_dispatch','plugin_worker_tasks','plugin_improvement_evaluate'],['plugin_memory','read','bash']],
    ['subagent:z',['plugin_task_continuation','plugin_loop','plugin_subagent','plugin_improvement_evaluate'],['plugin_memory','plugin_dispatch','read']],
  ]) {
@@ -129,16 +129,22 @@ test("worker that ignores the contract still delivers a nonempty result; parent 
     delivered();
   }, () => {}, parent => harness.dependencyCheckpoint(parent));
   t.after(async () => { await dispatcher.stop(); await harness.stop(0); await rm(home, { recursive: true, force: true }); });
-  runtime.answer = (text, key) => {
-    if (!key.startsWith("dispatch:")) return `parent: ${text.slice(0, 40)}`;
+  let task!: Awaited<ReturnType<Dispatcher["submit"]>>;
+  runtime.answer = async (text, key) => {
+    if (!key.startsWith("dispatch:")) {
+      // Delegate inside the owning turn, while its host mandate is active.
+      // Submission after idle has no current-turn provenance and must not rely
+      // on resultMandate adopting the focused task later.
+      if (text === "Fix it; tests only") task = await dispatcher.submit("main", "req", "implement fix");
+      return `parent: ${text.slice(0, 40)}`;
+    }
     // A worker model that still tries the parent's continuation tool, as in the live evidence.
     try { bridge.guardTool(key, "plugin_task_continuation"); } catch (error) { denials.push(toolGuardDenialReason(error)); }
     return "worker evidence: fix implemented and tested";
   };
+  await dispatcher.start();
   await harness.accept({ id: "op", sessionKey: "main", source: "channel", text: "Fix it; tests only", replyTo: { channel: replies.name, target: "operator" } });
   await harness.waitForSessionIdle("main");
-  await dispatcher.start();
-  const task = await dispatcher.submit("main", "req", "implement fix");
   await received; await harness.waitForSessionIdle("main");
   assert.equal(denials.length, 1);
   assert.match(denials[0]!, /^worker_orchestration_denied/);

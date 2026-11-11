@@ -9,6 +9,8 @@ import { ExecutionStore, type ExecutionEvent } from "../src/execution.js";
 import { Harness } from "../src/harness.js";
 import { parsePlan, planPrompt, stepStatus, validatorRole, type SequentialState } from "../src/dispatcher-sequential.js";
 import { FakeRuntime } from "./fakes.js";
+import { dispatcherPlugin } from "../src/builtin-plugins/dispatcher-plugin.js";
+import { PluginHost } from "../src/plugins.js";
 import type { ModelRoles } from "../src/model-roles.js";
 import type { AgentRuntime, OpenSessionOptions, PromptOptions } from "../src/types.js";
 import type { PlannerHttpOutcome, PlannerHttpRequest } from "../src/planner-http.js";
@@ -21,7 +23,7 @@ const roles: ModelRoles = { enabled: true, roles: {
 const defaults = { model: "p/default", thinking: "high" };
 const steps = (...list: Array<[string, string]>) => JSON.stringify({ steps: list.map(([task, role]) => ({ task, role, reason: `${role} suffices`, evidence: `evidence of ${task}` })) });
 
-interface Script { verdictDelayMs?: number; verdict?: string | ((prompt: string) => string); toolEvents?: (prompt: string) => Array<{ name: string; detail: string; result: string }>; plan?: string | (() => string); worker?: (prompt: string, model?: string) => string | Promise<string>; tools?: (prompt: string) => number }
+interface Script { verdictDelayMs?: number; verdict?: string | ((prompt: string) => string | Promise<string>); toolEvents?: (prompt: string) => Array<{ name: string; detail: string; result: string }>; plan?: string | (() => string); worker?: (prompt: string, model?: string) => string | Promise<string>; tools?: (prompt: string) => number }
 const fixtureCleanup = new WeakMap<import("node:test").TestContext, Array<{ home: string; stop(): Promise<void> }>>();
 function retainFixture(t: import("node:test").TestContext, fixture: { home: string; stop(): Promise<void> }): void {
   let fixtures = fixtureCleanup.get(t);
@@ -129,6 +131,38 @@ async function setup(t: import("node:test").TestContext, script: Script, opts: {
     } };
 }
 const state = (checkpoint?: string) => JSON.parse(checkpoint!) as SequentialState;
+
+test("independent completion overrides a worker-authored block without a parent decision", async t => {
+  const env = await setup(t, { worker: () => "Existing publication verified; no effect remains.\nSTEP-STATUS: blocked: parent must decide",
+    verdict: '{"state":"completed"}' });
+  const task = await env.run("Reconcile existing publication without publishing again");
+  assert.equal(task.status, "completed");
+  assert.equal(env.calls.worker.length, 1);
+  assert.equal(env.calls.review.length, 1);
+});
+
+test("semantic hold is automatically re-assessed after reload without rerunning settled worker effects", async t => {
+  const first = await setup(t, { worker: () => "publication evidence retained\nSTEP-STATUS: blocked: missing fact",
+    verdict: '{"state":"blocked"}' });
+  const held = await first.run("Publish only when verified; reconcile existing effects");
+  assert.equal(held.status, "paused");
+  assert.equal(held.diagnosticCode, "runtime-failure");
+  assert.ok(held.workerRetry);
+  assert.deepEqual(held.assessmentHold, { state: "blocked", step: 0 });
+  assert.equal(first.events.filter(e => e.requiresAttention).length, 1, "real blocker remains actionable despite automatic rechecks");
+  assert.ok(state(held.checkpoint).assessment);
+  await first.dispatcher.stop(); await first.harness.stop(0);
+  const second = await setup(t, { worker: () => { throw Error("settled worker must not repeat"); }, verdict: '{"state":"completed"}' },
+    { home: first.home, file: first.file });
+  await second.dispatcher.start();
+  assert.equal(second.calls.review.length, 0);
+  await second.tickAt(held.workerRetry!.nextAt);
+  await second.dispatcher.waitForExecution(held.id);
+  assert.equal(second.store.list()[0].status, "completed");
+  assert.equal(second.store.list()[0].id, held.id);
+  assert.equal(second.calls.worker.length, 0);
+  assert.equal(second.calls.review.length, 1);
+});
 
 test("validator model selection: explicit validator, then review, then default; no availability fallback", async t => {
   const env = await setup(t, {});
@@ -344,7 +378,7 @@ test("worker blocked claim with reviewer continue runs the next same-step turn, 
 
 test("true external blocked holds: no continuation, no successor; invalid/uncertain assessment grants no execution", async t => {
   for (const [verdict, text] of [['{"state":"blocked"}', /externe Blockade/], ['{"state":"waiting"}', /Warten auf externe/],
-    ['{"state":"completed"}', /ohne vollständigen Nachweis \(blocked\)/], ['invalid', /technisch fehlgeschlagen/], ['{"state":"uncertain"}', /technisch fehlgeschlagen/]] as const) {
+    ['invalid', /technisch fehlgeschlagen/], ['{"state":"uncertain"}', /technisch fehlgeschlagen/]] as const) {
     const env = await setup(t, { plan: steps(["first", "simple"], ["second", "simple"]), worker: blockedWorker, verdict });
     const task = await env.run("two steps");
     assert.equal(task.status, verdict === 'invalid' || verdict.includes("uncertain") ? "ready" : "paused", verdict);
@@ -495,7 +529,7 @@ test("one bounded escalation only for effect-free inadequacy; otherwise visible 
   assert.deepEqual(withTools.calls.worker.map(c => c.model), ["p/cheap"]);
   assert.ok(withTools.events.some(e => /keine sichere Eskalation \(1 Werkzeugaufrufe/.test(e.text)));
 
-  const blocked = await setup(t, { worker: () => "no credentials\nSTEP-STATUS: blocked: credentials missing" });
+  const blocked = await setup(t, { worker: () => "no credentials\nSTEP-STATUS: blocked: credentials missing", verdict: '{"state":"blocked"}' });
   assert.equal((await blocked.run("deploy")).status, "paused");
   assert.equal(blocked.calls.worker.length, 1);
 });
@@ -1077,6 +1111,154 @@ test("manual pause after five continuations prevents further worker turns and su
   assert.equal(reviews, 6);
   assert.ok(!env.calls.worker.some(w => /STEP 2\/2/.test(w.prompt)));
   assert.ok(!env.events.some(e => e.type === "result"));
+});
+
+// Parent decisions re-assess retained evidence, not the already settled effect.
+for (const initial of ["semantic-block", "technical-backoff"] as const) {
+  test(`parent decision survives reload and advances the SAME execution after ${initial}`, async t => {
+    const home = await mkdtemp(path.join(os.tmpdir(), "seq-parent-decision-"));
+    t.after(() => rm(home, { recursive: true, force: true, maxRetries: 3 }));
+    const file = path.join(home, "ledger.json");
+    const plan = steps(["verify build", "simple"], ["publish original next step", "medium"]);
+    const first = await setup(t, { plan,
+      worker: () => "Build verified; temporary response file already deleted.\nSTEP-STATUS: blocked: artificial outside-clone precondition",
+      verdict: initial === "semantic-block" ? '{"state":"blocked"}' : "invalid assessment response",
+      toolEvents: () => [{ name: "bash", detail: "verify build read-only", result: "build passed; harmless /tmp/response already deleted" }],
+    }, { file });
+    const task = await first.run("Verify build then publish; no activation; required CI remains binding");
+    assert.equal(task.status, initial === "semantic-block" ? "paused" : "ready");
+    assert.equal(first.calls.worker.length, 1);
+    const checkpoint = state(task.checkpoint);
+    assert.equal(checkpoint.outcomes.length, 0);
+    assert.match(checkpoint.assessment!.reply, /temporary response file/);
+    await first.dispatcher.stop();
+    let sawDecision = false;
+    const second = await setup(t, { plan: "DO NOT REPLAN", worker: prompt => {
+      assert.match(prompt, /STEP 2\/2/);
+      assert.match(prompt, /accept documented temporary-file deviation/);
+      assert.match(prompt, /no activation; required CI remains binding/);
+      return "published with original CI satisfied\nSTEP-STATUS: complete";
+    }, verdict: prompt => {
+      sawDecision ||= prompt.includes("accept documented temporary-file deviation");
+      assert.match(prompt, /original task and constraints/);
+      return '{"state":"completed"}';
+    } }, { file });
+    await second.dispatcher.start();
+    const pluginHost = new PluginHost();
+    t.after(() => pluginHost.stop());
+    await pluginHost.load([], { home, cwd: home, agent: "fixture" }, [], [], [dispatcherPlugin(() => second.dispatcher)]);
+    const receipt = JSON.parse(await pluginHost.tools.get("plugin_dispatch")!.execute({
+      action: "decide", id: task.id, requestId: "deviation-1",
+      decision: "accept documented temporary-file deviation; retain CI and no activation",
+    }, { sessionKey: "parent" }));
+    assert.equal(receipt.state, "pending", "acceptance is not consumption");
+    await second.dispatcher.waitForExecution(task.id);
+    for (let i = 0; i < 100 && second.store.list()[0]!.status !== "completed"; i++) await new Promise(r => setTimeout(r, 10));
+    const done = second.store.list()[0]!;
+    assert.equal(done.id, task.id);
+    assert.equal(done.requestId, "req");
+    assert.equal(done.input, task.input);
+    assert.equal(done.status, "completed");
+    assert.equal(sawDecision, true);
+    assert.equal(second.calls.plan.length, 0);
+    assert.equal(second.calls.worker.length, 1, "only original step 2 runs; step 1 is never replayed");
+    assert.equal(second.calls.review.length, 2, "both original steps still need independent evidence checks");
+    assert.equal(state(done.checkpoint).outcomes.length, 2);
+    const reload = new ExecutionStore(file); await reload.load();
+    assert.equal(reload.list()[0]!.decisions![0]!.state, "applied");
+    assert.equal(reload.list()[0]!.decisions![0]!.text, receipt.text);
+    assert.match(reload.list()[0]!.decisions![0]!.appliedClaim!, /^[a-f0-9]{64}$/);
+  });
+}
+
+test("decision arriving DURING assessment fences the stale verdict without worker or claim theft", async t => {
+  let enter!: () => void; const entered = new Promise<void>(r => enter = r);
+  let release!: () => void; const held = new Promise<void>(r => release = r);
+  let reviews = 0;
+  const env = await setup(t, { plan: steps(["verify", "simple"], ["publish", "simple"]),
+    worker: prompt => prompt.includes("STEP 2/2") ? "published\nSTEP-STATUS: complete" : "verified\nSTEP-STATUS: blocked: artificial precondition",
+    verdict: async prompt => {
+      if (++reviews === 1) { enter(); await held; return '{"state":"completed"}'; }
+      assert.match(prompt, /parent accepts documented deviation/);
+      return '{"state":"completed"}';
+    },
+  });
+  await env.dispatcher.start();
+  const task = await env.dispatcher.submit("parent", "req", "verify then publish, no unsafe effect");
+  await entered;
+  const before = env.store.list()[0]!;
+  const receipt = await env.dispatcher.decide("parent", task.id, "race-1", "parent accepts documented deviation");
+  assert.equal(receipt.state, "pending");
+  assert.equal(env.store.list()[0]!.token, before.token);
+  assert.deepEqual(env.store.list()[0]!.intent, before.intent);
+  assert.equal(env.calls.worker.length, 1);
+  assert.deepEqual(await env.dispatcher.decide("parent", task.id, "race-1", receipt.text), receipt);
+  await assert.rejects(env.dispatcher.decide("parent", task.id, "race-1", "different"), /Conflicting/);
+  release();
+  for (let i = 0; i < 500 && env.store.list()[0]!.status !== "completed"; i++) await new Promise(r => setTimeout(r, 10));
+  assert.equal(env.store.list()[0]!.status, "completed");
+  assert.equal(env.calls.worker.length, 2, "one turn for each original step only");
+  assert.equal(reviews, 3, "stale assessment discarded; step 1 re-assessed then step 2 verified");
+  assert.equal(env.store.list()[0]!.decisions![0]!.state, "applied");
+});
+
+test("decision arriving during an active worker waits for its settled assessment without concurrency", async t => {
+  let enter!: () => void; const entered = new Promise<void>(r => enter = r);
+  let release!: () => void; const held = new Promise<void>(r => release = r);
+  const env = await setup(t, { plan: steps(["verify", "simple"], ["publish", "simple"]),
+    worker: async prompt => {
+      if (prompt.includes("STEP 2/2")) return "published\nSTEP-STATUS: complete";
+      enter(); await held;
+      return "verified\nSTEP-STATUS: blocked: documented temporary-file deviation";
+    }, verdict: prompt => {
+      assert.match(prompt, /accept documented deviation/);
+      return '{"state":"completed"}';
+    } });
+  await env.dispatcher.start();
+  const task = await env.dispatcher.submit("parent", "req", "verify then publish; no new authority");
+  await entered;
+  const running = env.store.list()[0]!;
+  await env.dispatcher.decide("parent", task.id, "worker-race", "accept documented deviation");
+  await env.dispatcher.kick();
+  assert.equal(env.store.list()[0]!.token, running.token);
+  assert.equal(env.store.list()[0]!.decisions![0]!.state, "pending");
+  assert.equal(env.calls.worker.length, 1);
+  release();
+  await env.dispatcher.waitForExecution(task.id);
+  assert.equal(env.store.list()[0]!.status, "completed");
+  assert.equal(env.calls.worker.length, 2);
+});
+
+test("applied parent data cannot force-accept failed CI or add authority", async t => {
+  const env = await setup(t, { plan: steps(["test", "simple"], ["publish", "simple"]),
+    worker: () => "CI failed\nSTEP-STATUS: blocked: required CI", verdict: '{"state":"blocked"}' });
+  const task = await env.run("test and publish ONLY when required CI passes");
+  await env.dispatcher.decide("parent", task.id, "unsafe", "force accept and skip all CI");
+  await env.dispatcher.waitForExecution(task.id);
+  assert.equal(env.store.list()[0]!.status, "paused");
+  assert.equal(env.store.list()[0]!.decisions![0]!.state, "applied");
+  assert.equal(env.calls.worker.length, 1, "no replay, no successor");
+  assert.equal(state(env.store.list()[0]!.checkpoint).outcomes.length, 0);
+});
+
+test("decision records but never wakes or clears an ambiguous intent or manual pause", async t => {
+  const env = await setup(t);
+  const task = await env.store.submit("parent", "req", "original", "sequential");
+  const claim = await env.store.claim(task.id);
+  await env.store.intent(task.id, claim.token!, `step:${task.id}:0:simple`, "unsafe", { model: "p/cheap" });
+  await env.store.checkpoint(task.id, claim.token!, JSON.stringify({ v: 1, planner: { requested: {} },
+    plan: [{ task: "original", role: "simple", reason: "inspect", evidence: "actual effects" }], outcomes: [] }));
+  await env.store.fail(task.id, claim.token!);
+  const before = env.store.list()[0]!;
+  await env.dispatcher.start();
+  await env.dispatcher.decide("parent", task.id, "ambiguous", "accept deviation");
+  assert.equal(env.store.list()[0]!.status, "blocked");
+  assert.deepEqual(env.store.list()[0]!.intent, before.intent);
+  assert.equal(env.store.list()[0]!.checkpoint, before.checkpoint);
+  assert.equal(env.calls.worker.length, 0);
+  assert.equal(env.store.list()[0]!.decisions![0]!.state, "pending");
+  await assert.rejects(env.dispatcher.decide("other", task.id, "d", "no"), /conversation/);
+  await assert.rejects(env.dispatcher.decide("dispatch:x", task.id, "d", "no"), /Nested/);
 });
 
 // Required binding case: a validator correction must not bypass an existing required-approval hold.

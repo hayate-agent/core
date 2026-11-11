@@ -16,6 +16,12 @@ Existing local GatewayModule overrides and disable/baseline operations are uncha
 This is source ownership separation: bundled modules still compile into the image;
 changing that pin requires a build and rollout, not runtime hot replacement.
 
+Gateways may explicitly expose model-discoverable text messaging through the
+optional `Channel.messaging` contract. Live capabilities are included in working
+turns and `plugin_message` provides bounded destination discovery, explicit
+operator-authorized sends and no-replay receipts. Adapters that do not opt in
+remain reply-only; see [native messaging](messaging.md).
+
 A module exports default `{ apiVersion: 1, async create(context) { ... } }`.
 Context supplies home, agent and initial approvers. Return `{ channel, home?,
 approvers? }`, or undefined when not configured. Channel implements the native

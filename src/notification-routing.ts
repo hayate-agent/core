@@ -14,6 +14,8 @@ export async function deliverTaskStatus(channel: Channel, to: Address, key: stri
 
 export function attentionRequired(event: import("./execution.js").ExecutionEvent, current: string): boolean {
   const status = event.status ?? current;
+  if (event.requiresAttention) return true;
+  if (event.type === "status" && Number.isSafeInteger(event.automaticRetryAt) && event.automaticRetryAt! > 0) return false;
   return event.type === "question" || ["blocked", "paused", "cancelled"].includes(status);
 }
 
