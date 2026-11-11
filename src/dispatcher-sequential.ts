@@ -436,6 +436,7 @@ End your reply with exactly one final line: "STEP-STATUS: complete" only if the 
         await context.status?.(next.escalation?.index === index
           ? `Schritt ${index + 1}/${state.plan.length}: ${role} unzureichend ohne Effekt; einmalige Eskalation auf ${next.escalation.to}.`
           : `Schritt ${index + 1}/${state.plan.length} abgeschlossen (${role}; ${trace}).`).catch(() => {});
+        if (state.outcomes.length < state.plan.length) await context.yieldStep?.();
       }
       return finalResult(state);
     },

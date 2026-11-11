@@ -24,5 +24,8 @@ export function capabilityContext(input: {
     subagent: { ...subagent, sessionAllowed: !child && subagent.exposed },
     review: tool("plugin_review"),
     delegationPolicy: input.dispatcherEnabled ? "dispatcher-worker" : "dedicated-subagent",
+    implementationRouting: input.dispatcherEnabled && input.dispatcherReady && !child
+      ? "Main orchestrates and uses native read/search tools. Delegate shell, file edits and implementation through plugin_dispatch. Technical worker failure is recovered by the dispatcher with retained state; do not take implementation over in Main. Polling deadlines do not revoke the original task."
+      : "Dispatcher routing is unavailable or this is a worker session.",
   })}`].filter(Boolean).join("\n\n");
 }

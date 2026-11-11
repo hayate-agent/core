@@ -19,7 +19,7 @@ for (const reason of ["ownership", "cancelled", "deadline", "missing-task", "sto
     const h = new Harness({ runtime, now: () => now, executionStore: store });
     h.addChannel(new MemoryChannel()); h.onStateChange = async () => {};
     h.restoreSessions([{ key: "mem:room1", task: { id: "task", original: "SECRET original", state: "waiting",
-      next: "SECRET next", depth: 2, wait: { reason: "SECRET dependency", nextAt: 61000, deadline: 301000 } } }]);
+      next: "SECRET next", depth: 2, expiresAt: 301000, wait: { reason: "SECRET dependency", nextAt: 61000, deadline: 301000 } } }]);
     runtime.open = async (...args) => {
       const session = await open(...args);
       session.prompt = async () => {

@@ -3,6 +3,7 @@ import { reasoningEffortNoneModels } from "./product-paths.js";
 import { McpManagement } from "./mcp-management.js";
 import { workingTreeEvidence } from "./repetition-budget.js";
 import { ToolGuardError } from "./tool-guard-error.js";
+import { guardDispatcherMain } from "./dispatcher-main-guard.js";
 import { improvementPlugin } from "./builtin-plugins/improvement-plugin.js";
 import { pluginOverlayReload } from "./plugin-overlay-reload.js";
 import { gatewayManagerPlugin } from "./builtin-plugins/gateway-manager-plugin.js";
@@ -360,6 +361,7 @@ async function main(argv: string[]): Promise<void> {
       if (tool === "plugin_review") await reloadRuntimeSettings();
       subagents.guardTool(key, tool);
       dispatchRuntime?.guardTool(key, tool);
+      guardDispatcherMain(key, tool, dispatchPolicy.enabled && dispatcher?.ready === true, input);
       await harness.guardWaitTool(key, tool, input);
       const current = harness.sessions.get(key)?.current;
       if (current?.source === "host") {
