@@ -37,6 +37,7 @@ export interface PluginMessage {
 export interface PluginChannel {
   readonly name: string;
   readonly messaging?: import("./types.js").ChannelMessaging;
+  readonly conversationPolicy?: 1;
   /** Implements SendMeta.progressId resolution, ordered edits and final replacement. */
   readonly editableProgress?: boolean;
   progressEnabled?(): boolean;
@@ -75,6 +76,7 @@ function wrapChannel(channel: PluginChannel): Channel {
       await deliver(input);
     }),
     ...(channel.messaging ? { messaging: channel.messaging } : {}),
+    ...(channel.conversationPolicy === 1 ? { conversationPolicy: 1 as const } : {}),
     editableProgress: channel.editableProgress === true,
     ...(channel.progressEnabled ? { progressEnabled: () => channel.progressEnabled!() } : {}),
     send: (to, text, meta) => channel.send(to, text, meta),

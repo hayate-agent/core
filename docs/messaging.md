@@ -13,6 +13,9 @@ or an installed-but-inactive module. This adds no credentials or permissions.
 - `{"action":"send","gateway":"slack","target":"C123", "text":"Authorized text", "requestId":"operator-task-message-1"}`:
   one explicitly authorized send. Omit `thread` for a new post; include the exact
   provider thread ID for a reply. Use exact IDs rather than guessed channel names.
+- `{"action":"send","gateway":"slack","target":"C123","file":{"path":"reports/result.pdf","name":"result.pdf"},"text":"Optional caption","requestId":"operator-task-file-1"}`:
+  one explicitly authorized file send. Files can also be sent in DMs or existing
+  threads; `thread` is optional.
 - `{"action":"receipt","requestId":"operator-task-message-1"}`: this conversation's
   retained outcome.
 
@@ -23,11 +26,34 @@ Adapters still enforce their own allowlists and destination validation. Console,
 API and other channels do not become send targets merely because they implement
 reply delivery; the gateway must explicitly provide `messaging`.
 
+## Binary files and images
+
+Adapters advertise `files` and `maxFileBytes` in live capabilities. File content
+is read only from a regular, non-symlink file under the current execution workspace
+or the originating conversation's own inbound attachment directory. Other agent
+storage, foreign conversation attachments, hidden credential trees and paths
+outside the workspace are rejected. One file per send, at most 10 MiB; empty
+files are allowed. Filename is validated separately and never used as a local
+storage path. Images and arbitrary binary bytes use the same file transfer path;
+there is no shell/Base64 workaround or automatic interpretation of uploaded data.
+
+Before external I/O, Core snapshots and hashes the bytes in origin-scoped storage.
+Destination changes cannot relabel ownership. The adapter rechecks hash and size.
+The caption, destination, filename and file fingerprint participate in the logical
+request identity, and identical retained sends are not uploaded again. Unknown
+upload/completion effects stay uncertain and require external reconciliation.
+A changed source file with the same request ID is rejected. Retain the source
+file (or use the immutable staged blob) when querying/repeating a send; `receipt`
+does not need the source file. Selecting an exportable file still requires the
+operator's mandate; workspace containment is not permission to disclose data.
+
+Access/mention rules are independent: see [conversation policies](conversation-policy.md).
+
 ## Receipt and retry semantics
 
 An exclusive private receipt under `<home>/message-receipts/` is flushed before
 external delivery. It stores destination, request ID, fingerprint and status,
-not message contents. Identity is scoped to the originating conversation and
+not message contents (file sends also retain the origin-scoped attachment reference). Identity is scoped to the originating conversation and
 logical request ID. Identical retries return the retained result, including after
 a process restart; conflicting text/destination with the same ID is rejected.
 

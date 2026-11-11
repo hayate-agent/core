@@ -1,7 +1,8 @@
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { createHash, randomUUID } from "node:crypto";
-import type { Address } from "./types.js";
+import type { Address, InboundAttachment } from "./types.js";
+import { verifyOutboundFile } from "./outbound-files.js";
 import type { Harness } from "./harness.js";
 import type { SettingsService } from "./settings.js";
 import type { GatewayOverride } from "./gateway-provider.js";
@@ -74,15 +75,18 @@ export class GatewayManager {
       return messaging.destinations({ limit, cursor }, signal);
     });
   }
-  async sendMessage(sessionKey: string, requestId: string, to: Address, text: string, signal?: AbortSignal): Promise<void> {
+  async sendMessage(sessionKey: string, requestId: string, to: Address, text: string, signal?: AbortSignal, attachment?: InboundAttachment): Promise<void> {
     return this.harness.withForegroundWork(async () => {
       const info = this.active.get(to.channel)?.channel.messaging?.describe();
-      if (!info?.text || info.connected === false) throw Error("Gateway messaging is unavailable or disconnected");
+      if (!info?.text || info.connected === false || (attachment && !info.files)) throw Error("Gateway messaging is unavailable or disconnected");
+      if (attachment) await verifyOutboundFile(this.context.home, sessionKey, attachment);
       signal?.throwIfAborted();
-      const deliveryId = "message:" + createHash("sha256").update(JSON.stringify([sessionKey, requestId, to, text])).digest("hex");
+      const deliveryId = "message:" + createHash("sha256").update(JSON.stringify(attachment
+        ? [sessionKey, requestId, to, text, attachment] : [sessionKey, requestId, to, text])).digest("hex");
       // One transport attempt, through the same delivery/activation fence as replies.
       // Stable ID is a provider hint, not an exactly-once or automatic replay claim.
-      await this.harness.deliver(to, text, { deliveryId });
+      await this.harness.deliver(to, text, { deliveryId,
+        ...(attachment ? { attachments: [attachment], attachmentSessionKey: sessionKey } : {}) });
     });
   }
   private readonly generations = new Map<string, number>();
