@@ -2,8 +2,8 @@
 
 ## Scope
 
-Core base: `b32155d` (refreshed current main before publication).
-Plugin base: `4941c9f`; candidate `58ded9f` (Plugins PR #84). Branches: `fix/execution-context-isolation` and
+Core base: `5628237` (current main and durable parent decisions integrated before release).
+Plugin base: `95e1962`; candidate `b7be618` (Plugins PR #84, merged as `59757c9`). Branches: `fix/execution-context-isolation` and
 `fix/dispatch-context-assertion` in sibling `execution-context-plugins`.
 
 Source-level investigation of the reported inherited-deadline review failure.
@@ -76,7 +76,10 @@ auto-continued; they require explicit operator reconciliation/new admission.
   task fences, inherited Main wait deadlines, worker mandate).
 - Plugins: 9/9 dispatcher tests passed, including two new contract regressions.
 - `git diff --check` passed.
-- Final full repository suite: 1801 passed, one optional skip, zero failures.
+- Final full repository suite after main integration: 1815 passed, one optional skip, zero failures.
+- Full top-level plugin suite: 85 passed. Native plugin compatibility CI passed.
+- Bound admission uses an explicit host capability (`submitBound`); an older
+  host rejects the plugin operation instead of ignoring its context assertion.
 - Full-suite findings corrected: worker-continuation fixture delegated after the
   owning turn was idle (and depended on the removed fallback); it now delegates
   inside that turn. Fresh-session cleanup now awaits dispatcher shutdown before
@@ -84,7 +87,7 @@ auto-continued; they require explicit operator reconciliation/new admission.
 - Production integration/deployment pending at commit time.
 
 Generated builtin plugins are ignored build output. `plugins.lock.json` now pins
-published plugin candidate `58ded9f` and exact file hashes. Normal build fetches
+published plugin candidate `b7be618` and exact file hashes. Normal build fetches
 and verifies those immutable sources (no development lock override).
 
 ```sh
