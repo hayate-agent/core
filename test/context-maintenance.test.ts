@@ -140,8 +140,11 @@ test("prepared handover refreshes intervening context after rotation failure", a
   await maintenance.request("chat", { action: "handover", preserve: "state", resume: "tests" });
   assert.match((await maintenance.beforeTurn("chat", session, async () => { throw new Error("open failed"); }))!, /kein bestätigter Abschluss/);
   const next = { status: () => ({ sessionId: "new" }) } as RuntimeSession;
-  assert.match((await new ContextMaintenance(home, () => contextPolicy()).beforeTurn("chat", session, async () => next))!, /Neue Sitzung übernommen/);
-  assert.equal(summaries, 2);
+  const restarted = new ContextMaintenance(home, () => contextPolicy());
+  await restarted.beforeTurn("chat", session, async () => { assert.fail("uncertain rotation must not repeat automatically"); });
+  await restarted.admit("chat", "reconcile", { action: "handover", preserve: "state", resume: "tests" });
+  assert.match((await restarted.beforeTurn("chat", session, async () => next))!, /Neue Sitzung übernommen/);
+  assert.equal(summaries, 1, "unchanged transcript must not compact a second time");
 });
 
 test("automatic post-turn compaction does not steal the next pre-turn handover", async (t) => {

@@ -193,8 +193,10 @@ export interface HarnessOptions {
     archives?: Pick<import("./session-archive.js").SessionArchives, "completionEvidence">;
     interrupt?(key: string): boolean;
     guidance(key: string, session: RuntimeSession): Promise<string>;
-    prepareContinuation?(key: string, session: RuntimeSession, rotate: (handover: import("./context-maintenance.js").ContextRecord["handover"]) => Promise<RuntimeSession>, action: "compact" | "handover", preserve: string, resume: string, target?: Address): Promise<void>;
+    prepareContinuation?(key: string, session: RuntimeSession, rotate: (handover: import("./context-maintenance.js").ContextRecord["handover"]) => Promise<RuntimeSession>, action: "compact" | "handover", preserve: string, resume: string, target?: Address, operationId?: string): Promise<void>;
     admissionStatus?(key: string): Promise<{ execution?: string }>;
+    recoveryStatus?(key: string): Promise<import("./context-maintenance.js").MaintenanceHold | undefined>;
+    recoveryReceipt?(key: string): Promise<{ operationId: string; state: NonNullable<import("./context-maintenance.js").ContextRecord["recovery"]>["state"] } | undefined>;
     request?(key: string, request: { action: "handover"; preserve: string; resume: string }): Promise<void>;
     beforeTurn?(key: string, session: RuntimeSession, rotate: (handover: import("./context-maintenance.js").ContextRecord["handover"]) => Promise<RuntimeSession>, target?: Address, incomingText?: string): Promise<string | undefined>;
     boundary(key: string, session: RuntimeSession, rotate: (handover: import("./context-maintenance.js").ContextRecord["handover"]) => Promise<RuntimeSession>, target?: Address): Promise<string | undefined>;
@@ -1729,6 +1731,7 @@ export class Harness {
     for (const s of this.sessions.values()) {
       if (this.opts.sessionEnabled?.(s.key) === false) continue;
       if (this.opts.externallyRecoveredSession?.(s.key)) continue;
+      if (await this.opts.contextMaintenance?.recoveryStatus?.(s.key)) continue;
       for (const task of this.tasks(s)) {
       if (task.recoveryEnrollment === "held-legacy") continue;
       await this.reconcileBlockedDependency(s, task);
@@ -2107,6 +2110,12 @@ export class Harness {
         }
         // Replies of finished turns go out first (FIFO) and are never recomputed.
         if (!(await this.outbox.flush(s.key, s.outbox))) break;
+        // Waiting/attention is not a failed working turn. Retain inbox and task
+        // budget. Ticks inspect the fixed deadline; delivery retries stay separate.
+        if (await this.opts.contextMaintenance?.recoveryStatus?.(s.key)) {
+          await this.flushMaintenanceNotices();
+          break;
+        }
         if (!s.queue.length && this.queueRunnableTask(s)) continue;
         if (!s.queue.length || this.paused) break;
         // Stable foreground priority also applies to restored inboxes and saved
@@ -2547,12 +2556,20 @@ export class Harness {
       };
       if (input.contextPreparation && s.cancelling !== input && !this.stopping) {
         if (!this.opts.contextMaintenance?.prepareContinuation) throw Error("Required continuation context preparation unavailable");
+        if (!input.contextPreparationOperationId) {
+          const receipt = await this.opts.contextMaintenance.recoveryReceipt?.(s.key);
+          input.contextPreparationOperationId = receipt && !["applied", "cancelled"].includes(receipt.state) ? receipt.operationId : randomUUID();
+          await this.onStateChange?.(); // bind the retained prerequisite before effects
+        }
         this.beforeMaintenance.add(s.key);
         try {
           await this.opts.contextMaintenance.prepareContinuation(s.key, session, rotate, input.contextPreparation,
-            input.completionAnchor?.task ?? input.text, input.text, input.replyTo ?? s.replyTo ?? this.home);
+            input.completionAnchor?.task ?? input.text, input.text, input.replyTo ?? s.replyTo ?? this.home, input.contextPreparationOperationId);
         } finally { this.beforeMaintenance.delete(s.key); }
+        await this.flushMaintenanceNotices();
+        if (await this.opts.contextMaintenance.recoveryStatus?.(s.key)) throw MAINTENANCE_YIELD;
         input.contextPreparation = undefined;
+        input.contextPreparationOperationId = undefined;
         checkExpiry();
       }
       let preTurnNotice: string | undefined;
@@ -2566,10 +2583,12 @@ export class Harness {
         this.preparedTurn.add(input);
         throw MAINTENANCE_YIELD;
       }
+      if (await this.opts.contextMaintenance?.recoveryStatus?.(s.key)) throw MAINTENANCE_YIELD;
       // Child sessions cannot call parent-owned continuation tools; give them
       // their actual outcome contract instead of continuation instructions.
       const child = childDeniedTools(s.key).length > 0;
       const guidance = (child ? `\n${CHILD_OUTCOME_CONTRACT}\n` : "\nTask continuation allowance: 20 consecutive stalled or unevidenced attempts, not 20 total turns. Distinct independently assessed verification, research and analysis count as progress without tracked-file edits. Checker calls and nudges themselves are not failures. Queue depth is separate. Working-model claims or changed wording do not grant progress credit. Original mandate and deadline remain binding.\n") + (await this.opts.contextMaintenance?.guidance(s.key, session) ?? "") + (await this.opts.memory?.recall(s.key, input.text) ?? "") + (await this.opts.reportContext?.(input) ?? "");
+      if (await this.opts.contextMaintenance?.recoveryStatus?.(s.key)) throw MAINTENANCE_YIELD;
       const text = input.replyOptional
         ? `${input.text}\n\n(Not addressed to you directly. Reply only if you have something useful to add; otherwise reply exactly ${NO_REPLY}.)`
         : input.text;
@@ -2931,6 +2950,7 @@ export class Harness {
     if (this.paused || this.stopping || this.gatewayChanging || this.activeDeliveries || this.outbox.held) return;
     for (const s of this.sessions.values()) {
       if (this.opts.sessionEnabled?.(s.key) === false || s.running || s.queue.length || s.outbox.length || s.unsaved || this.stoppingHostParents.has(s.key)) continue;
+      if (await this.opts.contextMaintenance?.recoveryStatus?.(s.key)) continue;
       for (const task of this.tasks(s)) {
       if (task.recoveryEnrollment === "held-legacy") continue;
       // Reconcile pre-upgrade exhausted checkpoints without a model nudge.
