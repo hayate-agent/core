@@ -163,8 +163,7 @@ export class Dispatcher {
     for (let task of ordered) {
       if (this.stopped || this.active.size >= this.capacity) break;
       if (["worker-failed", "runtime-failure"].includes(task.diagnosticCode ?? "") &&
-          (["blocked", "paused"].includes(task.status) || task.status === "ready" && task.workerRetry &&
-            task.dependency?.expiresAt !== undefined && task.dependency.expiresAt <= Date.now()) &&
+          (["blocked", "paused"].includes(task.status) || task.status === "ready" && task.workerRetry) &&
           !this.active.has(task.id) && this.parentEnabled(task.parent)) {
         if (task.workerRetry && !this.store.assessmentDue(task) &&
             !(task.dependency?.expiresAt !== undefined && task.dependency.expiresAt <= Date.now())) continue;

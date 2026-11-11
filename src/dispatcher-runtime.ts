@@ -29,7 +29,7 @@ export class DispatcherRuntime {
     // Retained events can outlive a newer question on the same execution.
     const questionId = question?.[1] ?? task?.question?.id;
     const text = event.automaticRetryAt && Number.isSafeInteger(event.automaticRetryAt)
-      ? task?.assessmentHold ? `${event.text} Nächste automatische Prüfung ab ${new Date(event.automaticRetryAt).toISOString()}.`
+      ? event.requiresAttention || task?.assessmentHold ? `${event.text} Nächste automatische Prüfung ab ${new Date(event.automaticRetryAt).toISOString()}.`
       : `Automatische Wiederaufnahme ab ${new Date(event.automaticRetryAt).toISOString()}; Dispatcher behält denselben Auftrag. Keine Nutzeraktion erforderlich.`
       : question?.[2] ?? event.text;
     return `${taskContextLabel(event.executionId, task?.dependency?.anchor?.outputTags, !!task?.dependency?.anchor)} · Dispatcher — ${text}${event.type === "question" ? `\n/dispatch answer ${event.executionId} ${questionId} <Antwort>` : ""}`;

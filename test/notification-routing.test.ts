@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Harness } from "../src/harness.js";
 import { attentionRequired, deliverTaskStatus, routineWait } from "../src/notification-routing.js";
+import { DispatcherRuntime } from "../src/dispatcher-runtime.js";
 import type { Inbound } from "../src/types.js";
 import { FakeRuntime, MemoryChannel, ROOM, msg } from "./fakes.js";
 
@@ -64,6 +65,14 @@ test("actual results and important blockers retain normal durable delivery", asy
   }
 });
 
+
+test("delayed semantic attention is not rewritten as no-user-action after the hold clears", () => {
+  const bridge = new DispatcherRuntime({} as never, { list: () => [] } as never);
+  const text = bridge.eventText({ id: "e", executionId: "x", parent: "p", type: "status", status: "paused",
+    text: "Verified external prerequisite is missing", automaticRetryAt: 123456, requiresAttention: true });
+  assert.match(text, /Verified external prerequisite is missing/);
+  assert.doesNotMatch(text, /Keine Nutzeraktion erforderlich/);
+});
 
 test("queued lifecycle uses event-time state; blockers/questions remain attention messages", () => {
   const event = { id: "event", executionId: "task", parent: "parent", type: "status" as const, text: "started", status: "running" as const };

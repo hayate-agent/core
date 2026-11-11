@@ -413,7 +413,8 @@ export class ExecutionStore {
       const task = this.find(draft, id);
       if (task.status !== "ready" || !this.assessmentDue(task))
         throw new ExecutionClaimConflict("Execution not ready");
-      const reason = task.intent ? recoveryBlock(task, current?.strategy === task.strategy ? current : undefined, policy) : undefined;
+      const reason = task.intent ? recoveryBlock(task, current?.strategy === task.strategy ? current : undefined, policy)
+        : task.workerRetry ? policy?.evaluate(structuredClone(task)) : undefined;
       if (reason) throw Error(reason);
       const claimedRecoveryAction = task.recoveryGrant?.restarts === task.restarts ? task.recoveryGrant.action : undefined;
       delete task.recoveryGrant;
@@ -698,18 +699,26 @@ export class ExecutionStore {
       delete task.workerRetry;
       return false;
     }
-    if (task.status === "ready") return false;
     if (task.classifierReceipt !== undefined && task.classifierReceipt.phase !== "observed") {
+      task.status = task.intent ? "blocked" : "paused";
       task.recoveryReason = "Classifier HTTP outcome unknown; retained receipt forbids automatic replay.";
       delete task.workerRetry;
       return false;
     }
-    if (!strategy.reconcile) return false;
+    if (!strategy.reconcile) {
+      if (task.workerRetry) {
+        task.status = task.intent ? "blocked" : "paused";
+        task.recoveryReason = "Matching strategy no longer supports reconciliation; automatic work held.";
+        delete task.workerRetry;
+      }
+      return false;
+    }
     const reason = recoveryBlock(task, strategy, policy);
-    if (reason) { task.recoveryReason = reason; delete task.workerRetry; return false; }
+    if (reason) { task.status = task.intent ? "blocked" : "paused"; task.recoveryReason = reason; delete task.workerRetry; return false; }
     delete task.recoveryReason;
     if (!newFailure && task.workerRetry) {
       if (task.workerRetry.nextAt > this.now()) return false;
+      if (task.status === "ready") return false; // eligible ready retry may now be claimed
       task.status = "ready";
       return true;
     }

@@ -60,6 +60,23 @@ test(`task expiry clears ${diagnostic} retry even before its backoff is due`, as
   assert.equal(store.events().at(-1)?.automaticRetryAt, undefined);
 });
 
+test("ready worker retry rechecks a changed trusted recovery policy before claim", async t => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "hy-ready-policy-")); let dispatcher: Dispatcher | undefined;
+  t.after(async () => { await dispatcher?.stop(); await rm(dir, { recursive: true, force: true }); });
+  let now = 1000; const store = new ExecutionStore(path.join(dir, "ledger.json"), { now: () => now }); await store.load();
+  let hold = false; let calls = 0;
+  const policy = { name: "live-gate", evaluate: () => hold ? "real changed gate" : undefined };
+  const strategy = { name: "fixture", version: 1, replaySafe: false, reconcile: true, execute: async () => { calls++; return "not authorized"; } };
+  const task = await store.submit("parent", "r", "work", "fixture"); const claim = await store.claim(task.id);
+  await store.fail(task.id, claim.token!, "worker-failed", { strategy, policy });
+  dispatcher = new Dispatcher(store, strategy, 1, async () => {}, () => {}, undefined, policy);
+  await dispatcher.start(); now = store.list()[0].workerRetry!.nextAt; hold = true;
+  await dispatcher.kick();
+  assert.equal(calls, 0); assert.equal(store.list()[0].workerRetry, undefined);
+  assert.equal(store.list()[0].recoveryReason, "real changed gate");
+  assert.notEqual(store.list()[0].status, "ready");
+});
+
 test("internal retry ownership is cleared when a genuine hold takes over", async t => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "hy-hold-owner-")); t.after(() => rm(dir, { recursive: true, force: true }));
   let now = 1000; const store = new ExecutionStore(path.join(dir, "ledger.json"), { now: () => now }); await store.load();
