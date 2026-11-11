@@ -63,7 +63,8 @@ for (const failure of [false, true]) {
     try {
       await h.recoverTasks();
       assert.deepEqual(events, ["check"], "startup must persist recovery before releasing work");
-      h.releaseRestored(); await h.drained();
+      h.releaseRestored();
+      if (failure) await h.waitForSessionIdle("mem:room1"); else await h.drained();
       assert.deepEqual(events, ["check", ...(preparation === "compact" ? ["compact"] : failure ? ["summary"] : ["summary", "seed"]),
         ...(failure ? [] : ["work", "check"])]);
       const queued = persisted.find(state => state.pending.some(input => input.taskId === "retained"));
@@ -127,7 +128,8 @@ for (const failure of [false, true]) {
       } }, input, reply, input.completionAnchor ? { task: input.completionAnchor.task } : undefined, signal) });
     h.addChannel(new MemoryChannel()); h.onStateChange = async () => {};
     try {
-      await h.submit(msg(mandate)); await h.drained();
+      await h.submit(msg(mandate));
+      if (failure) await h.waitForSessionIdle("mem:room1"); else await h.drained();
       assert.equal(turns, failure ? 1 : 2, "required preparation failure must not execute a working prompt");
       assert.deepEqual(events, ["work-1", "check", ...(preparation === "compact" ? ["compact"] : preparation === "handover" ? failure ? ["summary"] : ["summary", "seed"] : []), ...(failure ? [] : ["work-2", "check"])]);
       const task = h.snapshotSessions()[0].task!;
@@ -139,15 +141,17 @@ for (const failure of [false, true]) {
         assert.equal(saved.pending?.action, preparation);
         // A later recovery/new turn must not bypass the failed prerequisite during cooldown.
         const restarted = new ContextMaintenance(home, () => contextPolicy(), undefined, () => now);
-        await assert.rejects(restarted.beforeTurn("mem:room1", runtime.sessions.get("mem:room1")!, async () => {
+        await restarted.beforeTurn("mem:room1", runtime.sessions.get("mem:room1")!, async () => {
           throw Error("must not rotate during cooldown");
-        }), /Context maintenance/);
+        });
+        assert.equal((await restarted.recoveryStatus("mem:room1"))?.state, "blocked");
         assert.equal(turns, 1);
         now += 60001;
         const retry = new ContextMaintenance(home, () => contextPolicy(), undefined, () => now);
         const old = runtime.sessions.get("mem:room1")!;
         old.compact = async () => {};
         old.summarize = async () => "CURRENT STATE AND NEXT STEPS: Run regression. No deployment.";
+        await retry.admit("mem:room1", "reconcile", { action: "handover", preserve: mandate, resume: "Run regression" });
         await retry.beforeTurn("mem:room1", old, async handover => {
           const next = await runtime.open("mem:room1", { fresh: true });
           await next.seedHandover!(handover!.text); return next;

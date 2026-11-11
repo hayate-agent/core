@@ -18,9 +18,13 @@ for (const policy of [{ enabled: false }, { autoHandover: false }]) test(`requir
   const maintenance = new ContextMaintenance(home, () => contextPolicy(policy));
   const session = new FakeSession("chat", () => "unused");
   try {
-    await assert.rejects(maintenance.prepareContinuation("chat", session, async () => {
+    await maintenance.prepareContinuation("chat", session, async () => {
       throw Error("must not rotate");
-    }, "handover", "No deployment", "Run regression"), /Context maintenance/);
-    assert.equal(session.compacted, 0); assert.equal((await maintenance.status("chat")).pending, undefined);
+    }, "handover", "No deployment", "Run regression");
+    const held = await maintenance.recoveryStatus("chat");
+    assert.equal(held?.state, "blocked"); assert.equal(held?.reason, "policy");
+    assert.equal(held?.failedAttempts, 0, "no runtime attempt took place");
+    assert.equal(session.compacted, 0);
+    assert.equal((await maintenance.status("chat")).pending?.preserve, "No deployment");
   } finally { await rm(home, { recursive: true, force: true }); }
 });

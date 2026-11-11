@@ -10,6 +10,7 @@ export interface OutboxEntry {
   text: string;
   outputTags?: string[];
   outcome?: TurnOutcome;
+  maintenance?: SendMeta["maintenance"];
   progressId?: string;
   /** Routine status uses a stable update row, not a final reply. */
   statusKey?: string;
@@ -66,7 +67,7 @@ export class OutboxDelivery {
       if (this.blocked.has(entry)) return false;
       try {
         entry.id ??= randomUUID();
-        await this.deps.deliver(entry.to, labelOutput(entry.text, entry.to.channel === "dispatch" ? undefined : entry.outputTags), { deliveryId: entry.id, ...(entry.statusKey ? { statusKey: entry.statusKey } : {}), ...(entry.progressId ? { progressId: entry.progressId } : {}), ...(entry.outcome ? { outcome: entry.outcome } : {}) });
+        await this.deps.deliver(entry.to, labelOutput(entry.text, entry.to.channel === "dispatch" ? undefined : entry.outputTags), { deliveryId: entry.id, ...(entry.statusKey ? { statusKey: entry.statusKey } : {}), ...(entry.progressId ? { progressId: entry.progressId } : {}), ...(entry.outcome ? { outcome: entry.outcome } : {}), ...(entry.maintenance ? { maintenance: entry.maintenance } : {}) });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         if (!(err instanceof PermanentDeliveryError) || !this.deps.park) {
