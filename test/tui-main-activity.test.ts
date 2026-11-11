@@ -103,8 +103,14 @@ test("rendered screen has one main while one input is queued, including late old
     ui.taskActivity(to, event(snapshot("old", 1)));
     ui.taskActivity(to, event(snapshot("new", 2)));
     ui.taskActivity(to, event(snapshot("old", 1, "main", "tool")));
-    await new Promise(resolve => setTimeout(resolve, 40));
-    const screen = (ui as any).tui.getScreenLines().join("\n");
+    // Wait for the requested rendered state, not an assumed 40ms frame budget:
+    // constrained CI can schedule the TUI's first frame later under full-suite load.
+    let screen = "";
+    for (let attempt = 0; attempt < 100; attempt++) {
+      screen = (ui as any).tui.getScreenLines().join("\n");
+      if ((screen.match(/Main · task/g) ?? []).length === 1 && /model new/.test(screen) && /1 queued/.test(screen)) break;
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
     assert.equal((screen.match(/Main · task/g) ?? []).length, 1);
     assert.match(screen, /1 queued/);
     assert.match(screen, /model new/);
