@@ -1,7 +1,7 @@
 /** Only host-created guard denials receive a specific, model-visible reason.
  * Never forward an arbitrary exception's message, properties or string conversion.
  */
-export type ToolGuardCode = "review_required" | "worker_orchestration_denied" | "authority_revoked" | "deadline_expired" | "execution_cancelled" | "ownership_lost" | "parent_mandate_missing" | "dispatcher_unavailable" | "continuation_budget_exhausted";
+export type ToolGuardCode = "dispatcher_required" | "review_required" | "worker_orchestration_denied" | "authority_revoked" | "deadline_expired" | "execution_cancelled" | "ownership_lost" | "parent_mandate_missing" | "dispatcher_unavailable" | "continuation_budget_exhausted";
 
 const codes = new WeakMap<object, ToolGuardCode>();
 
@@ -24,6 +24,7 @@ export function toolGuardDenialReason(error: unknown): string {
     case "parent_mandate_missing": return "parent_mandate_missing: No live parent mandate is available for this continuation; return the result or blocker without starting more work.";
     case "authority_revoked": return "authority_revoked: Execution authority is no longer valid; this action is blocked.";
     case "continuation_budget_exhausted": return "continuation_budget_exhausted: Productive follow-up budget exhausted; no work tool was executed. Status-only dependency rechecks remain allowed until the fixed deadline. Record waiting or a blocked next step; do not disguise productive work as waiting.";
+    case "dispatcher_required": return "dispatcher_required: Dispatcher is enabled and available. Delegate shell and implementation work through plugin_dispatch; worker failure does not permit Main takeover. The dispatcher retains and reconciles the interrupted execution.";
     case "dispatcher_unavailable": return "dispatcher_unavailable: The required dispatcher is unavailable; this action is blocked.";
     default: return "Tool guard blocked this action; authorization could not be established.";
   }

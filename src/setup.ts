@@ -50,7 +50,8 @@ export async function initialize(opts: InitOptions): Promise<string[]> {
 # admins: ["@operator:example.org"]
 # approvers: ["@operator:example.org"]
 # Dispatcher: verify backend concurrency support before setting BOTH enabled
-# and concurrentRequests to true above; capacity: 1 is a starting worker limit.
+# and concurrentRequests to true above; capacity defaults to 4 active workers.
+# Lower capacity explicitly if required by your backend; Main does not use a worker slot.
 # direct uses normal isolated worker turns; sequential also needs modelRoles.
 # See docs/dispatcher.md and docs/model-roles.md. Restart after startup changes.
 `,

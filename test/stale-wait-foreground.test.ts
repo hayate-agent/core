@@ -28,6 +28,7 @@ async function fixture(t: { after(fn: () => Promise<void>): void }, opts: { dead
   h.addChannel(new MemoryChannel());
   h.onStateChange = async () => {};
   const old: DurableTask = { id: "old", original: ORIGINAL, state: "waiting", depth: 0, next: "Check old worker",
+    expiresAt: opts.deadline, // authentic task expiry, distinct from a model polling window
     anchor: { id: "a-old", task: ORIGINAL, receivedAt: opts.now - 5 * DAY },
     wait: { reason: "waiting for worker", nextAt: opts.deadline - 1000, deadline: opts.deadline } };
   const current: DurableTask = { id: "example", original: "Migrate example", state: "completed", depth: 0,
@@ -146,11 +147,11 @@ test(`${entry} rejects ${fault} wait before dependency admission`, async t => {
   const f = await fixture(t, { now, deadline: now + DAY });
   const session = f.h.state("mem:room1");
   const old = session.tasks!.find(x => x.id === "old")!;
-  if (fault === "boundary") old.wait!.deadline = now;
+  if (fault === "boundary") { old.wait!.deadline = now; old.expiresAt = now; }
   if (fault === "deadline") old.wait!.deadline = NaN;
   if (fault === "nextAt") old.wait!.nextAt = NaN;
   if (fault === "reason") old.wait!.reason = " ";
-  if (fault === "lastWait") { old.lastWait = { ...old.wait!, deadline: now }; old.wait = undefined; old.state = "blocked"; }
+  if (fault === "lastWait") { old.lastWait = { ...old.wait!, deadline: now }; old.expiresAt = now; old.wait = undefined; old.state = "blocked"; }
   if (entry === "startup") await f.h.recoverTasks();
   else if (entry === "tick") await f.h.tick();
   else { session.running = true; await (f.h as any).reconcileBlockedDependency(session, old, true); session.running = false; }

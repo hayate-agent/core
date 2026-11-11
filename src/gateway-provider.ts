@@ -10,6 +10,8 @@ export interface GatewayInstance {
 export interface GatewayFactoryContext {
   /** Versioned durable, session-bound attachment reference contract. */
   inboundAttachments?: 1;
+  /** Host verifies/stages explicit binary sends and binds their origin session. */
+  outboundAttachments?: 1;
   home: string;
   agent: string;
   approvers: string[];

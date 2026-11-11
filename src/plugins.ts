@@ -36,6 +36,8 @@ export interface PluginMessage {
 
 export interface PluginChannel {
   readonly name: string;
+  readonly messaging?: import("./types.js").ChannelMessaging;
+  readonly conversationPolicy?: 1;
   /** Implements SendMeta.progressId resolution, ordered edits and final replacement. */
   readonly editableProgress?: boolean;
   progressEnabled?(): boolean;
@@ -73,6 +75,8 @@ function wrapChannel(channel: PluginChannel): Channel {
       };
       await deliver(input);
     }),
+    ...(channel.messaging ? { messaging: channel.messaging } : {}),
+    ...(channel.conversationPolicy === 1 ? { conversationPolicy: 1 as const } : {}),
     editableProgress: channel.editableProgress === true,
     ...(channel.progressEnabled ? { progressEnabled: () => channel.progressEnabled!() } : {}),
     send: (to, text, meta) => channel.send(to, text, meta),
@@ -222,11 +226,12 @@ export class PluginHost {
               if (!registering) throw new Error("Plugin registration is closed");
               if (!strategy || typeof strategy.name !== "string" || !/^[a-z][a-z0-9_-]*$/.test(strategy.name) ||
                   !Number.isSafeInteger(strategy.version) || strategy.version < 1 || typeof strategy.replaySafe !== "boolean" ||
-                  typeof strategy.execute !== "function") throw new Error("Invalid dispatcher strategy");
+                  typeof strategy.execute !== "function" || (strategy.decisionBoundary !== undefined && typeof strategy.decisionBoundary !== "function")) throw new Error("Invalid dispatcher strategy");
               if (strategy.name === "direct" || strategy.name === "sequential" || this.dispatchers.has(strategy.name)) throw new Error(`Dispatcher conflict: ${strategy.name}`);
               this.dispatchers.set(strategy.name, Object.freeze({
                 name: strategy.name, version: strategy.version, replaySafe: strategy.replaySafe,
                 execute: strategy.execute.bind(strategy),
+                ...(strategy.decisionBoundary ? { decisionBoundary: strategy.decisionBoundary.bind(strategy) } : {}),
               }));
             },
             registerCompaction: (name: string, strategy: CompactionStrategy) => {

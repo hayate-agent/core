@@ -5,6 +5,9 @@ import { dispatcherConfig, pickModelRule } from "../src/dispatcher-config.js";
 
 test("dispatcher stays off without explicit concurrency support", () => {
   assert.equal(dispatcherConfig().enabled, false);
+  assert.equal(dispatcherConfig().capacity, 4);
+  assert.equal(defaultConfig({ dispatcher: { enabled: true, concurrentRequests: true } }).dispatcher?.capacity, 4);
+  assert.equal(dispatcherConfig({ capacity: 1 }).capacity, 1); // explicit backend/operator limit survives
   assert.throws(() => defaultConfig({ dispatcher: { enabled: true } }), /concurrentRequests/);
   const config = defaultConfig({ dispatcher: { enabled: true, concurrentRequests: true, capacity: 7, strategy: "custom" } });
   assert.deepEqual(config.dispatcher, { enabled: true, concurrentRequests: true, capacity: 7, strategy: "custom", retentionDays: 7, countAuxiliaryRuns: false });

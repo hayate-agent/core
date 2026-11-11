@@ -68,7 +68,7 @@ test("startup fences states, expiry, depth, absent mandate and accepted children
   }
 });
 
-test("startup blocked child without task provenance admits one independent assessed step without replaying the child", { timeout: 30000 }, async t => {
+test("startup blocked child without task provenance cannot grant independent parent work", { timeout: 30000 }, async t => {
   const home = await mkdtemp(path.join(os.tmpdir(), "startup-blocked-child-"));
   t.after(() => rm(home, { recursive: true, force: true }));
   const store = new ExecutionStore(path.join(home, "executions.json")); await store.load();
@@ -90,10 +90,10 @@ test("startup blocked child without task provenance admits one independent asses
   t.after(() => h.stop(1000));
   h.restoreSessions([{ key: "mem:room1", task: task() }]);
   await h.recoverTasks(); await h.recoverTasks();
-  assert.equal(checks, 1); assert.equal(h.pendingInputs().length, 1);
+  assert.equal(checks, 0); assert.equal(h.pendingInputs().length, 0);
   h.releaseRestored(); await h.drained();
-  assert.equal(turns, 1); assert.equal(checks, 2);
-  assert.equal(h.state("mem:room1").task?.state, "completed");
+  assert.equal(turns, 0); assert.equal(checks, 0);
+  assert.equal(h.state("mem:room1").task?.state, "blocked");
   assert.equal(JSON.stringify(store.list()), before);
 });
 

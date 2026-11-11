@@ -2,7 +2,7 @@
   "files": {
     "boundary-assessor.ts": "50673771d39126c132829704b5b2ab6172092e867245f8edca8c9b0eb71615cb",
     "compaction-strategy-plugin.ts": "8dadb434b15443524827b302af9c98c22ce40e892e0c0c2bc60e558dae33c932",
-    "completion-prompt.ts": "8335827538216dc7f115aa37bc945d660c70e46b648058f7ab740334a05be5dc",
+    "completion-prompt.ts": "004a7ac8b8b7c737c4b23fc52320fca3f9c005b62681c64368ad748bcee0b96e",
     "completion-strategy-plugin.ts": "5f69464b4648d9b360020eac5b967e924549236eaff92f3c5e68f79826503b6f",
     "context-plugin.ts": "1da424038b5f5dd8e88999d86c4b26fecca5d21ca4170b83fdba9958eef787f0",
     "context-strategy-plugin.ts": "104c0e4a9b9619d361a8089b43724986366bc3665993c2146268e5f847698643",
@@ -10,7 +10,7 @@
     "cron-report-plugin.ts": "71bb9d6432985d25defb18d4ef45653342c2243f42e215b972b0eb586d24a260",
     "cron-report-processing.ts": "4e40d3f4c9801d87af1bdd8e2624a12f21e02ad49378a504abaea7a1bb49856f",
     "cron-reports.ts": "0bbf04e0c3ce1c8a499cdcc2e3bba1d27c88aacd71218f1b4027002591947991",
-    "dispatcher-plugin.ts": "d89b63d45c80cb75125ef310ddf2015f6fe92fefa6672e268bdfdf00e5637521",
+    "dispatcher-plugin.ts": "ff57ec32d8bb7517063d95917ff79a17616774f6e2e95b435d870b7e6a583829",
     "execution-metadata.ts": "a19904571ba749a4821bcd47f4b9c4f496b067c553090a18cb36cc4bdd666cbc",
     "extension-manager-plugin.ts": "51ea7b167e2683b180f510a005305975afabb22819e02aa03aafbc434061200c",
     "gateway-baselines.ts": "7e4422bfef1e74ad4e767d4c88947b88082c45aeccb9b3da2193ccbff9baaa1c",
@@ -49,6 +49,6 @@
     "wasm-tools-plugin.ts": "438c6ac8899e283e4268f51ef451275bf16a37b584db84ee8302a26200cc70de"
   },
   "repository": "https://git.vanillacore.net/harness/plugins",
-  "revision": "4941c9f558f9c8541fbada847c685e5b866e8272",
+  "revision": "999e01167aec66d74e8a1ff240d1b8841ae3572e",
   "schema": 1
 }

@@ -3,6 +3,7 @@ import { reasoningEffortNoneModels } from "./product-paths.js";
 import { McpManagement } from "./mcp-management.js";
 import { workingTreeEvidence } from "./repetition-budget.js";
 import { ToolGuardError } from "./tool-guard-error.js";
+import { guardDispatcherMain } from "./dispatcher-main-guard.js";
 import { improvementPlugin } from "./builtin-plugins/improvement-plugin.js";
 import { pluginOverlayReload } from "./plugin-overlay-reload.js";
 import { gatewayManagerPlugin } from "./builtin-plugins/gateway-manager-plugin.js";
@@ -91,6 +92,8 @@ import { handoverWorktreeReview } from "./review-worktree.js";
 import { ReviewWorkers } from "./review-execution.js";
 import { ReviewSubagents } from "./review-subagents.js";
 import { capabilityContext } from "./capability-context.js";
+import { messagePlugin } from "./message-plugin.js";
+import { conversationPolicyPlugin } from "./conversation-policy-plugin.js";
 import { roleAwareReviewer, resolveModelRole } from "./model-roles.js";
 import { runtimeReviewer } from "./runtime/reviewer.js";
 import { validatorRole } from "./dispatcher-sequential.js";
@@ -360,6 +363,7 @@ async function main(argv: string[]): Promise<void> {
       if (tool === "plugin_review") await reloadRuntimeSettings();
       subagents.guardTool(key, tool);
       dispatchRuntime?.guardTool(key, tool);
+      guardDispatcherMain(key, tool, dispatchPolicy.enabled && dispatcher?.ready === true, input);
       await harness.guardWaitTool(key, tool, input);
       const current = harness.sessions.get(key)?.current;
       if (current?.source === "host") {
@@ -456,6 +460,8 @@ async function main(argv: string[]): Promise<void> {
       })(),
       registeredTools: composeToolCatalog(plugins.tools, initialReloadableTools, reloadableTools?.tools ?? new Map()).map(tool => tool.name),
       dispatcherEnabled: dispatchPolicy.enabled, dispatcherReady: dispatcher?.ready === true,
+      dispatcherWorkers: dispatcher?.workers,
+      messagingGateways: gatewayManager?.messagingCapabilities(),
       reviewInstructions: reviewEngine.instructions,
     }),
     beforeTurn: async (input) => {
@@ -493,7 +499,7 @@ async function main(argv: string[]): Promise<void> {
   });
   harness.home = config.home_address;
   gatewayManager = new GatewayManager(harness, settings, {
-    inboundAttachments: 1,
+    inboundAttachments: 1, outboundAttachments: 1,
     services: plugins.services,
     home: config.home, agent: config.agent, approvers: config.approvers, admins: config.admins,
   }, bundledGatewayModules());
@@ -635,10 +641,16 @@ async function main(argv: string[]): Promise<void> {
       seen: harness.seenIds(),
     });
   // Restore before scheduler execution, persistence callbacks, or channel startup can write state.
+  // Historical permits/timers are not evidence of ongoing execution. Establish
+  // the upgrade boundary before any scheduler/channel can release old input.
+  await executions.holdLegacyRecovery();
+  harness.holdLegacyRecovery(saved?.pending ?? []);
   if (saved?.pending?.length) harness.restorePending(saved.pending);
   if (saved?.outbox?.length) harness.restoreOutbox(saved.outbox);
   ledgerRecoveryReady = true;
   harness.onStateChange = () => persist();
+  // Persist held history before plugins, dispatcher or channels can execute.
+  await persist();
   if (apiKey) {
     // A run whose turn never made it into the inbox (crash between record and accept) is over.
     const pendingIds = new Set((saved?.pending ?? []).map((i) => i.id));
@@ -676,7 +688,7 @@ async function main(argv: string[]): Promise<void> {
       }
       const mandate = await harness.operatorTaskMandate(parent, requestId, input);
       return dispatcher.submitScheduled(parent, requestId, input, mandate);
-    }), subagentPlugin(subagents,async()=>{await persist();}), ...(reloadableTools ? [reloadableToolsPlugin(reloadableTools)] : []), wasmToolsPlugin(config.home, config.wasmTools ?? []), continuationPlugin(harness), loopPlugin(harness), improvementPlugin(improvement!), protectedContentPlugin(protectedContent), gatewayManagerPlugin(gatewayManager, settings), policyManagerPlugin(policyManager, settings), extensionManagerPlugin(extensionManager, settings), gatewayPlugin(settings, harness), contextPlugin(maintenance, settings), ...(config.memory.enabled ? [memoryPlugin(memory), ...(config.memory.consolidation ? [memoryConsolidationHost(config.memory.consolidation, runtime, memory, log)] : [])] : []), skillSearchPlugin(skillCatalog), ...(adaptiveSkills ? [adaptiveSkills.plugin()] : []), ...reviewEngine.plugins]);
+    }), subagentPlugin(subagents,async()=>{await persist();}), ...(reloadableTools ? [reloadableToolsPlugin(reloadableTools)] : []), wasmToolsPlugin(config.home, config.wasmTools ?? []), continuationPlugin(harness), loopPlugin(harness), improvementPlugin(improvement!), protectedContentPlugin(protectedContent), gatewayManagerPlugin(gatewayManager, settings), messagePlugin(config.home, gatewayManager), conversationPolicyPlugin(settings, harness), policyManagerPlugin(policyManager, settings), extensionManagerPlugin(extensionManager, settings), gatewayPlugin(settings, harness), contextPlugin(maintenance, settings), ...(config.memory.enabled ? [memoryPlugin(memory), ...(config.memory.consolidation ? [memoryConsolidationHost(config.memory.consolidation, runtime, memory, log)] : [])] : []), skillSearchPlugin(skillCatalog), ...(adaptiveSkills ? [adaptiveSkills.plugin()] : []), ...reviewEngine.plugins]);
   if (dispatchPolicy.enabled) {
     dispatchRuntime = new DispatcherRuntime(harness, executions, async () => {
       await reloadRuntimeSettings();

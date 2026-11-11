@@ -241,6 +241,10 @@ export interface SendMeta {
   deliveryId?: string;
   /** The turn behind this reply failed or was cancelled (text is the error/partial output). */
   outcome?: TurnOutcome;
+  /** Host-staged, origin-conversation-bound bytes; never arbitrary adapter paths. */
+  attachments?: InboundAttachment[];
+  /** Original tool conversation, bound by the host before an explicit file send. */
+  attachmentSessionKey?: string;
 }
 
 /**
@@ -252,9 +256,21 @@ export interface DedupPins {
   unpin(ids: Iterable<string>): void;
 }
 
+/** Optional explicit opt-in for model-discoverable, authorized proactive messaging. */
+export interface ChannelMessaging {
+  describe(): { text: boolean; files?: boolean; maxFileBytes?: number; threads?: boolean; connected?: boolean; destinationFormat: string;
+    workspace?: string; allowedTargets?: string[]; conversation?: import("./gateway-settings.js").ConversationPolicy };
+  destinations?(query: { limit: number; cursor?: string }, signal?: AbortSignal): Promise<{
+    destinations: Array<{ target: string; name?: string; kind?: string }>; nextCursor?: string }>;
+}
+
 /** A messaging channel (Matrix, console, ...). */
 export interface Channel {
   readonly name: string;
+  /** No messaging tool access unless the trusted adapter explicitly opts in. */
+  readonly messaging?: ChannelMessaging;
+  /** Adapter enforces the shared conversation-policy contract before admitting input. */
+  readonly conversationPolicy?: 1;
   /** Resolved global/per-gateway policy, applied before start. */
   configureGateway?(settings: import("./gateway-settings.js").GatewaySettings): void;
   /** `deliverInbound` resolves once the input is durably accepted (safe to acknowledge upstream). */

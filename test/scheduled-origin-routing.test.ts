@@ -9,8 +9,8 @@ import { ExecutionStore } from '../src/execution.js';
 import { FakeRuntime, MemoryChannel } from './fakes.js';
 import type { Address } from '../src/types.js';
 
-// Regression: loop turns carry no task mandate, so their dispatcher executions had no
-// anchor and delayed results fell back to `home` (or were dropped without /sethome).
+// Each loop occurrence has its own mandate; delayed results still belong to its
+// requesting room/thread, never the configured home or a later occurrence.
 const A: Address = { channel: 'mem', target: 'roomA', thread: 'thread-a' };
 const B: Address = { channel: 'mem', target: 'roomB' };
 
@@ -21,7 +21,7 @@ async function submitDuringLoop(h: Harness, runtime: FakeRuntime, dispatcher: Di
   h.enqueue({ sessionKey: key, source: 'loop', text: 'hourly overview' });
   for (let i = 0; i < 200 && !session.busy; i++) await new Promise(r => setTimeout(r, 5));
   assert.equal(h.sessions.get(key)!.current?.source, 'loop');
-  assert.equal(h.dependencyCheckpoint(key), undefined, 'loop turn has no task mandate');
+  assert.ok(h.dependencyCheckpoint(key)?.taskId, 'loop turn has its own host mandate');
   const execution = await dispatcher.submit(key, requestId, 'collect tickets');
   release(); await h.waitForSessionIdle(key);
   return execution;
