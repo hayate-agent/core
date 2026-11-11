@@ -115,6 +115,12 @@ export class Dispatcher {
     } finally { this.submitting--; }
   }
   /** Versioned model-facing capability. Older hosts must fail closed, not ignore the assertion. */
+  /** Host supplies the current turn identity; omission is never a context selector. */
+  submitCurrent(parent: string, requestId: string, input: string): Promise<Execution> {
+    const mandate = this.checkpoint?.(parent);
+    if (!mandate?.taskId) return Promise.reject(Error("parent-mandate-missing: no active host task for delegation"));
+    return this.submitBound(parent, requestId, input, mandate.taskId);
+  }
   submitBound(parent: string, requestId: string, input: string, expectedTaskId: string): Promise<Execution> {
     return this.submit(parent, requestId, input, expectedTaskId);
   }

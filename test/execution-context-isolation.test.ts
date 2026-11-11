@@ -26,9 +26,10 @@ test("model taskId is an assertion, not a selector; admission exposes exact host
   let tool: any;
   dispatcherPlugin(() => dispatcher).activate({ registerTool: (value: any) => tool = value, registerCommand: () => {} } as any);
   const submit = (taskId?: string) => tool.execute({ action: "submit", requestId: "review", task: "Review newer interface fix", taskId }, { sessionKey: "main" });
-  await assert.rejects(submit(), /taskId required/);
   await assert.rejects(submit("new"), /execution-context-mismatch/);
   assert.equal(store.list().length, 0, "no persisted job on mismatch");
+  const automatic = JSON.parse(await submit());
+  assert.deepEqual(automatic.mandate, { taskId: "old", expiresAt });
   const receipt = JSON.parse(await submit("old"));
   assert.deepEqual(receipt.mandate, { taskId: "old", expiresAt });
   assert.equal(store.list()[0].dependency?.original, "old mandate");
