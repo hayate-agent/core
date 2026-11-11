@@ -89,6 +89,23 @@ export class Dispatcher {
       this.store.events().some(event => this.parentEnabled(event.parent)) || this.store.list().some(task => this.parentEnabled(task.parent) && (task.status === "ready" || task.status === "running"))
       ? ["dispatcher work"] : [];
   }
+  /** Executing operations, not work awaiting its next durable claim.
+   * Non-active running claims need reconciliation, never silent lock stealing. */
+  maintenanceBlockers(): string[] {
+    const blockers: string[] = [];
+    if (this.submitting || this.scheduling) blockers.push("dispatcher claim/submission in flight");
+    if (this.active.size) blockers.push(`dispatcher executing: ${[...this.active.keys()].join(", ")}`);
+    if (this.delivering) blockers.push("dispatcher delivery in flight");
+    for (const task of this.store.list()) {
+      if (task.status === "running" && !this.active.has(task.id)) blockers.push(`dispatcher stale claim: ${task.id}`);
+      // The existing trusted decision boundary certifies an exact durable worker
+      // report bound to this intent. Recovery may reassess it, never rerun effects.
+      const settledReport = this.strategyFor(task)?.reconcile && this.strategyFor(task)?.decisionBoundary?.(task);
+      if (task.intent && task.intent.replay === "unsafe" && task.intent.result === undefined && !settledReport)
+        blockers.push(`dispatcher unresolved effect: ${task.id} (${task.intent.key})`);
+    }
+    return blockers;
+  }
   async start(): Promise<void> {
     if (this.initialized) throw Error("Dispatcher already started");
     this.initialized = true;
@@ -157,7 +174,7 @@ export class Dispatcher {
       do {
         this.scheduleRequested = false;
         await this.schedule();
-      } while (this.scheduleRequested && !this.stopped);
+      } while (this.scheduleRequested && !this.stopped && !this.admissionFenced());
     })().finally(() => { this.scheduling = undefined; });
     return this.scheduling;
   }
@@ -168,7 +185,7 @@ export class Dispatcher {
     const ordered = last < 0 ? tasks : [...tasks.slice(last + 1), ...tasks.slice(0, last + 1)];
     for (let task of ordered) {
       if (task.recoveryEnrollment === "held-legacy") continue;
-      if (this.stopped || this.active.size >= this.capacity) break;
+      if (this.stopped || this.admissionFenced() || this.active.size >= this.capacity) break;
       if (["worker-failed", "runtime-failure"].includes(task.diagnosticCode ?? "") &&
           (["blocked", "paused"].includes(task.status) || task.status === "ready" && task.workerRetry) &&
           !this.active.has(task.id) && this.parentEnabled(task.parent)) {
@@ -195,7 +212,7 @@ export class Dispatcher {
       if (this.stopped) return;
       const current = this.store.list().find(item => item.id === claimed.id);
       if (current?.status !== "running" || current.token !== claimed.token) continue;
-      if (!this.parentEnabled(claimed.parent)) {
+      if (this.admissionFenced() || !this.parentEnabled(claimed.parent)) {
         await this.store.releaseUnstartedClaim(claimed.id, claimed.token!, claimed.claimedRecoveryAction);
         continue;
       }
@@ -241,12 +258,22 @@ export class Dispatcher {
         },
         yieldStep: async () => {
           check();
-          if (!this.store.list().some(other => other.id !== task.id && other.status === "ready" &&
+          if (!this.admissionFenced() && !this.store.list().some(other => other.id !== task.id && other.status === "ready" &&
               this.store.assessmentDue(other) && this.parentEnabled(other.parent) && this.strategyFor(other))) return;
           await this.store.yieldStep(task.id, token);
           throw new ExecutionClaimConflict("Settled step yielded to queued work");
         },
-        checkpoint: (value, notice) => { check(); return this.store.checkpoint(task.id, token, value, notice); },
+        checkpoint: async (value, notice) => {
+          check(); await this.store.checkpoint(task.id, token, value, notice);
+          if (this.admissionFenced()) {
+            const current = this.store.list().find(item => item.id === task.id)!;
+            if (!current.intent) await this.store.yieldStep(task.id, token);
+            else if (strategy.reconcile && strategy.decisionBoundary?.(current))
+              await this.store.deferAssessment(task.id, token, Date.now() + 1, decisionRevision);
+            else return; // Unknown outcome: retain ownership until actual settlement.
+            throw new ExecutionClaimConflict("Maintenance checkpoint reached");
+          }
+        },
         workerSession: key => { check(); return this.store.workerSession(task.id, token, key); },
         decisions: async () => {
           check();
@@ -256,6 +283,8 @@ export class Dispatcher {
         },
         fenceDecisions: revision => this.store.fenceDecisions(task.id, token, revision),
         intent: (key, replay, route, revision) => { check(); return this.store.intent(task.id, token, key, replay, route, revision); },
+        // Settlement alone is not a scheduling boundary: the strategy must first
+        // apply its completion/blocked verdict. yieldStep then parks safe work.
         settleIntent: (key, result, checkpoint, revision) => { check(); return this.store.settleIntent(task.id, token, key, result, checkpoint, revision); },
       });
       const result = await (this.parallelAdmission ? this.parallelAdmission.run(async () => {
@@ -323,12 +352,13 @@ export class Dispatcher {
   }
   flushEvents(): Promise<void> {
     if (this.delivering) return this.delivering;
+    if (this.admissionFenced()) return Promise.resolve();
     this.delivering = (async () => {
       while (!this.stopped) {
         const events = this.store.events().filter(event => this.parentEnabled(event.parent));
         if (!events.length) return;
         for (const event of events) {
-          if (this.stopped) return;
+          if (this.stopped || this.admissionFenced()) return;
           if (!this.parentEnabled(event.parent)) continue;
           // Receiver must durably deduplicate by event.id before acknowledging.
           // Failures leave the event pending and reject; never spin on failure.

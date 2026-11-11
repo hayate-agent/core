@@ -15,6 +15,49 @@ HEX owns installation, signals and supervisor integration.
 - `DELETE {"lease_id":"..."}`: 200 only for the current unexpired lease; stale,
   expired or foreign IDs return 409 without affecting another lease.
 
+## Durable maintenance checkpoint (explicit opt-in)
+
+`POST {"mode":"maintenance","request_id":"stable-operation-id","timeout_ms":60000,"ttl_ms":300000}`
+uses a durable checkpoint rather than requiring all tasks to finish. The request
+uses the same API authentication as idle admission; no model tool gains update or
+orchestration authority. `request_id` is 1–128 ASCII alphanumeric/`._:-`
+characters, starting alphanumeric; timeout is an integer 0–120000ms. Old clients
+and omitted/`idle` mode keep the existing idle behaviour.
+
+The host fences new input, scheduler claims and ordinary continuation pumps before
+its first await. Existing executing turns finish and checkpoint their provider
+transcripts; dispatcher steps yield at committed checkpoint/effect-receipt
+boundaries without changing task identity, original mandate, deadline, recovery
+enrollment or budgets. Waiting/paused tasks, runnable durable queues and undelivered
+settled results are retained, not reasons to wait for all-task-idle. In-flight
+operations and approvals remain blockers. An unsafe unresolved dispatcher intent
+or an orphan running claim returns an identifier-bound reconciliation diagnostic;
+neither is cleared or stolen. Unsupported plugin/gateway owners remain unsupported.
+
+After executing work drains, the host awaits ledger/context persistence, writes
+state (tasks, continuations, inbox/outbox and original authority), then fsyncs
+`update-maintenance.json` before returning 201 with `checkpointed:true`. Callers
+must require that flag: older runtimes may ignore unknown POST fields. The lease
+TTL starts after checkpoint. A duplicate request in the same live lease returns
+the same receipt. A settled, expired or postboot receipt is not permission to
+repeat effects; reconcile it and use a new operation ID only for genuinely new
+work. The bounded journal retains 64 receipts; deployment receipts must remain
+retained externally for longer-term install/restart reconciliation.
+
+Timeout returns 409 with actionable blockers. A pending fsync retains the fence
+until its outcome is known; GET reports checkpoint-in-progress. It cannot produce
+a late lease after timeout. Matching DELETE durably releases a maintenance lease
+before opening ingress; a failed release stays fenced. On boot the host marks
+interrupted checkpoint transactions recovered, without restoring process-local
+leases, installing code, replaying messages/tools or resetting any task budgets.
+Existing dispatcher/task ledgers remain the only work-recovery authority.
+
+This Core journal records **admission**, not installation. The native deployment
+owner must retain its own prepare/install/restart/verify transaction and rollback
+journal (see the overlays native-host reconciler). Source changes cannot give an
+already-running old process this new contract. No hot patch, lock deletion or
+unknown-effect replay is an acceptable bootstrap substitute.
+
 After 201, invoke the existing SIGTERM shutdown **before expires_at**, retaining a
 margin for transport/signal delay. There is no renewal or stop endpoint. A lease
 is process-local, exclusive and not durable across restart. Expiry/release clears
