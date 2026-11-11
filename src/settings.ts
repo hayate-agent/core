@@ -1,5 +1,6 @@
 import { validatePolicyOverlay, type PolicyOverlay, type PolicyOverride } from "./policy-modules.js";
 import { dispatcherConfig, type DispatcherConfig } from "./dispatcher-config.js";
+import { mergeConversationPolicy } from "./gateway-settings.js";
 import { validateGatewayOverlay, type GatewayOverlay, type GatewayOverride } from "./gateway-provider.js";
 import { memoryConfig, type MemoryConfig } from "./memory.js";
 import { benchmarkConfig, type BenchmarkConfig } from "./benchmark/config.js";
@@ -121,7 +122,8 @@ function mergeSettings(base: LocalSettings, layer: LocalSettings): LocalSettings
   }
   if (base.gateways !== undefined || layer.gateways !== undefined) {
     const overrides = { ...base.gateways?.overrides };
-    for (const [name, fields] of Object.entries(layer.gateways?.overrides ?? {})) overrides[name] = { ...overrides[name], ...fields };
+    for (const [name, fields] of Object.entries(layer.gateways?.overrides ?? {})) overrides[name] = { ...overrides[name], ...fields,
+      ...(overrides[name]?.conversation || fields.conversation ? { conversation: mergeConversationPolicy(overrides[name]?.conversation, fields.conversation) } : {}) };
     result.gateways = { ...base.gateways, ...layer.gateways, overrides };
   }
   return structuredClone(result);
@@ -521,7 +523,8 @@ export class SettingsService {
       const updated = await this.localForMutation();
       const overrides = { ...updated.gateways?.overrides };
       for (const [name, fields] of Object.entries(value.overrides ?? {})) {
-        overrides[name] = { ...overrides[name], ...fields };
+        overrides[name] = { ...overrides[name], ...fields,
+          ...(overrides[name]?.conversation || fields.conversation ? { conversation: mergeConversationPolicy(overrides[name]?.conversation, fields.conversation) } : {}) };
       }
       updated.gateways = { ...updated.gateways, ...value,
         ...(updated.gateways?.overrides || value.overrides ? { overrides } : {}),

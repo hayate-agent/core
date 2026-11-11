@@ -6,7 +6,7 @@
  */
 import { loadAttachments, validateAttachmentAdmission } from "./attachments.js";
 import { assessmentRetryDelay } from "./assessment-retry.js";
-import { gatewaySettings, type GatewayConfig } from "./gateway-settings.js";
+import { applyGatewaySettings, assertGatewayConversationSupport, gatewaySettings, type GatewayConfig } from "./gateway-settings.js";
 import { createHash, randomUUID } from "node:crypto";
 import { naturalBudgetReset, type OperatorBudgetGrant } from "./natural-budget-reset.js";
 import { TurnActivity } from "./activity.js";
@@ -349,7 +349,7 @@ export class Harness {
   // ---------------------------------------------------------------- lifecycle
 
   addChannel(channel: Channel): void {
-    channel.configureGateway?.(gatewaySettings(this.opts.gateways, channel.name));
+    applyGatewaySettings(channel, this.opts.gateways);
     this.channels.set(channel.name, channel);
   }
 
@@ -382,7 +382,7 @@ export class Harness {
     this.channels.delete(name);
     try {
       if (candidate) {
-        candidate.configureGateway?.(gatewaySettings(this.opts.gateways, name));
+        applyGatewaySettings(candidate, this.opts.gateways);
         await candidate.start((input) => this.accept(input), pins);
         this.channels.set(name, candidate);
       }
@@ -1274,8 +1274,10 @@ export class Harness {
    * state file), so the channel may acknowledge it upstream. Commands run in the background.
    */
   configureGateways(config: GatewayConfig): void {
+    // Validate all adapters before mutating any effective policy.
+    for (const channel of this.channels.values()) assertGatewayConversationSupport(channel, config);
     this.opts.gateways = config;
-    for (const channel of this.channels.values()) channel.configureGateway?.(gatewaySettings(config, channel.name));
+    for (const channel of this.channels.values()) applyGatewaySettings(channel, config);
   }
 
   isAcceptingChannelInput(input: Inbound): boolean {
