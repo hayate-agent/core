@@ -26,7 +26,7 @@ export interface DispatcherConfig {
 }
 export function dispatcherConfig(value?: Partial<DispatcherConfig>): DispatcherConfig {
   if (value !== undefined && (!value || typeof value !== "object" || Array.isArray(value))) throw Error("Invalid dispatcher configuration");
-  const config = { enabled: false, strategy: "direct", concurrentRequests: false, capacity: 1, countAuxiliaryRuns: false, retentionDays: 7, ...value };
+  const config = { enabled: false, strategy: "direct", concurrentRequests: false, capacity: 4, countAuxiliaryRuns: false, retentionDays: 7, ...value };
   if (typeof config.countAuxiliaryRuns !== "boolean" || typeof config.enabled !== "boolean" || typeof config.concurrentRequests !== "boolean" ||
       typeof config.strategy !== "string" || !/^[a-z][a-z0-9_-]*$/.test(config.strategy) ||
       !Number.isSafeInteger(config.capacity) || config.capacity < 1 ||

@@ -69,6 +69,11 @@ export class Dispatcher {
     return strategy?.version === task.strategyVersion ? strategy : undefined;
   }
   get ready(): boolean { return this.recovered && !this.stopped; }
+  /** Instance-wide worker occupancy; scheduler/submission and Main have no worker slot. */
+  get workers(): { capacity: number; active: number; queued: number } {
+    return { capacity: this.capacity, active: this.active.size,
+      queued: this.store.list().filter(task => task.status === "ready" && !this.active.has(task.id) && this.parentEnabled(task.parent)).length };
+  }
   /** Includes durable runnable tasks and claim/delivery windows, not just worker slots. */
   updateBlockers(): string[] {
     return this.submitting || this.active.size || this.scheduling || this.delivering ||

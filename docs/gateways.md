@@ -209,15 +209,16 @@ WebUI has no bundled baseline; install and select its module explicitly.
 ## 4. Optional background delegation: enable the dispatcher
 
 Normal chat works without a dispatcher. For a first deployment, use built-in
-`direct` and one worker slot, **only after verifying the backend can handle
-concurrent Main/worker/review requests**. Merge into `hayate-agent.yaml`:
+`direct`, **only after verifying the backend can handle concurrent
+Main/worker/review requests**. The default is four active workers; explicitly lower
+it for a constrained backend. Merge into `hayate-agent.yaml`:
 
 ```yaml
 dispatcher:
   enabled: true
   strategy: direct
   concurrentRequests: true
-  capacity: 1
+  capacity: 4
   retentionDays: 7
 ```
 
@@ -238,7 +239,7 @@ dispatcher:
   enabled: true
   strategy: sequential
   concurrentRequests: true
-  capacity: 1
+  capacity: 4
 modelRoles:
   enabled: true
   roles:

@@ -17,7 +17,8 @@ claim/effect/event records. Main is not redirected through a background worker.
 The [starter profile](examples/hayate-agent.yaml) keeps dispatch disabled.
 For a minimal first activation, see the
 [direct/sequential setup walkthrough](gateways.md#4-optional-background-delegation-enable-the-dispatcher).
-Use `direct` with `capacity: 1` after confirming backend concurrency, then restart
+Use `direct` with the default `capacity: 4` (or an explicit lower backend limit)
+after confirming backend concurrency, then restart
 and check `/dispatch status`. `sequential` additionally needs real registered
 model-role selections; model IDs, context capacities and supported reasoning
 levels are not prescribed by the starter. Ordinary terminal/WebUI/Matrix chat
@@ -42,11 +43,34 @@ dispatcher:
 ```
 
 Defaults are `enabled: false`, `strategy: direct`, `concurrentRequests: false`,
-`capacity: 1`, `retentionDays: 7` (integer, 1–3650). Enabling requires the operator's explicit declaration that the
+`capacity: 4`, `retentionDays: 7` (integer, 1–3650). Enabling requires the operator's explicit declaration that the
 configured runtime/backend supports concurrent requests. This declaration does
 not probe or configure the backend. Capacity limits active strategy executions,
 not the number of retained tasks or configured persistent workers. The runtime
 must also have headroom for Main, approvals and review requests.
+
+Capacity is the **worker execution limit**, not a dispatcher execution slot.
+The scheduler accepts multiple durable tasks, fills available worker capacity and
+handles independent completions while other tasks are still running. It does not
+wait for an unrelated publisher before starting an independent review if worker
+capacity is available. A genuinely dependent review must still wait for its input.
+Pending tasks are bounded by the ledger's storage limits, not by worker capacity.
+
+Main answers short questions, known facts and simple status requests directly and
+uses its available tools for bounded lookups, local inspection and short research.
+Enabling the dispatcher does not make delegation mandatory or remove Main's tools.
+Delegate substantial, long-running or independently parallel work when useful;
+keep existing authority, tool allowlists and review requirements intact. Current
+worker capacity, active executions and runnable queue length are supplied as host
+facts on each turn; do not infer that the dispatcher itself is busy or single-slot.
+
+The default applies to **every installation** that leaves capacity unspecified.
+Explicit installation, settings and drop-in values (including `capacity: 1`) remain
+binding; upgrading Core does not silently override a backend/operator limit. Audit
+those layers fleet-wide when rolling out, choose a backend-supported worker limit,
+and restart each process to activate it. Existing persona instructions that demand
+delegation of all work should be narrowed to substantial tasks, not short questions
+and bounded information requests. No automatic live rollout is performed.
 
 `direct` is the reserved built-in strategy: one ordinary isolated Harness turn
 per task. It uses the configured runtime rather than calling PI directly. It
