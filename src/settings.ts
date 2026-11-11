@@ -140,6 +140,10 @@ export class SettingsService {
     // absent fields before strict effective-layer validation. Disk values (null,
     // unknown keys, invalid types) still pass through the unchanged validators.
     this.defaults = JSON.parse(JSON.stringify(defaults)) as LocalSettings;
+    // Adaptive skills are installation-only, not part of the writable overlay
+    // contract. Structural typing permits HarnessConfig.skills here; exclude
+    // only this trusted field before validating combined runtime settings.
+    if (this.defaults.skills) delete (this.defaults.skills as { adaptive?: boolean }).adaptive;
   }
   private diagnose(message: string): void {
     // Never include values/parser excerpts: overlays can contain misplaced secrets.
