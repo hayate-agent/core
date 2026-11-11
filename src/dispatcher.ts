@@ -106,6 +106,10 @@ export class Dispatcher {
       return task;
     } finally { this.submitting--; }
   }
+  /** Versioned model-facing capability. Older hosts must fail closed, not ignore the assertion. */
+  submitBound(parent: string, requestId: string, input: string, expectedTaskId: string): Promise<Execution> {
+    return this.submit(parent, requestId, input, expectedTaskId);
+  }
   async submit(parent: string, requestId: string, input: string, expectedTaskId?: string): Promise<Execution> {
     if (!this.recovered || this.stopped || this.admissionFenced()) throw Error("Dispatcher unavailable");
     this.submitting++;
