@@ -12,7 +12,8 @@ async function until(check: () => boolean) {
 }
 
 test("EOF-equivalent worker failure retries the SAME execution through dispatcher with intent and backoff across reload", async t => {
-  const dir = await mkdtemp(path.join(os.tmpdir(), "hy-retry-")); t.after(() => rm(dir, { recursive: true, force: true }));
+  const dir = await mkdtemp(path.join(os.tmpdir(), "hy-retry-"));
+  let resumed: Dispatcher | undefined;
   const file = path.join(dir, "ledger.json"); let now = 1000;
   const store = new ExecutionStore(file, { now: () => now }); await store.load();
   let calls = 0; let execution = ""; let oldToken = "";
@@ -31,13 +32,14 @@ test("EOF-equivalent worker failure retries the SAME execution through dispatche
       return "done";
     } };
   const dispatcher = new Dispatcher(store, strategy, 1, async () => {}, () => {});
+  t.after(async () => { await dispatcher.stop(); await resumed?.stop(); await rm(dir, { recursive: true, force: true }); });
   await dispatcher.start(); await dispatcher.submit("parent", "stable-id", "implement bridge");
   await until(() => !!store.list()[0]?.workerRetry);
   assert.equal(calls, 1); assert.equal(store.list()[0].status, "ready");
   await dispatcher.kick(); assert.equal(calls, 1, "no hot retry before due time");
   await dispatcher.stop();
   const restored = new ExecutionStore(file, { now: () => now }); await restored.load();
-  const resumed = new Dispatcher(restored, strategy, 1, async () => {}, () => {}); t.after(() => resumed.stop());
+  resumed = new Dispatcher(restored, strategy, 1, async () => {}, () => {});
   await resumed.start(); assert.equal(calls, 1);
   now = restored.list()[0].workerRetry!.nextAt; await resumed.kick();
   await until(() => restored.list()[0].status === "completed");
@@ -62,7 +64,7 @@ test(`technical recovery preserves ${hold} hold`, async t => {
 });
 
 test("settled steps yield scarce capacity to ready review without replay", async t => {
-  const dir = await mkdtemp(path.join(os.tmpdir(), "hy-fair-")); t.after(() => rm(dir, { recursive: true, force: true }));
+  const dir = await mkdtemp(path.join(os.tmpdir(), "hy-fair-"));
   const store = new ExecutionStore(path.join(dir, "ledger.json")); await store.load();
   await store.submit("parent", "publisher", "publish", "sequential");
   await store.submit("parent", "review", "review", "sequential");
@@ -74,7 +76,7 @@ test("settled steps yield scarce capacity to ready review without replay", async
       }
       order.push(task.requestId); return "done";
     } }, 1, async () => {}, () => {});
-  t.after(() => dispatcher.stop()); await dispatcher.start();
+  t.after(async () => { await dispatcher.stop(); await rm(dir, { recursive: true, force: true }); }); await dispatcher.start();
   await until(() => store.list().every(task => task.status === "completed"));
   assert.deepEqual(order, ["publisher-step1", "review", "publisher"]);
 });
