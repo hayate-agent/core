@@ -605,7 +605,11 @@ export class Harness {
    * establishes ongoing work. Old model permits and timers do not. */
   holdLegacyRecovery(inputs: Inbound[]): void {
     for (const s of this.sessions.values()) for (const task of this.tasks(s)) {
-      if (task.recoveryEnrollment || ["completed", "stopped"].includes(task.state)) continue;
+      if (task.recoveryEnrollment === "current" || task.recoveryEnrollment === "held-legacy") continue;
+      if (["completed", "stopped"].includes(task.state)) {
+        task.recoveryEnrollment = "held-legacy";
+        continue; // Terminal history cannot be re-enrolled by a late result.
+      }
       const ingress = inputs.some(input => input.sessionKey === s.key &&
         (input.source === "channel" || input.source === "api") &&
         (input.taskId === task.id || input.id === task.id));

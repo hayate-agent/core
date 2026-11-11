@@ -20,6 +20,12 @@ test('upgrade holds unresolved history and saves its generated inbox without exe
  const next=make();t.after(()=>next.h.stop(0));next.h.restoreSessions(JSON.parse(JSON.stringify(f.h.snapshotSessions())));next.h.holdLegacyRecovery([]);await next.h.recoverTasks();await next.h.tick();assert.equal(next.assessments(),0);assert.equal(next.h.snapshotSessions()[0]!.heldRecoveryInputs!.length,1);
 });
 
+test('terminal pre-upgrade history stays terminal and cannot gain authority from a late result',async t=>{
+ const f=make();t.after(()=>f.h.stop(0));f.h.restoreSessions([{key,tasks:[{...old(),state:'completed'},{...old(),id:'stopped',state:'stopped'}]}]);f.h.holdLegacyRecovery([]);
+ const rows=f.h.snapshotSessions()[0]!.tasks!;assert.deepEqual(rows.map(t=>t.state),['completed','stopped']);assert.ok(rows.every(t=>t.recoveryEnrollment==='held-legacy'));
+ await f.h.recoverTasks();await f.h.tick();assert.equal(f.assessments(),0);
+});
+
 test('authentic unfinished operator ingress remains current, unlike generated permits',async t=>{
  const f=make();t.after(()=>f.h.stop(0));f.h.restoreSessions([{key,tasks:[old()]}]);
  f.h.holdLegacyRecovery([{id:'old',sessionKey:key,source:'channel',text:'Old request',started:true}]);
