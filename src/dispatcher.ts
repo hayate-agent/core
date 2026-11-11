@@ -1,6 +1,7 @@
 import type { ExecutionRecoveryPolicy } from "./execution-recovery.js";
 import { validateWorkerPin } from "./model-roles.js";
-import { ExecutionClaimConflict, ExecutionDecisionConflict, ExecutionWorkerFailure, type Execution, type ExecutionEvent, type ExecutionStore } from "./execution.js";
+import { ExecutionClaimConflict, ExecutionDecisionConflict, ExecutionDeadlineExpired, ExecutionWorkerFailure, type Execution, type ExecutionEvent, type ExecutionStore } from "./execution.js";
+import { toolGuardDenialReason } from "./tool-guard-error.js";
 
 export interface DispatchContext {
   readonly signal: AbortSignal;
@@ -113,11 +114,23 @@ export class Dispatcher {
       return task;
     } finally { this.submitting--; }
   }
-  async submit(parent: string, requestId: string, input: string): Promise<Execution> {
+  /** Versioned model-facing capability. Older hosts must fail closed, not ignore the assertion. */
+  submitBound(parent: string, requestId: string, input: string, expectedTaskId: string): Promise<Execution> {
+    return this.submit(parent, requestId, input, expectedTaskId);
+  }
+  async submit(parent: string, requestId: string, input: string, expectedTaskId?: string): Promise<Execution> {
     if (!this.recovered || this.stopped || this.admissionFenced()) throw Error("Dispatcher unavailable");
     this.submitting++;
     try {
-      const task = await this.store.submit(parent, requestId, input, this.strategy.name, this.strategy.version, this.checkpoint?.(parent), undefined, this.origin?.(parent));
+      const mandate = this.checkpoint?.(parent);
+      // An assertion, never a selector: model input cannot switch host authority.
+      if (expectedTaskId !== undefined && (!expectedTaskId || mandate?.taskId !== expectedTaskId))
+        throw Error("execution-context-mismatch: delegation must match the active host task");
+      if (mandate?.expiresAt !== undefined && mandate.expiresAt <= Date.now())
+        throw Error("deadline-expired: delegation deadline has elapsed");
+      const task = await this.store.submit(parent, requestId, input, this.strategy.name, this.strategy.version, mandate, undefined, this.origin?.(parent));
+      if (expectedTaskId !== undefined && task.dependency?.taskId !== expectedTaskId)
+        throw Error("execution-context-mismatch: requestId already belongs to another task");
       await this.kick();
       return task;
     } finally { this.submitting--; }
@@ -195,6 +208,8 @@ export class Dispatcher {
         await this.store.releaseUnstartedClaim(task.id, token, task.claimedRecoveryAction);
         return;
       }
+      if (task.dependency?.expiresAt !== undefined && task.dependency.expiresAt <= Date.now())
+        throw new ExecutionDeadlineExpired();
       const execute = () => strategy.execute(task, {
         signal: abort.signal,
         status: async text => {
@@ -232,7 +247,12 @@ export class Dispatcher {
         intent: (key, replay, route, revision) => { check(); return this.store.intent(task.id, token, key, replay, route, revision); },
         settleIntent: (key, result, checkpoint, revision) => { check(); return this.store.settleIntent(task.id, token, key, result, checkpoint, revision); },
       });
-      const result = await (this.parallelAdmission ? this.parallelAdmission.run(async () => { check(); return execute(); }, abort.signal) : execute());
+      const result = await (this.parallelAdmission ? this.parallelAdmission.run(async () => {
+        check();
+        if (task.dependency?.expiresAt !== undefined && task.dependency.expiresAt <= Date.now())
+          throw new ExecutionDeadlineExpired();
+        return execute();
+      }, abort.signal) : execute());
       check();
       await this.store.complete(task.id, token, result, decisionRevision);
     } catch (error) {
@@ -244,7 +264,8 @@ export class Dispatcher {
       }
       // Preserve partial state, but do not automatically spin on a failing plugin.
       if (!this.stopped && this.store.list().find(item => item.id === task.id)?.status === "running") {
-        await this.store.fail(task.id, token, error instanceof ExecutionWorkerFailure ? error.diagnosticCode : "runtime-failure",
+        await this.store.fail(task.id, token, error instanceof ExecutionDeadlineExpired || toolGuardDenialReason(error).startsWith("deadline_expired:")
+          ? "deadline-expired" : error instanceof ExecutionWorkerFailure ? error.diagnosticCode : "runtime-failure",
           { strategy, policy: this.recoveryPolicy }).catch(this.report);
       }
       if (!abort.signal.aborted && !(error instanceof ExecutionClaimConflict)) this.report(error);

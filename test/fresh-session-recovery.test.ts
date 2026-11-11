@@ -39,7 +39,10 @@ test("parked dispatcher work is not claimed/delivered until explicit parent sele
   const task = await store.submit("local-old", "old", "preserve original", "test");
   const dispatcher = new Dispatcher(store, { name: "test", version: 1, replaySafe: true, execute: async () => { runs++; return "done"; } },
     1, async () => { delivered++; }, () => {}, undefined, undefined, () => false, [], () => enabled);
-  t.after(async () => { await dispatcher.stop(); await rm(dir, { recursive: true, force: true }); });
+  t.after(async () => {
+    await dispatcher.stop();
+    await rm(dir, { recursive: true, force: true });
+  });
   await dispatcher.start(); await settle();
   assert.equal(store.list()[0]!.status, "ready"); assert.equal(delivered, 0); assert.equal(runs, 0);
   const claim = store.claim.bind(store);

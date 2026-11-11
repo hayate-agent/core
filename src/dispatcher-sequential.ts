@@ -3,6 +3,7 @@ import { assessmentRetryDelay } from "./assessment-retry.js";
 import type { AgentRuntime } from "./types.js";
 import { assessCompletion, type CompletionDiagnostic } from "./completion-check.js";
 import { runtimeReviewer } from "./runtime/reviewer.js";
+import { ExecutionDeadlineExpired } from "./execution.js";
 import { derivedPlanBoundary, stepCompletionPrompt, parentDecisionContext } from "./dispatcher-step-prompt.js";
 import type { DispatchContext, DispatcherStrategy } from "./dispatcher.js";
 import type { Execution, ExecutionStore } from "./execution.js";
@@ -206,7 +207,7 @@ export function sequentialStrategy(deps: SequentialDeps): DispatcherStrategy {
         if (context.signal.aborted) throw Error("Execution aborted");
         const current = deps.store.list(task.parent).find(item => item.id === task.id);
         if (!current || current.token !== task.token || current.status !== "running" || current.parentStopped) throw Error("Execution ownership lost");
-        if (current.dependency?.expiresAt !== undefined && current.dependency.expiresAt <= Date.now()) return block("Auftragsfrist abgelaufen; keine weiteren Schritte.");
+        if (current.dependency?.expiresAt !== undefined && current.dependency.expiresAt <= Date.now()) throw new ExecutionDeadlineExpired();
       };
       await authorize();
       let state = readState(task);
