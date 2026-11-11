@@ -260,6 +260,9 @@ export class ExecutionStore {
     this.queue = next;
     return next;
   }
+  /** Await all accepted ledger writes; failure must not produce a maintenance lease. */
+  async drain(): Promise<void> { await this.queue; }
+
   private event(draft: Ledger, task: Execution, type: ExecutionEvent["type"], text: string, attention = false): void {
     draft.events.push({ id: randomUUID(), executionId: task.id, parent: task.parent, type, text, status: task.status,
       ...(attention ? { requiresAttention: true } : {}),

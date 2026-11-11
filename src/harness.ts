@@ -224,6 +224,12 @@ export interface HarnessOptions {
   now?: () => number;
   /** Synchronous owner inventory; maintenance closed by ordered shutdown is not a blocker. */
   updateBlockers?: () => string[];
+  maintenance?: {
+    blockers(): string[];
+    /** Flush all durable owners after executing work reaches its receipt boundary. */
+    flush(): Promise<void>;
+    journal: import("./update-maintenance.js").MaintenanceJournal;
+  };
   log?: (msg: string) => void;
   /** Durably records a reply that can never be delivered (before it leaves the outbox). */
   parkUndeliverable?: (entry: OutboxEntry, error: string) => Promise<void>;
@@ -240,13 +246,14 @@ export interface UpdateAdmissionStatus {
 
 export class Harness {
   readonly sessions = new Map<string, SessionState>();
-  private updateLease?: { id: string; expires: number };
+  private updateLease?: { id: string; expires: number; requestId?: string };
+  private maintenancePreparing = false;
   private foregroundWork = 0;
 
   get updateFenced(): boolean {
     const lease = this.updateLease;
     if (lease && lease.expires <= this.now() && this.updateLease === lease) this.updateLease = undefined;
-    return !!this.updateLease;
+    return this.maintenancePreparing || !!this.updateLease;
   }
 
   /** Reserve before the first await, including producer scripts and direct callers. */
@@ -258,6 +265,7 @@ export class Harness {
 
   updateAdmissionStatus(): UpdateAdmissionStatus {
     if (this.stopping) return { status: "unavailable", blockers: ["shutting down"] };
+    if (this.maintenancePreparing) return { status: "busy", blockers: ["maintenance checkpoint in progress"] };
     if (this.updateFenced) return { status: "leased", blockers: [], lease_id: this.updateLease!.id, expires_at: this.updateLease!.expires };
     const blockers = [...(this.opts.updateBlockers?.() ?? [])];
     if (!this.isDrained() || this.inbox.runningCommands.size || this.inbox.handoff.size || this.inbox.unsaved.size) blockers.push("turns, inbox or outbox");
@@ -275,8 +283,90 @@ export class Harness {
     return { status: "admitted", blockers: [], lease_id: this.updateLease.id, expires_at: this.updateLease.expires };
   }
 
+  /** Explicit maintenance path: fence producers synchronously, then drain only executing
+   * work. Durable queues, waits and settled deliveries remain recoverable, not blockers. */
+  async prepareUpdateAdmission(requestId: string, ttlMs: number, timeoutMs: number): Promise<UpdateAdmissionStatus> {
+    if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(requestId) || !Number.isSafeInteger(ttlMs) || ttlMs < 1000 || ttlMs > 300000 ||
+        !Number.isSafeInteger(timeoutMs) || timeoutMs < 0 || timeoutMs > 120000) throw Error("Invalid maintenance request");
+    const owner = this.opts.maintenance;
+    if (!owner || !this.onStateChange) return { status: "unavailable", blockers: ["durable maintenance owner unavailable"] };
+    // The journal is a receipt, not authorization to repeat an install or restart.
+    const receipt = owner.journal.get(requestId);
+    if (receipt) {
+      if (receipt.phase === "checkpointed" && this.updateFenced && this.updateLease?.id === receipt.leaseId)
+        return { status: "admitted", blockers: [], lease_id: this.updateLease.id, expires_at: this.updateLease.expires };
+      return { status: "busy", blockers: [`maintenance request ${requestId}: ${receipt.phase}; reconcile receipt, do not replay`] };
+    }
+    if (this.stopping || this.updateFenced) return this.updateAdmissionStatus();
+    this.maintenancePreparing = true; // Before first await: only one checkpoint owner.
+    const id = randomUUID(), deadline = Date.now() + timeoutMs;
+    const record = (phase: import("./update-maintenance.js").MaintenanceReceipt["phase"]) =>
+      owner.journal.record({ requestId, leaseId: id, phase, at: Date.now(), pid: process.pid });
+    const blockers = () => {
+      const list = [...owner.blockers()];
+      if (this.stopping) list.push("shutting down");
+      if ([...this.sessions.values()].some(s => s.running || s.current) || this.inbox.accepting.size || this.inbox.runningCommands.size || this.inbox.handoff.size)
+        list.push("executing turn or input acceptance; waiting for durable receipt");
+      if (this.approvals.size) list.push("unresolved approvals");
+      if (this.foregroundWork || this.activeDeliveries || this.gatewayChanging || this.budgetChanging) list.push("foreground operation or host transition");
+      return list;
+    };
+    let timedOut = false;
+    const operation = (async (): Promise<UpdateAdmissionStatus> => {
+    try {
+      // No process-local lease or other checkpoint owner remains here. Close old
+      // expired receipts before beginning another transaction (bounded retention).
+      await owner.journal.recover();
+      await record("preparing");
+      while (blockers().length) {
+        if (Date.now() >= deadline || blockers().some(r => r.startsWith("unsupported update owner:"))) {
+          const reasons = blockers();
+          await record("failed");
+          return { status: reasons.some(r => r.startsWith("unsupported update owner:")) ? "unavailable" : "busy", blockers: reasons };
+        }
+        await new Promise(resolve => setTimeout(resolve, Math.min(25, Math.max(1, deadline - Date.now()))));
+      }
+      // No executing mutations remain. Each owner must persist before acknowledgement.
+      // A timeout does not un-fence an unresolved persistence operation.
+      await owner.flush();
+      await this.onStateChange!();
+      if (timedOut) { await record("failed"); return { status: "busy", blockers: ["maintenance timed out before checkpoint"] }; }
+      const reasons = blockers();
+      if (reasons.length) { await record("failed"); return { status: "busy", blockers: reasons }; }
+      await record("checkpointed");
+      if (timedOut) { await record("released"); return { status: "busy", blockers: ["maintenance timed out before admission"] }; }
+      this.updateLease = { id, expires: this.now() + ttlMs, requestId };
+      return { status: "admitted", blockers: [], lease_id: id, expires_at: this.updateLease.expires };
+    } catch (error) {
+      await record("failed").catch(() => {});
+      throw error;
+    } finally { this.maintenancePreparing = false; }
+    })();
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      return await Promise.race([operation, new Promise<UpdateAdmissionStatus>(resolve => {
+        timer = setTimeout(() => {
+          timedOut = true;
+          resolve({ status: "busy", blockers: [...blockers(), "maintenance deadline reached; pending checkpoint retains fence until settled; inspect GET"] });
+        }, Math.max(0, deadline - Date.now()));
+      })]);
+    } finally { clearTimeout(timer); }
+  }
+
+  async releaseMaintenanceAdmission(id: string): Promise<boolean> {
+    if (this.maintenancePreparing || !this.updateFenced || this.updateLease?.id !== id) return false;
+    const lease = this.updateLease;
+    this.maintenancePreparing = true;
+    try {
+      if (lease.requestId) await this.opts.maintenance!.journal.record({ requestId: lease.requestId, leaseId: id,
+        phase: "released", at: Date.now(), pid: process.pid });
+      if (this.updateLease === lease) this.updateLease = undefined;
+      return true;
+    } finally { this.maintenancePreparing = false; }
+  }
+
   releaseUpdateAdmission(id: string): boolean {
-    if (!this.updateFenced || this.updateLease?.id !== id) return false;
+    if (!this.updateFenced || this.updateLease?.id !== id || this.updateLease.requestId) return false;
     this.updateLease = undefined;
     return true;
   }
@@ -2094,10 +2184,13 @@ export class Harness {
   }
 
   private async pump(s: SessionState): Promise<void> {
-    if (s.running || this.gatewayChanging || this.stoppingHostParents.has(s.key) || this.opts.sessionEnabled?.(s.key) === false) return;
+    // An already-accepted dispatcher worker is part of its current durable step.
+    // Let it produce its receipt; never start ordinary queued continuations.
+    const heldForUpdate = () => this.updateFenced && !(this.maintenancePreparing && this.opts.externallyRecoveredSession?.(s.key));
+    if (s.running || heldForUpdate() || this.gatewayChanging || this.stoppingHostParents.has(s.key) || this.opts.sessionEnabled?.(s.key) === false) return;
     s.running = true;
     try {
-      while (!this.halting && !this.stoppingHostParents.has(s.key) && this.opts.sessionEnabled?.(s.key) !== false) {
+      while (!this.halting && !heldForUpdate() && !this.stoppingHostParents.has(s.key) && this.opts.sessionEnabled?.(s.key) !== false) {
         // A finished turn's reply goes out only once its completion is durable.
         if (s.unsaved) {
           try {
