@@ -133,6 +133,58 @@ checkpoint. Native summaries retain intent/corrections, decisions, verified resu
 Git/PR/deployment state, open work and next steps. Never include secrets. Compaction
 may lose details; persistent review state, inbox and authorization are not summaries.
 
+## Durable recovery fence
+
+Each maintenance operation has a durable ID, state and lifetime count of observed
+failed attempts. Scheduler/guard checks are not attempts. Safe, idempotent seed
+and archive-link recovery uses fixed absolute backoff (1 second exponential to
+60 seconds) and stops after seven actual failures in an automatic recovery epoch,
+including persistent identical errors. The lifetime count never resets on arrivals,
+restart, a different error or explicit recovery. This does not lower task continuation
+budgets. The previous capped `recoveryRetry` counter/deadline migrates without a
+fresh budget; an exhausted old counter becomes blocked.
+
+`recoveryStatus(key)` returns structured waiting/blocked information (operation ID,
+failed count, reason, and deadline when waiting). Host pumps retain the inbox and
+check this fence before claiming work. Task recovery/assessment also respects it.
+No compact, summary or working prompt runs during backoff or a terminal hold;
+no repeated failure is thrown/logged for these guard checks. A policy-disabled
+mandatory preparation retains its intent as a policy blocker, not a false success.
+Embedding hosts must honor this status after `prepareContinuation`, `beforeTurn`
+and `guidance`; those methods no longer repeatedly throw a stored recovery error.
+
+A rejected native compact/summary, uncertain rotation or interrupted persisted
+in-flight reservation is **not proof of no effects**. It blocks automatic replay
+immediately; safe idempotent recovery alone may retry. Summary uses native
+compaction too. Unchanged prepared branches reuse the existing summary rather than
+compacting again on a seed retry. Before effects, the host binds the queued
+prerequisite to its operation ID durably; an applied receipt for that same operation
+(including an explicitly reconciled handover) satisfies it without another compact.
+
+Only the existing versioned, authorized host `admit` contract can reopen recovery.
+Ordinary model requests, repeated arrivals, policy changes and a retry of an old
+acceptance receipt cannot reset it. A compact with uncertain outcome requires an
+explicit handover reconciliation, not another compact. Admission grants a new
+bounded automatic epoch on the **same** operation ID and retains the lifetime count.
+Unstarted intent can be cancelled; prepared/uncertain effects cannot be rolled back
+by cancellation. Mandatory cancellation retains the fence and does not increment
+failure counts. Optional foreground interruption retains its existing defer semantics.
+
+Recovery emits one notice on entering waiting and one on entering blocked, with
+stable delivery IDs. Delivery retries never redo maintenance. Diagnostics include
+only allowlisted stage/code/error class/cause code and bounded SHA-256 correlation,
+not raw exception messages, stacks, paths, prompts or credentials. Error fingerprints
+and same-error counts distinguish actual failure sequences from scheduler pacing;
+changing an error does not replenish the automatic epoch.
+
+Durable outbox entries carry typed maintenance metadata. Internal dispatcher,
+subagent and API result channels must not treat waiting/informational maintenance
+as a completed working result. A terminal dispatcher hold records the closed
+`maintenance-blocked` diagnostic and retains its recovery session, with no automatic
+worker retry. Subagent/API terminal holds are failed results, never successes.
+This prevents independent worker recovery from silently starting a fresh compaction
+budget after the owner has reached needs-attention.
+
 ## Completion notices
 
 After a successful maintenance boundary and saved state, Harness queues a short
@@ -219,9 +271,11 @@ that seed as context and continues; no artificial autonomous continuation is enq
 when there is no work. Channel, thread, queue, goals and review budgets remain owned
 by the same Harness session key. Old native session history remains on disk.
 
-A failed rotation retains the prepared summary. If the old session processes another
-turn before retry, the summary is refreshed before rotation. If restart resumes a new
-session before the switched marker was saved, recovery retries the saved handover.
+A failed rotation retains the prepared summary and fences uncertain effects for
+explicit reconciliation. When admitted recovery observes a changed old branch,
+it refreshes the summary before rotation. Unchanged branches reuse the checkpoint.
+If restart finds an interrupted in-flight reservation, it blocks for reconciliation;
+known settled seed/archive-link failures may retry the saved handover after backoff.
 The PI adapter reuses an identical `harness-handover` message already on the active
 branch and still retries its provider checkpoint. Checkpoint/archive-link failures
 therefore do not append the same seed repeatedly, including after reopening the
@@ -233,5 +287,6 @@ no isolated summary model; no automatic continuation without queued input; and n
 UI notification for every maintenance operation yet. The service stores one small
 state/checkpoint file per Harness session in `<home>/context-maintenance/`. Rotation
 uses the existing session-provider binding contract; custom providers must honor it.
-A summary error leaves the current session available and reserves cooldown. A failed
-prepared-recovery attempt fails that boundary rather than silently discarding context.
+A summary error retains the session/checkpoint without assuming that no compact
+occurred. Failed recovery retains intent and the working-prompt fence, routing a
+structured wait/blocker to the host rather than repeatedly throwing at boundaries.

@@ -49,6 +49,8 @@ export interface Inbound {
   waitRecheck?: { reason: string; next: string };
   /** Durable prerequisite on a checker-authorized queued continuation. */
   contextPreparation?: "compact" | "handover";
+  /** Host-bound operation receipt; delivery/restart must not repeat successful preparation. */
+  contextPreparationOperationId?: string;
   continuationDepth?: number;
   /** Host-issued recheck provenance; productive tools must acquire a work step first. */
   waitCheck?: { sequence: number; productive?: boolean };
@@ -227,6 +229,8 @@ export class PermanentDeliveryError extends Error {}
 
 /** Extra info for outbound messages. */
 export interface SendMeta {
+  /** Host maintenance lifecycle, never a working-turn result on internal channels. */
+  maintenance?: { state: "notice" } | import("./context-maintenance.js").MaintenanceHold;
   /** Transport-neutral presentation intent. Adapters render progress subtly (e.g. italic).
    * Progress text is plain text, not channel-specific markup; unsupported adapters may ignore it.
    */

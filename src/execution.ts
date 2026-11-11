@@ -21,7 +21,7 @@ export interface ExecutionDecision {
 }
 
 /** Closed host-owned causes; exception/worker text is never persisted here. */
-export type ExecutionDiagnosticCode = "runtime-failure" | "worker-failed" | "worker-cancelled" | "manual-pause" | "deadline-expired";
+export type ExecutionDiagnosticCode = "runtime-failure" | "worker-failed" | "worker-cancelled" | "maintenance-blocked" | "manual-pause" | "deadline-expired";
 export class ExecutionDeadlineExpired extends Error {
   constructor() { super("deadline-expired: saved execution deadline has elapsed"); }
 }
@@ -30,7 +30,7 @@ export class ExecutionAssessmentHold extends Error {
 }
 
 export class ExecutionWorkerFailure extends Error {
-  constructor(readonly diagnosticCode: "worker-failed" | "worker-cancelled") { super(diagnosticCode); }
+  constructor(readonly diagnosticCode: "worker-failed" | "worker-cancelled" | "maintenance-blocked") { super(diagnosticCode); }
 }
 
 export type ExecutionStatus = "ready" | "running" | "paused" | "blocked" | "completed" | "cancelled";
