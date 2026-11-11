@@ -45,6 +45,7 @@ import { PluginHost } from "./plugins.js";
 import { Subagents } from "./subagents.js";
 import { ExecutionStore, executionTarget } from "./execution.js";
 import { Dispatcher, stopDispatcherParent } from "./dispatcher.js";
+import { MaintenanceJournal } from "./update-maintenance.js";
 import { DispatcherRuntime } from "./dispatcher-runtime.js";
 import { attentionRequired } from "./notification-routing.js";
 import { dispatcherConfig } from "./dispatcher-config.js";
@@ -242,6 +243,9 @@ async function main(argv: string[]): Promise<void> {
     protectedExecutions: () => new Set(harness?.pendingInputs().flatMap(input => input.hostEvent ? [input.hostEvent.executionId] : []) ?? []),
   });
   await executions.load();
+  const maintenanceJournal = new MaintenanceJournal(path.join(config.home, "update-maintenance.json"));
+  await maintenanceJournal.load();
+  await maintenanceJournal.recover();
   const reviewSettings = reviewConfig(config.review);
   const reviewModule = reviewSettings.enabled ? await loadPolicyEngine(config.home, config.reviewEngine, {
     apiVersion: 1, executionContexts: (createReviewEngine as typeof createReviewEngine & { executionContexts?: 1 }).executionContexts, modelTools: ["plugin_review"], create: context => createReviewEngine({ ...context, config: reviewSettings }),
@@ -416,10 +420,8 @@ async function main(argv: string[]): Promise<void> {
   let improvement: ImprovementController | undefined;
   let gatewayManager: GatewayManager | undefined;
 
-  harness = new Harness({
-    attachmentRoot: path.join(config.home, "attachments"),
-    updateBlockers: () => {
-      const blockers = [...plugins.updateBlockers(), ...(dispatcher?.updateBlockers() ?? [])];
+  const updateOwnerBlockers = () => {
+      const blockers = [...plugins.updateBlockers()];
       if (!hostAdmissionReady) blockers.push("startup reconciliation");
       const effective = settings.effective();
       // These independently loaded owners predate the foreground ownership contract.
@@ -429,6 +431,14 @@ async function main(argv: string[]): Promise<void> {
       if (Object.values(effective.policyPlugins ?? {}).some(spec => spec.module && !spec.disabled)) blockers.push("unsupported update owner: policy modules");
       blockers.push(...(gatewayManager?.updateBlockers() ?? ["gateway startup"]));
       return blockers;
+  };
+  harness = new Harness({
+    attachmentRoot: path.join(config.home, "attachments"),
+    updateBlockers: () => [...updateOwnerBlockers(), ...(dispatcher?.updateBlockers() ?? [])],
+    maintenance: {
+      blockers: () => [...updateOwnerBlockers(), ...(dispatcher?.maintenanceBlockers() ?? [])],
+      flush: async () => { await executions.drain(); await executionContexts.drain(); },
+      journal: maintenanceJournal,
     },
     runtime,
     sessionEnabled,
