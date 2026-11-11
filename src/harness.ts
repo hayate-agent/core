@@ -1063,7 +1063,7 @@ export class Harness {
   dependencyCheckpoint(key: string): import("./execution.js").Execution["dependency"] {
     const s = this.sessions.get(key), input = s?.current;
     const task = s && this.tasks(s).find(task => task.id === input?.taskId);
-    if (!input || !task || input.taskId !== task.id || task.state === "stopped" ||
+    if (!input || !task || task.recoveryEnrollment === "held-legacy" || input.taskId !== task.id || task.state === "stopped" ||
         (task.state === "completed" && input.source !== "host")) return;
     if (input.source === "host" && !this.resultMandate(input)) return;
     const deadlines = [task.expiresAt, task.wait?.deadline, task.lastWait?.deadline, input.continuationExpiresAt]
@@ -2156,14 +2156,26 @@ export class Harness {
           input.continuationExpiresAt = mandate?.expiresAt;
         }
         this.resetContinuation(input);
-        if (input.source === "channel" && !(input.continuationDepth ?? 0)) {
+        const freshHostWork = ["api", "cron", "loop", "heartbeat", "goal"].includes(input.source) &&
+          !input.taskId && !input.waitCheck && !input.waitRecheck && input.continuationDepth === undefined &&
+          !/^(dispatch|subagent):/.test(s.key) && !this.opts.externallyRecoveredSession?.(s.key);
+        if ((input.source === "channel" && !(input.continuationDepth ?? 0)) || freshHostWork) {
+          // Every new scheduled/API occurrence owns a fresh mandate. Never
+          // inherit session.task or a prior occurrence's completion/expiry.
           input.taskId = input.taskId ?? input.id ?? randomUUID();
+          if (freshHostWork) input.completionAnchor = { id: input.taskId, task: input.text,
+            receivedAt: this.now(), replyTo: structuredClone(input.replyTo ?? s.replyTo) };
           const existing = this.tasks(s).find(task => task.id === input.taskId);
           s.tasks = this.tasks(s);
-          s.task = existing ?? { recoveryEnrollment: "current", id: input.taskId, original: input.text, state: "active", depth: 0, anchor: input.completionAnchor,
+          const assigned: DurableTask = existing ?? { recoveryEnrollment: "current", id: input.taskId, original: input.text, state: "active", depth: 0, anchor: input.completionAnchor,
             // A restored input without a retained task cannot establish which
             // executions predated its original acceptance. Keep that case fenced.
             ...(!this.restoredTaskInputs.has(input) ? this.preexistingUnscoped(s.key) : {}) };
+          if (freshHostWork) {
+            if (!existing) s.tasks.push(assigned);
+            // Scheduled occurrence ownership is not a change of operator focus.
+            s.task ??= assigned;
+          } else s.task = assigned;
         }
         if (this.opts.executionStore) input.executionTurnId ??= randomUUID();
         if (replayable(input)) {
