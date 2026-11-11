@@ -60,7 +60,19 @@ test(`technical recovery preserves ${hold} hold`, async t => {
   const before = store.list()[0];
   await store.retryWorker(task.id, { version: 1, replaySafe: false, reconcile: hold !== "unsafe-strategy" },
     hold === "policy" ? { name: "hold", evaluate: () => "real hold" } : undefined);
-  assert.deepEqual(store.list()[0], before);
+  if (hold === "semantic") {
+    assert.equal(store.list()[0].status, "blocked", "no effect is replayed before independent reassessment");
+    assert.ok(store.list()[0].workerRetry, "a semantic assessment hold has an automatic wake-up owner");
+    assert.deepEqual(store.list()[0].intent, before.intent);
+  } else if (hold === "expired") {
+    assert.equal(store.list()[0].diagnosticCode, "deadline-expired");
+    assert.equal(store.list()[0].workerRetry, undefined);
+    assert.match(store.list()[0].recoveryReason!, /deadline expired/);
+  } else if (hold === "policy") {
+    assert.equal(store.list()[0].recoveryReason, "real hold");
+    assert.equal(store.list()[0].workerRetry, undefined);
+    assert.equal(store.list()[0].status, before.status);
+  } else assert.deepEqual(store.list()[0], before);
 });
 
 test("settled steps yield scarce capacity to ready review without replay", async t => {

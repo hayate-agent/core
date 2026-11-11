@@ -1,6 +1,6 @@
 import type { ExecutionRecoveryPolicy } from "./execution-recovery.js";
 import { validateWorkerPin } from "./model-roles.js";
-import { ExecutionClaimConflict, ExecutionDecisionConflict, ExecutionDeadlineExpired, ExecutionWorkerFailure, type Execution, type ExecutionEvent, type ExecutionStore } from "./execution.js";
+import { ExecutionClaimConflict, ExecutionDecisionConflict, ExecutionDeadlineExpired, ExecutionWorkerFailure, ExecutionAssessmentHold, type Execution, type ExecutionEvent, type ExecutionStore } from "./execution.js";
 import { toolGuardDenialReason } from "./tool-guard-error.js";
 
 export interface DispatchContext {
@@ -160,13 +160,17 @@ export class Dispatcher {
     const tasks = this.store.list();
     const last = tasks.findIndex(task => task.id === this.lastClaimed);
     const ordered = last < 0 ? tasks : [...tasks.slice(last + 1), ...tasks.slice(0, last + 1)];
-    for (const task of ordered) {
+    for (let task of ordered) {
       if (this.stopped || this.active.size >= this.capacity) break;
-      if (task.diagnosticCode === "worker-failed" && ["blocked", "paused"].includes(task.status) &&
+      if (["worker-failed", "runtime-failure"].includes(task.diagnosticCode ?? "") &&
+          (["blocked", "paused"].includes(task.status) || task.status === "ready" && task.workerRetry) &&
           !this.active.has(task.id) && this.parentEnabled(task.parent)) {
+        if (task.workerRetry && !this.store.assessmentDue(task) &&
+            !(task.dependency?.expiresAt !== undefined && task.dependency.expiresAt <= Date.now())) continue;
         const retained = this.strategyFor(task);
         if (retained) await this.store.retryWorker(task.id, retained, this.recoveryPolicy);
-        continue; // durable backoff, picked up by the existing host retry tick
+        task = this.store.list().find(row => row.id === task.id)!;
+        if (task.status !== "ready") continue; // internal pause remains durably timed
       }
       if (task.status !== "ready" || !this.store.assessmentDue(task) || this.active.has(task.id) || !this.parentEnabled(task.parent)) continue;
       const strategy = this.strategyFor(task);
@@ -266,7 +270,8 @@ export class Dispatcher {
       if (!this.stopped && this.store.list().find(item => item.id === task.id)?.status === "running") {
         await this.store.fail(task.id, token, error instanceof ExecutionDeadlineExpired || toolGuardDenialReason(error).startsWith("deadline_expired:")
           ? "deadline-expired" : error instanceof ExecutionWorkerFailure ? error.diagnosticCode : "runtime-failure",
-          { strategy, policy: this.recoveryPolicy }).catch(this.report);
+          { strategy, policy: this.recoveryPolicy,
+            ...(error instanceof ExecutionAssessmentHold ? { assessmentHold: { state: error.state, step: error.step } } : {}) }).catch(this.report);
       }
       if (!abort.signal.aborted && !(error instanceof ExecutionClaimConflict)) this.report(error);
     } finally {

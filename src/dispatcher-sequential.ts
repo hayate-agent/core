@@ -3,7 +3,7 @@ import { assessmentRetryDelay } from "./assessment-retry.js";
 import type { AgentRuntime } from "./types.js";
 import { assessCompletion, type CompletionDiagnostic } from "./completion-check.js";
 import { runtimeReviewer } from "./runtime/reviewer.js";
-import { ExecutionDeadlineExpired } from "./execution.js";
+import { ExecutionDeadlineExpired, ExecutionAssessmentHold } from "./execution.js";
 import { derivedPlanBoundary, stepCompletionPrompt, parentDecisionContext } from "./dispatcher-step-prompt.js";
 import type { DispatchContext, DispatcherStrategy } from "./dispatcher.js";
 import type { Execution, ExecutionStore } from "./execution.js";
@@ -319,6 +319,9 @@ export function sequentialStrategy(deps: SequentialDeps): DispatcherStrategy {
         if (!state.progress) state.progress = { index, stalls: 0, receipts: receipts(evidence).slice(0, 64) };
         if (!state.assessment) await retain(0);
         let status = stepStatus(reply);
+        // A retained effect-bearing inadequacy hold is also independently
+        // re-assessed on wake-up; never replay its tools to obtain a new label.
+        if (status === "inadequate" && state.prior?.index === index && state.assessment) status = "blocked";
         let verdictState: string | undefined;
         let validation: CompletionDiagnostic | undefined;
         // Worker prose is only a proposal. Independently validate the exact step
@@ -326,8 +329,8 @@ export function sequentialStrategy(deps: SequentialDeps): DispatcherStrategy {
         // "continue" means unfinished work of THIS step: resume it in the same
         // retained worker session (same intent, same route), bounded.
         // A worker "blocked" claim is equally only a proposal: it is assessed too.
-        // Reviewer continue runs the next same-step turn; a reviewer "completed"
-        // never overrides the worker's blocked claim (hold, no successor).
+        // The independent reviewer, not the worker's self-reported pause/block,
+        // owns completion. A confirmed completion never needs a parent nudge.
         const authority = `Current authority: mandate deadline ${task.dependency?.expiresAt !== undefined ? new Date(task.dependency.expiresAt).toISOString() : "none"}; scope is exactly the mandate above.
 Correctable vs blocked: a worker "blocked" claim or evidence shortfall that rests on an unverified or false assumption (wrong tool capability, wrong working directory, artificial evidence-count requirement) and is contradicted or not supported by the host tool observations in the data is CORRECTABLE: answer state "continue" with "next" = one concrete correction citing the host evidence, or the exact read-only facts the worker must report first. Answer "blocked" only for a genuine external dependency, missing permission or safety boundary. Never grant new scope.`;
         for (let round = state.correction?.index === index ? state.correction.rounds : 0; status !== "inadequate"; round++) {
@@ -377,12 +380,13 @@ Correctable vs blocked: a worker "blocked" claim or evidence shortfall that rest
           verdictState = verdict?.state ?? "technical";
           if (verdict?.state === "completed" && claimed === "complete") break;
           if (claimed === "complete") status = undefined;
-          // Completion cannot silently repair a missing status or override a blocked claim.
-          // Ask only for a final report when the independent evidence already passed.
+          // An empty report still needs a final report; a nonempty blocked report
+          // can be independently verified as completed without a working replay.
           const reportOnly = verdict?.state === "completed" && claimed === undefined;
-          if (verdict?.state === "completed" && claimed === "blocked" && decisions.length) {
-            // Parent data never force-accepts: independent assessment still verifies
-            // retained evidence against the original mandate and constraints.
+          if (verdict?.state === "completed" && claimed === "blocked") {
+            // The independent reviewer verified the original step and its retained
+            // host evidence. Worker self-classification is not a veto; neither a
+            // parent decision nor another working turn is required.
             status = "complete";
             break;
           }
@@ -441,7 +445,7 @@ End your reply with exactly one final line: "STEP-STATUS: complete" only if the 
         delete next.prior;
         delete next.progress; // progress evidence belongs to this exact step only
         // Keep failed assessment evidence for explicit resume; never repeat the settled worker.
-        if (status === "complete" || status === "inadequate") delete next.assessment;
+        if (status === "complete") delete next.assessment;
         let limit: string | undefined;
         if (status === "complete") {
           next.outcomes.push({ role, requested: route, ...(observed ? { observed } : {}), result, ...(role !== step.role ? { escalatedFrom: step.role } : {}) });
@@ -451,7 +455,10 @@ End your reply with exactly one final line: "STEP-STATUS: complete" only if the 
             ...(verdictState === "technical" ? { validation: { diagnostic: validation ?? "technical", timeoutMs: STEP_VALIDATION_TIMEOUT_MS } } : {}) };
           const higher = stepRoles[stepRoles.indexOf(role) + 1];
           // Bounded: one level, only on explicit inadequacy with no tool call (no possible effect).
-          if (status === "inadequate" && tools === 0 && higher && role === step.role) next.escalation = { index, from: role, to: higher };
+          if (status === "inadequate" && tools === 0 && higher && role === step.role) {
+            next.escalation = { index, from: role, to: higher };
+            delete next.assessment; // proven effect-free escalation only
+          }
           else limit = status === "inadequate"
             ? `Schritt ${index + 1} meldet unzureichende Fähigkeit; keine sichere Eskalation (${tools} Werkzeugaufrufe, Rolle ${role}).`
             : verdictState === "blocked" || verdictState === "waiting"
@@ -463,7 +470,14 @@ End your reply with exactly one final line: "STEP-STATUS: complete" only if the 
         await context.settleIntent(intentKey, result, JSON.stringify(next), decisionRevision);
         state = next;
         const trace = `${route.model ?? "?"} → ${observed?.model ?? "unbeobachtet"}`;
-        if (limit) return block(`${limit} Angefordert/beobachtet: ${trace}.`);
+        if (limit) {
+          const reason = `${limit} Angefordert/beobachtet: ${trace}.`;
+          if (verdictState === "blocked" || verdictState === "waiting") {
+            await context.status?.(`Sequenzieller Plan blockiert: ${reason}`.slice(0, 8000)).catch(() => {});
+            throw new ExecutionAssessmentHold(verdictState, index, reason);
+          }
+          return block(reason);
+        }
         await context.status?.(next.escalation?.index === index
           ? `Schritt ${index + 1}/${state.plan.length}: ${role} unzureichend ohne Effekt; einmalige Eskalation auf ${next.escalation.to}.`
           : `Schritt ${index + 1}/${state.plan.length} abgeschlossen (${role}; ${trace}).`).catch(() => {});
