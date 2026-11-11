@@ -28,7 +28,7 @@ dispatcher:
   enabled: false
   strategy: direct
   concurrentRequests: false
-  capacity: 1
+  capacity: 4
   retentionDays: 7
 
 # Optional WebUI presentation tool, AFTER installing the separate WebUI plugin:
