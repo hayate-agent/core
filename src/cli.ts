@@ -640,6 +640,7 @@ async function main(argv: string[]): Promise<void> {
   // Restore before scheduler execution, persistence callbacks, or channel startup can write state.
   // Historical permits/timers are not evidence of ongoing execution. Establish
   // the upgrade boundary before any scheduler/channel can release old input.
+  await executions.holdLegacyRecovery();
   harness.holdLegacyRecovery(saved?.pending ?? []);
   if (saved?.pending?.length) harness.restorePending(saved.pending);
   if (saved?.outbox?.length) harness.restoreOutbox(saved.outbox);

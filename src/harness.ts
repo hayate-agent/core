@@ -614,7 +614,7 @@ export class Harness {
         (input.source === "channel" || input.source === "api") &&
         (input.taskId === task.id || input.id === task.id));
       const child = this.opts.executionStore?.list(s.key).some(e =>
-        ["ready", "running"].includes(e.status) && !e.parentStopped &&
+        ["ready", "running"].includes(e.status) && e.recoveryEnrollment !== "held-legacy" && !e.parentStopped &&
         e.dependency?.taskId === task.id && e.dependency.original === task.original);
       task.recoveryEnrollment = ingress || child ? "current" : "held-legacy";
       if (task.recoveryEnrollment === "held-legacy") {

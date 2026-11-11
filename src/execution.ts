@@ -35,6 +35,8 @@ export class ExecutionWorkerFailure extends Error {
 
 export type ExecutionStatus = "ready" | "running" | "paused" | "blocked" | "completed" | "cancelled";
 export interface Execution {
+  /** Old paused failures require explicit resolution, not automatic retry on upgrade. */
+  recoveryEnrollment?: "current" | "held-legacy";
   id: string;
   /** Host-captured parent mandate; never accepted from model tool arguments. */
   dependency?: { taskId: string; depth: number; original: string; expiresAt?: number; anchor?: import("./types.js").Inbound["completionAnchor"] };
@@ -396,10 +398,21 @@ export class ExecutionStore {
       }
       if (draft.executions.length >= 2000) throw Error("Retained execution limit reached; archive only after reconciliation");
       if (origin !== undefined && !validAddress(origin)) throw Error("Invalid execution origin");
-      const task: Execution = { dependency: structuredClone(dependency), ...(origin ? { origin: structuredClone(origin) } : {}), pinned: structuredClone(pinned), id: randomUUID(), parent, requestId, input, strategy, strategyVersion, status: "ready", restarts: 0 };
+      const task: Execution = { recoveryEnrollment: "current", dependency: structuredClone(dependency), ...(origin ? { origin: structuredClone(origin) } : {}), pinned: structuredClone(pinned), id: randomUUID(), parent, requestId, input, strategy, strategyVersion, status: "ready", restarts: 0 };
       draft.executions.push(task);
       this.event(draft, task, "accepted", "Auftrag angenommen");
       return task;
+    });
+  }
+  /** Persist before dispatcher startup: accepted/interrupted work stays current;
+   * old paused/blocked failures are retained without automatic re-enrollment. */
+  holdLegacyRecovery(): Promise<void> {
+    return this.mutate(draft => {
+      for (const task of draft.executions) {
+        if (task.recoveryEnrollment) continue;
+        task.recoveryEnrollment = task.status === "running" ||
+          task.status === "ready" && !task.workerRetry && !task.diagnosticCode ? "current" : "held-legacy";
+      }
     });
   }
   /** Current policy is supplied by the trusted host registry, never by model input.
@@ -411,7 +424,7 @@ export class ExecutionStore {
   claim(id: string, current?: RecoveryStrategy & { strategy: string }, policy?: ExecutionRecoveryPolicy): Promise<Execution> {
     return this.mutate(draft => {
       const task = this.find(draft, id);
-      if (task.status !== "ready" || !this.assessmentDue(task))
+      if (task.recoveryEnrollment === "held-legacy" || task.status !== "ready" || !this.assessmentDue(task))
         throw new ExecutionClaimConflict("Execution not ready");
       const reason = task.intent ? recoveryBlock(task, current?.strategy === task.strategy ? current : undefined, policy)
         : task.workerRetry ? policy?.evaluate(structuredClone(task)) : undefined;
@@ -689,7 +702,7 @@ export class ExecutionStore {
     });
   }
   private scheduleWorkerRetry(task: Execution, strategy: RecoveryStrategy, policy?: ExecutionRecoveryPolicy, newFailure = true): boolean {
-    if (!["blocked", "paused", "ready"].includes(task.status) ||
+    if (task.recoveryEnrollment === "held-legacy" || !["blocked", "paused", "ready"].includes(task.status) ||
         !["worker-failed", "runtime-failure"].includes(task.diagnosticCode ?? "") ||
         task.parentStopped || task.question && !task.question.answer) return false;
     if (task.dependency?.expiresAt !== undefined && task.dependency.expiresAt <= this.now()) {
@@ -736,6 +749,7 @@ export class ExecutionStore {
       if (action === "resume") {
         if (task.dependency?.expiresAt !== undefined && task.dependency.expiresAt <= this.now()) throw new ExecutionDeadlineExpired();
         if (task.status !== "paused" || task.intent || (task.question && task.question.answer === undefined)) throw Error("Execution cannot resume without resolving its blocker");
+        task.recoveryEnrollment = "current";
         task.status = "ready";
         if (task.workerRetry) task.workerRetry.nextAt = this.now();
         delete task.diagnosticCode;
@@ -809,6 +823,7 @@ export class ExecutionStore {
       if (!task.recoverySession && task.token && task.intent) task.recoverySession = `dispatch:${task.id}:${task.token}`;
       delete task.token;
       (task.resolutions ??= []).push({ actor, action, evidence, at: this.now() });
+      task.recoveryEnrollment = "current";
       task.recoveryGrant = { action, restarts: task.restarts };
       delete task.recoveryReason;
       task.status = "ready";

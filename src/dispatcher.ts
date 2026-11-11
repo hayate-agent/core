@@ -161,6 +161,7 @@ export class Dispatcher {
     const last = tasks.findIndex(task => task.id === this.lastClaimed);
     const ordered = last < 0 ? tasks : [...tasks.slice(last + 1), ...tasks.slice(0, last + 1)];
     for (let task of ordered) {
+      if (task.recoveryEnrollment === "held-legacy") continue;
       if (this.stopped || this.active.size >= this.capacity) break;
       if (["worker-failed", "runtime-failure"].includes(task.diagnosticCode ?? "") &&
           (["blocked", "paused"].includes(task.status) || task.status === "ready" && task.workerRetry) &&
