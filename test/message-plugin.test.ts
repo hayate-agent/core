@@ -36,6 +36,10 @@ test("generic messaging is discoverable, explicit nonempty tool selections inclu
     dispatcherEnabled: false, dispatcherReady: false, reviewInstructions: "", messagingGateways: f.gateways.messagingCapabilities() });
   assert.match(text, /plugin_message send/); assert.match(text, /"gateway":"slack"/);
   assert.doesNotMatch(text, /SLACK_BOT_TOKEN|private-bot/); // no credential values in host facts
+  const hidden = capabilityContext({ revision: 1, sessionKey: "main", registeredTools: ["plugin_message"], selectedTools: [],
+    dispatcherEnabled: false, dispatcherReady: false, reviewInstructions: "", messagingGateways: f.gateways.messagingCapabilities() });
+  assert.match(hidden, /native messaging tool is not exposed/);
+  assert.doesNotMatch(hidden, /To send an operator-authorized message use plugin_message send/);
 });
 
 test("one authorized send has a durable receipt; identical retries survive service recreation without replay", async t => {
