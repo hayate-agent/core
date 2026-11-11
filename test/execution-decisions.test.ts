@@ -96,6 +96,28 @@ test("pending questions and manual pauses cannot be bypassed by a decision", asy
   assert.equal(store.list()[0]!.diagnosticCode, "manual-pause");
 });
 
+test("explicit pause of a blocked retained assessment survives reload and decision delivery", async t => {
+  const { store, task, file } = await fixture(t);
+  const claim = await store.claim(task.id);
+  await store.intent(task.id, claim.token!, "step:0", "unsafe", { model: "p/worker" }, 0);
+  await store.checkpoint(task.id, claim.token!, "settled assessment evidence");
+  await store.fail(task.id, claim.token!, "runtime-failure");
+  const blocked = store.list()[0]!;
+  assert.equal(blocked.status, "blocked");
+  await store.control(task.id, "pause");
+  const reloaded = new ExecutionStore(file); await reloaded.load();
+  assert.equal(reloaded.list()[0]!.diagnosticCode, "manual-pause");
+  await reloaded.recordDecision("parent", task.id, "hold", "accept documented deviation", () => true);
+  const afterDecision = new ExecutionStore(file); await afterDecision.load();
+  const held = afterDecision.list()[0]!;
+  assert.equal(held.status, "blocked", "decision must not wake the explicit hold");
+  assert.equal(held.diagnosticCode, "manual-pause");
+  assert.deepEqual(held.intent, blocked.intent, "pause preserves unresolved effect evidence");
+  assert.equal(held.checkpoint, blocked.checkpoint);
+  assert.equal(held.decisions![0]!.state, "pending");
+  await assert.rejects(afterDecision.control(task.id, "resume"), /cannot resume/);
+});
+
 test("decision validation on reload rejects corrupt audits and receipt limits fail closed", async t => {
   const { store, task, file } = await fixture(t);
   for (let i = 0; i < 32; i++) await store.recordDecision("parent", task.id, `d${i}`, "scoped context");

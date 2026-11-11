@@ -620,8 +620,9 @@ export class ExecutionStore {
       } else if (action === "pause") {
         // Pause is not a blocker-resolution API. Revoking an in-flight effect
         // leaves its outcome ambiguous, even before startup recovery runs.
-        if (task.status === "blocked") return;
-        task.status = task.intent ? "blocked" : "paused";
+        // An existing blocker must retain both its state and effect evidence,
+        // but an explicit pause still adds a durable operator hold.
+        if (task.status !== "blocked") task.status = task.intent ? "blocked" : "paused";
         task.diagnosticCode = "manual-pause";
       } else { task.status = "cancelled"; task.terminalAt = this.now(); }
       // Revoke the old worker before any replacement can claim the task.
