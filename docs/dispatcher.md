@@ -1,5 +1,37 @@
 # Optional durable dispatcher
 
+## Routing and recovery guarantees
+
+With an enabled, ready dispatcher, Main orchestrates; shell execution and file
+mutation (`bash`, `write`, `edit`) run in dispatcher workers. A runtime tool guard
+enforces this even after worker failure. Native read/search and dispatcher status
+remain available to Main. Starting a separate subagent is not a way around this
+routing rule. Main fallback is available only when dispatcher mode is disabled or
+the dispatcher is unavailable.
+
+A typed `worker-failed` outcome (for example a provider EOF) is a technical
+interruption, not a semantic blocker. The scheduler requeues the **same execution
+ID** with durable exponential backoff (15 seconds up to 5 minutes), retaining its
+intent, original mandate and worker transcript. The matching strategy must support
+reconciliation; no opaque effect is blindly replayed. Manual pauses, cancellation,
+unanswered questions, authentic mandate expiry and trusted recovery-policy holds
+remain binding. Technical retries have no total-attempt cutoff. Generic strategy
+exceptions are not guessed to be transient from exception text.
+
+Sequential execution yields capacity at committed step boundaries when another
+execution is ready. Round-robin admission lets a queued review run before the
+publisher claims its next step, including with capacity 1. An in-flight worker is
+not preempted and its work is never duplicated to free a slot.
+
+A model-selected wait deadline bounds polling, **not** the operator mandate.
+Only the task's authentic `expiresAt` limits task authority. While a child is
+running, a parent wait retains its read-only monitor even when the validator
+proposes productive continuation. The host renews that nonproductive polling
+window as necessary, without extending any authentic task expiry. Parent monitors
+cannot mutate or control the child. Once the child settles, the original task is
+independently assessed for the next deliverable. Historical task expiries are not
+automatically cleared: their original provenance must be reconciled separately.
+
 The dispatcher is a host scheduler, not another model loop. Main submits a scoped
 operator task and receives a durable result event. A trusted strategy owns its
 execution; Main does not have to create or poll workers. Ordinary operator turns

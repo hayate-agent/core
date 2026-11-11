@@ -858,7 +858,8 @@ export class Harness {
       const reason: import("./execution.js").WaitAuthorityDenialReason | undefined =
         this.stopping ? "cancelled" : this.sessions.get(key)?.current !== input ? "ownership" :
         this.sessions.get(key)?.cancelling === input ? "cancelled" :
-        !Number.isSafeInteger(input.continuationExpiresAt) || input.continuationExpiresAt! <= at ? "deadline" :
+        (task?.expiresAt !== undefined && (input.continuationExpiresAt === undefined || task.expiresAt <= at)) ||
+        input.continuationExpiresAt !== undefined && (!Number.isSafeInteger(input.continuationExpiresAt) || input.continuationExpiresAt <= at) ? "deadline" :
         !task ? "missing-task" : task.state === "stopped" ? "stopped-task" :
         input.waitCheck!.sequence !== task.waitChecks ? "sequence" : undefined;
       if (reason) return (async (): Promise<never> => {
@@ -874,6 +875,10 @@ export class Harness {
       })();
       return task;
     };
+    if (input.taskId && this.hasPendingDependency(key, input.taskId) &&
+        !["read", "grep", "find", "ls", "plugin_task_continuation"].includes(tool) &&
+        !(tool === "plugin_dispatch" && (args as { action?: unknown } | null)?.action === "status"))
+      throw new ToolGuardError("worker_orchestration_denied", "A child owns this work; the parent monitor may only inspect evidence and status, never duplicate or control its effects.");
     const authority = assertAuthorized();
     // No async yield on the authorized path before claiming the charge barrier.
     const task = authority instanceof Promise ? await authority : authority!;
@@ -1709,13 +1714,12 @@ export class Harness {
       !!o.anchor.outputTags?.length && !o.anchor.outputTags.some(tag => tags.includes(tag)));
   }
 
-  /** A wait whose operator-granted window has passed grants no automatic work.
-   * Deterministic task state only: no relevance guess, no cancellation. */
-  private waitExpired(task: DurableTask): boolean {
+  /** Malformed polling metadata is not safe to execute. Poll expiry alone does
+   * not revoke the mandate; authentic task.expiresAt is checked separately. */
+  private invalidWait(task: DurableTask): boolean {
     return [task.wait, task.lastWait].some(wait => !!wait && (
-      !Number.isSafeInteger(wait.deadline) || wait.deadline <= this.now() ||
-      !Number.isSafeInteger(wait.nextAt) || typeof wait.reason !== "string" ||
-      !wait.reason.trim() || wait.reason.length > 1000));
+      !Number.isSafeInteger(wait.deadline) || !Number.isSafeInteger(wait.nextAt) ||
+      typeof wait.reason !== "string" || !wait.reason.trim() || wait.reason.length > 1000));
   }
 
   /** A blocked worker is not running work, but its effects are still uncertain.
@@ -1731,7 +1735,7 @@ export class Harness {
       !!task.id && !!task.original.trim() && task.original.length <= 8000 &&
       (!task.anchor || task.anchor.task === task.original) &&
       Number.isSafeInteger(task.depth) && task.depth >= 0 && repetitions(task) < 20 && !task.termination &&
-      !this.waitExpired(task) &&
+      !this.invalidWait(task) &&
       (task.expiresAt === undefined || (Number.isSafeInteger(task.expiresAt) && task.expiresAt > this.now())) &&
       !s.current && (betweenTurns ? s.running && s.queue.every(input => input.taskId !== task.id) : !s.queue.length && !s.running) &&
       !this.paused && !this.stopping && !this.gatewayChanging && !this.updateFenced &&
@@ -1803,8 +1807,8 @@ export class Harness {
       if (next) {
         task.state = "active";
         task.next = next;
-        // An independent admission cannot outlive the wait that authorized it.
-        const deadlines = [task.expiresAt, plan?.expiresAt, task.wait?.deadline, task.lastWait?.deadline]
+        // A model-selected polling window is not an operator mandate expiry.
+        const deadlines = [task.expiresAt, plan?.expiresAt]
           .filter((deadline): deadline is number => deadline !== undefined);
         if (task.wait) task.lastWait = task.wait;
         task.wait = undefined;
@@ -2238,7 +2242,6 @@ export class Harness {
           catch { input.continuation = undefined; task = undefined; }
         }
         const inheritedDeadline = Math.min((targetId !== input.taskId ? task?.expiresAt : input.continuationExpiresAt) ?? Infinity,
-          input.continuation?.taskId !== undefined ? task?.wait?.deadline ?? Infinity : Infinity,
           input.continuation?.expiresAt ?? Infinity);
         if (task && task.state !== "stopped" && (task.state !== "completed" || this.settledReplies.has(input))) {
           const independent = task.recoveryAdmission?.independent;
@@ -2599,7 +2602,7 @@ export class Harness {
           assessmentInput.taskId = target.id;
           assessmentInput.completionAnchor = structuredClone(target.anchor);
           assessmentInput.continuationDepth = target.depth;
-          assessmentInput.continuationExpiresAt = Math.min(target.expiresAt ?? Infinity, target.wait?.deadline ?? Infinity);
+          assessmentInput.continuationExpiresAt = target.expiresAt;
           if (assessmentInput.continuationExpiresAt === Infinity) assessmentInput.continuationExpiresAt = undefined;
         }
         const parentAdmission = this.tasks(s).find(t => t.id === input.taskId)?.recoveryAdmission;
@@ -2615,16 +2618,21 @@ export class Harness {
         });
         // Independent assessment may change the plan, never its selected scope.
         const plan = assessed && { ...assessed, taskId: checkpoint?.taskId };
-        // Replacing a wait with productive work removes its timer, not its
-        // registered scheduling window. A first-turn wait is still only on
-        // the input, so settlement cannot inherit this deadline from the task.
-        if (plan?.state === "continue" && checkpoint?.state === "waiting" && checkpoint.wait)
-          plan.expiresAt = Math.min(plan.expiresAt ?? Infinity, checkpoint.wait.deadline);
+        // While a child owns the work, retain the nonproductive monitor rather
+        // than replacing it with a productive admission that cannot be scheduled.
+        // Its polling window never becomes the original mandate's lifetime.
+        if (plan?.state === "continue" && checkpoint?.state === "waiting" && checkpoint.wait &&
+            assessmentEligible() && !this.paused && !this.stopping && !s.queue.length &&
+            !assessmentAbort.signal.aborted && s.cancelling !== input &&
+            this.hasPendingDependency(s.key, input.taskId)) {
+          independentlyResolved = true;
+          input.continuation = checkpoint;
+        }
         if (assessmentEligible() && !this.paused && !this.stopping && !s.queue.length &&
             !assessmentAbort.signal.aborted && s.cancelling !== input && plan?.progress)
           this.assessedProgress.set(input, structuredClone(plan.progress));
         if ((input.source !== "host" || this.resultMandate(input)) && assessmentEligible() && !this.paused && !this.stopping && !s.queue.length && !assessmentAbort.signal.aborted && s.cancelling !== input &&
-            plan?.state === "continue" && typeof plan.next === "string" && plan.next.trim() && plan.next.length <= 4000) {
+            !independentlyResolved && plan?.state === "continue" && typeof plan.next === "string" && plan.next.trim() && plan.next.length <= 4000) {
           // An explicit progress verdict keeps PR185's milestone/replay semantics.
           independentlyContinued = !plan.progress;
           independentlyResolved = true;
@@ -2861,7 +2869,10 @@ export class Harness {
       // scheduler or inference for running, queued, admitted or not-due work.
       if (task.state === "active" && !task.recoveryAdmission) await this.assessStartupTask(s, task);
       if (this.queueRunnableTask(s)) break;
-      if (this.hasPendingDependency(s.key, task.id)) continue;
+      if (this.hasPendingDependency(s.key, task.id) &&
+          !(task.state === "waiting" && task.expiresAt !== undefined && at >= task.expiresAt) &&
+          (task.state !== "waiting" || !this.opts.executionStore?.list(s.key).some(e =>
+            this.mayDependOn(e, task.id, task) && e.status === "running"))) continue;
       if (task?.state === "waiting" && task.wait && (!Number.isSafeInteger(task.wait.nextAt) || !Number.isSafeInteger(task.wait.deadline) || at >= task.wait.nextAt || at >= task.wait.deadline || (task.expiresAt !== undefined && at >= task.expiresAt)) && this.onStateChange &&
           s.key !== "improvement:nightly" && !this.opts.externallyRecoveredSession?.(s.key)) {
         const wait = task.wait;
@@ -2870,7 +2881,30 @@ export class Harness {
           task.next!.length <= 4000 && Number.isSafeInteger(task.depth) && task.depth >= 0 && task.depth < Number.MAX_SAFE_INTEGER &&
           (task.waitChecks === undefined || (Number.isSafeInteger(task.waitChecks) && task.waitChecks >= 0 && task.waitChecks < Number.MAX_SAFE_INTEGER)) &&
           (task.expiresAt === undefined || Number.isSafeInteger(task.expiresAt));
-        const expired = at >= wait.deadline || (task.expiresAt !== undefined && at >= task.expiresAt);
+        const expired = task.expiresAt !== undefined && at >= task.expiresAt;
+        if (valid && !expired && at >= wait.deadline) {
+          // A running child remains monitored beyond the model's polling
+          // window. Renew only this nonproductive timer, never task authority.
+          const runningChild = this.opts.executionStore?.list(s.key).some(e =>
+            this.mayDependOn(e, task.id, task) && e.status === "running");
+          if (runningChild) {
+            task.wait = { ...wait, nextAt: at + 60000,
+              deadline: Math.min(task.expiresAt ?? Infinity, at + 300000) };
+            s.unsaved = true;
+            await this.onStateChange(); s.unsaved = false;
+            continue;
+          }
+          // Polling ended, not the task. Reassess once dependencies settle;
+          // never renew an operator deadline or replay a child's effects.
+          task.state = "active";
+          task.wait = undefined;
+          task.lastWait = undefined;
+          task.recoveryAssessment = undefined;
+          task.recoveryRetry = undefined;
+          s.unsaved = true;
+          await this.onStateChange(); s.unsaved = false;
+          continue;
+        }
         if (!valid || expired) {
           task.state = "blocked";
           task.termination = !valid ? "malformed_checkpoint" : "deadline_expired";
@@ -2890,9 +2924,9 @@ export class Harness {
           waitCheck: { sequence: task.waitChecks },
           taskId: task.id, continuationDepth: task.depth,
           waitRecheck: { reason: wait.reason, next: task.next! },
-          continuationExpiresAt: Math.min(task.expiresAt ?? Infinity, wait.deadline),
+          continuationExpiresAt: task.expiresAt,
           completionAnchor: task.anchor ?? { id: task.id, task: task.original, receivedAt: at }, replyTo: s.replyTo,
-          text: `Recheck a persisted wait within the original authorized task. The timer is NOT evidence that the condition is satisfied. First verify the condition and completed side effects; do not repeat them or broaden authority. If still waiting, register another bounded wait within the same deadline.\nOriginal task: ${task.original}\nCondition: ${wait.reason}\nSafe verification step: ${task.next}` });
+          text: `Recheck a persisted wait within the original authorized task. The timer is NOT evidence that the condition is satisfied. First verify the condition and completed side effects; do not repeat them or broaden authority. If still waiting, register another bounded polling window. A polling deadline is not an operator deadline; preserve the authentic task expiry if present.\nOriginal task: ${task.original}\nCondition: ${wait.reason}\nSafe verification step: ${task.next}` });
         continue;
       }
       }

@@ -57,6 +57,8 @@ export interface Execution {
   checkpoint?: string;
   /** Host-scheduled read-only assessment retry, never a worker replay grant. */
   assessmentRetryAt?: number;
+  /** Technical worker failures are retried by the dispatcher, never the parent. */
+  workerRetry?: { attempts: number; nextAt: number };
   /** Bounded host event dedup receipts, committed atomically with checkpoints. */
   checkpointNotices?: string[];
   result?: string;
@@ -172,6 +174,9 @@ export class ExecutionStore {
         if (item.origin !== undefined && !validAddress(item.origin)) throw Error("Invalid execution origin");
         if (item.checkpointNotices !== undefined && (!Array.isArray(item.checkpointNotices) || item.checkpointNotices.length > 32 ||
             item.checkpointNotices.some(k => typeof k !== "string" || !k || k.length > 100))) throw Error("Invalid checkpoint notice receipts");
+        if (item.workerRetry !== undefined && (!item.workerRetry || !Number.isSafeInteger(item.workerRetry.attempts) ||
+            item.workerRetry.attempts < 1 || !Number.isSafeInteger(item.workerRetry.nextAt) || item.workerRetry.nextAt < 0))
+          throw Error("Invalid worker retry");
         if (item.assessmentRetryAt !== undefined && (!Number.isSafeInteger(item.assessmentRetryAt) || item.assessmentRetryAt < 0))
           throw Error("Invalid assessment retry timestamp");
         for (const value of [item.checkpoint, item.result, item.token]) {
@@ -361,6 +366,8 @@ export class ExecutionStore {
       const old = draft.executions.find(item => item.parent === parent && item.requestId === requestId) ?? await this.archived(parent, requestId);
       if (old) {
         if (old.dependency?.taskId !== dependency?.taskId) throw Error("execution-context-mismatch: requestId belongs to another task");
+        if (dependency?.expiresAt !== undefined && dependency.expiresAt < (old.dependency?.expiresAt ?? Infinity))
+          throw Error("execution-context-mismatch: retained request has a looser mandate deadline; reconcile its authority before retrying");
         if (old.input !== input || old.strategy !== strategy || old.strategyVersion !== strategyVersion ||
             JSON.stringify(old.pinned ?? null) !== JSON.stringify(pinned ?? null)) throw Error("Conflicting execution request ID");
         return old;
@@ -376,7 +383,8 @@ export class ExecutionStore {
   /** Current policy is supplied by the trusted host registry, never by model input.
    * Recovery is not itself a replay grant: policy is checked again at claim time. */
   assessmentDue(task: Readonly<Execution>): boolean {
-    return task.assessmentRetryAt === undefined || task.assessmentRetryAt <= this.now();
+    return (task.assessmentRetryAt === undefined || task.assessmentRetryAt <= this.now()) &&
+      (task.workerRetry === undefined || task.workerRetry.nextAt <= this.now());
   }
   claim(id: string, current?: RecoveryStrategy & { strategy: string }, policy?: ExecutionRecoveryPolicy): Promise<Execution> {
     return this.mutate(draft => {
@@ -407,6 +415,15 @@ export class ExecutionStore {
         throw Error("Invalid assessment deferral");
       task.assessmentRetryAt = nextAt;
       task.recoverySession ??= `dispatch:${task.id}:${token}`;
+      task.status = "ready";
+      delete task.token;
+    });
+  }
+  /** A committed sequential step can release capacity without replaying effects. */
+  yieldStep(id: string, token: string): Promise<void> {
+    return this.mutate(draft => {
+      const task = this.owned(draft, id, token);
+      if (task.intent || !task.checkpoint) throw Error("Cannot yield an unsettled step");
       task.status = "ready";
       delete task.token;
     });
@@ -603,15 +620,42 @@ export class ExecutionStore {
     });
   }
   /** Token fencing prevents a late failure from pausing a replacement claim. */
-  fail(id: string, token: string, code: ExecutionDiagnosticCode): Promise<void> {
+  fail(id: string, token: string, code: ExecutionDiagnosticCode,
+    recovery?: { strategy: RecoveryStrategy; policy?: ExecutionRecoveryPolicy }): Promise<void> {
     return this.mutate(draft => {
       const task = this.find(draft, id);
       if (task.status !== "running" || task.token !== token) return;
       task.status = task.intent ? "blocked" : "paused";
       task.diagnosticCode = code;
+      if (code === "worker-failed" || code === "worker-cancelled") task.recoverySession = `dispatch:${task.id}:${token}`;
+      else task.recoverySession ??= `dispatch:${task.id}:${token}`;
       delete task.token;
-      this.event(draft, task, "status", code === "deadline-expired" ? `${task.status}: deadline-expired` : task.status);
+      const scheduled = recovery && this.scheduleWorkerRetry(task, recovery.strategy, recovery.policy);
+      this.event(draft, task, "status", scheduled
+        ? "Technischer Worker-Abbruch; Dispatcher setzt denselben Auftrag nach Backoff mit Zustandsabgleich fort."
+        : code === "deadline-expired" ? `${task.status}: deadline-expired` : task.status);
     });
+  }
+  /** Host-only recovery of a failed worker. Preserve intent and transcript;
+   * the matching strategy must reconcile uncertain effects in a new worker claim.
+   * Manual pauses, semantic blockers, questions and expired authority never qualify.
+   */
+  retryWorker(id: string, strategy: RecoveryStrategy, policy?: ExecutionRecoveryPolicy): Promise<void> {
+    return this.mutate(draft => {
+      const task = this.find(draft, id);
+      if (this.scheduleWorkerRetry(task, strategy, policy))
+        this.event(draft, task, "status", "Technischer Worker-Abbruch; Dispatcher setzt denselben Auftrag nach Backoff mit Zustandsabgleich fort.");
+    });
+  }
+  private scheduleWorkerRetry(task: Execution, strategy: RecoveryStrategy, policy?: ExecutionRecoveryPolicy): boolean {
+    if (!["blocked", "paused"].includes(task.status) || task.diagnosticCode !== "worker-failed" ||
+        task.parentStopped || task.question && !task.question.answer ||
+        task.dependency?.expiresAt !== undefined && task.dependency.expiresAt <= this.now() ||
+        !strategy.reconcile || recoveryBlock(task, strategy, policy)) return false;
+    const attempts = Math.min(Number.MAX_SAFE_INTEGER, (task.workerRetry?.attempts ?? 0) + 1);
+    task.workerRetry = { attempts, nextAt: this.now() + Math.min(300000, 15000 * 2 ** Math.min(attempts - 1, 5)) };
+    task.status = "ready";
+    return true;
   }
   control(id: string, action: "pause" | "resume" | "cancel"): Promise<void> {
     return this.mutate(draft => {
@@ -625,8 +669,7 @@ export class ExecutionStore {
       } else if (action === "pause") {
         // Pause is not a blocker-resolution API. Revoking an in-flight effect
         // leaves its outcome ambiguous, even before startup recovery runs.
-        // An existing blocker must retain both its state and effect evidence,
-        // but an explicit pause still adds a durable operator hold.
+        // An existing blocker retains its effects; explicit pause adds a hold.
         if (task.status !== "blocked") task.status = task.intent ? "blocked" : "paused";
         task.diagnosticCode = "manual-pause";
       } else { task.status = "cancelled"; task.terminalAt = this.now(); }

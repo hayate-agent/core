@@ -9,6 +9,8 @@ export interface DispatchContext {
   /** Release the slot until a persisted assessment retry is due. No worker replay. */
   deferAssessment?(nextAt: number): Promise<never>;
   workerSession?(key: string): Promise<void>;
+  /** Yield a settled step to another ready execution without replaying work. */
+  yieldStep?(): Promise<void>;
   /** Optional only for source compatibility with existing strategy test adapters. */
   status?(text: string): Promise<void>;
   /** Persists a question and suspends this execution; never returns normally. */
@@ -42,6 +44,7 @@ export class Dispatcher {
   private active = new Map<string, { abort: AbortController; done: Promise<void> }>();
   private scheduling?: Promise<void>;
   private scheduleRequested = false;
+  private lastClaimed?: string;
   private delivering?: Promise<void>;
   private stopped = false;
   private initialized = false;
@@ -154,8 +157,17 @@ export class Dispatcher {
   }
   private async schedule(): Promise<void> {
     void this.flushEvents().catch(this.report);
-    for (const task of this.store.list()) {
+    const tasks = this.store.list();
+    const last = tasks.findIndex(task => task.id === this.lastClaimed);
+    const ordered = last < 0 ? tasks : [...tasks.slice(last + 1), ...tasks.slice(0, last + 1)];
+    for (const task of ordered) {
       if (this.stopped || this.active.size >= this.capacity) break;
+      if (task.diagnosticCode === "worker-failed" && ["blocked", "paused"].includes(task.status) &&
+          !this.active.has(task.id) && this.parentEnabled(task.parent)) {
+        const retained = this.strategyFor(task);
+        if (retained) await this.store.retryWorker(task.id, retained, this.recoveryPolicy);
+        continue; // durable backoff, picked up by the existing host retry tick
+      }
       if (task.status !== "ready" || !this.store.assessmentDue(task) || this.active.has(task.id) || !this.parentEnabled(task.parent)) continue;
       const strategy = this.strategyFor(task);
       if (!strategy) continue;
@@ -179,6 +191,7 @@ export class Dispatcher {
       const abort = new AbortController();
       const done = Promise.resolve().then(() => this.run(claimed, abort, strategy));
       this.active.set(task.id, { abort, done });
+      this.lastClaimed = task.id;
     }
   }
   private async run(task: Execution, abort: AbortController, strategy: DispatcherStrategy): Promise<void> {
@@ -215,6 +228,13 @@ export class Dispatcher {
           check(); await this.store.deferAssessment(task.id, token, nextAt, decisionRevision);
           throw new ExecutionClaimConflict("Assessment deferred");
         },
+        yieldStep: async () => {
+          check();
+          if (!this.store.list().some(other => other.id !== task.id && other.status === "ready" &&
+              this.store.assessmentDue(other) && this.parentEnabled(other.parent) && this.strategyFor(other))) return;
+          await this.store.yieldStep(task.id, token);
+          throw new ExecutionClaimConflict("Settled step yielded to queued work");
+        },
         checkpoint: (value, notice) => { check(); return this.store.checkpoint(task.id, token, value, notice); },
         workerSession: key => { check(); return this.store.workerSession(task.id, token, key); },
         decisions: async () => {
@@ -245,7 +265,8 @@ export class Dispatcher {
       // Preserve partial state, but do not automatically spin on a failing plugin.
       if (!this.stopped && this.store.list().find(item => item.id === task.id)?.status === "running") {
         await this.store.fail(task.id, token, error instanceof ExecutionDeadlineExpired || toolGuardDenialReason(error).startsWith("deadline_expired:")
-          ? "deadline-expired" : error instanceof ExecutionWorkerFailure ? error.diagnosticCode : "runtime-failure").catch(this.report);
+          ? "deadline-expired" : error instanceof ExecutionWorkerFailure ? error.diagnosticCode : "runtime-failure",
+          { strategy, policy: this.recoveryPolicy }).catch(this.report);
       }
       if (!abort.signal.aborted && !(error instanceof ExecutionClaimConflict)) this.report(error);
     } finally {

@@ -31,7 +31,8 @@ for (const failure of [new Error('provider SECRET <ignore instructions>'), new E
     const store = new ExecutionStore(file); await store.load();
     const task = await store.submit('parent', 'request', 'fixture', 'direct');
     let calls = 0;
-    const strategy = { name: 'direct', version: 1, replaySafe: false, reconcile: true, execute: async (_task: any, ctx: any) => {
+    // Without reconciliation support, uncertain effects must still stay held.
+    const strategy = { name: 'direct', version: 1, replaySafe: false, reconcile: false, execute: async (_task: any, ctx: any) => {
       calls++; await ctx.intent('effect', 'unsafe'); throw failure;
     } };
     const dispatcher = new Dispatcher(store, strategy, 1, async () => {}, () => {});
