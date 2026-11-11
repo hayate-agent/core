@@ -48,7 +48,7 @@ await maintenance.beforeTurn('recovery',old,async handover=>{
 const failed=await maintenance.status('recovery');
 assert.equal(failed.failure.stage,'archive-link');assert.equal(failed.handover.phase,'prepared');assert.ok(failed.pending);
 await next.dispose();next=await runtime.open('recovery');
-const recovered=new ContextMaintenance(process.env.TEST_HOME,()=>contextPolicy());
+const recovered=new ContextMaintenance(process.env.TEST_HOME,()=>contextPolicy(),undefined,()=>Date.now()+1001);
 await recovered.guidance('recovery',next);
 assert.equal(next.session.sessionManager.getBranch().filter(e=>e.type==='custom_message' && e.customType==='harness-handover').length,1,'archive-link retry must preserve a single seed across reopen');
 const done=await recovered.status('recovery');

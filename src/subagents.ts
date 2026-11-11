@@ -158,11 +158,12 @@ export class Subagents {
       const record=this.records.get(to.target);
       if (!record) throw Error("Unknown subagent delivery");
       if (meta?.approvalId) throw Error("Approval requests must use the trusted parent operator destination");
+      if (meta?.maintenance && meta.maintenance.state !== "blocked") return;
       if (record.state === "cancelled") return;
       clearTimeout(this.timers.get(record.id));
       this.timers.delete(record.id);
       record.result=text.slice(0,64000);
-      record.state=meta?.outcome==="cancelled"?"cancelled":meta?.outcome==="failed"?"failed":"completed";
+      record.state=meta?.outcome==="cancelled"?"cancelled":meta?.outcome==="failed" || meta?.maintenance?.state === "blocked"?"failed":"completed";
       await this.save();
     },
   };

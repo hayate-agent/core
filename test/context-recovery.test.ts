@@ -6,7 +6,7 @@ import path from "node:path";
 import { ContextMaintenance, contextPolicy, MaintenanceError } from "../src/context-maintenance.js";
 import type { RuntimeSession } from "../src/types.js";
 
-for (const action of ["compact", "handover"] as const) test(`${action} failure preserves request across restart and respects failed-attempt cooldown`, async t => {
+for (const action of ["compact", "handover"] as const) test(`${action} uncertain failure preserves request and requires versioned handover reconciliation`, async t => {
   const home = await mkdtemp(path.join(os.tmpdir(), "context-retry-")); t.after(() => rm(home, { recursive: true, force: true }));
   const policy = () => contextPolicy({ enabled: false, cooldownTurns: 2 });
   let fail = true, calls = 0;
@@ -24,9 +24,12 @@ for (const action of ["compact", "handover"] as const) test(`${action} failure p
   assert.ok(!JSON.stringify(failed).includes("secret-provider-token"));
   const restarted = new ContextMaintenance(home, policy);
   await run(restarted); assert.equal(calls, 1);
+  await restarted.boundary("chat", session, rotate);
+  assert.equal((await restarted.recoveryStatus("chat"))?.reason, "uncertain");
+  assert.equal(calls, 1, "a rejected compact/summary may already have applied effects");
   fail = false;
-  if (action === "handover") { await restarted.boundary("chat", session, rotate); await restarted.boundary("chat", session, rotate); }
-  assert.match((await run(restarted))!, action === "handover" ? /Neue Sitzung/ : /kompaktiert/);
+  await restarted.admit("chat", "reconcile", { ...request, action: "handover" });
+  assert.match((await restarted.beforeTurn("chat", session, rotate))!, /Neue Sitzung/);
   assert.equal(calls, 2);
   assert.equal((await restarted.status("chat")).pending, undefined);
   assert.equal((await restarted.status("chat")).failure, undefined);
@@ -46,7 +49,8 @@ test("archive link failure remains recoverable after rotation and restart", asyn
   assert.equal(failed.failure?.stage, "archive-link");
   assert.equal(failed.failure?.code, "ENOSPC");
   assert.equal(failed.handover?.phase, "prepared");
-  assert.match((await new ContextMaintenance(home, policy).beforeTurn("chat", next, async () => { throw Error("must not rotate twice"); }))!, /Neue Sitzung/);
+  const restarted = new ContextMaintenance(home, policy, undefined, () => Date.now() + 1001);
+  assert.match((await restarted.beforeTurn("chat", next, async () => { throw Error("must not rotate twice"); }))!, /Neue Sitzung/);
   assert.equal(seeds, 1); assert.equal(rotations, 1);
   assert.equal((await maintenance.status("chat")).pending, undefined);
   assert.equal((await maintenance.status("chat")).failure, undefined);
@@ -61,9 +65,11 @@ test("prepared recovery failures persist safe stage diagnostics without discardi
   const rotate = async () => { throw Error("cannot rotate"); };
   await maintenance.beforeTurn("chat", session, rotate);
   fail = true;
-  await assert.rejects(maintenance.beforeTurn("chat", session, rotate));
+  assert.equal((await maintenance.recoveryStatus("chat"))?.reason, "uncertain");
+  await maintenance.admit("chat", "reconcile", { action: "handover", preserve: "state", resume: "wait" });
+  await maintenance.beforeTurn("chat", session, rotate);
   const state = await maintenance.status("chat");
-  assert.equal(state.failure?.stage, "summary");
+  assert.equal(state.failure?.stage, "rotation");
   assert.equal(state.handover?.phase, "prepared");
   assert.ok(state.handover?.archiveId);
 });
