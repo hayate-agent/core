@@ -42,7 +42,8 @@ test(`internal pause wakes automatically with retained identity, backoff and res
   assert.equal(store.list().length, 1);
 });
 
-test("task expiry clears an internal retry even before its backoff is due", async t => {
+for (const diagnostic of ["runtime-failure", "worker-failed"] as const)
+test(`task expiry clears ${diagnostic} retry even before its backoff is due`, async t => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "hy-expired-retry-"));
   let dispatcher: Dispatcher | undefined;
   t.after(async () => { await dispatcher?.stop(); await rm(dir, { recursive: true, force: true }); });
@@ -51,7 +52,7 @@ test("task expiry clears an internal retry even before its backoff is due", asyn
   const strategy = { name: "fixture", version: 1, replaySafe: false, reconcile: true,
     execute: async () => { assert.fail("expired work must not execute"); } };
   const task = await store.submit("parent", "r", "work", "fixture", 1, { taskId: "p", original: "work", depth: 0, expiresAt: now + 1000 });
-  const claim = await store.claim(task.id); await store.fail(task.id, claim.token!, "runtime-failure", { strategy });
+  const claim = await store.claim(task.id); await store.fail(task.id, claim.token!, diagnostic, { strategy });
   assert.ok(store.list()[0].workerRetry!.nextAt > now + 1000);
   now += 1000; dispatcher = new Dispatcher(store, strategy, 1, async () => {}, () => {}); await dispatcher.start();
   assert.equal(store.list()[0].workerRetry, undefined);

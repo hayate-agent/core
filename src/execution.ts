@@ -25,6 +25,10 @@ export type ExecutionDiagnosticCode = "runtime-failure" | "worker-failed" | "wor
 export class ExecutionDeadlineExpired extends Error {
   constructor() { super("deadline-expired: saved execution deadline has elapsed"); }
 }
+export class ExecutionAssessmentHold extends Error {
+  constructor(readonly state: "blocked" | "waiting", readonly step: number, reason: string) { super(reason); }
+}
+
 export class ExecutionWorkerFailure extends Error {
   constructor(readonly diagnosticCode: "worker-failed" | "worker-cancelled") { super(diagnosticCode); }
 }
@@ -59,6 +63,8 @@ export interface Execution {
   assessmentRetryAt?: number;
   /** Internal worker/strategy pauses have a durable dispatcher wake-up, not a parent nudge. */
   workerRetry?: { attempts: number; nextAt: number };
+  /** Independent semantic hold: retain actionable attention while rechecking. */
+  assessmentHold?: { state: "blocked" | "waiting"; step: number };
   /** Bounded host event dedup receipts, committed atomically with checkpoints. */
   checkpointNotices?: string[];
   result?: string;
@@ -91,6 +97,7 @@ export interface ExecutionEvent {
   status?: ExecutionStatus;
   /** Host-owned automatic wake-up, distinguishes backoff from a human attention hold. */
   automaticRetryAt?: number;
+  requiresAttention?: boolean;
 }
 export interface TurnSettlement {
   repetition?: import("./repetition-budget.js").RepetitionBudget;
@@ -179,6 +186,10 @@ export class ExecutionStore {
         if (item.workerRetry !== undefined && (!item.workerRetry || !Number.isSafeInteger(item.workerRetry.attempts) ||
             item.workerRetry.attempts < 1 || !Number.isSafeInteger(item.workerRetry.nextAt) || item.workerRetry.nextAt < 0))
           throw Error("Invalid worker retry");
+        if (item.assessmentHold !== undefined && (!item.assessmentHold ||
+            !["blocked", "waiting"].includes(item.assessmentHold.state) ||
+            !Number.isSafeInteger(item.assessmentHold.step) || item.assessmentHold.step < 0))
+          throw Error("Invalid assessment hold");
         if (item.assessmentRetryAt !== undefined && (!Number.isSafeInteger(item.assessmentRetryAt) || item.assessmentRetryAt < 0))
           throw Error("Invalid assessment retry timestamp");
         for (const value of [item.checkpoint, item.result, item.token]) {
@@ -207,6 +218,11 @@ export class ExecutionStore {
         if (!event || typeof event.id !== "string" || !event.id || eventIds.has(event.id) || !ids.has(event.executionId) ||
             data.executions.find(item => item.id === event.executionId)?.parent !== event.parent || typeof event.parent !== "string" ||
             !["accepted", "status", "question", "result"].includes(event.type) || typeof event.text !== "string") throw Error("Invalid execution event");
+        if (event.automaticRetryAt !== undefined && (event.type !== "status" ||
+            !Number.isSafeInteger(event.automaticRetryAt) || event.automaticRetryAt <= 0))
+          throw Error("Invalid automatic retry event");
+        if (event.requiresAttention !== undefined && typeof event.requiresAttention !== "boolean")
+          throw Error("Invalid event attention flag");
         eventIds.add(event.id);
       }
       if (data.turns !== undefined) {
@@ -242,8 +258,9 @@ export class ExecutionStore {
     this.queue = next;
     return next;
   }
-  private event(draft: Ledger, task: Execution, type: ExecutionEvent["type"], text: string): void {
+  private event(draft: Ledger, task: Execution, type: ExecutionEvent["type"], text: string, attention = false): void {
     draft.events.push({ id: randomUUID(), executionId: task.id, parent: task.parent, type, text, status: task.status,
+      ...(attention ? { requiresAttention: true } : {}),
       ...(type === "status" && !task.parentStopped && !(task.question && task.question.answer === undefined) &&
         task.workerRetry && ["runtime-failure", "worker-failed"].includes(task.diagnosticCode ?? "") &&
         ["paused", "blocked", "ready"].includes(task.status) ? { automaticRetryAt: task.workerRetry.nextAt } : {}) });
@@ -530,6 +547,7 @@ export class ExecutionStore {
       task.question = { id: randomUUID(), text };
       task.status = "paused";
       delete task.workerRetry;
+      delete task.assessmentHold;
       delete task.token;
       this.event(draft, task, "question", `Question ${task.question.id}: ${text}`);
     });
@@ -611,6 +629,8 @@ export class ExecutionStore {
       this.checkDecisionRevision(task, decisionRevision);
       if (task.intent) throw Error("Unresolved effect intent");
       task.status = "completed";
+      delete task.assessmentHold;
+      delete task.workerRetry;
       task.terminalAt = this.now();
       task.result = result;
       delete task.token;
@@ -631,11 +651,13 @@ export class ExecutionStore {
   }
   /** Token fencing prevents a late failure from pausing a replacement claim. */
   fail(id: string, token: string, code: ExecutionDiagnosticCode,
-    recovery?: { strategy: RecoveryStrategy; policy?: ExecutionRecoveryPolicy }): Promise<void> {
+    recovery?: { strategy: RecoveryStrategy; policy?: ExecutionRecoveryPolicy; assessmentHold?: Execution["assessmentHold"] }): Promise<void> {
     return this.mutate(draft => {
       const task = this.find(draft, id);
       if (task.status !== "running" || task.token !== token) return;
       task.status = task.intent ? "blocked" : "paused";
+      const priorHold = task.assessmentHold;
+      task.assessmentHold = recovery?.assessmentHold;
       task.diagnosticCode = code;
       if (!["runtime-failure", "worker-failed"].includes(code)) delete task.workerRetry;
       if (code === "worker-failed" || code === "worker-cancelled") task.recoverySession = `dispatch:${task.id}:${token}`;
@@ -643,8 +665,10 @@ export class ExecutionStore {
       delete task.token;
       const scheduled = recovery && this.scheduleWorkerRetry(task, recovery.strategy, recovery.policy);
       this.event(draft, task, "status", scheduled
-        ? "Interne Ausführungsunterbrechung; automatischer Wiederanlauf nach Backoff, keine Nutzeraktion erforderlich."
-        : code === "deadline-expired" ? `${task.status}: deadline-expired` : task.status);
+        ? task.assessmentHold ? "Unabhängige Prüfung meldet weiter eine Blockade oder externe Wartebedingung. Ursache prüfen; Dispatcher bewertet automatisch erneut, ohne abgeschlossene Effekte zu wiederholen."
+          : "Interne Ausführungsunterbrechung; automatischer Wiederanlauf nach Backoff, keine Nutzeraktion erforderlich."
+        : code === "deadline-expired" ? `${task.status}: deadline-expired` : task.status,
+        !!task.assessmentHold && (priorHold?.state !== task.assessmentHold.state || priorHold?.step !== task.assessmentHold.step));
     });
   }
   /** Host-only recovery of a failed worker. Preserve intent and transcript;
@@ -664,15 +688,17 @@ export class ExecutionStore {
     });
   }
   private scheduleWorkerRetry(task: Execution, strategy: RecoveryStrategy, policy?: ExecutionRecoveryPolicy, newFailure = true): boolean {
-    if (!["blocked", "paused"].includes(task.status) ||
+    if (!["blocked", "paused", "ready"].includes(task.status) ||
         !["worker-failed", "runtime-failure"].includes(task.diagnosticCode ?? "") ||
         task.parentStopped || task.question && !task.question.answer) return false;
     if (task.dependency?.expiresAt !== undefined && task.dependency.expiresAt <= this.now()) {
+      task.status = task.intent ? "blocked" : "paused";
       task.diagnosticCode = "deadline-expired";
       task.recoveryReason = "Execution mandate deadline expired; no automatic work is authorized.";
       delete task.workerRetry;
       return false;
     }
+    if (task.status === "ready") return false;
     if (task.classifierReceipt !== undefined && task.classifierReceipt.phase !== "observed") {
       task.recoveryReason = "Classifier HTTP outcome unknown; retained receipt forbids automatic replay.";
       delete task.workerRetry;
@@ -710,6 +736,7 @@ export class ExecutionStore {
         // An existing blocker retains its effects; explicit pause adds a hold.
         if (task.status !== "blocked") task.status = task.intent ? "blocked" : "paused";
         task.diagnosticCode = "manual-pause";
+        delete task.assessmentHold;
         delete task.workerRetry;
       } else { task.status = "cancelled"; task.terminalAt = this.now(); }
       // Revoke the old worker before any replacement can claim the task.

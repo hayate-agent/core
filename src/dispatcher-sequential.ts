@@ -3,7 +3,7 @@ import { assessmentRetryDelay } from "./assessment-retry.js";
 import type { AgentRuntime } from "./types.js";
 import { assessCompletion, type CompletionDiagnostic } from "./completion-check.js";
 import { runtimeReviewer } from "./runtime/reviewer.js";
-import { ExecutionDeadlineExpired } from "./execution.js";
+import { ExecutionDeadlineExpired, ExecutionAssessmentHold } from "./execution.js";
 import { derivedPlanBoundary, stepCompletionPrompt, parentDecisionContext } from "./dispatcher-step-prompt.js";
 import type { DispatchContext, DispatcherStrategy } from "./dispatcher.js";
 import type { Execution, ExecutionStore } from "./execution.js";
@@ -470,7 +470,14 @@ End your reply with exactly one final line: "STEP-STATUS: complete" only if the 
         await context.settleIntent(intentKey, result, JSON.stringify(next), decisionRevision);
         state = next;
         const trace = `${route.model ?? "?"} → ${observed?.model ?? "unbeobachtet"}`;
-        if (limit) return block(`${limit} Angefordert/beobachtet: ${trace}.`);
+        if (limit) {
+          const reason = `${limit} Angefordert/beobachtet: ${trace}.`;
+          if (verdictState === "blocked" || verdictState === "waiting") {
+            await context.status?.(`Sequenzieller Plan blockiert: ${reason}`.slice(0, 8000)).catch(() => {});
+            throw new ExecutionAssessmentHold(verdictState, index, reason);
+          }
+          return block(reason);
+        }
         await context.status?.(next.escalation?.index === index
           ? `Schritt ${index + 1}/${state.plan.length}: ${role} unzureichend ohne Effekt; einmalige Eskalation auf ${next.escalation.to}.`
           : `Schritt ${index + 1}/${state.plan.length} abgeschlossen (${role}; ${trace}).`).catch(() => {});

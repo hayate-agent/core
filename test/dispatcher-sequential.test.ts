@@ -148,6 +148,8 @@ test("semantic hold is automatically re-assessed after reload without rerunning 
   assert.equal(held.status, "paused");
   assert.equal(held.diagnosticCode, "runtime-failure");
   assert.ok(held.workerRetry);
+  assert.deepEqual(held.assessmentHold, { state: "blocked", step: 0 });
+  assert.equal(first.events.filter(e => e.requiresAttention).length, 1, "real blocker remains actionable despite automatic rechecks");
   assert.ok(state(held.checkpoint).assessment);
   await first.dispatcher.stop(); await first.harness.stop(0);
   const second = await setup(t, { worker: () => { throw Error("settled worker must not repeat"); }, verdict: '{"state":"completed"}' },
