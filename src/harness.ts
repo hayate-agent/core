@@ -50,6 +50,10 @@ export interface Goal {
 }
 
 export interface DurableTask {
+  /** Host-only recovery enrollment. Missing on pre-boundary history; models cannot enroll it. */
+  recoveryEnrollment?: "current" | "held-legacy";
+  /** Original checkpoint retained when automatic execution is held. */
+  recoveryHeldState?: DurableTask["state"];
   id: string;
   original: string;
   state: "active" | "waiting" | "blocked" | "completed" | "stopped";
@@ -116,6 +120,8 @@ export interface SessionState {
   task?: DurableTask;
   /** Retained mandates, independent of the most recent channel message. */
   tasks?: DurableTask[];
+  /** Historical generated inbox entries retained by the upgrade boundary, never pumped. */
+  heldRecoveryInputs?: Inbound[];
   completionRecent?: NonNullable<Inbound["completionContext"]>["recent"];
   statusDelivered?: Record<string, string>;
   hashtags?: import("./hashtags.js").HashtagReference[];
@@ -594,6 +600,43 @@ export class Harness {
     return tasks;
   }
 
+  /** One-time upgrade boundary: history is not automatic execution enrollment.
+   * Only an authentic interrupted ingress or an exact accepted/running child
+   * establishes ongoing work. Old model permits and timers do not. */
+  holdLegacyRecovery(inputs: Inbound[]): void {
+    for (const s of this.sessions.values()) for (const task of this.tasks(s)) {
+      if (task.recoveryEnrollment || ["completed", "stopped"].includes(task.state)) continue;
+      const ingress = inputs.some(input => input.sessionKey === s.key &&
+        (input.source === "channel" || input.source === "api") &&
+        (input.taskId === task.id || input.id === task.id));
+      const child = this.opts.executionStore?.list(s.key).some(e =>
+        ["ready", "running"].includes(e.status) && !e.parentStopped &&
+        e.dependency?.taskId === task.id && e.dependency.original === task.original);
+      task.recoveryEnrollment = ingress || child ? "current" : "held-legacy";
+      if (task.recoveryEnrollment === "held-legacy") {
+        task.recoveryHeldState = task.state;
+        task.state = "blocked";
+      }
+    }
+  }
+
+  /** Explicit authenticated command path only; no model tool calls this method. */
+  async resumeHeldTask(key: string, id: string): Promise<string> {
+    const s = this.state(key), task = this.tasks(s).find(t => t.id === id);
+    if (!this.onStateChange) throw Error("Durable state owner required");
+    if (!task || task.recoveryEnrollment !== "held-legacy" || ["completed", "stopped"].includes(task.state) ||
+        task.termination || repetitions(task) >= 20 ||
+        (task.expiresAt !== undefined && (!Number.isSafeInteger(task.expiresAt) || task.expiresAt <= this.now()))) throw Error("Task is not eligible for explicit legacy recovery; existing stops, deadlines and budgets remain binding");
+    if (s.current || s.running || s.queue.length || this.stopping || this.updateFenced) throw Error("Conversation is busy; no task resumed");
+    const before = structuredClone(task);
+    task.recoveryEnrollment = "current"; task.state = "active";
+    task.recoveryAdmission = undefined; task.recoveryAssessment = undefined; task.recoveryRetry = undefined;
+    task.supervisorDecision = undefined;
+    try { await this.onStateChange?.(); }
+    catch (error) { Object.assign(task, before); throw error; }
+    return `Task ${id}: explicitly enrolled for independent recovery assessment; no archived input replayed.`;
+  }
+
   private taskQueueId(task: DurableTask, depth: number): string {
     return `task:${task.id}:${task.budgetEpoch ? `${task.budgetEpoch}:` : ""}${depth}`;
   }
@@ -757,7 +800,7 @@ export class Harness {
       admission.expiresAt === task.expiresAt && !task.termination &&
       (!task.expiresAt || task.expiresAt > this.now()) &&
       pending.every(e => this.supervisable(e) && !e.parentStopped &&
-        (!e.dependency?.taskId || (e.dependency.taskId === task.id && e.dependency.original === task.original)) &&
+        e.dependency?.taskId === task.id && e.dependency.original === task.original &&
         !(e.question && !e.question.answer)) &&
       receipt.evidence === createHash("sha256").update(JSON.stringify(pending)).digest("hex"));
   }
@@ -793,7 +836,7 @@ export class Harness {
         s.key === "improvement:nightly" || this.stoppingHostParents.has(s.key) ||
         this.opts.externallyRecoveredSession?.(s.key)) return false;
     // A retained proposal without admission must not starve later admitted work.
-    const task = this.tasks(s).find(task => task.state === "active" && task.recoveryAdmission && task.next?.trim() &&
+    const task = this.tasks(s).find(task => task.recoveryEnrollment !== "held-legacy" && task.state === "active" && task.recoveryAdmission && task.next?.trim() &&
       !this.supersededByNewerTopic(s, task) && !this.hasPendingDependency(s.key, task.id) &&
       Number.isSafeInteger(task.depth) && task.depth >= 0 && repetitions(task) < 20 &&
       (task.expiresAt === undefined || (Number.isSafeInteger(task.expiresAt) && task.expiresAt > this.now())));
@@ -991,7 +1034,7 @@ export class Harness {
     let task = this.tasks(s).find(task => task.id === id);
     if (task && (task.original !== original || task.state === "stopped" || task.state === "completed")) throw Error("Scheduled mandate unavailable");
     if (!task) {
-      task = { id, original, state: "waiting", depth: 0, anchor: { id, task: original, receivedAt: this.now() }, ...this.preexistingUnscoped(key) };
+      task = { recoveryEnrollment: "current", id, original, state: "waiting", depth: 0, anchor: { id, task: original, receivedAt: this.now() }, ...this.preexistingUnscoped(key) };
       s.tasks = [...this.tasks(s), task];
       if (key.startsWith("cron-followup:")) s.task = task;
     }
@@ -1038,7 +1081,7 @@ export class Harness {
     const deadlines = [task?.expiresAt, task?.wait?.deadline, task?.lastWait?.deadline,
       execution?.dependency?.expiresAt, input.continuationExpiresAt].filter((value): value is number => value !== undefined);
     const expiresAt = deadlines.length ? Math.min(...deadlines) : undefined;
-    if (!task || task.original !== execution?.dependency?.original || execution?.status !== "completed" || execution.parentStopped ||
+    if (!task || task.recoveryEnrollment === "held-legacy" || task.original !== execution?.dependency?.original || execution?.status !== "completed" || execution.parentStopped ||
         this.stoppingHostParents.has(input.sessionKey) || !this.opts.hostEventAllowed?.(input) ||
         !task.id || !task.original.trim() ||
         !["active", "waiting", "blocked", "completed"].includes(task.state) || !Number.isSafeInteger(task.depth) || task.depth < 0 || !Number.isSafeInteger(repetitions(task)) ||
@@ -1050,7 +1093,7 @@ export class Harness {
   private continuationTarget(s: SessionState, input: Inbound, id: string): DurableTask {
     const task = this.tasks(s).find(task => task.id === id);
     if (typeof id !== "string" || !id.trim() || id.length > 256 ||
-        !task || !task.original.trim() || !task.anchor?.id || !task.anchor.task.trim() || task.anchor.task !== task.original ||
+        !task || task.recoveryEnrollment === "held-legacy" || !task.original.trim() || !task.anchor?.id || !task.anchor.task.trim() || task.anchor.task !== task.original ||
         !["active", "waiting", "blocked"].includes(task.state) || task.termination ||
         (task.expiresAt !== undefined && (!Number.isSafeInteger(task.expiresAt) || task.expiresAt <= this.now())) ||
         (task.wait && (!Number.isSafeInteger(task.wait.deadline) || task.wait.deadline <= this.now())) ||
@@ -1183,7 +1226,7 @@ export class Harness {
     if (s) {
       for (const task of this.tasks(s)) {
         if (task.state === "completed" || task.state === "stopped") continue;
-        rows.push(`continuation ${safe(task.id)}: ${task.state}${task.wait ? "; wait timer retained" : ""}`);
+        rows.push(`continuation ${safe(task.id)}: ${task.state}${task.recoveryEnrollment === "held-legacy" ? "; historical recovery held; explicit /task-resume required" : ""}${task.wait ? "; wait timer retained" : ""}`);
       }
       for (const name of ["loop", "heartbeat", "goal"] as const) {
         const source = s[name];
@@ -1457,7 +1500,7 @@ export class Harness {
             input.taskId ??= input.id ?? randomUUID();
             const tasks = this.tasks(s);
             if (!tasks.some(task => task.id === input.taskId)) {
-              tasks.push({ id: input.taskId, original: input.text,
+              tasks.push({ recoveryEnrollment: "current", id: input.taskId, original: input.text,
                 state: "active", depth: 0, anchor: structuredClone(input.completionAnchor),
                 ...(!this.restoredTaskInputs.has(input) ? this.preexistingUnscoped(s.key) : {}) });
               s.tasks = tasks;
@@ -1637,6 +1680,12 @@ export class Harness {
   }
   restorePending(inputs: Inbound[], maxReplays = Harness.MAX_REPLAYS): void {
     for (const input of inputs) {
+      const owner = input.taskId && this.tasks(this.state(input.sessionKey)).find(task => task.id === input.taskId);
+      if (["cron", "heartbeat", "loop", "goal"].includes(input.source) &&
+          (owner && owner.recoveryEnrollment === "held-legacy" || !owner && ((input.continuationDepth ?? 0) > 0 || !!input.taskId || !!input.waitCheck))) {
+        (this.state(input.sessionKey).heldRecoveryInputs ??= []).push(structuredClone(input));
+        continue;
+      }
       if (this.opts.externallyRecoveredSession?.(input.sessionKey)) continue;
       if (this.opts.sessionEnabled?.(input.sessionKey) === false) {
         this.state(input.sessionKey).queue.push(input);
@@ -1671,6 +1720,7 @@ export class Harness {
       if (this.opts.sessionEnabled?.(s.key) === false) continue;
       if (this.opts.externallyRecoveredSession?.(s.key)) continue;
       for (const task of this.tasks(s)) {
+      if (task.recoveryEnrollment === "held-legacy") continue;
       await this.reconcileBlockedDependency(s, task);
       const assessed = !task.recoveryAdmission;
       if (assessed) await this.assessStartupTask(s, task);
@@ -1731,7 +1781,7 @@ export class Harness {
     const children = () => this.opts.executionStore?.list(s.key).filter(e =>
       !["completed", "cancelled"].includes(e.status) && this.mayDependOn(e, task.id, task)) ?? [];
     const snapshot = () => JSON.stringify(children());
-    const eligible = () => this.tasks(s).includes(task) && ["active", "waiting", "blocked"].includes(task.state) &&
+    const eligible = () => this.tasks(s).includes(task) && task.recoveryEnrollment !== "held-legacy" && ["active", "waiting", "blocked"].includes(task.state) &&
       !!task.id && !!task.original.trim() && task.original.length <= 8000 &&
       (!task.anchor || task.anchor.task === task.original) &&
       Number.isSafeInteger(task.depth) && task.depth >= 0 && repetitions(task) < 20 && !task.termination &&
@@ -1745,19 +1795,18 @@ export class Harness {
     const technicalRetry = previous?.dependencyHold?.reason === "global-hold" && !!previous.diagnostic ||
       !!task.recoveryRetry && previous?.dependencyHold?.reason === "assessment-claimed";
     if (!this.onStateChange || !eligible() || this.recoveringTasks.has(task)) return;
-    // Missing legacy provenance is not permission to replay a child, but must
-    // not prevent the existing read-only assessment of an independent step.
+    // An unknown owner is not evidence that every historical task owns this
+    // child. In particular, a model's independent-step proposal cannot turn
+    // one legacy blocker into autonomous admissions for the whole task archive.
+    // Revoke already-saved legacy admissions as well; never mutate the worker.
     const unscoped = children();
-    const legacyHold = unscoped.some(e => !e.dependency?.taskId && e.status === "blocked");
-    if (!this.opts.completionCheck) {
-      if (legacyHold) await this.unscopedDependencyBlocker(s, task, unscoped);
+    const legacyHold = unscoped.some(e => !e.dependency?.taskId);
+    if (legacyHold) {
+      await this.unscopedDependencyBlocker(s, task, unscoped);
       return;
     }
-    if (previous?.dependencyHold && !technicalRetry && !legacyHold) return;
-    if (legacyHold && previous?.dependencyHold && !technicalRetry) {
-      const evidence = createHash("sha256").update(snapshot()).digest("hex");
-      if (previous.dependencyHold.evidence === evidence) return;
-    }
+    if (!this.opts.completionCheck) return;
+    if (previous?.dependencyHold && !technicalRetry) return;
     // Retry only read-only inference, never a worker's uncertain effects.
     if (task.recoveryRetry && (!Number.isSafeInteger(task.recoveryRetry.attempts) ||
         task.recoveryRetry.attempts < 1 ||
@@ -1817,8 +1866,7 @@ export class Harness {
         task.recoveryAdmission = { id: this.taskQueueId(task, task.depth + 1), depth: task.depth + 1,
           next, original: task.original, expiresAt: task.expiresAt,
           independent: { evidence, taskId: task.id, sessionKey: s.key } };
-      } else if (legacyHold && !diagnostic) await this.unscopedDependencyBlocker(s, task, children());
-      else this.recoveryAttention(s, task, diagnostic === "technical" ? "technical" : diagnostic === "unavailable" ? "unavailable" : "inconclusive", !!task.recoveryRetry);
+      } else this.recoveryAttention(s, task, diagnostic === "technical" ? "technical" : diagnostic === "unavailable" ? "unavailable" : "inconclusive", !!task.recoveryRetry);
       try { await this.onStateChange(); }
       catch (error) {
         // Keep the durable assessment claim, but never release an unsaved permit.
@@ -1862,7 +1910,7 @@ export class Harness {
   }
 
   private async assessRetainedTask(s: SessionState, task: DurableTask, betweenTurns: boolean): Promise<void> {
-    const eligible = () => this.tasks(s).includes(task) && task.state === "active" && !task.recoveryAdmission &&
+    const eligible = () => this.tasks(s).includes(task) && task.recoveryEnrollment !== "held-legacy" && task.state === "active" && !task.recoveryAdmission &&
       !!task.id && !!task.original.trim() && task.original.length <= 8000 &&
       (!task.anchor || task.anchor.task === task.original) &&
       Number.isSafeInteger(task.depth) && task.depth >= 0 && repetitions(task) < 20 &&
@@ -2104,7 +2152,7 @@ export class Harness {
           input.taskId = input.taskId ?? input.id ?? randomUUID();
           const existing = this.tasks(s).find(task => task.id === input.taskId);
           s.tasks = this.tasks(s);
-          s.task = existing ?? { id: input.taskId, original: input.text, state: "active", depth: 0, anchor: input.completionAnchor,
+          s.task = existing ?? { recoveryEnrollment: "current", id: input.taskId, original: input.text, state: "active", depth: 0, anchor: input.completionAnchor,
             // A restored input without a retained task cannot establish which
             // executions predated its original acceptance. Keep that case fenced.
             ...(!this.restoredTaskInputs.has(input) ? this.preexistingUnscoped(s.key) : {}) };
@@ -2424,6 +2472,10 @@ export class Harness {
         throw Error("Host event authority revoked");
       }
       const task = this.tasks(s).find(task => task.id === input.taskId);
+      if (task?.recoveryEnrollment === "held-legacy") {
+        s.cancelling = input;
+        throw Error("Historical task is not enrolled for automatic execution");
+      }
       if (input.taskId && input.id && input.id === (task ? this.taskQueueId(task, input.continuationDepth ?? 0) : `task:${input.taskId}:${input.continuationDepth}`) &&
           (!task || task.state !== "active" || task.depth + 1 !== input.continuationDepth)) {
         s.cancelling = input;
@@ -2858,6 +2910,7 @@ export class Harness {
     for (const s of this.sessions.values()) {
       if (this.opts.sessionEnabled?.(s.key) === false || s.running || s.queue.length || s.outbox.length || s.unsaved || this.stoppingHostParents.has(s.key)) continue;
       for (const task of this.tasks(s)) {
+      if (task.recoveryEnrollment === "held-legacy") continue;
       // Reconcile pre-upgrade exhausted checkpoints without a model nudge.
       if ((task.state === "blocked" || task.state === "active") && repetitions(task) >= 20 && !task.budgetAttentionId) {
         this.budgetAttention(s, task);
@@ -2894,13 +2947,13 @@ export class Harness {
             await this.onStateChange(); s.unsaved = false;
             continue;
           }
-          // Polling ended, not the task. Reassess once dependencies settle;
-          // never renew an operator deadline or replay a child's effects.
-          task.state = "active";
-          task.wait = undefined;
-          task.lastWait = undefined;
-          task.recoveryAssessment = undefined;
-          task.recoveryRetry = undefined;
+          // An expired polling window is not a fresh execution permit. Retain
+          // the checkpoint for explicit resume instead of reactivating it on
+          // the next tick (especially after upgrading a historical wait).
+          task.recoveryHeldState = task.state;
+          task.recoveryEnrollment = "held-legacy";
+          task.state = "blocked";
+          task.recoveryAdmission = undefined;
           s.unsaved = true;
           await this.onStateChange(); s.unsaved = false;
           continue;
@@ -2964,8 +3017,8 @@ export class Harness {
   snapshotSessions(): PersistedSession[] {
     const out: PersistedSession[] = [];
     for (const s of this.sessions.values()) {
-      if (!s.stopPending && !s.hashtags?.length && !this.tasks(s).length && !s.heartbeat && !s.heartbeatDisabled && !s.loop && !s.goal && !s.replyTo) continue;
-      out.push({ stopPending: s.stopPending, hashtags: structuredClone(s.hashtags), operatorBudgetGrants: structuredClone(s.operatorBudgetGrants), key: s.key, task: s.task ? structuredClone(s.task) : undefined, tasks: structuredClone(this.tasks(s)), completionRecent: structuredClone(s.completionRecent), statusDelivered: structuredClone(s.statusDelivered), replyTo: s.replyTo, heartbeat: s.heartbeat, heartbeatDisabled: s.heartbeatDisabled, loop: s.loop, goal: s.goal });
+      if (!s.stopPending && !s.hashtags?.length && !this.tasks(s).length && !s.heldRecoveryInputs?.length && !s.heartbeat && !s.heartbeatDisabled && !s.loop && !s.goal && !s.replyTo) continue;
+      out.push({ stopPending: s.stopPending, hashtags: structuredClone(s.hashtags), operatorBudgetGrants: structuredClone(s.operatorBudgetGrants), key: s.key, heldRecoveryInputs: structuredClone(s.heldRecoveryInputs), task: s.task ? structuredClone(s.task) : undefined, tasks: structuredClone(this.tasks(s)), completionRecent: structuredClone(s.completionRecent), statusDelivered: structuredClone(s.statusDelivered), replyTo: s.replyTo, heartbeat: s.heartbeat, heartbeatDisabled: s.heartbeatDisabled, loop: s.loop, goal: s.goal });
     }
     return out;
   }
@@ -2976,6 +3029,7 @@ export class Harness {
       s.hashtags = structuredClone(p.hashtags);
       s.operatorBudgetGrants = structuredClone(p.operatorBudgetGrants);
       s.tasks = p.tasks ? structuredClone(p.tasks) : [];
+      s.heldRecoveryInputs = structuredClone(p.heldRecoveryInputs);
       s.completionRecent = p.completionRecent?.slice(-8).map(m => ({ role: m.role, text: m.text.slice(0, 2000) }));
       s.task = p.task ? s.tasks.find(task => task.id === p.task!.id) ?? structuredClone(p.task) : undefined;
       s.statusDelivered = p.statusDelivered ? { ...p.statusDelivered } : undefined;

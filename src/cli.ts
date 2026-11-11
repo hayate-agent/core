@@ -638,10 +638,15 @@ async function main(argv: string[]): Promise<void> {
       seen: harness.seenIds(),
     });
   // Restore before scheduler execution, persistence callbacks, or channel startup can write state.
+  // Historical permits/timers are not evidence of ongoing execution. Establish
+  // the upgrade boundary before any scheduler/channel can release old input.
+  harness.holdLegacyRecovery(saved?.pending ?? []);
   if (saved?.pending?.length) harness.restorePending(saved.pending);
   if (saved?.outbox?.length) harness.restoreOutbox(saved.outbox);
   ledgerRecoveryReady = true;
   harness.onStateChange = () => persist();
+  // Persist held history before plugins, dispatcher or channels can execute.
+  await persist();
   if (apiKey) {
     // A run whose turn never made it into the inbox (crash between record and accept) is over.
     const pendingIds = new Set((saved?.pending ?? []).map((i) => i.id));

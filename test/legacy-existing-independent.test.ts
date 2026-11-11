@@ -7,7 +7,7 @@ import {Harness} from '../src/harness.js';
 import {ExecutionStore} from '../src/execution.js';
 import {FakeRuntime,MemoryChannel} from './fakes.js';
 
-test('existing task receives one independent admission despite unknown legacy children, without replay',async t=>{
+test('existing task stays fenced by unknown legacy children even when a model would propose independent work',async t=>{
  const home=await mkdtemp(path.join(os.tmpdir(),'legacy-existing-'));t.after(()=>rm(home,{recursive:true,force:true}));
  const store=new ExecutionStore(path.join(home,'executions.json'));await store.load();
  for(let i=0;i<3;i++){const e=await store.submit('mem:room1','old-'+i,'Old unrelated ticket work','direct',1);const c=await store.claim(e.id);await store.intent(e.id,c.token!,'unknown-'+i,'unsafe');await store.fail(e.id,c.token!,'Interrupted');}
@@ -17,6 +17,6 @@ test('existing task receives one independent admission despite unknown legacy ch
   return {state:'completed'};
  }});h.addChannel(new MemoryChannel());h.onStateChange=async()=>{};t.after(()=>h.stop(0));
  h.restoreSessions([{key:'mem:room1',replyTo:{channel:'mem',target:'room1'},task:{id:'existing',original:'Check independent acceptance checklist',state:'blocked',depth:0,explicitBlocked:true}}]);
- await h.recoverTasks();assert.equal(h.pendingInputs().length,1);await h.start();h.releaseRestored();await h.drained();
- assert.equal(runs,1);assert.equal(JSON.stringify(store.list()),before);assert.equal(h.state('mem:room1').task?.state,'completed');
+ await h.recoverTasks();assert.equal(h.pendingInputs().length,0);await h.start();h.releaseRestored();await h.drained();
+ assert.equal(assessed,0);assert.equal(runs,0);assert.equal(JSON.stringify(store.list()),before);assert.equal(h.state('mem:room1').task?.state,'blocked');
 });

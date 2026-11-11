@@ -159,6 +159,17 @@ export const COMMANDS: Command[] = [
     },
   },
   {
+    name: "task-resume", admin: true,
+    help: "<task-id> — explicitly enroll one held historical task in this conversation; preserve deadlines and budgets",
+    run: async (args, input, ctx) => {
+      if (input.source !== "channel" || !(input.replyTo?.channel === "console" ||
+          !!input.sender && ctx.admins.includes(input.sender))) return "⛔ authenticated operator channel required";
+      const [id, extra] = args.trim().split(/\s+/);
+      if (!id || extra) return "usage: /task-resume <exact-task-id>";
+      return ctx.harness.resumeHeldTask(input.sessionKey, id);
+    },
+  },
+  {
     name: "task-budget", admin: true,
     help: "inspect|reset|resume|reset-resume <session-key> <task-id> [<token> <request-id>] (authenticated operator only)",
     run: async (args, input, ctx) => {
