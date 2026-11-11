@@ -366,6 +366,8 @@ export class ExecutionStore {
       const old = draft.executions.find(item => item.parent === parent && item.requestId === requestId) ?? await this.archived(parent, requestId);
       if (old) {
         if (old.dependency?.taskId !== dependency?.taskId) throw Error("execution-context-mismatch: requestId belongs to another task");
+        if (dependency?.expiresAt !== undefined && dependency.expiresAt < (old.dependency?.expiresAt ?? Infinity))
+          throw Error("execution-context-mismatch: retained request has a looser mandate deadline; reconcile its authority before retrying");
         if (old.input !== input || old.strategy !== strategy || old.strategyVersion !== strategyVersion ||
             JSON.stringify(old.pinned ?? null) !== JSON.stringify(pinned ?? null)) throw Error("Conflicting execution request ID");
         return old;

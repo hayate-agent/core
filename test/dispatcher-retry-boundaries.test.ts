@@ -22,6 +22,15 @@ test(`authentic parent expiry remains binding while child is ${status}`, async t
   assert.equal(store.list()[0].status, status);
 });
 
+test("request-ID dedup cannot silently retain a looser task deadline", async t => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "hy-dedup-")); t.after(() => rm(dir, { recursive: true, force: true }));
+  const store = new ExecutionStore(path.join(dir, "ledger.json")); await store.load();
+  const mandate = { taskId: "p", original: "work", depth: 0, expiresAt: 300000 };
+  const first = await store.submit("parent", "stable", "work", "direct", 1, mandate);
+  await assert.rejects(store.submit("parent", "stable", "work", "direct", 1, { ...mandate, expiresAt: 200000 }), /looser mandate deadline/);
+  assert.equal((await store.submit("parent", "stable", "work", "direct", 1, mandate)).id, first.id);
+});
+
 test("repeated worker failures atomically retain the most recent transcript and retry window", async t => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "hy-transcript-")); t.after(() => rm(dir, { recursive: true, force: true }));
   let now = 1000; const file = path.join(dir, "ledger.json");
