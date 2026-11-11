@@ -45,7 +45,7 @@ let catalog=['plugin_task_continuation','plugin_loop','plugin_subagent','plugin_
 for(const tools of [undefined,['read','bash','plugin_task_continuation','plugin_loop','plugin_subagent','plugin_dispatch','plugin_worker_tasks','plugin_improvement_evaluate','plugin_memory']]) {
  const runtime=new PiRuntime({cwd:process.env.TEST_HOME,sessionsDir:process.env.TEST_HOME+'/sessions',skillPaths:[],personaSections:async()=>[],approvals:{mode:'off',tools:[]},tools,pluginTools:()=>catalog});
  for(const [key,hidden,visible] of [
-   ['main',[],['plugin_task_continuation','plugin_loop','plugin_dispatch','plugin_memory']],
+   ['main',[],['read','bash','plugin_task_continuation','plugin_loop','plugin_dispatch','plugin_memory']],
    ['dispatch:x:y',['plugin_task_continuation','plugin_loop','plugin_subagent','plugin_dispatch','plugin_worker_tasks','plugin_improvement_evaluate'],['plugin_memory','read','bash']],
    ['subagent:z',['plugin_task_continuation','plugin_loop','plugin_subagent','plugin_improvement_evaluate'],['plugin_memory','plugin_dispatch','read']],
  ]) {

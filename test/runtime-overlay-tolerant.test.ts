@@ -76,7 +76,7 @@ test("startup cross-field safety and valid coupled values survive invalid siblin
   const settings = new SettingsService(file, {}); await settings.load();
   assert.equal(settings.effective().dispatcher?.enabled, true);
   assert.equal(settings.effective().dispatcher?.concurrentRequests, true);
-  assert.equal(settings.effective().dispatcher?.capacity, 1);
+  assert.equal(settings.effective().dispatcher?.capacity, 4);
   await writeFile(file, stringify({ dispatcher: { enabled: true }, model: "p/ok" }));
   const unsafe = new SettingsService(file, {}); await unsafe.load();
   assert.equal(unsafe.effective().dispatcher?.enabled, false);

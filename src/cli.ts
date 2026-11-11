@@ -456,6 +456,7 @@ async function main(argv: string[]): Promise<void> {
       })(),
       registeredTools: composeToolCatalog(plugins.tools, initialReloadableTools, reloadableTools?.tools ?? new Map()).map(tool => tool.name),
       dispatcherEnabled: dispatchPolicy.enabled, dispatcherReady: dispatcher?.ready === true,
+      dispatcherWorkers: dispatcher?.workers,
       reviewInstructions: reviewEngine.instructions,
     }),
     beforeTurn: async (input) => {
