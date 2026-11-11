@@ -1,5 +1,5 @@
 {
-  "contentDigest": "e5b7f50a695ffac1fbe0f90de0265292687d34a67c7b4ad712a6659586b62c51",
+  "contentDigest": "c31dfb9b5a8ba3bc81aacc8856b89af02508c10f50c571c613a5910444191e7a",
   "files": [
     {
       "mode": "100644",
@@ -294,7 +294,7 @@
     {
       "mode": "100644",
       "path": "docs/plugins.md",
-      "sha256": "5fa18e405faf04136074704f8405dc3855665611c59d16fc09cf6a2321a8be8c"
+      "sha256": "dcbfc02fea13436959a4cc6442a397f0c4c01fd37fc09c0142914acb80bd41dc"
     },
     {
       "mode": "100644",
@@ -449,7 +449,7 @@
     {
       "mode": "100644",
       "path": "plugins.lock.json",
-      "sha256": "fd5f6738559f70796749f13d5957118a168766e3cd02273e51956b12d5362ec7"
+      "sha256": "4a551921d4440a01a908817f80f3c61a4497a8d6f85361541b55859e57ab8cca"
     },
     {
       "mode": "100644",
@@ -619,7 +619,7 @@
     {
       "mode": "100644",
       "path": "src/cli.ts",
-      "sha256": "20600f1e9348f8c088d7fd05e7f8205cd10c338a0b14ed72a7d44f30a0bd6a0c"
+      "sha256": "eb729fbdc69a20b32dd72af2d1e6531b6c80bb1d34eba051f57503630f9c2ce2"
     },
     {
       "mode": "100644",
@@ -639,7 +639,7 @@
     {
       "mode": "100644",
       "path": "src/completion-check.ts",
-      "sha256": "3c4fbee2822cf527b4a0cf4edaabc06b919357414f15ced4c8657de755648642"
+      "sha256": "0e6c83a6e874557e00463889f7fd243958c24b6625c8ad827d3c85717e83254c"
     },
     {
       "mode": "100644",
@@ -654,7 +654,7 @@
     {
       "mode": "100644",
       "path": "src/config.ts",
-      "sha256": "61fdde32178ab5bb4d775a6dc646bf48863fb1a9c9494c27b5895b07095e3d4b"
+      "sha256": "19028d2aba67248322dc1501b7bcc283926b801c4e0981d594f9e446613bba0f"
     },
     {
       "mode": "100644",
@@ -714,12 +714,12 @@
     {
       "mode": "100644",
       "path": "src/dispatcher-runtime.ts",
-      "sha256": "7e6cc859ccdab45c0847a9a747621760781d30101eabe5020150c0a216fc72b8"
+      "sha256": "c29ecd7f1767349757baaf79e3fc525dfcf4aba12e14a7db7a2fb742cb0b3a7a"
     },
     {
       "mode": "100644",
       "path": "src/dispatcher-sequential.ts",
-      "sha256": "d738c02908de6ce9ecc602e9f5efaf53622126c3fde8bf14c32eb52942aacbbb"
+      "sha256": "5f82a9e313fbf23cdf86f922b2c0a438ca8b3d02c197b3e824389073bdec134a"
     },
     {
       "mode": "100644",
@@ -919,7 +919,7 @@
     {
       "mode": "100644",
       "path": "src/plugins.ts",
-      "sha256": "1810d887747e4aafa0715f1794237f9f321b5a142154f472cc4f06c064270f59"
+      "sha256": "caab5c6d5c45ae9ae320990088ca891274dfc5eea1d9ef35fcaf3028fa4077bc"
     },
     {
       "mode": "100644",
@@ -1115,6 +1115,11 @@
       "mode": "100644",
       "path": "src/update.ts",
       "sha256": "0929b8c7515c4a11f59c98f3e305d4708cecc4c007f65a9848521deac66d2558"
+    },
+    {
+      "mode": "100644",
+      "path": "src/validator.ts",
+      "sha256": "e15db01990dff70881181d7ab185930fa1b334893d9f9d0da73b05d01b2bba77"
     },
     {
       "mode": "100644",
@@ -1649,7 +1654,7 @@
     {
       "mode": "100644",
       "path": "test/dispatcher-sequential.test.ts",
-      "sha256": "c587d4bafe1abf1315d5417ae5e13cfe1dec23de368ab459bed9ee924741527b"
+      "sha256": "ec3e35b50286eacedddfb7170b7daed1bfc43e3b7e73cca16672fe27a4d5cd6c"
     },
     {
       "mode": "100644",
@@ -2858,6 +2863,11 @@
     },
     {
       "mode": "100644",
+      "path": "test/validator-plugin.test.ts",
+      "sha256": "bd0aaff472efd5f99f06896290bb68add36fbda5898237cef0b2072c3893a2c0"
+    },
+    {
+      "mode": "100644",
       "path": "test/validator-transient-retry.test.ts",
       "sha256": "60dd8c4fa38b0f8238dcd43276c525b1fd2177e3518c96b5a563c7f8aeb82515"
     },
@@ -3010,6 +3020,11 @@
       "mode": "100644",
       "path": "vendor/plugins/src/completion-strategy-plugin.ts",
       "sha256": "5f69464b4648d9b360020eac5b967e924549236eaff92f3c5e68f79826503b6f"
+    },
+    {
+      "mode": "100644",
+      "path": "vendor/plugins/src/completion-validator-plugin.ts",
+      "sha256": "dca11e5beb4cabdfac439143dd4a16497990a5dd312317bd3a465480620e4045"
     },
     {
       "mode": "100644",
@@ -3233,7 +3248,7 @@
     }
   ],
   "historyPolicy": "fresh-root; no source commits, tags, refs or deleted blobs",
-  "pluginSHA": "999e01167aec66d74e8a1ff240d1b8841ae3572e",
+  "pluginSHA": "7ff45b2996a8312312bd3f13f2c4fdc633a519ae",
   "schema": 1,
-  "sourceSHA": "787b99d08608bf9b930f3134fd2faf355f4420c6"
+  "sourceSHA": "f93a54fb8b97393fedd828624bf9c6d39cb8aa13"
 }

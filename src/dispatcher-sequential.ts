@@ -169,6 +169,7 @@ function finalResult(state: SequentialState): string {
 }
 
 export interface SequentialDeps {
+  validators?: import("./validator.js").ValidatorRegistry;
   harness: Harness;
   store: ExecutionStore;
   roles: () => { config?: ModelRoles; defaults: ModelPair; review?: ModelPair } | undefined;
@@ -360,7 +361,7 @@ Correctable vs blocked: a worker "blocked" claim or evidence shortfall that rest
               completionContext: { recent: [], tasks: [], tools: evidence },
             }, reply, { task: `Original mandate (scope and limits):\n${task.input}\n${parentDecisionContext(decisions)}\nValidate ONLY step ${index + 1}:\n${step.task}\nRequired evidence:\n${step.evidence}\n${authority}`,
               ...(task.dependency?.expiresAt !== undefined ? { expiresAt: task.dependency.expiresAt } : {}) },
-            context.signal, reviewer.model, Date.now, stepCompletionPrompt, value => { validation = value; }, STEP_VALIDATION_TIMEOUT_MS);
+            context.signal, reviewer.model, Date.now, stepCompletionPrompt, value => { validation = value; }, STEP_VALIDATION_TIMEOUT_MS, deps.validators);
             await authorize();
             if (!verdict) nextAt = Date.now() + assessmentRetryDelay(attempt);
             // Commit the diagnostic event and dedup receipt together with the

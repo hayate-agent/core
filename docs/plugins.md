@@ -136,6 +136,27 @@ Cleanup must terminate promptly; there is no timeout/sandbox guarantee. Invalid
 plugins fail startup rather than silently disappear. External side effects are
 not transactional. Use /help to inspect registered commands.
 
+## Completion validator providers
+
+Completion assessment is separate from code-review policies. The bundled
+`completion-validator-plugin` (implementation in `harness/plugins`) registers the
+`legacy-llm` provider. Core owns only the versioned contract/registry and authority
+fences; task, nightly and delegated-step assessment use the same host registry.
+
+Dedicated plugins use `api.registerValidatorProvider({ apiVersion: 1, name,
+version, assess })` during activation. Names are unique, versions positive integers.
+`assess(request)` returns an unknown semantic answer; the validator plugin checks
+its shape. The request includes authorization, evidence, bounded prompt, selected
+model, backend and cancellation signal. A provider never grants authority, supplies
+execution receipts or overrides actual worker outcomes/context preparation.
+
+Installation setting `completionCheck.provider` selects a registered name,
+defaulting to `legacy-llm`; `false` disables assessments. Missing, disabled, failing
+or invalid providers produce no verdict, not success or an implicit fallback.
+Providers are startup registrations, not tool-only reload modules. A restart is
+required for installation/selection changes. Existing `completionStrategy` prompt
+selection and persisted continuation/checkpoint formats remain compatible.
+
 ## Composable policy hooks
 
 Trusted startup plugins may call `api.registerPolicy({id, prepare?, beforeTool?,
