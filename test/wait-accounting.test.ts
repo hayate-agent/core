@@ -50,7 +50,8 @@ for (const depth of [19, 20]) test(`unchanged status rechecks at depth ${depth} 
     try {
       await restarted.tick(); await restarted.drained();
       assert.equal(restarted.state(key).task!.termination, undefined, "polling expiry is not mandate expiry");
-      assert.equal(restarted.state(key).task!.state, "active");
+      assert.equal(restarted.state(key).task!.state, "blocked");
+      assert.equal(restarted.state(key).task!.recoveryEnrollment, "held-legacy", "elapsed polling cannot enroll autonomous work");
       assert.equal(restarted.state(key).task!.waitChecks, 25);
       assert.ok(restarted.state(key).task!.next);
     } finally { await restarted.stop(0); }

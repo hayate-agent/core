@@ -30,15 +30,15 @@ function harness(store: ExecutionStore, clock: { now: number }, assess: () => Pr
   return { h, ch, runtime, calls: () => calls };
 }
 
-test("real Peter legacy: an assessed global hold yields one actionable blocker, no permit, no replay over 50 ticks and restart", { timeout: 10000 }, async t => {
+test("real Peter legacy: unknown provenance yields one deterministic blocker, no assessment, no permit or replay over 50 ticks and restart", { timeout: 10000 }, async t => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "peter-unscoped-"));
   t.after(() => rm(dir, { recursive: true, force: true }));
   const store = new ExecutionStore(path.join(dir, "executions.json")); await store.load();
   const ids = [await blockedChild(store, "w1"), await blockedChild(store, "w2"), await blockedChild(store, "w3")];
   const before = JSON.stringify(store.list(key));
   const clock = { now: 1000 };
-  // Independent steps are now admitted by design. Exercise the complementary
-  // global-hold decision here; legacy-existing-independent covers admission.
+  // Unknown provenance must not be converted into model-selected authority.
+  // The result is deterministic even when a completion backend is available.
   const a = harness(store, clock, async () => ({ state: "blocked" }));
   let saved: ReturnType<Harness["snapshotSessions"]> = [];
   let outbox: ReturnType<Harness["outboxEntries"]> = [];
@@ -51,7 +51,7 @@ test("real Peter legacy: an assessed global hold yields one actionable blocker, 
   await a.h.recoverTasks();
   await a.h.start(); a.h.releaseRestored();
   for (let i = 0; i < 50; i++) { clock.now += 60000; await a.h.tick(); await a.h.drained(); }
-  assert.equal(a.calls(), 2, "one persisted assessment per parent, without repeated inference");
+  assert.equal(a.calls(), 0, "no inference can establish missing child ownership");
   assert.equal(a.runtime.opened.length, 0);
   assert.equal(JSON.stringify(store.list(key)), before, "unknown children unchanged");
   const notices = a.ch.sent.filter(m => m.text.includes("ohne Aufgabenzuordnung"));
@@ -79,7 +79,7 @@ test("real Peter legacy: an assessed global hold yields one actionable blocker, 
   assert.equal(JSON.stringify(store.list(key)), before);
 });
 
-test("an assessed global hold blocks a previously active task instead of leaving it queued behind the fence", { timeout: 10000 }, async t => {
+test("unknown child ownership blocks a previously active task instead of leaving it queued behind the fence", { timeout: 10000 }, async t => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "peter-unscoped-"));
   t.after(() => rm(dir, { recursive: true, force: true }));
   const store = new ExecutionStore(path.join(dir, "executions.json")); await store.load();
@@ -94,7 +94,7 @@ test("an assessed global hold blocks a previously active task instead of leaving
   assert.equal(a.h.snapshotSessions()[0]!.tasks![0]!.state, "blocked");
   assert.equal(a.ch.sent.filter(m => m.text.includes("ohne Aufgabenzuordnung")).length, 1);
   assert.equal(a.runtime.opened.length, 0);
-  assert.equal(a.calls(), 1);
+  assert.equal(a.calls(), 0);
 });
 
 test("technical errors back off across restarts without replay; legacy reset and original deadline stay fenced", async t => {

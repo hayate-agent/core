@@ -15,6 +15,8 @@ export interface PersistedSession {
   operatorBudgetGrants?: import("./natural-budget-reset.js").OperatorBudgetGrant[];
   task?: import("./harness.js").DurableTask;
   tasks?: import("./harness.js").DurableTask[];
+  /** Non-executable historical generated inputs quarantined during recovery upgrade. */
+  heldRecoveryInputs?: Inbound[];
   completionRecent?: NonNullable<Inbound["completionContext"]>["recent"];
   /** Last successfully displayed routine status; persisted to deduplicate retries/restarts. */
   statusDelivered?: Record<string, string>;
