@@ -252,9 +252,19 @@ export interface DedupPins {
   unpin(ids: Iterable<string>): void;
 }
 
+/** Optional explicit opt-in for model-discoverable, authorized proactive messaging. */
+export interface ChannelMessaging {
+  describe(): { text: boolean; threads?: boolean; connected?: boolean; destinationFormat: string;
+    workspace?: string; allowedTargets?: string[] };
+  destinations?(query: { limit: number; cursor?: string }, signal?: AbortSignal): Promise<{
+    destinations: Array<{ target: string; name?: string; kind?: string }>; nextCursor?: string }>;
+}
+
 /** A messaging channel (Matrix, console, ...). */
 export interface Channel {
   readonly name: string;
+  /** No messaging tool access unless the trusted adapter explicitly opts in. */
+  readonly messaging?: ChannelMessaging;
   /** Resolved global/per-gateway policy, applied before start. */
   configureGateway?(settings: import("./gateway-settings.js").GatewaySettings): void;
   /** `deliverInbound` resolves once the input is durably accepted (safe to acknowledge upstream). */
