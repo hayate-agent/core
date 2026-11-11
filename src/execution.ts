@@ -9,7 +9,10 @@ import { recoveryBlock, type RecoveryStrategy, type ExecutionRecoveryPolicy } fr
 export class ExecutionClaimConflict extends Error {}
 
 /** Closed host-owned causes; exception/worker text is never persisted here. */
-export type ExecutionDiagnosticCode = "runtime-failure" | "worker-failed" | "worker-cancelled" | "manual-pause";
+export type ExecutionDiagnosticCode = "runtime-failure" | "worker-failed" | "worker-cancelled" | "manual-pause" | "deadline-expired";
+export class ExecutionDeadlineExpired extends Error {
+  constructor() { super("deadline-expired: saved execution deadline has elapsed"); }
+}
 export class ExecutionWorkerFailure extends Error {
   constructor(readonly diagnosticCode: "worker-failed" | "worker-cancelled") { super(diagnosticCode); }
 }
@@ -336,6 +339,7 @@ export class ExecutionStore {
           !Number.isSafeInteger(strategyVersion) || strategyVersion < 1) throw Error("Invalid execution submission");
       const old = draft.executions.find(item => item.parent === parent && item.requestId === requestId) ?? await this.archived(parent, requestId);
       if (old) {
+        if (old.dependency?.taskId !== dependency?.taskId) throw Error("execution-context-mismatch: requestId belongs to another task");
         if (old.input !== input || old.strategy !== strategy || old.strategyVersion !== strategyVersion ||
             JSON.stringify(old.pinned ?? null) !== JSON.stringify(pinned ?? null)) throw Error("Conflicting execution request ID");
         return old;
@@ -526,7 +530,7 @@ export class ExecutionStore {
       task.status = task.intent ? "blocked" : "paused";
       task.diagnosticCode = code;
       delete task.token;
-      this.event(draft, task, "status", task.status);
+      this.event(draft, task, "status", code === "deadline-expired" ? `${task.status}: deadline-expired` : task.status);
     });
   }
   control(id: string, action: "pause" | "resume" | "cancel"): Promise<void> {
@@ -534,6 +538,7 @@ export class ExecutionStore {
       const task = this.find(draft, id);
       if (["completed", "cancelled"].includes(task.status)) return;
       if (action === "resume") {
+        if (task.dependency?.expiresAt !== undefined && task.dependency.expiresAt <= this.now()) throw new ExecutionDeadlineExpired();
         if (task.status !== "paused" || task.intent || (task.question && task.question.answer === undefined)) throw Error("Execution cannot resume without resolving its blocker");
         task.status = "ready";
         delete task.diagnosticCode;
