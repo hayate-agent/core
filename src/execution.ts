@@ -7,6 +7,18 @@ import { recoveryBlock, type RecoveryStrategy, type ExecutionRecoveryPolicy } fr
 
 /** Expected contention with a control or another claimant, not a storage failure. */
 export class ExecutionClaimConflict extends Error {}
+/** New parent data invalidated a verdict, not the retained worker evidence. */
+export class ExecutionDecisionConflict extends Error {}
+export interface ExecutionDecision {
+  requestId: string;
+  text: string;
+  recordedAt: number;
+  state: "pending" | "applied";
+  /** Applied means delivered to a strategy boundary, NOT approved or completed. */
+  appliedAt?: number;
+  /** Non-secret claim correlation, never an ownership credential. */
+  appliedClaim?: string;
+}
 
 /** Closed host-owned causes; exception/worker text is never persisted here. */
 export type ExecutionDiagnosticCode = "runtime-failure" | "worker-failed" | "worker-cancelled" | "manual-pause";
@@ -22,6 +34,8 @@ export interface Execution {
   /** Host-captured address of the submitting turn (room/thread); never from model tool arguments. */
   origin?: import("./types.js").Address;
   requestId: string;
+  /** Append-only bounded audit; retries never replace a decision. */
+  decisions?: ExecutionDecision[];
   parent: string;
   input: string;
   strategy: string;
@@ -140,6 +154,13 @@ export class ExecutionStore {
             !Number.isSafeInteger(item.strategyVersion) || item.strategyVersion < 1 ||
             !["ready", "running", "paused", "blocked", "completed", "cancelled"].includes(item.status) ||
             !Number.isSafeInteger(item.restarts) || item.restarts < 0) throw Error("Invalid execution record");
+        if (item.decisions !== undefined && (!Array.isArray(item.decisions) || item.decisions.length > 32 ||
+            new Set(item.decisions.map(d => d?.requestId)).size !== item.decisions.length ||
+            Buffer.byteLength(JSON.stringify(item.decisions.map(d => ({ requestId: d?.requestId, text: d?.text }))), "utf8") > 16000 ||
+            item.decisions.some(d => !d || !validDecisionInput(d.requestId, d.text) || !Number.isFinite(d.recordedAt) ||
+              !["pending", "applied"].includes(d.state) || (d.state === "applied"
+                ? !Number.isFinite(d.appliedAt) || typeof d.appliedClaim !== "string" || !/^[a-f0-9]{64}$/.test(d.appliedClaim)
+                : d.appliedAt !== undefined || d.appliedClaim !== undefined)))) throw Error("Invalid execution decisions");
         if (item.question !== undefined && (!item.question || typeof item.question.id !== "string" || !item.question.id ||
             typeof item.question.text !== "string" || !item.question.text.trim() || item.question.text.length > 8000 ||
             (item.question.answer !== undefined && (typeof item.question.answer !== "string" || item.question.answer.length > 8000)))) throw Error("Invalid execution question");
@@ -374,9 +395,10 @@ export class ExecutionStore {
   }
   /** Trusted strategy yields its slot while retaining settled evidence and intent.
    * The next claim must reconcile, never start an opaque worker again. */
-  deferAssessment(id: string, token: string, nextAt: number): Promise<void> {
+  deferAssessment(id: string, token: string, nextAt: number, decisionRevision?: number): Promise<void> {
     return this.mutate(draft => {
       const task = this.owned(draft, id, token);
+      this.checkDecisionRevision(task, decisionRevision);
       if (!Number.isSafeInteger(nextAt) || nextAt <= this.now() || !task.checkpoint || !task.intent)
         throw Error("Invalid assessment deferral");
       task.assessmentRetryAt = nextAt;
@@ -438,20 +460,22 @@ export class ExecutionStore {
       task.recoverySession = key;
     });
   }
-  intent(id: string, token: string, key: string, replay: "safe" | "unsafe", route?: import("./model-roles.js").ModelPair): Promise<void> {
+  intent(id: string, token: string, key: string, replay: "safe" | "unsafe", route?: import("./model-roles.js").ModelPair, decisionRevision?: number): Promise<void> {
     if (route !== undefined && (!route || typeof route !== "object" || Array.isArray(route) || Object.keys(route).some(k => !["model", "thinking"].includes(k)) ||
         (route.model !== undefined && (typeof route.model !== "string" || route.model.length > 200)) ||
         (route.thinking !== undefined && (typeof route.thinking !== "string" || route.thinking.length > 40)))) throw Error("Invalid selected route");
     return this.mutate(draft => {
       if (typeof key !== "string" || !key.trim() || !["safe", "unsafe"].includes(replay)) throw Error("Invalid effect intent");
       const task = this.owned(draft, id, token);
+      this.checkDecisionRevision(task, decisionRevision);
       if (task.intent) throw Error("Resolve previous effect intent first");
       task.intent = { key, replay, ...(route ? { route: structuredClone(route) } : {}) };
     });
   }
-  settleIntent(id: string, token: string, key: string, result: string, checkpoint: string): Promise<void> {
+  settleIntent(id: string, token: string, key: string, result: string, checkpoint: string, decisionRevision?: number): Promise<void> {
     return this.mutate(draft => {
       const task = this.owned(draft, id, token);
+      this.checkDecisionRevision(task, decisionRevision);
       if (task.intent?.key !== key) throw Error("Unknown effect intent");
       if (typeof result !== "string" || typeof checkpoint !== "string" || result.length > 64000 || checkpoint.length > 64000) throw Error("Invalid effect result");
       task.checkpoint = checkpoint;
@@ -483,6 +507,61 @@ export class ExecutionStore {
       this.event(draft, task, "question", `Question ${task.question.id}: ${text}`);
     });
   }
+  /** Parent is supplied by the authenticated host session, never tool arguments.
+   * wake is trusted strategy code proving a retained assessment boundary.
+   * Recording never changes a token, clears intent, or grants replay authority. */
+  recordDecision(parent: string, id: string, requestId: string, text: string,
+      wake?: (task: Readonly<Execution>) => boolean): Promise<ExecutionDecision> {
+    return this.mutate(draft => {
+      if (/^(dispatch|subagent):/.test(parent)) throw Error("Nested worker decisions are disabled");
+      if (!validDecisionInput(requestId, text)) throw Error("Invalid decision requestId or text");
+      const task = this.find(draft, id);
+      if (task.parent !== parent || task.parentStopped || ["completed", "cancelled"].includes(task.status))
+        throw Error("Execution cannot accept a decision in this conversation");
+      const receipts = task.decisions ??= [];
+      const prior = receipts.find(d => d.requestId === requestId);
+      if (prior) {
+        if (prior.text !== text) throw Error("Conflicting decision requestId reuse");
+        return prior;
+      }
+      if (receipts.length >= 32) throw Error("Execution decision limit reached");
+      const receipt: ExecutionDecision = { requestId, text, recordedAt: this.now(), state: "pending" };
+      if (Buffer.byteLength(JSON.stringify([...receipts, receipt].map(({ requestId, text }) => ({ requestId, text }))), "utf8") > 16000)
+        throw Error("Execution decision data limit reached");
+      receipts.push(receipt);
+      if (!task.token && !task.recoveryReason && !(task.question && task.question.answer === undefined) && wake?.(structuredClone(task))) {
+        if (["blocked", "paused"].includes(task.status) && task.diagnosticCode !== "manual-pause") task.status = "ready";
+        if (task.status === "ready") delete task.assessmentRetryAt;
+      }
+      this.event(draft, task, "status", `Decision recorded: ${requestId}; pending strategy consumption`);
+      return receipt;
+    });
+  }
+  /** Delivery receipt at an owned boundary; never a semantic approval. */
+  applyDecisions(id: string, token: string): Promise<ExecutionDecision[]> {
+    return this.mutate(draft => {
+      const task = this.owned(draft, id, token);
+      for (const d of task.decisions ?? []) if (d.state === "pending") {
+        d.state = "applied"; d.appliedAt = this.now(); d.appliedClaim = createHash("sha256").update(token).digest("hex");
+      }
+      return task.decisions ?? [];
+    });
+  }
+  private checkDecisionRevision(task: Execution, revision?: number): void {
+    if (revision !== undefined && revision !== (task.decisions?.length ?? 0))
+      throw new ExecutionDecisionConflict("Parent decision arrived at execution boundary");
+  }
+  fenceDecisions(id: string, token: string, revision: number): Promise<void> {
+    return this.mutate(draft => this.checkDecisionRevision(this.owned(draft, id, token), revision));
+  }
+  /** Only our own drained claim may yield; keep all evidence and intent. */
+  deferDecision(id: string, token: string): Promise<void> {
+    return this.mutate(draft => {
+      const task = this.owned(draft, id, token);
+      task.status = "ready";
+      delete task.token;
+    });
+  }
   answer(parent: string, id: string, questionId: string, text: string): Promise<void> {
     return this.mutate(draft => {
       const task = this.find(draft, id);
@@ -494,10 +573,11 @@ export class ExecutionStore {
       this.event(draft, task, "status", "Antwort gespeichert; Ausführung bereit");
     });
   }
-  complete(id: string, token: string, result: string): Promise<void> {
+  complete(id: string, token: string, result: string, decisionRevision?: number): Promise<void> {
     return this.mutate(draft => {
       if (typeof result !== "string" || result.length > 64000) throw Error("Invalid execution result");
       const task = this.owned(draft, id, token);
+      this.checkDecisionRevision(task, decisionRevision);
       if (task.intent) throw Error("Unresolved effect intent");
       task.status = "completed";
       task.terminalAt = this.now();
@@ -637,6 +717,11 @@ export class ExecutionStore {
   ack(eventId: string): Promise<void> {
     return this.mutate(draft => { draft.events = draft.events.filter(event => event.id !== eventId); });
   }
+}
+
+function validDecisionInput(requestId: unknown, text: unknown): boolean {
+  return typeof requestId === "string" && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(requestId) &&
+    typeof text === "string" && !!text.trim() && Buffer.byteLength(text, "utf8") <= 4000;
 }
 
 function validAddress(value: unknown): value is import("./types.js").Address {

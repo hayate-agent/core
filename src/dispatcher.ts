@@ -1,6 +1,6 @@
 import type { ExecutionRecoveryPolicy } from "./execution-recovery.js";
 import { validateWorkerPin } from "./model-roles.js";
-import { ExecutionClaimConflict, ExecutionWorkerFailure, type Execution, type ExecutionEvent, type ExecutionStore } from "./execution.js";
+import { ExecutionClaimConflict, ExecutionDecisionConflict, ExecutionWorkerFailure, type Execution, type ExecutionEvent, type ExecutionStore } from "./execution.js";
 
 export interface DispatchContext {
   readonly signal: AbortSignal;
@@ -12,8 +12,11 @@ export interface DispatchContext {
   status?(text: string): Promise<void>;
   /** Persists a question and suspends this execution; never returns normally. */
   question?(text: string): Promise<never>;
-  intent(key: string, replay: "safe" | "unsafe", route?: import("./model-roles.js").ModelPair): Promise<void>;
-  settleIntent(key: string, result: string, checkpoint: string): Promise<void>;
+  intent(key: string, replay: "safe" | "unsafe", route?: import("./model-roles.js").ModelPair, decisionRevision?: number): Promise<void>;
+  settleIntent(key: string, result: string, checkpoint: string, decisionRevision?: number): Promise<void>;
+  /** Authenticated parent data, not authority expansion or verdict override. */
+  decisions?(): Promise<import("./execution.js").ExecutionDecision[]>;
+  fenceDecisions?(revision: number): Promise<void>;
 }
 /** Trusted plugins supply policy; no model-generated field grants replay permission. */
 export interface DispatcherStrategy {
@@ -21,6 +24,8 @@ export interface DispatcherStrategy {
   version: number;
   replaySafe: boolean;
   reconcile?: boolean;
+  /** Trusted strategy opt-in; true only at a retained assessment boundary safe to wake. */
+  decisionBoundary?(task: Readonly<Execution>): boolean;
   execute(task: Readonly<Execution>, context: DispatchContext): Promise<string>;
 }
 
@@ -160,6 +165,7 @@ export class Dispatcher {
   }
   private async run(task: Execution, abort: AbortController, strategy: DispatcherStrategy): Promise<void> {
     const token = task.token!;
+    let decisionRevision = strategy.decisionBoundary ? 0 : undefined;
     const check = (): void => {
       const current = this.store.list().find(item => item.id === task.id);
       if (abort.signal.aborted || current?.status !== "running" || current.token !== token)
@@ -186,18 +192,31 @@ export class Dispatcher {
           throw new ExecutionClaimConflict("Execution waiting for answer");
         },
         deferAssessment: async nextAt => {
-          check(); await this.store.deferAssessment(task.id, token, nextAt);
+          check(); await this.store.deferAssessment(task.id, token, nextAt, decisionRevision);
           throw new ExecutionClaimConflict("Assessment deferred");
         },
         checkpoint: (value, notice) => { check(); return this.store.checkpoint(task.id, token, value, notice); },
         workerSession: key => { check(); return this.store.workerSession(task.id, token, key); },
-        intent: (key, replay, route) => { check(); return this.store.intent(task.id, token, key, replay, route); },
-        settleIntent: (key, result, checkpoint) => { check(); return this.store.settleIntent(task.id, token, key, result, checkpoint); },
+        decisions: async () => {
+          check();
+          const rows = await this.store.applyDecisions(task.id, token);
+          decisionRevision = rows.length;
+          return rows;
+        },
+        fenceDecisions: revision => this.store.fenceDecisions(task.id, token, revision),
+        intent: (key, replay, route, revision) => { check(); return this.store.intent(task.id, token, key, replay, route, revision); },
+        settleIntent: (key, result, checkpoint, revision) => { check(); return this.store.settleIntent(task.id, token, key, result, checkpoint, revision); },
       });
       const result = await (this.parallelAdmission ? this.parallelAdmission.run(async () => { check(); return execute(); }, abort.signal) : execute());
       check();
-      await this.store.complete(task.id, token, result);
+      await this.store.complete(task.id, token, result, decisionRevision);
     } catch (error) {
+      const current = this.store.list().find(row => row.id === task.id);
+      if (error instanceof ExecutionDecisionConflict || (current?.status === "running" && current.token === token &&
+          (current.decisions?.length ?? 0) !== decisionRevision && strategy.decisionBoundary?.(current))) {
+        await this.store.deferDecision(task.id, token).catch(this.report);
+        return;
+      }
       // Preserve partial state, but do not automatically spin on a failing plugin.
       if (!this.stopped && this.store.list().find(item => item.id === task.id)?.status === "running") {
         await this.store.fail(task.id, token, error instanceof ExecutionWorkerFailure ? error.diagnosticCode : "runtime-failure").catch(this.report);
@@ -217,6 +236,16 @@ export class Dispatcher {
     if (action === "continue" && task.intent && !this.strategyFor(task)?.reconcile) throw Error("Strategy has no reconciliation support; choose explicit retry or cancel");
     await this.store.resolve(parent, id, actor, action, evidence);
     await this.kick();
+  }
+  async decide(parent: string, id: string, requestId: string, text: string): Promise<import("./execution.js").ExecutionDecision> {
+    if (/^(dispatch|subagent):/.test(parent)) throw Error("Nested worker decisions are disabled");
+    const task = this.store.list(parent).find(row => row.id === id);
+    if (!task) throw Error("Unknown execution in this conversation");
+    const strategy = this.strategyFor(task);
+    if (!strategy?.decisionBoundary) throw Error("Strategy does not support parent decisions");
+    const receipt = await this.store.recordDecision(parent, id, requestId, text, current => strategy.decisionBoundary!(current));
+    await this.kick();
+    return receipt;
   }
   async answer(parent: string, id: string, questionId: string, text: string): Promise<void> {
     await this.store.answer(parent, id, questionId, text);

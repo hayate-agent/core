@@ -270,6 +270,66 @@ A `safe` intent is replayable only when the currently registered matching strate
 version also declares `replaySafe: true`. Do not declare safety for an opaque
 model/tool turn or an external operation lacking an idempotency contract.
 
+## Parent decision delivery (source interface)
+
+A compatible bundled dispatcher plugin exposes `plugin_dispatch` action `decide`
+with `id`, a stable `requestId`, and `decision` text, and the admin command:
+
+```
+/dispatch decide <execution-id> <decision-request-id> Accept the documented temporary-file deviation; retain all original constraints.
+```
+
+The authenticated host session supplies the parent scope; model arguments cannot
+select another parent. Nested dispatcher/subagent workers cannot record decisions.
+The command uses the host's admin authentication gate (including for other
+`/dispatch` command actions). Model-tool access remains the existing parent-session
+tool policy, not an independent permission or authority grant.
+
+`Dispatcher.decide` and `ExecutionStore.recordDecision` durably append an audit
+receipt. The reply's `recorded: true` means acceptance only. `state: pending` means
+not yet consumed at a strategy boundary; `applied` means delivered to strategy code,
+NOT approval of a deviation, evidence, effects or task completion. Inspect bounded
+`status` with `id` and `field: decisions` for exact text and receipt readback, or
+ordinary status for receipt summaries. `/dispatch status` also includes receipts.
+`appliedClaim` is a hash for correlation, not a live ownership token.
+
+Request IDs are 1–128 ASCII letters/digits/`._:-`, starting with a letter/digit;
+text must be nonblank and at most 4,000 UTF-8 bytes. Each execution retains at most
+32 decisions and 16,000 UTF-8 bytes of JSON decision input. Reusing an ID with
+byte-identical text returns its existing receipt without another event or wake;
+changed text conflicts. IDs are scoped to that execution. Cancelled, completed,
+parent-stopped and foreign executions reject all writes, including retries; read
+the retained receipt instead. Audits survive reload and terminal compaction.
+
+Only opted-in trusted strategies accept this interface. Sequential execution opts
+in with `decisionBoundary(task)`, which proves a matching retained settled step
+assessment before waking a deferred/blocked assessment. A bare ambiguous intent,
+recovery-policy block, manual pause or unanswered question is not bypassed. Other
+strategies reject `decide` explicitly rather than pretending to consume it.
+
+`DispatchContext.decisions()` delivers and durably marks receipts under the owned
+claim. New decisions never revoke an active token, steal a claim, abort a worker,
+or clear intent. Workers drain normally. `fenceDecisions(revision)`, revision-aware
+`intent` and `settleIntent`, and the host's completion/deferral checks discard stale
+verdicts at assessment/claim boundaries. The dispatcher yields only its own drained
+claim, retaining evidence and intent for re-assessment, not replay.
+
+Sequential worker and assessment prompts include parent decisions as scoped data
+under the original mandate. The independent assessor may accept an explicitly
+documented planning deviation using retained evidence; it must still check actual
+evidence and every original permission, safety and review/CI constraint. It may
+then complete that same original step and run its original successor without
+replaying settled effects. An applied decision may still leave a task blocked.
+`resume` is control only: task text is rejected; use `decide` for scoped steering.
+
+Cross-repository development: use the new core and plugins sources together via
+the documented local materializer lock. Production publication must pin the
+immutable plugins revision/hash in `plugins.lock.json`; an old adapter lacks the
+new surface, and a new adapter on an old running host rejects decisions with a
+compatible-host-upgrade error. The adapter's optional-capability projection also typechecks against older host
+contracts; it never emulates a missing decision API. Builds do not activate this feature: rollout and restart belong to an
+external authorized operator, not this source-only worker.
+
 A strategy may perform work itself or use a separately configured external system.
 The current context does not expose a Harness object or a managed-subagent API;
 registration alone does not provision workers, credentials or backend access.
