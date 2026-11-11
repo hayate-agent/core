@@ -4,6 +4,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { DispatcherRuntime } from "../src/dispatcher-runtime.js";
+import { ValidatorRegistry } from "../src/validator.js";
 import { Dispatcher } from "../src/dispatcher.js";
 import { ExecutionStore, type ExecutionEvent } from "../src/execution.js";
 import { Harness } from "../src/harness.js";
@@ -40,7 +41,7 @@ function retainFixture(t: import("node:test").TestContext, fixture: { home: stri
 }
 /** Real Harness, store and dispatcher; fake model runtime emitting observed selection and tool events. */
 async function setup(t: import("node:test").TestContext, script: Script, opts: { roles?: ModelRoles; unavailable?: string[]; home?: string; file?: string;
-  manualProgress?: boolean; retainedTranscript?: string; http?: (request: PlannerHttpRequest) => Promise<PlannerHttpOutcome> } = {}) {
+  manualProgress?: boolean; retainedTranscript?: string; validators?: ValidatorRegistry; http?: (request: PlannerHttpRequest) => Promise<PlannerHttpOutcome> } = {}) {
   let now = Date.now();
   t.mock.method(Date, "now", () => now);
   const home = opts.home ?? await mkdtemp(path.join(os.tmpdir(), "seq-dispatch-"));
@@ -88,7 +89,7 @@ async function setup(t: import("node:test").TestContext, script: Script, opts: {
   let bridge!: DispatcherRuntime;
   const harness = new Harness({ runtime, tickMs: 60000, busyMode: "queue", beforeExecution: input => bridge.beforeTurn(input.sessionKey) });
   harness.onStateChange = async () => {};
-  bridge = new DispatcherRuntime(harness, store, undefined, () => ({ config: opts.roles ?? roles, defaults }));
+  bridge = new DispatcherRuntime(harness, store, undefined, () => ({ config: opts.roles ?? roles, defaults }), opts.validators);
   harness.addChannel(bridge.channel);
   const events: ExecutionEvent[] = [];
   let settle!: () => void; let settled = new Promise<void>(r => { settle = r; });
@@ -131,6 +132,33 @@ async function setup(t: import("node:test").TestContext, script: Script, opts: {
     } };
 }
 const state = (checkpoint?: string) => JSON.parse(checkpoint!) as SequentialState;
+
+test("delegated step uses selected dedicated provider, not legacy LLM", async t => {
+  const validators = new ValidatorRegistry(); let assessments = 0;
+  validators.register({ apiVersion: 1, name: "dedicated", version: 1,
+    async assess(request) { assessments++; assert.match(request.promptText, /STEP-STATUS/); return { state: "completed" }; } });
+  validators.select("dedicated");
+  const env = await setup(t, { verdict: () => { throw Error("legacy must not run"); } }, { validators });
+  const task = await env.run("Finish authorized tests");
+  assert.equal(task.status, "completed"); assert.equal(assessments, 1); assert.equal(env.calls.review.length, 0);
+});
+
+test("disabled delegated-step provider retains evidence instead of declaring success", async t => {
+  const validators = new ValidatorRegistry(); validators.select(false);
+  const env = await setup(t, {}, { validators, manualProgress: true });
+  const task = await env.run("Finish authorized tests");
+  assert.notEqual(task.status, "completed"); assert.equal(env.calls.review.length, 0);
+  assert.ok(state(task.checkpoint).assessment, "settled worker evidence is durable");
+});
+
+test("selected completion provider never promotes an actual failed worker", async t => {
+  const validators = new ValidatorRegistry(); let calls = 0;
+  validators.register({ apiVersion: 1, name: "dedicated", version: 1,
+    async assess() { calls++; return { state: "completed" }; } }); validators.select("dedicated");
+  const env = await setup(t, { worker: () => { throw Error("actual worker failure"); } }, { validators });
+  const task = await env.run("Finish authorized tests");
+  assert.notEqual(task.status, "completed"); assert.equal(calls, 0);
+});
 
 test("independent completion overrides a worker-authored block without a parent decision", async t => {
   const env = await setup(t, { worker: () => "Existing publication verified; no effect remains.\nSTEP-STATUS: blocked: parent must decide",
