@@ -39,6 +39,19 @@ test("symlinks, hidden credentials, agent storage, out-of-workspace and oversize
   await assert.rejects(stageOutboundFile(f.home, "main", f.cwd, "normal", "../unsafe"), /filename/);
 });
 
+test("explicit ordinary workspaces inside private agent homes are exportable, but stores and hidden subtrees are not", async t => {
+  const f = await fixture(t);
+  const privateHome = path.join(f.root, ".hayate-agent"); const workspace = path.join(privateHome, "workspace");
+  await mkdir(workspace, { recursive: true }); await writeFile(path.join(workspace, "report.bin"), Buffer.from([0, 255]));
+  const ref = await stageOutboundFile(privateHome, "main", workspace, "report.bin"); await verifyOutboundFile(privateHome, "main", ref);
+  await mkdir(path.join(workspace, ".ssh")); await writeFile(path.join(workspace, ".ssh/key"), "secret");
+  await assert.rejects(stageOutboundFile(privateHome, "main", workspace, ".ssh/key"), /protected|outside/);
+  await mkdir(path.join(privateHome, "sessions")); await writeFile(path.join(privateHome, "sessions/history"), "private");
+  await assert.rejects(stageOutboundFile(privateHome, "main", path.join(privateHome, "sessions"), "history"), /protected|outside/);
+  const ssh = path.join(f.root, ".ssh"); await mkdir(ssh); await writeFile(path.join(ssh, "id_rsa"), "private");
+  await assert.rejects(stageOutboundFile(privateHome, "main", ssh, "id_rsa"), /protected|outside/);
+});
+
 test("native file messaging passes a host-bound reference, preserves caption, and never reuploads on retry", async t => {
   const f = await fixture(t); await writeFile(path.join(f.cwd, "report.bin"), Buffer.from([1, 2, 255])); let calls = 0;
   const gateway = { messagingCapabilities: () => [{ gateway: "chat", messaging: { text: true, files: true, connected: true, destinationFormat: "ID" } }],

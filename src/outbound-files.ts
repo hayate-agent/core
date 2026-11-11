@@ -20,8 +20,15 @@ export async function stageOutboundFile(home: string, sessionKey: string, cwd: s
   const owner = createHash("sha256").update(sessionKey).digest("hex");
   const directory = path.join(agentHome, "attachments", owner);
   const ownBlob = inside(directory, actual) && path.dirname(actual) === directory && /^[a-f0-9]{64}$/.test(path.basename(actual));
-  const hidden = actual.split(path.sep).some(part => part.startsWith(".") && part !== "." && part !== "..");
-  if (!ownBlob && (!inside(workspace, actual) || inside(agentHome, actual) || hidden)) throw Error("File is outside the exportable workspace or belongs to protected/foreign agent storage");
+  const protectedNames = new Set(["attachments", "sessions", "session-archives", "local-sessions", "memory", "memory-pending", "secrets", "credentials", "api-private", "plugins", "overlays"]);
+  const relative = path.relative(workspace, actual);
+  const workspaceParts = path.relative(agentHome, workspace).split(path.sep);
+  // An explicitly bound ordinary workspace may itself live under the private
+  // agent home (common on containers). Its siblings and runtime stores stay private.
+  const nestedWorkspace = inside(agentHome, workspace) && ["workspace", "workspaces", "work", "projects"].includes(workspaceParts[0]) &&
+    !workspaceParts.some(part => part.startsWith(".") || protectedNames.has(part));
+  const hidden = (nestedWorkspace ? relative : actual).split(path.sep).some(part => part.startsWith(".") || ["secrets", "credentials", "api-private"].includes(part));
+  if (!ownBlob && (!inside(workspace, actual) || (inside(agentHome, actual) && !nestedWorkspace) || hidden)) throw Error("File is outside the exportable workspace or belongs to protected/foreign agent storage");
   const name = filename ?? path.basename(actual);
   if (!name || name.length > 255 || name !== path.basename(name) || /[\x00-\x1f\x7f]/.test(name)) throw Error("Invalid outgoing filename");
   const handle = await open(actual, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
