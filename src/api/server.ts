@@ -44,7 +44,8 @@ export interface ApiServerOptions {
   /** Unsent SSE bytes per connection before a slow client is dropped. */
   maxSseBufferBytes?: number;
   log?: (msg: string) => void;
-  updateAdmission?: Pick<Harness, "acquireUpdateAdmission" | "updateAdmissionStatus" | "releaseUpdateAdmission" | "withForegroundWork">;
+  updateAdmission?: Pick<Harness, "acquireUpdateAdmission" | "updateAdmissionStatus" | "releaseUpdateAdmission" | "withForegroundWork"> &
+    Partial<Pick<Harness, "prepareUpdateAdmission" | "releaseMaintenanceAdmission">>;
 }
 
 class HttpError extends Error {
@@ -129,13 +130,24 @@ export class ApiChannel implements Channel {
         const ttl = body.ttl_ms ?? 60000;
         if (typeof ttl !== "number" || !Number.isSafeInteger(ttl) || ttl < 1000 || ttl > 300000)
           throw new HttpError(400, "ttl_ms must be an integer from 1000 to 300000", "invalid_request");
-        const result = owner.acquireUpdateAdmission(ttl);
-        return this.json(res, result.status === "admitted" ? 201 : result.status === "unavailable" ? 503 : 409, result);
+        if (body.mode !== undefined && body.mode !== "idle" && body.mode !== "maintenance")
+          throw new HttpError(400, "mode must be idle or maintenance", "invalid_request");
+        if (body.mode === "maintenance" && (!owner.prepareUpdateAdmission || typeof body.request_id !== "string" ||
+            !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(body.request_id) ||
+            (body.timeout_ms !== undefined && (typeof body.timeout_ms !== "number" || !Number.isSafeInteger(body.timeout_ms) || body.timeout_ms < 0 || body.timeout_ms > 120000))))
+          throw new HttpError(400, "maintenance requires supported owner, request_id and timeout_ms from 0 to 120000", "invalid_request");
+        const result = body.mode === "maintenance"
+          ? await owner.prepareUpdateAdmission!(body.request_id as string, ttl, (body.timeout_ms as number | undefined) ?? 60000)
+          : owner.acquireUpdateAdmission(ttl);
+        return this.json(res, result.status === "admitted" ? 201 : result.status === "unavailable" ? 503 : 409,
+          body.mode === "maintenance" && result.status === "admitted" ? { ...result, checkpointed: true } : result);
       }
       if (req.method === "DELETE") {
         const body = await readJson(req);
         if (typeof body.lease_id !== "string" || !body.lease_id) throw new HttpError(400, "lease_id required", "invalid_request");
-        return this.json(res, owner.releaseUpdateAdmission(body.lease_id) ? 200 : 409, owner.updateAdmissionStatus());
+        const released = owner.releaseMaintenanceAdmission
+          ? await owner.releaseMaintenanceAdmission(body.lease_id) : owner.releaseUpdateAdmission(body.lease_id);
+        return this.json(res, released ? 200 : 409, owner.updateAdmissionStatus());
       }
     }
     if (req.method === "GET" && p === "/v1/capabilities") return this.json(res, 200, this.capabilities());
@@ -166,6 +178,7 @@ export class ApiChannel implements Channel {
       features: {
         run_submission: true,
         update_admission: !!this.opts.updateAdmission,
+        update_admission_maintenance: !!this.opts.updateAdmission?.prepareUpdateAdmission,
         run_status: true,
         run_events_sse: true,
         run_stop: true,

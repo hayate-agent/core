@@ -1,5 +1,5 @@
 {
-  "contentDigest": "c31dfb9b5a8ba3bc81aacc8856b89af02508c10f50c571c613a5910444191e7a",
+  "contentDigest": "762969e017ff97212dba535a2523b2e32abfd353a5800db5e117eac57b2bbc34",
   "files": [
     {
       "mode": "100644",
@@ -404,7 +404,7 @@
     {
       "mode": "100644",
       "path": "docs/update-admission.md",
-      "sha256": "ecb5b1c692f6b3414103c0a93c10b9ca7a6dab84542c2069d5bb494f5091e6ca"
+      "sha256": "6520058a20e6d536627e80db6852638bc66dcb238381b71ee7ef63a9d354cd61"
     },
     {
       "mode": "100644",
@@ -504,7 +504,7 @@
     {
       "mode": "100644",
       "path": "src/api/server.ts",
-      "sha256": "6a10d9005a6013175bec25b60ecf00cb7c5bbaf817bbc4f384f0feeac3fc4902"
+      "sha256": "b1a78a299eeceddff14920fe8932b8d72b6dab8c8778bb8dcc65e32df0e31bfc"
     },
     {
       "mode": "100644",
@@ -619,7 +619,7 @@
     {
       "mode": "100644",
       "path": "src/cli.ts",
-      "sha256": "eb729fbdc69a20b32dd72af2d1e6531b6c80bb1d34eba051f57503630f9c2ce2"
+      "sha256": "44f4255998d314c152bdf3fb6bc3b59231ca767cd3744422d379c5e62150ae7e"
     },
     {
       "mode": "100644",
@@ -729,7 +729,7 @@
     {
       "mode": "100644",
       "path": "src/dispatcher.ts",
-      "sha256": "eacdc213c63bfa6c1f0927f5c6eb76e8c5036fb6532192ebc17b253cbea394a2"
+      "sha256": "6509ff8e6da3f2228be996f2308e16df179fface1581ff6b6feafd33cfb7cc76"
     },
     {
       "mode": "100644",
@@ -749,7 +749,7 @@
     {
       "mode": "100644",
       "path": "src/execution.ts",
-      "sha256": "755da55478c26b1777cab4194cef121fc159a4ba64e7b7a516107b228b5aa121"
+      "sha256": "fa199902b88a8acd4505f9c407577475e234bfdf0feba9dd6ef6d536f7db0f73"
     },
     {
       "mode": "100644",
@@ -779,7 +779,7 @@
     {
       "mode": "100644",
       "path": "src/harness.ts",
-      "sha256": "e20dd95f854a6c6e8991b46bcbf433df46a566e88e8a4d5847fc53a1c20efd92"
+      "sha256": "775499e6057a69d85391d1851d22b88c0ba3425e6d76c154c2a7b028b125efec"
     },
     {
       "mode": "100644",
@@ -1110,6 +1110,11 @@
       "mode": "100644",
       "path": "src/types.ts",
       "sha256": "a6d76b3225fa42ef0fc9aa7caf20254c08402cad8eb2eb11567aa3366bca93ce"
+    },
+    {
+      "mode": "100644",
+      "path": "src/update-maintenance.ts",
+      "sha256": "e8b5e5cbe362d29f6fbcc124ceb836ab6dbd4d7917f3314fd643be1f50ac4ec0"
     },
     {
       "mode": "100644",
@@ -2848,6 +2853,11 @@
     },
     {
       "mode": "100644",
+      "path": "test/update-maintenance.test.ts",
+      "sha256": "833d0195d3833b5adc6fd17df1d873eb2f5cb04d3a9d05d1f272b94784412ff7"
+    },
+    {
+      "mode": "100644",
       "path": "test/update.test.ts",
       "sha256": "0414b54af95b2bbac6bbde39ffba8602607cea1141e2e0775a5f84e78da45eb7"
     },
@@ -3250,5 +3260,5 @@
   "historyPolicy": "fresh-root; no source commits, tags, refs or deleted blobs",
   "pluginSHA": "7ff45b2996a8312312bd3f13f2c4fdc633a519ae",
   "schema": 1,
-  "sourceSHA": "f93a54fb8b97393fedd828624bf9c6d39cb8aa13"
+  "sourceSHA": "a29dea2c715491850279f524825c03a52498985e"
 }
