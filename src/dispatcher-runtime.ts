@@ -247,6 +247,10 @@ export class DispatcherRuntime {
       // An obsolete worker's durable outbox must be drainable, but cannot
       // complete a replacement execution or reanimate a cancelled task.
       if (!pending) return;
+      if (meta?.maintenance) {
+        if (meta.maintenance.state === "blocked") pending.reject(new ExecutionWorkerFailure("maintenance-blocked"));
+        return; // waiting/informational notices are never worker completion
+      }
       if (meta?.outcome === "failed" || meta?.outcome === "cancelled") pending.reject(new ExecutionWorkerFailure(meta.outcome === "failed" ? "worker-failed" : "worker-cancelled"));
       else pending.resolve(text.slice(0, 64000));
     },

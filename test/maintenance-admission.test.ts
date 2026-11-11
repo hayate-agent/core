@@ -136,7 +136,10 @@ test("identified admission is durable, idempotent and does not overwrite pending
     await again.admit("chat", "request-4", request, 3);
     const failing = { status: () => ({ sessionId: "session-2", contextPercent: 5 }), compact: async () => { throw Error("SECRET_DISK"); } } as unknown as RuntimeSession;
     await again.boundary("chat", failing, rotate);
-    assert.deepEqual(await again.admissionStatus("chat"), { id: "request-4", version: 4, execution: "failed" });
+    const receipt = await again.admissionStatus("chat");
+    assert.deepEqual({ ...receipt, recovery: undefined }, { id: "request-4", version: 4, execution: "failed", recovery: undefined });
+    assert.equal(receipt.recovery?.state, "blocked");
+    assert.equal(receipt.recovery?.reason, "uncertain");
     assert.ok(!JSON.stringify(await again.admissionStatus("chat")).includes("SECRET"));
     assert.ok((await again.status("chat")).pending, "failed maintenance retains recovery intent");
     await assert.rejects(again.cancelAdmission("chat", "request-4", 4), /cannot be cancelled/);
