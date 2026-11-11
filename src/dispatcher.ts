@@ -160,13 +160,16 @@ export class Dispatcher {
     const tasks = this.store.list();
     const last = tasks.findIndex(task => task.id === this.lastClaimed);
     const ordered = last < 0 ? tasks : [...tasks.slice(last + 1), ...tasks.slice(0, last + 1)];
-    for (const task of ordered) {
+    for (let task of ordered) {
       if (this.stopped || this.active.size >= this.capacity) break;
-      if (task.diagnosticCode === "worker-failed" && ["blocked", "paused"].includes(task.status) &&
+      if (["worker-failed", "runtime-failure"].includes(task.diagnosticCode ?? "") && ["blocked", "paused"].includes(task.status) &&
           !this.active.has(task.id) && this.parentEnabled(task.parent)) {
+        if (task.workerRetry && !this.store.assessmentDue(task) &&
+            !(task.dependency?.expiresAt !== undefined && task.dependency.expiresAt <= Date.now())) continue;
         const retained = this.strategyFor(task);
         if (retained) await this.store.retryWorker(task.id, retained, this.recoveryPolicy);
-        continue; // durable backoff, picked up by the existing host retry tick
+        task = this.store.list().find(row => row.id === task.id)!;
+        if (task.status !== "ready") continue; // internal pause remains durably timed
       }
       if (task.status !== "ready" || !this.store.assessmentDue(task) || this.active.has(task.id) || !this.parentEnabled(task.parent)) continue;
       const strategy = this.strategyFor(task);

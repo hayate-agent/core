@@ -71,4 +71,8 @@ test("queued lifecycle uses event-time state; blockers/questions remain attentio
   assert.equal(attentionRequired({ ...event, status: "blocked" }, "completed"), true);
   assert.equal(attentionRequired({ ...event, type: "question" }, "running"), true);
   assert.equal(attentionRequired({ ...event, status: undefined }, "blocked"), true);
+  assert.equal(attentionRequired({ ...event, status: "paused", automaticRetryAt: 123456 }, "paused"), false,
+    "a host-scheduled recovery is routine status, not a request for another human nudge");
+  assert.equal(attentionRequired({ ...event, type: "question", automaticRetryAt: 123456 }, "paused"), true,
+    "an actual question still requires an answer");
 });

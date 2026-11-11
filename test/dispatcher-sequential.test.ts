@@ -132,6 +132,36 @@ async function setup(t: import("node:test").TestContext, script: Script, opts: {
 }
 const state = (checkpoint?: string) => JSON.parse(checkpoint!) as SequentialState;
 
+test("independent completion overrides a worker-authored block without a parent decision", async t => {
+  const env = await setup(t, { worker: () => "Existing publication verified; no effect remains.\nSTEP-STATUS: blocked: parent must decide",
+    verdict: '{"state":"completed"}' });
+  const task = await env.run("Reconcile existing publication without publishing again");
+  assert.equal(task.status, "completed");
+  assert.equal(env.calls.worker.length, 1);
+  assert.equal(env.calls.review.length, 1);
+});
+
+test("semantic hold is automatically re-assessed after reload without rerunning settled worker effects", async t => {
+  const first = await setup(t, { worker: () => "publication evidence retained\nSTEP-STATUS: blocked: missing fact",
+    verdict: '{"state":"blocked"}' });
+  const held = await first.run("Publish only when verified; reconcile existing effects");
+  assert.equal(held.status, "paused");
+  assert.equal(held.diagnosticCode, "runtime-failure");
+  assert.ok(held.workerRetry);
+  assert.ok(state(held.checkpoint).assessment);
+  await first.dispatcher.stop(); await first.harness.stop(0);
+  const second = await setup(t, { worker: () => { throw Error("settled worker must not repeat"); }, verdict: '{"state":"completed"}' },
+    { home: first.home, file: first.file });
+  await second.dispatcher.start();
+  assert.equal(second.calls.review.length, 0);
+  await second.tickAt(held.workerRetry!.nextAt);
+  await second.dispatcher.waitForExecution(held.id);
+  assert.equal(second.store.list()[0].status, "completed");
+  assert.equal(second.store.list()[0].id, held.id);
+  assert.equal(second.calls.worker.length, 0);
+  assert.equal(second.calls.review.length, 1);
+});
+
 test("validator model selection: explicit validator, then review, then default; no availability fallback", async t => {
   const env = await setup(t, {});
   const validator = { model: "p/small-validator", thinking: "low" };
@@ -346,7 +376,7 @@ test("worker blocked claim with reviewer continue runs the next same-step turn, 
 
 test("true external blocked holds: no continuation, no successor; invalid/uncertain assessment grants no execution", async t => {
   for (const [verdict, text] of [['{"state":"blocked"}', /externe Blockade/], ['{"state":"waiting"}', /Warten auf externe/],
-    ['{"state":"completed"}', /ohne vollständigen Nachweis \(blocked\)/], ['invalid', /technisch fehlgeschlagen/], ['{"state":"uncertain"}', /technisch fehlgeschlagen/]] as const) {
+    ['invalid', /technisch fehlgeschlagen/], ['{"state":"uncertain"}', /technisch fehlgeschlagen/]] as const) {
     const env = await setup(t, { plan: steps(["first", "simple"], ["second", "simple"]), worker: blockedWorker, verdict });
     const task = await env.run("two steps");
     assert.equal(task.status, verdict === 'invalid' || verdict.includes("uncertain") ? "ready" : "paused", verdict);
@@ -497,7 +527,7 @@ test("one bounded escalation only for effect-free inadequacy; otherwise visible 
   assert.deepEqual(withTools.calls.worker.map(c => c.model), ["p/cheap"]);
   assert.ok(withTools.events.some(e => /keine sichere Eskalation \(1 Werkzeugaufrufe/.test(e.text)));
 
-  const blocked = await setup(t, { worker: () => "no credentials\nSTEP-STATUS: blocked: credentials missing" });
+  const blocked = await setup(t, { worker: () => "no credentials\nSTEP-STATUS: blocked: credentials missing", verdict: '{"state":"blocked"}' });
   assert.equal((await blocked.run("deploy")).status, "paused");
   assert.equal(blocked.calls.worker.length, 1);
 });

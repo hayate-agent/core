@@ -9,14 +9,29 @@ remain available to Main. Starting a separate subagent is not a way around this
 routing rule. Main fallback is available only when dispatcher mode is disabled or
 the dispatcher is unavailable.
 
-A typed `worker-failed` outcome (for example a provider EOF) is a technical
-interruption, not a semantic blocker. The scheduler requeues the **same execution
+Both `worker-failed` (for example a provider EOF) and the broader
+`runtime-failure` strategy/validator interruption have a durable automatic
+recovery owner. An internal `paused` or `blocked` state is not a terminal
+lifecycle state: its stored `workerRetry.nextAt` is consumed by the existing
+scheduler, including after host restart and for diagnosed legacy internal pauses.
+Cheap ticks never renew that due time. Explicit user pause (`manual-pause`),
+cancellation, deadline expiry and unanswered questions are different holds and
+are never auto-resumed.
+
+A typed `worker-failed` outcome is a technical interruption, not a semantic blocker. The scheduler requeues the **same execution
 ID** with durable exponential backoff (15 seconds up to 5 minutes), retaining its
 intent, original mandate and worker transcript. The matching strategy must support
 reconciliation; no opaque effect is blindly replayed. Manual pauses, cancellation,
 unanswered questions, authentic mandate expiry and trusted recovery-policy holds
-remain binding. Technical retries have no total-attempt cutoff. Generic strategy
-exceptions are not guessed to be transient from exception text.
+remain binding. Technical retries have no total-attempt cutoff. Generic strategy exceptions are classified as `runtime-failure`, without
+inferring permission or diagnosis from exception text. With a reconciliation-capable
+strategy, they receive the same durable backoff. A retained sequential assessment
+is rechecked independently before any new worker effects; a genuine blocked verdict
+does not start a successor or repeat settled effects. A reviewer-confirmed completed
+step overrides the worker's own `blocked` label without an extra parent decision.
+Real policy holds take ownership back and clear automatic retry metadata. Scheduled
+pauses are projected as timed automatic recovery, not repeated requests for human
+intervention.
 
 Sequential execution yields capacity at committed step boundaries when another
 execution is ready. Round-robin admission lets a queued review run before the

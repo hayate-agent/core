@@ -28,7 +28,10 @@ export class DispatcherRuntime {
     const question = event.type === "question" ? /^Question ([a-f0-9-]{36}): ([\s\S]*)$/.exec(event.text) : null;
     // Retained events can outlive a newer question on the same execution.
     const questionId = question?.[1] ?? task?.question?.id;
-    return `${taskContextLabel(event.executionId, task?.dependency?.anchor?.outputTags, !!task?.dependency?.anchor)} · Dispatcher — ${question?.[2] ?? event.text}${event.type === "question" ? `\n/dispatch answer ${event.executionId} ${questionId} <Antwort>` : ""}`;
+    const text = event.automaticRetryAt && Number.isSafeInteger(event.automaticRetryAt)
+      ? `Automatische Wiederaufnahme ab ${new Date(event.automaticRetryAt).toISOString()}; Dispatcher behält denselben Auftrag. Keine Nutzeraktion erforderlich.`
+      : question?.[2] ?? event.text;
+    return `${taskContextLabel(event.executionId, task?.dependency?.anchor?.outputTags, !!task?.dependency?.anchor)} · Dispatcher — ${text}${event.type === "question" ? `\n/dispatch answer ${event.executionId} ${questionId} <Antwort>` : ""}`;
   }
   private taskForSession(key: string) {
     return this.store.list().find(task => key === `dispatch:${task.id}:${task.token}`);

@@ -770,8 +770,12 @@ export class Harness {
    * (e.g. validator-continuation limit). Manual pause, questions, unresolved intents and
    * operator stop stay binding. Assessment is read-only: it neither resumes nor replays the child. */
   private supervisable(e: import("./execution.js").Execution): boolean {
-    return e.status === "blocked" ||
-      (e.status === "paused" && e.diagnosticCode === "runtime-failure" && !e.intent && !e.question && !e.parentStopped);
+    // Timed recovery already has a dispatcher owner; never create a competing
+    // parent repair/admission while that same child is waiting for its due time.
+    const scheduledRetry = e.workerRetry && !e.recoveryReason &&
+      ["runtime-failure", "worker-failed"].includes(e.diagnosticCode ?? "");
+    return !scheduledRetry && (e.status === "blocked" ||
+      (e.status === "paused" && e.diagnosticCode === "runtime-failure" && !e.intent && !e.question && !e.parentStopped));
   }
 
   private mayDependOn(e: import("./execution.js").Execution, taskId: string, task?: DurableTask): boolean {
