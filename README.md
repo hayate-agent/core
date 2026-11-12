@@ -103,8 +103,12 @@ explicit admin/approver configuration and optional WebUI customization tools.
 
 Command availability depends on the channel and your permissions. Use
 `/reload-models` after changing provider/model configuration and `/reload-skills`
-after changing skills. `/restart` restarts the installed native CLI after draining
-work; it resumes the selected interactive conversation.
+after changing skills. `/restart` fences new input, checkpoints work within one
+configurable deadline (default60s), then restarts and resumes durable work.
+Native installations check configurable Core/Plugins/WebUI Git sources hourly
+and update automatically by default; `/update check`, `/update install` and
+`/update status software` expose the same external lifecycle owner. Containers
+keep image updates with their deployment owner. See [native lifecycle](docs/native-lifecycle.md).
 
 ## Configuration and safety
 

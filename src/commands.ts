@@ -28,6 +28,7 @@ export interface CommandContext {
   modelRoles?: { get(): import("./model-roles.js").ModelRoles | undefined; set(value: import("./model-roles.js").ModelRoles | undefined): Promise<void> };
   scheduler?: Scheduler;
   updater?: import("./update.js").OverlayUpdater;
+  softwareUpdates?: (action: import("./software-updates.js").SoftwareUpdateAction) => Promise<import("./software-updates.js").SoftwareUpdateStatus>;
   /** Mutable approval settings shared with the runtime. */
   approvals: { mode: "off" | "manual"; tools: string[] };
   /** Current skill catalog (refreshed by /reload-skills). */
@@ -584,10 +585,10 @@ export const COMMANDS: Command[] = [
   {
     name: "restart",
     aliases: ["reload"],
-    help: "Gracefully restart after draining active runs",
+    help: "Fence new input, checkpoint work and restart within lifecycle.restartTimeoutSeconds (default 60s)",
     admin: true,
     run: async (_a, input, ctx) => {
-      reply(ctx, input, "♻️ restarting after current work…");
+      reply(ctx, input, "♻️ Restarting: new input is fenced; current work is checkpointed for recovery (default deadline 60s).");
       await ctx.restart();
     },
   },
@@ -604,12 +605,23 @@ export const COMMANDS: Command[] = [
   {
     name: "update",
     admin: true,
-    help: "Inspect or reconcile provisioned local overlays: status | apply [skills|cron|all] (no download)",
+    help: "status | check | install [software]; native Core/Plugins/WebUI update, or apply [skills|cron|all] for local overlays",
     run: async (args, _input, ctx) => {
-      if (!ctx.updater) throw Error("Overlay updater unavailable");
       const [action = "status", target = "all", ...extra] = args.trim().split(/\s+/).filter(Boolean);
+      if (["check", "install"].includes(action) || (action === "status" && target === "software")) {
+        if (!["software", "all"].includes(target) || extra.length) throw Error("usage: /update status|check|install [software]");
+        if (!ctx.softwareUpdates) throw Error("Native lifecycle owner unavailable");
+        const result = await ctx.softwareUpdates(action as "status" | "check" | "install");
+        return `${result.phase}: ${result.detail}${result.requestId ? ` (request ${result.requestId})` : ""}`;
+      }
+      if (!ctx.updater) throw Error("Overlay updater unavailable");
       if (!["status", "apply"].includes(action) || !["skills", "cron", "all"].includes(target) || extra.length) throw Error("usage: /update status|apply [skills|cron|all]");
       const results = await ctx.updater.run(action as "status" | "apply", target === "all" ? ["skills", "cron"] : [target as "skills" | "cron"]);
+      if (ctx.softwareUpdates && action === "status" && target === "all") {
+        const software = await ctx.softwareUpdates("status");
+        return [`software: ${software.phase} — ${software.detail}`,
+          ...results.filter(r => r.component === "skills" || r.component === "cron").map(r => `${r.component}: ${r.status} — ${r.detail}`)].join("\n");
+      }
       return results.map(r => `${r.component}: ${r.status} — ${r.detail}`).join("\n");
     },
   },

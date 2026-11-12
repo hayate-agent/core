@@ -7,7 +7,9 @@ import { spawnSync } from 'node:child_process';
 const temporary = mkdtempSync(path.join(realpathSync(process.platform === 'darwin' ? '/tmp' : os.tmpdir()), 'hy-'));
 try {
   const tests = readdirSync('test').filter(name => name.endsWith('.test.ts')).sort().map(name => `test/${name}`);
-  const result = spawnSync(process.execPath, ['--import', 'tsx', '--test', ...tests], {
+  const concurrency = process.env.HAYATE_TEST_CONCURRENCY;
+  if (concurrency !== undefined && !/^(?:[1-9]|[1-5][0-9]|6[0-4])$/.test(concurrency)) throw Error('Invalid HAYATE_TEST_CONCURRENCY');
+  const result = spawnSync(process.execPath, ['--import', 'tsx', '--test', ...(concurrency ? [`--test-concurrency=${concurrency}`] : []), ...tests], {
     stdio: 'inherit', env: { ...process.env, TMPDIR: temporary, TMP: temporary, TEMP: temporary },
   });
   if (result.error) throw result.error;
