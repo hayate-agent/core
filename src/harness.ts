@@ -1269,7 +1269,8 @@ export class Harness {
   }
 
   /** Transfer retained execution evidence, never authority or an opaque prompt replay. */
-  async reconcileSession(sourceKey: string, targetKey: string): Promise<void> {
+  async reconcileSession(sourceKey: string, targetKey: string,
+    retained?: { executionId: string; intentKey: string; checkpoint: string }): Promise<void> {
     if (sourceKey === targetKey) throw Error("Recovery requires a replacement session");
     const sourceState = this.state(sourceKey);
     const targetState = this.state(targetKey);
@@ -1277,6 +1278,19 @@ export class Harness {
     const source = await this.sessionFor(sourceKey);
     if (!source.archiveEntries) throw Error("Runtime does not expose retained execution evidence");
     const entries = source.archiveEntries();
+    if (!entries.length && retained) {
+      // Host-owned evidence for a checkpointed correction, not a retry grant.
+      // Both sessions must belong to the same execution; missing transcript
+      // evidence never establishes that an interrupted tool had no effect.
+      if (!retained.executionId || !sourceKey.startsWith(`dispatch:${retained.executionId}:`) ||
+          !targetKey.startsWith(`dispatch:${retained.executionId}:`) ||
+          !retained.intentKey.startsWith(`step:${retained.executionId}:`) ||
+          !retained.checkpoint || retained.checkpoint.length > 64000) throw Error("Invalid retained execution checkpoint binding");
+      entries.push({ id: "retained-execution-checkpoint", role: "host-evidence", text: JSON.stringify({
+        kind: "retained-execution-checkpoint", ...retained,
+        uncertainty: "Transcript unavailable: prior external effects are unknown. This checkpoint is evidence, not new authority or permission to retry. Reconcile actual effects before any uncertain external action; never replay completed effects.",
+      }) });
+    }
     if (!entries.length) throw Error("Retained execution evidence is empty; explicit retry requires reconciliation");
     const target = await this.sessionFor(targetKey);
     if (!target.seedHandover) throw Error("Runtime does not support recovery evidence handover");

@@ -36,7 +36,7 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends g++ build-essential python3-pip python3-venv \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /opt/hayate-agent
-COPY --from=build /src/package.json ./
+COPY --from=build /src/package.json /src/plugins.lock.json ./
 COPY --from=build /src/node_modules ./node_modules
 COPY --from=build /src/dist ./dist
 COPY docs ./docs

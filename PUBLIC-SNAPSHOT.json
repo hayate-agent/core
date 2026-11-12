@@ -1,5 +1,5 @@
 {
-  "contentDigest": "02e2bde49ee9571a41ad5e4eed1f4013ea755b8ceeb3510a6b8170fac7734691",
+  "contentDigest": "21a354f68c6c963294c7269545906e43facfb3a07e5e8060ebe8a422cbc84289",
   "files": [
     {
       "mode": "100644",
@@ -19,7 +19,7 @@
     {
       "mode": "100644",
       "path": "Dockerfile",
-      "sha256": "ca7c8727e6a0b6ec526b7465ce206a21098a1e310ef5dba7dc40eba4d7d5853d"
+      "sha256": "7ca0ff6590ff1266980b6eacfc5c03d67c1028512498dd66c89b193bf340e08f"
     },
     {
       "mode": "100644",
@@ -124,7 +124,7 @@
     {
       "mode": "100644",
       "path": "docs/dispatcher.md",
-      "sha256": "81d275ccb2c362ea5de4ce2948b1c27abb5e1f14ebc3c5aacc8d8a5c1fe45ca8"
+      "sha256": "627c292958612bcd8ed12c5964fad6eac498c733ec4dacf15297a81ae75e2d8b"
     },
     {
       "mode": "100644",
@@ -269,7 +269,7 @@
     {
       "mode": "100644",
       "path": "docs/native-lifecycle.md",
-      "sha256": "aa46bac5a015077e31c1fb5e5eaab8f7704794f5baa6ac9305b3b54fb0e82273"
+      "sha256": "a6f4118ebe749d96cc12cf959377eb67d341435194e01b9f65986113eb06111d"
     },
     {
       "mode": "100644",
@@ -444,7 +444,7 @@
     {
       "mode": "100644",
       "path": "package.json",
-      "sha256": "f6af19d795fc7e24af7546f7ff0f474309181c96de6e3277fec1a113d5c9b7fb"
+      "sha256": "6f1cab94c0d023b7728001c07ba32fc8936b3fef3564dafca7898556cc26e8c4"
     },
     {
       "mode": "100644",
@@ -459,7 +459,12 @@
     {
       "mode": "100644",
       "path": "scripts/build-plugin-assets.mjs",
-      "sha256": "ff2cc4ca5e2d8e36cc5959dbfc71d1bf8ad5ce553a949bd0c4e8e4d9fb1c2e09"
+      "sha256": "ac3cd52a6b51d708288bf73edd0fb78e5293bc6598c3cdc23383837cd7a75453"
+    },
+    {
+      "mode": "100644",
+      "path": "scripts/build-source-version.mjs",
+      "sha256": "be1683f7dc4b6507e84c013d761f888e32459cfe6d61c9a51823c0f9a459f621"
     },
     {
       "mode": "100644",
@@ -509,7 +514,7 @@
     {
       "mode": "100644",
       "path": "src/api/server.ts",
-      "sha256": "5ab9924b6a1a90590de0ddf9d70d7118ae2523c572001e2228f4324e850e42b2"
+      "sha256": "0d86b6afba07949ec015b9a3f65d125afa90435c545dd502743ab07f144660f1"
     },
     {
       "mode": "100644",
@@ -574,7 +579,7 @@
     {
       "mode": "100644",
       "path": "src/build-info.ts",
-      "sha256": "5d96e3b1147cea62a85ea335b7cb01ac18d4d8209c6d9b165686737a20445f9d"
+      "sha256": "d7e6f1793b9d584c493268f244a04428aaf6aca0c4fa78617571d52ab97e83a3"
     },
     {
       "mode": "100644",
@@ -624,12 +629,12 @@
     {
       "mode": "100644",
       "path": "src/cli.ts",
-      "sha256": "a7f720eb87029fcfacbc0576cad06fd26aaf591f622e28a8b9ca39ca4a1ade7f"
+      "sha256": "3623f4322ac31706351d16660fc2d07407d9e105694331269cc72356d9801d5a"
     },
     {
       "mode": "100644",
       "path": "src/commands.ts",
-      "sha256": "e90eac3f96a8c5bf7b187d4171e112291eab99e81c3426809f04248f8970a3dd"
+      "sha256": "a6b3397a28d2435f57d0712d33c19dbf2c5779461a26ecdf83423f6ff5c44e3b"
     },
     {
       "mode": "100644",
@@ -655,6 +660,11 @@
       "mode": "100644",
       "path": "src/completion-strategy.ts",
       "sha256": "1df588bfd9115a101b15f223765d0c914637f5f2fe0a9a1bb94186524531d682"
+    },
+    {
+      "mode": "100644",
+      "path": "src/component-versions.ts",
+      "sha256": "e7809cffb21f6277647e4bc2f34ff0bdd438909506d3197b5b6a41b37cc42c5b"
     },
     {
       "mode": "100644",
@@ -729,7 +739,7 @@
     {
       "mode": "100644",
       "path": "src/dispatcher-sequential.ts",
-      "sha256": "5f82a9e313fbf23cdf86f922b2c0a438ca8b3d02c197b3e824389073bdec134a"
+      "sha256": "55c162565562cf614111e06b2b0c5844c0b7f53e2542bbb77b4c31177272127e"
     },
     {
       "mode": "100644",
@@ -789,7 +799,7 @@
     {
       "mode": "100644",
       "path": "src/harness.ts",
-      "sha256": "775499e6057a69d85391d1851d22b88c0ba3425e6d76c154c2a7b028b125efec"
+      "sha256": "c4363939319f0471537721e7bcdc4cc160e1d6b7e713a8954801266d101e48a8"
     },
     {
       "mode": "100644",
@@ -1099,12 +1109,17 @@
     {
       "mode": "100644",
       "path": "src/software-updates.ts",
-      "sha256": "809e8c7c6d98419878d00e5237c50e04f8223f12eedaa049fdd4698db8bf8747"
+      "sha256": "e7d6c4b459dc894d51f19c34081ca3dd913d9b982cad1db6b2834e0ea5f974ba"
+    },
+    {
+      "mode": "100644",
+      "path": "src/source-version.ts",
+      "sha256": "a630af0efe33f5d99f01d4e8de5530e5a1d7664a4e44c45d5338c250b13ec77c"
     },
     {
       "mode": "100644",
       "path": "src/startup-notice.ts",
-      "sha256": "897c1006c53600d29bb8d4fdfc1c1b19dd61f37aa993d0353f8563ab20bc8645"
+      "sha256": "6da8107043730ed06975e97a96562c490ff9e2ea86543fd8fde5d95f1bb43686"
     },
     {
       "mode": "100644",
@@ -1498,6 +1513,11 @@
     },
     {
       "mode": "100644",
+      "path": "test/component-versions.test.ts",
+      "sha256": "96a9e70f55f95e00bb2d7350b2ddf982d0d8dc7b2b778b390352ae6b194bca9b"
+    },
+    {
+      "mode": "100644",
       "path": "test/config-tick.test.ts",
       "sha256": "06b337be2bad860c379d2c70a476f5d2912efa4f4cd7642bfaeec5d40b754c93"
     },
@@ -1680,6 +1700,11 @@
       "mode": "100644",
       "path": "test/dispatcher-diagnostic.test.ts",
       "sha256": "f999ab7c6639d79168a4f987a4c720d17777abf92ca21aa7e25af6bc0953f8f9"
+    },
+    {
+      "mode": "100644",
+      "path": "test/dispatcher-empty-evidence.test.ts",
+      "sha256": "6e18067ef282a7775eafb761090b929ee862fe97033d88e2570f908847da93d8"
     },
     {
       "mode": "100644",
@@ -2789,7 +2814,12 @@
     {
       "mode": "100644",
       "path": "test/software-updates.test.ts",
-      "sha256": "710224abe4ff138e19bb0462bb6da48bcb6b12ae96e275796b04b4cc6b215a06"
+      "sha256": "9e3194b49eeb82ded7c0f33c99f510e7e2fe0b951374f333de6730d9fd264c19"
+    },
+    {
+      "mode": "100644",
+      "path": "test/source-version-build.test.ts",
+      "sha256": "9620cb75cfad037a41d0e0a82a097b6a07a8e9ce2b2d4e958259fadcff872582"
     },
     {
       "mode": "100644",
@@ -2819,7 +2849,7 @@
     {
       "mode": "100644",
       "path": "test/startup-notice.test.ts",
-      "sha256": "00579c6fa93a6d9a645b6b4737c73b50819b5967a35733cd87cf6285a128c5b3"
+      "sha256": "5f0483c90a031cdcb874dadd657e59a49ab6ddc818129a069e3f4a702c6e86c6"
     },
     {
       "mode": "100644",
@@ -3360,5 +3390,5 @@
   "historyPolicy": "fresh-root; no source commits, tags, refs or deleted blobs",
   "pluginSHA": "224bf11abcf6dc9aca8a5a9c06f8674a69f50db1",
   "schema": 1,
-  "sourceSHA": "e6c759ce4b28503ab1cf73f98b491d8c62436354"
+  "sourceSHA": "2b28654a35bacf412763f7dc4cf3b5ff3b9c68b8"
 }

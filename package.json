@@ -13,7 +13,8 @@
     "dist",
     "docs",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "plugins.lock.json"
   ],
   "bin": {
     "hayate-agent": "./dist/launcher.js"
@@ -27,7 +28,7 @@
     "prebuild": "npm run plugins:materialize && npm run plugins:assets",
     "pretypecheck": "npm run plugins:materialize",
     "pretest": "npm run build",
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node scripts/build-source-version.mjs",
     "prepare": "npm run build",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node scripts/test.mjs",
