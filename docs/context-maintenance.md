@@ -86,7 +86,31 @@ contextMaintenance:
   checkEveryTurns: 5
   cooldownTurns: 5
   autoHandover: true
+  workerContextTokens: 48000
 ```
+
+### Worker context within a single Harness turn
+
+A dispatcher/subagent worker may make many assistant/tool exchanges before its
+single Harness turn finishes. Harness before/after-turn maintenance cannot bound
+that inner loop. The PI adapter therefore enables **native between-response
+compaction for child sessions**, independent of the Main compaction owner, with
+an absolute `workerContextTokens` trigger (default 48,000; safe integer >= 8,192).
+The reserve is calculated from the **actually selected model** after per-turn
+routing and refreshed before the SDK's next-response check. Existing stricter
+per-model reserves are retained; recent retained context is at most one third of
+the remaining input threshold. Overrides are in-memory and child-session-local;
+Main and ephemeral classifiers are unchanged. No model context window is forged.
+
+This is a compaction trigger, not a hard billing/output quota: an indivisible
+message or static system context can still exceed it, and compaction itself
+consumes tokens. SDK compaction runs only at its safe boundary after settled tool
+results, never by aborting an in-flight side effect or starting a replacement
+worker. Failure retains the SDK's error/abort semantics, not a success receipt.
+Worker instructions also require a bounded verified slice and an explicit
+incomplete checkpoint for remaining work. Context-maintenance tool requests must
+finish their working turn before the host performs handover; a long-running tool
+cannot be handed over mid-effect. No new permission or replay right is granted.
 
 The same partial object may be stored in `settings.local.yaml`. The core command
 `/context-policy status|on|off|handover-on|handover-off` updates that overlay (admin

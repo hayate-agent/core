@@ -354,6 +354,7 @@ async function main(argv: string[]): Promise<void> {
     legacySessionProvider: new FilesystemSessionProvider(path.join(config.home, "session-store")),
     compaction: () => compactionAdapter,
     compactionOwner: () => contextPolicy(settings.effective().contextMaintenance).compactionOwner ?? "harness",
+    workerContextTokens: () => contextPolicy(settings.effective().contextMaintenance).workerContextTokens ?? 48000,
     mcp: settings.effective().mcp,
     mcpUserManagement: true,
     skillPaths: config.skills.paths,
