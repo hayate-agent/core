@@ -46,7 +46,7 @@ for (const attempts of [1, 3]) test(`unavailable with reserved retry ${attempts}
     await h.recoverTasks();
     assert.equal(h.pendingInputs().length, 0);
     assert.equal(h.state(key).task!.recoveryRetry?.diagnostic, "technical");
-    assert.equal(h.state(key).task!.state, "blocked");
+    assert.equal(h.state(key).task!.state, "active", "an unavailable assessor retains its durable retry owner");
     assert.equal(h.state(key).task!.recoveryAdmission, undefined);
   } finally { await h.stop(0); }
 });

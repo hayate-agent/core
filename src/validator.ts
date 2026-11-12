@@ -7,7 +7,13 @@ export interface CompletionAuthorization {
   purpose?: "nightly-closure";
 }
 export type CompletionDiagnostic = "unavailable" | "inconclusive" | "invalid_response" | "technical";
-export type CompletionDiagnosticSink = (diagnostic: CompletionDiagnostic) => void;
+/** Fixed vocabulary only: never retain exception text, URLs, headers or model data. */
+export interface CompletionFailureDetail {
+  cause: "timeout" | "provider_error" | "invalid_shape";
+  code?: "ECONNRESET" | "ECONNREFUSED" | "ETIMEDOUT" | "ENOTFOUND" | "EAI_AGAIN" | "UND_ERR_CONNECT_TIMEOUT" | "UND_ERR_SOCKET";
+  status?: number;
+}
+export type CompletionDiagnosticSink = (diagnostic: CompletionDiagnostic, detail?: CompletionFailureDetail) => void;
 export type CompletionPrompt = (input: Inbound, reply: string, authorization: CompletionAuthorization, now: () => number) => string;
 
 /** Trusted extension request. All answers are advisory, never execution receipts or authority. */

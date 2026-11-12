@@ -27,7 +27,7 @@ for (const stored of [false, true]) test(`${mode}, stored next=${stored}: restar
     await restored.recoverTasks(); restored.releaseRestored(); await restored.drained();
     await restored.tick(); await restored.drained();
     assert.equal(turns, 0); assert.equal(restored.state(key).task!.id, "original");
-    assert.equal(restored.state(key).task!.state, "blocked");
+    assert.equal(restored.state(key).task!.state, mode === "inconclusive" ? "active" : "blocked");
     assert.equal(restored.state(key).task!.lastReply, "Published receipt 123");
     assert.equal(restored.state(key).task!.recoveryAdmission, undefined);
     if (stored) assert.equal(restored.state(key).task!.next, "Read receipt 123, no publication");
@@ -59,7 +59,7 @@ test("genuine completed Q&A stays completed without assessor or replay", async (
   finally { await h.stop(0); }
 });
 
-test("inconclusive assessment never admits working attempts or evaluator-only loops", async () => {
+test("inconclusive assessment retains backoff without working attempts or hot evaluator loops", async () => {
   let checks = 0, turns = 0;
   const h = new Harness({ runtime: new FakeRuntime(() => { turns++; return "No new evidence"; }), tickMs: 60000,
     completionCheck: async (_i, _r, _s, diagnostic) => { checks++; diagnostic?.("inconclusive"); return undefined; } });
@@ -67,7 +67,8 @@ test("inconclusive assessment never admits working attempts or evaluator-only lo
   try {
     await h.recoverTasks(); h.releaseRestored(); await h.drained();
     for (let i = 0; i < 25; i++) { await h.tick(); await h.drained(); }
-    assert.equal(h.state(key).task!.state, "blocked");
+    assert.equal(h.state(key).task!.state, "active");
+    assert.ok(h.state(key).task!.recoveryRetry);
     assert.equal(turns, 0); assert.equal(checks, 1);
     assert.equal(h.state(key).task!.recoveryAdmission, undefined);
     const before = turns; await h.tick(); await h.drained(); assert.equal(turns, before);

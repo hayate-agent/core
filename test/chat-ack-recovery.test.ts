@@ -6,9 +6,9 @@ import { FakeRuntime, MemoryChannel, msg } from "./fakes.js";
 
 const key = "mem:room1";
 const unfinished = (): DurableTask => ({ id: "unfinished", original: "Implement and test the repair", state: "active", depth: 2 });
-const make = (check: NonNullable<ConstructorParameters<typeof Harness>[0]["completionCheck"]>) => {
+const make = (check: NonNullable<ConstructorParameters<typeof Harness>[0]["completionCheck"]>, now?: () => number) => {
   const runtime = new FakeRuntime(() => "Gern geschehen.");
-  const h = new Harness({ runtime, tickMs: 60000, completionCheck: check });
+  const h = new Harness({ runtime, tickMs: 60000, completionCheck: check, now });
   const channel = new MemoryChannel(); h.addChannel(channel); h.onStateChange = async () => {};
   return { h, runtime, channel };
 };
@@ -43,7 +43,7 @@ for (const text of ["DANKE SEHR!", "Was ist zwei plus zwei?"]) {
         checks++; assert.equal(JSON.parse(reply).reply, "Gern geschehen.");
         return assessCompletion({ review: async () => '{"state":"completed"}' }, input, reply,
           { task: input.completionAnchor!.task }, signal);
-      }); next = fixture.h;
+      }, () => saved[0].task.recoveryRetry.nextAt); next = fixture.h;
       next.restoreSessions(saved); await next.recoverTasks(); next.releaseRestored(); await next.drained();
       await next.recoverTasks();
       assert.equal(checks, 1); assert.equal(next.state(key).task!.state, "completed");

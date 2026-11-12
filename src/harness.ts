@@ -72,6 +72,8 @@ export interface DurableTask {
   supervisorDecision?: { proposal?: "continue" | "waiting" | "blocked" | "completed";
     verdict: "continue" | "waiting" | "blocked" | "completed" | "unresolved";
     diagnostic?: import("./completion-check.js").CompletionDiagnostic;
+    /** Host reason for a non-decision, not a semantic denial or execution permit. */
+    deferred?: "queued-input" | "interrupted" | "paused" | "stopping" | "unavailable" | "no-verdict";
     /** One-shot assessment receipt. Only recoveryAdmission grants execution. */
     dependencyHold?: { evidence: string; reason: "assessment-claimed" | "global-hold" | "independent-next-proposed";
       next?: string } };
@@ -2143,20 +2145,10 @@ export class Harness {
     if (!unchanged()) return;
     if (diagnostic) task.recoveryRetry.diagnostic = diagnostic;
     task.recoveryAssessment = "decided";
-    if (diagnostic === "inconclusive") {
-      // A valid semantic non-decision is not a technical outage or a timer
-      // permission. Preserve the real uncertainty until relevant evidence.
-      this.reconcileUnassessedTask(task);
-      await this.outbox.barrier();
-      return;
-    }
-    if (diagnostic === "unavailable") {
-      // Keep the read-only retry scheduler alive. This is not a semantic block
-      // and never admits productive work without a later independent decision.
-      task.state = "active";
-      task.explicitBlocked = false;
-      task.recoveryRetry.nextAt = this.now() + assessmentRetryDelay(task.recoveryRetry.attempts);
-      this.recoveryAttention(s, task, diagnostic, true);
+    if (diagnostic === "inconclusive" || diagnostic === "unavailable") {
+      // Keep #369's read-only retry ownership: a missing verdict is neither a
+      // semantic block nor productive/replay permission.
+      this.reconcileUnassessedTask(task, true);
       await this.outbox.barrier();
       return;
     }
@@ -2168,6 +2160,7 @@ export class Harness {
       task.next = `First reconcile the actual task state and completed side effects; do not blindly replay external effects. Then: ${plan.next.trim()}`;
       task.anchor = input.completionAnchor;
       task.recoveryRetry = undefined;
+      task.supervisorDecision = { proposal: task.supervisorDecision?.proposal, verdict: "continue" };
       task.contextPreparation = plan.contextPreparation;
       if (plan.expiresAt !== undefined) task.expiresAt = plan.expiresAt;
       task.recoveryAdmission = { id: this.taskQueueId(task, task.depth + 1), depth: task.depth + 1,
@@ -2176,9 +2169,11 @@ export class Harness {
       // Unknown/legacy tasks cannot be closed without a task-bound result.
       task.state = "completed";
       task.recoveryRetry = undefined;
+      task.supervisorDecision = { proposal: task.supervisorDecision?.proposal, verdict: "completed" };
     } else if (plan?.state === "waiting" || plan?.state === "blocked") {
       task.state = plan.state; // No timer or executable next step is granted.
       task.recoveryRetry = undefined;
+      task.supervisorDecision = { proposal: task.supervisorDecision?.proposal, verdict: plan.state };
     } else {
       task.recoveryRetry.diagnostic ??= "invalid_response";
       task.recoveryRetry.nextAt = this.now() + assessmentRetryDelay(task.recoveryRetry.attempts);
@@ -2190,7 +2185,9 @@ export class Harness {
   private reconcileUnassessedTask(task: DurableTask, preserveRetry = false): void {
     if (!preserveRetry) task.recoveryRetry = undefined;
     task.recoveryAssessment = "decided";
-    task.state = "blocked";
+    // A backend outage or inconclusive review does not revoke the mandate.
+    // Retain its scheduler owner and backoff, while withholding all execution.
+    task.state = preserveRetry && task.recoveryRetry ? "active" : "blocked";
     task.explicitBlocked = false;
     task.next ??= "Independent supervisor admission unavailable; retained task requires assessment before productive continuation.";
   }
@@ -2537,17 +2534,17 @@ export class Harness {
           if (repetitions(task) >= 20 && task.state === "blocked") this.budgetAttention(s, task);
           const diagnostic = this.completionDiagnostics.get(input);
           task.supervisorDecision = this.supervisorDecisions.get(input);
-          // Technical assessment failure is unresolved, not a semantic denial.
+          // Every non-decision retains a durable retry owner, including skipped,
+          // interrupted, superseded and inconclusive assessments. A diagnostic
+          // callback is not guaranteed to run. Never turn its absence into a hold.
           // Keep the proposal untrusted; only independent admission permits work.
           if (repetitions(task) < 20 && task.supervisorDecision?.verdict === "unresolved" &&
-              (task.supervisorDecision.proposal === "continue" ||
-               task.supervisorDecision.diagnostic === "technical" ||
-               task.supervisorDecision.diagnostic === "invalid_response" ||
-               task.supervisorDecision.diagnostic === "unavailable")) {
+              (task.expiresAt === undefined || task.expiresAt > this.now())) {
             task.state = "active";
             task.explicitBlocked = false;
             task.recoveryAssessment = "claimed";
-            task.recoveryRetry = { attempts: 1, nextAt: this.now() + 60000, diagnostic: task.supervisorDecision.diagnostic ?? "unavailable" };
+            task.recoveryRetry = { attempts: 1, nextAt: this.now() + 60000,
+              diagnostic: task.supervisorDecision.diagnostic ?? "inconclusive" };
           }
           if (dependencyDecision) task.supervisorDecision = {
             ...(task.supervisorDecision ?? { verdict: "unresolved" }), dependencyHold: dependencyDecision };
@@ -2555,7 +2552,7 @@ export class Harness {
             task.recoveryAdmission = { id: this.taskQueueId(task, task.depth + 1), depth: task.depth + 1,
               next: task.next, original: task.original, expiresAt: task.expiresAt,
               ...(independentValid ? { independent } : {}) };
-          if (!plan && task.state === "active" && (diagnostic === "inconclusive" || diagnostic === "unavailable") &&
+          if (!plan && task.state === "active" && !task.recoveryRetry && (diagnostic === "inconclusive" || diagnostic === "unavailable") &&
               (task.expiresAt === undefined || task.expiresAt > this.now()) &&
               !this.paused && !this.stopping && !s.queue.length && !this.hasPendingDependency(s.key, task.id)) {
             if (retainedNext?.trim()) task.next = retainedNext;
@@ -2949,8 +2946,12 @@ export class Harness {
       input.continuation = undefined;
     if (autonomous && finalStatus === "completed") {
       const diagnostic = this.completionDiagnostics.get(input) ?? (!this.opts.completionCheck ? "unavailable" : undefined);
+      const deferred = independentlyResolved ? undefined : s.queue.length ? "queued-input" :
+        assessmentAbort.signal.aborted ? "interrupted" : this.paused ? "paused" : this.stopping ? "stopping" :
+        !this.opts.completionCheck ? undefined : !diagnostic ? "no-verdict" : undefined;
       this.supervisorDecisions.set(input, { ...(checkpoint ? { proposal: checkpoint.state } : {}),
-        verdict: independentlyResolved ? input.continuation!.state : "unresolved", ...(diagnostic ? { diagnostic } : {}) });
+        verdict: independentlyResolved ? input.continuation!.state : "unresolved", ...(diagnostic ? { diagnostic } : {}),
+        ...(deferred ? { deferred } : {}) });
     }
     denyProposal();
     if (s.cancelling === input) {

@@ -974,8 +974,8 @@ test("completed assessment preserves terminal boundaries and retains inconclusiv
       await h.submit({...msg("original task"),...(boundary==="depth"?{continuationDepth:20}:{})});await h.drained();
       assert.equal(turns,boundary==="depth"?0:1,boundary);
       assert.equal(checks,["finished","invalid","failed","denied","waiting","blocked"].includes(boundary)?1:0,boundary);
-      if(["finished","expired","pause"].includes(boundary)) assert.equal(h.state("mem:room1").task?.state,"completed",boundary);
-      if(["invalid","failed","denied"].includes(boundary)) assert.equal(h.state("mem:room1").task?.state,"active",boundary);
+      if(["finished","expired"].includes(boundary)) assert.equal(h.state("mem:room1").task?.state,"completed",boundary);
+      if(["invalid","failed","denied","pause"].includes(boundary)) assert.equal(h.state("mem:room1").task?.state,"active",boundary);
     } finally {await h.stop(1000);}
   }
 });
