@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 import { reasoningEffortNoneModels } from "./product-paths.js";
+import { BUILD_INFO } from "./build-info.js";
+import { StartupNotice } from "./startup-notice.js";
 import { McpManagement } from "./mcp-management.js";
 import { workingTreeEvidence } from "./repetition-budget.js";
 import { ToolGuardError } from "./tool-guard-error.js";
@@ -1003,7 +1005,6 @@ async function main(argv: string[]): Promise<void> {
   process.once("disconnect", () => void shutdown(interactive ? 129 : 143));
   try {
     await harness.start();
-    if (process.send && process.connected) process.send({ type: "hayate-runtime-ready" }, () => {});
     await improvement!.start();
   }
   catch (err) {
@@ -1044,7 +1045,15 @@ async function main(argv: string[]): Promise<void> {
     await persist();
     harness.releaseRestored();
   }
+  if (stopping) return;
   hostAdmissionReady = true;
+  // Never acknowledge a restart from the old process or before startup recovery
+  // and channel authentication succeed. Outbox delivery is independent of work.
+  new StartupNotice({ agent: config.agent, build: BUILD_INFO, restarted: !!saved,
+    post: (input, text) => harness.post(input, text), log }).ready(localSessions?.current
+      ? { channel: "console", target: localSessions.current.key } : harness.home ?? config.home_address);
+  await persist();
+  if (!stopping && process.send && process.connected) process.send({ type: "hayate-runtime-ready" }, () => {});
 }
 
 main(process.argv.slice(2)).catch(async (err) => {
