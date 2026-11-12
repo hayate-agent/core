@@ -10,6 +10,7 @@ import { reviewConfig } from "./review-config.js";
 import { validateWasmTools } from "./wasm-tools.js";
 import { validateModelRoles, type ModelRoles } from "./model-roles.js";
 import { dispatcherConfig } from "./dispatcher-config.js";
+import { softwareUpdatePolicy, type SoftwareUpdateConfig } from "./software-updates.js";
 
 export interface ReviewConfig {
   enabled: boolean;
@@ -101,6 +102,10 @@ export interface HarnessConfig {
     /** On SIGTERM / restart: wait this long for in-flight turns, then abort (Hermes restart_drain_timeout). */
     drainSeconds: number;
   };
+  /** Total checkpoint/stop deadline shared by all owners, including cleanup. */
+  lifecycle?: { restartTimeoutSeconds: number; agentRestart?: boolean };
+  /** Startup-trusted native source update policy; not a model-writable setting. */
+  softwareUpdates?: SoftwareUpdateConfig;
   /** Container memory guard: kill the largest child above this % of the cgroup limit; 0 = off. */
   memoryGuard: { percent: number };
   /** Senders allowed to run privileged commands (/approve, /pause, /restart, /yolo ...). Empty = everyone. */
@@ -144,6 +149,13 @@ export function defaultConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
   if (!Number.isInteger(loop.tickMs) || loop.tickMs < 1 || loop.tickMs > 2_147_483_647) {
     throw new Error("loop.tickMs must be an integer between 1 and 2147483647 milliseconds");
   }
+  if (!Number.isFinite(loop.drainSeconds) || loop.drainSeconds < 0 || loop.drainSeconds > 3600) throw Error("loop.drainSeconds must be between 0 and 3600");
+  softwareUpdatePolicy(overrides.softwareUpdates);
+  if (overrides.lifecycle !== undefined && (!overrides.lifecycle || typeof overrides.lifecycle !== "object" || Array.isArray(overrides.lifecycle) ||
+      Object.keys(overrides.lifecycle).some(key => !["restartTimeoutSeconds", "agentRestart"].includes(key)) ||
+      (overrides.lifecycle.agentRestart !== undefined && typeof overrides.lifecycle.agentRestart !== "boolean"))) throw Error("Invalid lifecycle configuration");
+  const lifecycle = { restartTimeoutSeconds: 60, agentRestart: false, ...overrides.lifecycle };
+  if (!Number.isInteger(lifecycle.restartTimeoutSeconds) || lifecycle.restartTimeoutSeconds < 1 || lifecycle.restartTimeoutSeconds > 3600) throw Error("lifecycle.restartTimeoutSeconds must be an integer between 1 and 3600");
   reviewConfig(overrides.review); // validate before startup
   if (overrides.reviewEngine !== undefined && (typeof overrides.reviewEngine !== "string" || !overrides.reviewEngine.trim() || overrides.reviewEngine.length > 2000)) throw Error("Invalid reviewEngine");
   if (overrides.contextStrategy !== undefined && (typeof overrides.contextStrategy !== "string" || !overrides.contextStrategy.trim() || overrides.contextStrategy.length > 2000)) throw Error("Invalid contextStrategy");
@@ -207,6 +219,8 @@ export function defaultConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
     skills: { paths: [path.join(home, "skills")], context: "auto", ...overrides.skills },
     cron: { jobsFile: path.join(home, "cron", "jobs.yaml"), ...overrides.cron },
     loop,
+    lifecycle,
+    softwareUpdates: softwareUpdatePolicy(overrides.softwareUpdates),
     memoryGuard: { percent: 90, ...overrides.memoryGuard },
     memory: memoryConfig(overrides.memory),
     admins: overrides.admins ?? [],

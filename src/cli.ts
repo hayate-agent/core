@@ -12,6 +12,7 @@ import { reloadableToolsPlugin } from "./builtin-plugins/reloadable-tools-plugin
 import { protectedContentPlugin } from "./builtin-plugins/protected-content-plugin.js";
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { LocalSessions } from "./local-sessions.js";
 import { ExecutionContexts } from "./execution-contexts.js";
@@ -46,6 +47,9 @@ import { Subagents } from "./subagents.js";
 import { ExecutionStore, executionTarget } from "./execution.js";
 import { Dispatcher, stopDispatcherParent } from "./dispatcher.js";
 import { MaintenanceJournal } from "./update-maintenance.js";
+import { ShutdownDeadline } from "./shutdown-deadline.js";
+import { requestSoftwareUpdate, softwareLifecyclePlugin } from "./software-update-client.js";
+import { containerRuntime } from "./software-updates.js";
 import { DispatcherRuntime } from "./dispatcher-runtime.js";
 import { attentionRequired } from "./notification-routing.js";
 import { dispatcherConfig } from "./dispatcher-config.js";
@@ -176,6 +180,15 @@ async function main(argv: string[]): Promise<void> {
   }
   if (!!values["--observe-directory"] !== !!values["--observe-session"]) throw Error("Observer requires both directory and exact session key");
   if (!!values["--maintenance-directory"] !== !!values["--maintenance-session"]) throw Error("Maintenance requires both directory and exact session key");
+  // Direct `node dist/cli.js run` and `npm start` need the same process owner
+  // as the installed launcher. Otherwise exit 75 merely stops a native service
+  // whose host restart policy may intentionally be disabled.
+  if (!Boolean(process.send && process.connected)) {
+    const { runForeground, foregroundOptions } = await import("./launcher.js");
+    process.exitCode = await runForeground(process.argv[1] ? path.resolve(process.argv[1]) : fileURLToPath(import.meta.url), argv,
+      process.execArgv, await foregroundOptions(argv));
+    return;
+  }
   const config = await loadConfig(values["--home"]);
   if (interactive) config.cwd = process.cwd();
   const protectedContent = new ProtectedContent(config.home, config.protectedContent);
@@ -354,6 +367,7 @@ async function main(argv: string[]): Promise<void> {
     legacySessionProvider: new FilesystemSessionProvider(path.join(config.home, "session-store")),
     compaction: () => compactionAdapter,
     compactionOwner: () => contextPolicy(settings.effective().contextMaintenance).compactionOwner ?? "harness",
+    workerContextTokens: () => contextPolicy(settings.effective().contextMaintenance).workerContextTokens ?? 48000,
     mcp: settings.effective().mcp,
     mcpUserManagement: true,
     skillPaths: config.skills.paths,
@@ -561,6 +575,8 @@ async function main(argv: string[]): Promise<void> {
         tls: apiTls,
         agent: config.agent,
         runs,
+        lifecycle: { timeoutSeconds: config.lifecycle?.restartTimeoutSeconds ?? 60,
+          nativeSoftwareUpdates: !containerRuntime() && config.softwareUpdates?.enabled !== false },
         updateAdmission: harness,
         cancel: (key, id) => harness.cancel(key, id),
         models: () => runtime.models(),
@@ -693,7 +709,13 @@ async function main(argv: string[]): Promise<void> {
       await dispatcher.submitScheduled(key, requestId, task, mandate);
     },
   });
-  await plugins.load(config.plugins ?? [], { agent: config.agent, home: config.home, cwd: config.cwd, executionContexts: executionContextCapability, foregroundWork: work => harness.withForegroundWork(work) }, [...builtinCommandNames, "sessions", "resume", ...skills.map((s) => s.name)], ["console", "api", "dispatch", ...Object.keys(bundledGatewayModules()), ...harness.channels.keys()], [...(values["--maintenance-directory"] ? [maintenanceControlPlugin(Object.freeze({
+  let requestRestart: () => Promise<void> = async () => { throw Error("Lifecycle startup not complete; retry restart"); };
+  await plugins.load(config.plugins ?? [], { agent: config.agent, home: config.home, cwd: config.cwd, executionContexts: executionContextCapability, foregroundWork: work => harness.withForegroundWork(work) }, [...builtinCommandNames, "sessions", "resume", ...skills.map((s) => s.name)], ["console", "api", "dispatch", ...Object.keys(bundledGatewayModules()), ...harness.channels.keys()], [softwareLifecyclePlugin(() => requestRestart(), (action, key) => {
+    if (action === "install" && config.softwareUpdates?.enabled !== false && config.softwareUpdates?.autoInstall !== false) return true;
+    if (action === "restart" && config.lifecycle?.agentRestart === true) return true;
+    const input = harness.sessions.get(key)?.current;
+    return input?.source === "channel" && (input.replyTo?.channel === "console" || !!input.sender && admins.includes(input.sender));
+  }), ...(values["--maintenance-directory"] ? [maintenanceControlPlugin(Object.freeze({
     status: () => maintenance.admissionStatus(values["--maintenance-session"]!),
     admit: (id: string, request: import("./context-maintenance.js").MaintenanceRequest, version: number) => maintenance.admit(values["--maintenance-session"]!, id, request, version),
     cancel: (id: string, version: number) => maintenance.cancelAdmission(values["--maintenance-session"]!, id, version),
@@ -799,8 +821,13 @@ async function main(argv: string[]): Promise<void> {
     if (stopping) return;
     stopping = true;
     harness.stopping = true; // fence synchronously, before any ordered cleanup awaits
-    // Like Hermes restart_drain_timeout: stop input, finish in-flight work for up to
-    // drainSeconds, abort the rest, then persist state (user's /pause flag untouched).
+    let persisted = false;
+    const deadline = new ShutdownDeadline((config.lifecycle?.restartTimeoutSeconds ?? 60) * 1000, () => {
+      console.error(`[lifecycle] shutdown deadline reached; ${persisted ? "checkpoint saved" : "previous durable inbox retained; final checkpoint unconfirmed"}`);
+      process.exit(persisted ? code : 1);
+    });
+    // Signal all producers/owners now. Waiting for business-level idle would
+    // deadlock durable agents that have queued work, monitors or periodic jobs.
     scheduler.stop();
     clearInterval(policyTimer);
     clearInterval(cronReportTimer);
@@ -821,13 +848,14 @@ async function main(argv: string[]): Promise<void> {
         (selected.task?.id === cancelledInput.taskId ? selected.task : undefined);
       if (task) { task.state = "stopped"; task.recoveryAdmission = undefined; }
     }
-    const retained = await harness.stop(interrupt ? 0 : config.loop.drainSeconds * 1000, 2000);
+    // Reserve part of the SAME deadline for durable snapshot and delivery cleanup.
+    const reserve = Math.min(5000, (config.lifecycle?.restartTimeoutSeconds ?? 60) * 200);
+    const retained = await deadline.wait(harness.stop(interrupt ? 0 :
+      Math.min(config.loop.drainSeconds * 1000, deadline.remaining(reserve + 1000)),
+      Math.min(1000, deadline.remaining(reserve))), deadline.remaining(reserve), () => harness.pendingInputs());
     // Only the explicitly interrupted current turn is cancelled; queued human
     // inputs and other conversations remain durable, parked under their owners.
-    let receiptTimer: NodeJS.Timeout | undefined;
-    const cancelledDurably = await Promise.race([cancellationReceipt,
-      new Promise<boolean>(resolve => { receiptTimer = setTimeout(() => resolve(false), 1000); })]);
-    clearTimeout(receiptTimer);
+    const cancelledDurably = await deadline.wait(cancellationReceipt, 1000, () => false);
     let unfinished = cancelledInput && cancelledDurably ? retained.filter(input =>
       !(cancelledInput.id && input.id === cancelledInput.id) &&
       !(cancelledInput.executionTurnId && input.executionTurnId === cancelledInput.executionTurnId) &&
@@ -839,21 +867,17 @@ async function main(argv: string[]): Promise<void> {
     harness.onStateChange = undefined;
     // A graceful stop is not the turn's fault: only crashes (OOM, kill) count towards giving up.
     for (const input of unfinished) if (sessionEnabled(input.sessionKey)) input.started = undefined;
-    let persisted = false;
-    for (let attempt = 0; attempt < 2 && !persisted; attempt++) {
-      let saveTimer: NodeJS.Timeout | undefined;
+    for (let attempt = 0; attempt < 2 && !persisted && deadline.remaining() > 0; attempt++) {
       try {
-        await Promise.race([persist(unfinished), new Promise<never>((_resolve, reject) => { saveTimer = setTimeout(() => reject(Error("shutdown save timed out")), 2000); })]);
-        persisted = true;
+        persisted = await deadline.wait(persist(unfinished).then(() => true), 2000, () => false);
+        if (!persisted) break; // A timed-out write has an unknown outcome; never overlap retries.
       } catch { console.error("[state] shutdown save failed; retaining ownership for a bounded retry"); }
-      finally { clearTimeout(saveTimer); }
     }
     if (!persisted) { console.error("[state] shutdown snapshot was NOT saved; previous durable inbox retained"); code = 1; }
     if (unfinished.length) console.error(`[harness] ${unfinished.length} pending input(s) retained for their owning conversations`);
     const cleanup = Promise.allSettled([owners, mcp.close(), memoryProvider.close(), extensionManager.stop(), policyManager.stop(), sessionProviderOwner?.close(), plugins.stop().then(() => executionContexts.drain())]);
-    let cleanupTimer: NodeJS.Timeout | undefined;
-    await Promise.race([cleanup, new Promise<void>(resolve => { cleanupTimer = setTimeout(resolve, 3000); })]);
-    clearTimeout(cleanupTimer);
+    await deadline.wait(cleanup.then(() => undefined), 3000, () => undefined);
+    deadline.close();
     // The kernel releases the Home lock when this owner exits, never while its
     // uncooperative callbacks could still write beside a replacement process.
     process.exit(code);
@@ -878,8 +902,28 @@ async function main(argv: string[]): Promise<void> {
     } satisfies BenchmarkSubmitter, { home: config.home, config: () => settings.effective().benchmark })
     : undefined;
 
+  requestRestart = async () => {
+    if (localSessions?.current && process.send && process.connected) {
+      try { process.send({ type: "hayate-restart", session: localSessions.current.id }, error => {
+        if (error) log("[lifecycle] foreground selection handoff failed; durable sessions retained");
+      }); } catch { log("[lifecycle] foreground selection handoff unavailable; durable sessions retained"); }
+    }
+    void shutdown(75);
+  };
+  const softwareEvent = (message: unknown) => {
+    const event = message as { type?: unknown; event?: unknown; detail?: unknown };
+    if (event?.type !== "hayate-software-event" || !["available", "prepared"].includes(event.event as string) || typeof event.detail !== "string") return;
+    const target = harness.home ?? config.home_address;
+    const text = event.event === "prepared" ? `♻️ Software prepared; checkpointing and restarting: ${event.detail}` :
+      `Software update available: ${event.detail}. ${config.softwareUpdates?.autoInstall === false ? "Use /update install to install and restart." : "Automatic download and validation enabled."}`;
+    log(`[lifecycle] ${text}`);
+    if (target) harness.post({ source: "host", sessionKey: `${target.channel}:${target.target}`, text: "Software lifecycle notice", replyTo: target }, text);
+    if (event.event === "prepared") void requestRestart();
+  };
+  process.on("message", softwareEvent);
   installCommands({
     harness,
+    softwareUpdates: requestSoftwareUpdate,
     benchmark: benchmarkService,
     mcp,
     scheduler,
@@ -935,19 +979,7 @@ async function main(argv: string[]): Promise<void> {
     approvers,
     agent: config.agent,
     // Exit with 75 after drain. The native foreground launcher or service supervisor restarts.
-    restart: async () => {
-      // Shut down outside the command handler; the drain delivers /restart's acknowledgement first.
-      if (localSessions?.current && process.send && process.connected) {
-        const session = localSessions.current.id;
-        await new Promise<void>((resolve, reject) => {
-          process.send!({ type: "hayate-restart", session }, error => {
-            if (error) reject(Error("Restart session could not be handed to the foreground launcher; agent was not stopped"));
-            else resolve();
-          });
-        });
-      }
-      setImmediate(() => void shutdown(75));
-    },
+    restart: requestRestart,
   });
 
   // Kill the largest tool child before the kernel OOM-kills the whole container.
@@ -958,10 +990,13 @@ async function main(argv: string[]): Promise<void> {
   process.on("SIGHUP", () => void shutdown(129, interactive));
   if (interactive) {
     process.stdin.once("end", () => void shutdown(129, true));
-    process.once("disconnect", () => void shutdown(129, true));
   }
+  // A lost native foreground owner is not a user cancellation. Checkpoint in
+  // gateway mode too, so an orphan cannot retain the Home lock indefinitely.
+  process.once("disconnect", () => void shutdown(interactive ? 129 : 143));
   try {
     await harness.start();
+    if (process.send && process.connected) process.send({ type: "hayate-runtime-ready" }, () => {});
     await improvement!.start();
   }
   catch (err) {

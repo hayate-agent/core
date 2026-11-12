@@ -1,5 +1,6 @@
 import { readFile, mkdir, rm, writeFile } from 'node:fs/promises';
 import { createHash, randomUUID } from 'node:crypto';
+import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
@@ -15,7 +16,7 @@ export async function materializeAssets(lock, output, load) {
   const verified = [];
   for (const plugin of lock.plugins) {
     if (!/^[a-z][a-z0-9-]*$/.test(plugin.name) || names.has(plugin.name) ||
-        plugin.repository !== 'https://git.vanillacore.net/harness/plugins' ||
+        !['https://git.vanillacore.net/harness/plugins', 'https://github.com/hayate-agent/plugins'].includes(plugin.repository) ||
         !/^[a-f0-9]{40}$/.test(plugin.revision) || !relative(plugin.source) ||
         !plugin.files || typeof plugin.files !== 'object' || Array.isArray(plugin.files) || !Object.keys(plugin.files).length) {
       throw Error('Invalid optional plugin identity');
@@ -47,10 +48,19 @@ export async function materializeAssets(lock, output, load) {
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const lock = JSON.parse(await readFile(path.join(root, 'plugin-assets.lock.json'), 'utf8'));
-  const local = process.argv[2] ? path.resolve(process.argv[2]) : path.join(root, 'vendor/plugin-assets');
+  const localSource = process.argv[2] || process.env.HAYATE_PLUGIN_SOURCE;
+  const local = localSource ? path.resolve(localSource) : undefined;
+  const pinnedSources = process.env.HAYATE_PLUGIN_ASSET_SOURCES ? JSON.parse(process.env.HAYATE_PLUGIN_ASSET_SOURCES) : {};
   await materializeAssets(lock, path.join(root, 'optional-plugins'), async (plugin, file) => {
-    if (local) return readFile(path.join(local, ...(process.argv[2] ? [] : [plugin.revision]), plugin.source, file));
-    const response = await fetch(`${plugin.repository}/raw/commit/${plugin.revision}/${plugin.source}/${file}`,
+    const pinned = pinnedSources[plugin.revision];
+    if (pinned !== undefined && (typeof pinned !== 'string' || !path.isAbsolute(pinned))) throw Error('Invalid pinned asset source');
+    if (pinned || local) return readFile(path.join(pinned || local, plugin.source, file));
+    const vendored = path.join(root, 'vendor/plugin-assets');
+    if (existsSync(vendored)) return readFile(path.join(vendored, plugin.revision, plugin.source, file));
+    const url = plugin.repository === 'https://github.com/hayate-agent/plugins'
+      ? `https://raw.githubusercontent.com/hayate-agent/plugins/${plugin.revision}/${plugin.source}/${file}`
+      : `${plugin.repository}/raw/commit/${plugin.revision}/${plugin.source}/${file}`;
+    const response = await fetch(url,
       { signal: AbortSignal.timeout(30_000), redirect: 'error' });
     if (!response.ok) throw Error(`Optional plugin download failed: ${response.status}`);
     return Buffer.from(await response.arrayBuffer());

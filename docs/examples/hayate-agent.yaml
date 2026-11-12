@@ -8,12 +8,27 @@ agent: hayate
 
 # Explicit model-visible tools, not an operating-system sandbox.
 # Remove tools: entirely to use runtime defaults; tools: [] exposes none.
-tools: [read, bash, edit, write, grep, find, ls]
+tools: [read, bash, edit, write, grep, find, ls, plugin_software_update]
 
 loop:
   tickMs: 15000
   busyMode: queue
   drainSeconds: 60
+
+# One TOTAL checkpoint/restart budget, not an all-business-idle requirement.
+lifecycle:
+  restartTimeoutSeconds: 60
+
+# Native-only source updates. Containers keep using their image deployment owner.
+# Set autoInstall: false for a notice followed by explicit /update install approval.
+softwareUpdates:
+  enabled: true
+  autoInstall: true
+  checkEverySeconds: 3600
+  sources:
+    core: {repository: 'https://github.com/hayate-agent/core.git', branch: main}
+    plugins: {repository: 'https://github.com/hayate-agent/plugins.git', branch: main}
+    webui: {repository: 'https://github.com/hayate-agent/webui.git', branch: main}
 
 # These are gateway feedback defaults, NOT gateway activation switches.
 # See ../gateways.md for enabling Matrix/WebUI. "reduced" opts into progress.

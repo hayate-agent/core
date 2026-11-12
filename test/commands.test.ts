@@ -162,7 +162,7 @@ for (const name of ["restart", "reload"]) {
     harness.post = (input, text) => { notices.push(text); return post(input, text); };
     ctx.restart = async () => {
       restarts++;
-      assert.equal(notices.at(-1), "♻️ restarting after current work…", "notice precedes restart");
+      assert.match(notices.at(-1)!, /Restarting: new input is fenced; current work is checkpointed/, "notice precedes restart");
     };
     ctx.reloadSkills = async () => { throw Error("skill discovery must not run"); };
     ctx.pluginCommands = new Map([[name, { name, help: "shadow", run: async () => { throw Error("plugin must not run"); } }]]);
@@ -186,7 +186,7 @@ for (const name of ["restart", "reload"]) {
       assert.deepEqual(runtime.opened.map(o => o.fresh), [false]);
       assert.equal(session.aborted, 0);
       assert.equal(runtime.reloads, 0);
-      assert.equal(ch.texts().filter(t => t === "♻️ restarting after current work…").length, 4);
+      assert.equal(ch.texts().filter(t => t.startsWith("♻️ Restarting: new input is fenced")).length, 4);
       await send("/help", "owner");
       assert.match(ch.texts().at(-1)!, /\/restart \(\/reload\) \[admin\] \[Hayate Agent\]/);
     } finally { await harness.stop(1000); }
@@ -270,7 +270,7 @@ test("/stop twice never replays runtime prose and /reload is not queued while ru
     assert.deepEqual(runtime.sessions.get("mem:room1")!.prompts, ["first", "work 0", "work 1"]);
     assert.deepEqual(ch.texts().filter(t => t.startsWith("echo:")), ["echo: first"]);
     assert.equal(restarts, 2);
-    assert.equal(ch.texts().filter(t => t === "♻️ restarting after current work…").length, 2);
+    assert.equal(ch.texts().filter(t => t.startsWith("♻️ Restarting: new input is fenced")).length, 2);
   } finally { await harness.stop(1000); }
 });
 
