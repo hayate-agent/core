@@ -30,7 +30,7 @@ export class SkillUpdates {
     if (bundle.version !== 1 || !Array.isArray(bundle.skills) || !bundle.skills.length || bundle.skills.length > 64) throw Error("Invalid skill bundle");
     const names = new Set<string>();
     return bundle.skills.map((entry: { name: string; content: string }) => {
-      if (!entry || typeof entry.name !== "string" || !/^[a-z][a-z0-9-]{0,63}$/.test(entry.name) || names.has(entry.name) || typeof entry.content !== "string" || Buffer.byteLength(entry.content) > 32000) throw Error("Invalid skill entry");
+      if (!entry || typeof entry.name !== "string" || (!/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(entry.name) || entry.name.length > 64) || names.has(entry.name) || typeof entry.content !== "string" || Buffer.byteLength(entry.content) > 32000) throw Error("Invalid skill entry");
       const skill = parseSkill(entry.content, path.join(entry.name, "SKILL.md"));
       if (!skill || skill.name !== entry.name) throw Error("Invalid skill metadata");
       names.add(entry.name); return { name: entry.name, content: entry.content };
