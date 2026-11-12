@@ -428,6 +428,26 @@ evidence and every original permission, safety and review/CI constraint. It may
 then complete that same original step and run its original successor without
 replaying settled effects. An applied decision may still leave a task blocked.
 `resume` is control only: task text is rejected; use `decide` for scoped steering.
+The minimal tool call is `{action:"resume", id:"<existing-owner>"}` with an
+optional nonempty `requestId`. For native transports that require every schema
+property, the only supported non-null placeholder envelope adds **all** of:
+`task:"", taskId:"", questionId:"", answer:"", decision:"", offset:0, limit:1,
+field:"input", charOffset:0`. This exact empty envelope has no steering meaning;
+partial envelopes, unknown fields, nonempty text and non-default values are
+rejected. PI's nullable optional placeholders continue to normalize to absence.
+These shapes do not change parent ownership, worker restrictions, manual pause,
+approval or uncertain-effect reconciliation fences.
+
+Failed sequential assessments retain `assessment.failure` in the bounded
+checkpoint alongside the existing diagnostic category, attempt count and retry
+time. Its fixed `cause` distinguishes `timeout`, `provider_error` and
+`invalid_shape`; an allowlisted network `code` and numeric HTTP error `status`
+may accompany a provider error. No exception message, stack, URL, header,
+prompt or model response is retained. `unavailable` and `inconclusive` remain
+separate categories. Older checkpoints contain no recoverable detailed cause.
+This is observability, not a retry-gate bypass: existing due-time scheduling and
+new scoped decision fences re-assess the retained result without replaying the
+worker. A decision receipt alone is neither successful assessment nor progress.
 
 Cross-repository development: use the new core and plugins sources together via
 the documented local materializer lock. Production publication must pin the
