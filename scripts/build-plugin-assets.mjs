@@ -22,4 +22,6 @@ for (const file of files) {
   digests[file] = createHash('sha256').update(await readFile(path.join(output, file))).digest('hex');
 }
 const lock = JSON.parse(await readFile(path.join(root, 'plugin-assets.lock.json'), 'utf8'));
-await writeFile(path.join(output, 'provenance.json'), JSON.stringify({ schema: 1, plugin: lock.plugins.find(p => p.name === 'webui'), files: digests }, null, 2) + '\n');
+const pkg = JSON.parse(await readFile(path.join(source, 'package.json'), 'utf8'));
+const version = typeof pkg.version === 'string' && /^\d+\.\d+\.\d+$/.test(pkg.version) ? pkg.version : undefined;
+await writeFile(path.join(output, 'provenance.json'), JSON.stringify({ schema: 1, version, plugin: lock.plugins.find(p => p.name === 'webui'), files: digests }, null, 2) + '\n');

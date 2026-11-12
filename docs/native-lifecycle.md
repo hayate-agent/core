@@ -42,11 +42,29 @@ new runtime sends one durable status message to the configured home channel (or
 the selected local TUI conversation):
 
 > ✅ shikamaru: Neustart abgeschlossen – wieder bereit.
-> Softwarestand: 0.1.252 · abcdef123456.
+> Softwarestand:
+> Core: 0.1.253 · abcdef123456
+> Plugins (Core-Bundle): 0.1.253 · 224bf11abcf6
+> Web (mitgeliefert): 0.1.0 · a03e5d2622cd
+> Web (separates Paket, installiert): 0.2.1 · 641c14b3193c
 
-The first start says “Gestartet und bereit.” instead. Git-source installations
-with the base package version show their exact Core commit rather than suggesting
-a downgrade to release 0.1.0. This applies to command/tool restarts, native updates,
+The first start says “Gestartet und bereit.” instead. Version numbers and short
+source revisions are shown for each installed component. Native Git builds resolve
+only exact tags or tags on the installed commit's checked-out first-parent history.
+Unreleased commits use `+dev.<commit>`; missing tags use an explicit source-build
+label. A newer unrelated release is never reported as installed. Tag lookup is
+bounded and optional at build/install time, never a startup network dependency or
+an update/restart gate.
+
+The bundled Plugins adapters have no independent whole-bundle release version:
+they are released with Core, so that line explicitly says **Core-Bundle** and retains
+their own locked Git revision. Independent `overlay-v*` releases do not relabel the
+built-in adapters. The local bundled Web gateway reports its hash-locked package
+version; a separately installed Web frontend package has its own line/version and
+is not claimed to be running just because it was downloaded/built. `/version` and
+authenticated `/v1/capabilities` expose the same installed component metadata.
+Older images without provenance say that version data is unavailable rather than
+inventing a value. This applies to command/tool restarts, native updates,
 service restarts and container replacements; it is not an old-process scheduling
 acknowledgement. Failed startup or shutdown during startup never claims readiness.
 

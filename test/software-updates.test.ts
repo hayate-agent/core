@@ -7,7 +7,7 @@ import { NativeSoftwareUpdates, softwareUpdatePolicy, type UpdateCommand } from 
 import { defaultConfig } from "../src/config.js";
 
 const revisions = { core: "a".repeat(40), plugins: "b".repeat(40), webui: "c".repeat(40) };
-async function fixture(options: { vendored?: boolean } = {}) {
+async function fixture(options: { vendored?: boolean; tags?: string; history?: string; metadataFailure?: boolean } = {}) {
   const home = await mkdtemp(path.join(os.tmpdir(), "hy-update-"));
   const events: string[] = [], commands: Array<{ command: string; args: string[]; cwd: string; env?: NodeJS.ProcessEnv }> = [];
   let fail = "";
@@ -15,6 +15,11 @@ async function fixture(options: { vendored?: boolean } = {}) {
     commands.push({ command, args, cwd, env });
     if (fail && args.includes(fail)) throw Error("PRIVATE_NETWORK_TOKEN never returned");
     const component = path.basename(cwd) as keyof typeof revisions;
+    if (args[0] === "ls-remote" && args[1] === "--tags") {
+      if (options.metadataFailure) throw Error("tag metadata unavailable");
+      return options.tags ?? "";
+    }
+    if (args[0] === "rev-list") return options.history ?? "";
     if (args[0] === "ls-remote") {
       const source = String(args[2]).split("/").at(-1)!.replace(/\.git$/, "") as keyof typeof revisions;
       return revisions[source] + "\trefs/heads/main\n";
@@ -86,6 +91,25 @@ test("install is durably scheduled outside command turn; three sources built, no
     await second.request("check");
     for (let n = 0; n < 200 && second.snapshot().phase === "checking"; n++) await new Promise(r => setTimeout(r, 5));
     assert.equal(second.snapshot().phase, "activated"); second.stop();
+  } finally { await f.cleanup(); }
+});
+
+test("installed build metadata records the checked-out version, not package.json's stale base", async () => {
+  const f = await fixture({ tags: `${revisions.core}\trefs/tags/v0.1.253` });
+  try {
+    await f.owner.request("install"); const result = await f.settled(); assert.equal(result.phase, "prepared");
+    const info = JSON.parse(await readFile(path.join(f.home, "software-updates/releases", result.pendingSelection!.release, "core/build-info.json"), "utf8"));
+    assert.deepEqual(info, { version: "0.1.253", revision: revisions.core });
+  } finally { await f.cleanup(); }
+});
+
+test("unavailable version metadata does not become an update/restart gate", async () => {
+  const f = await fixture({ metadataFailure: true });
+  try {
+    await f.owner.request("install"); const result = await f.settled(); assert.equal(result.phase, "prepared");
+    const info = JSON.parse(await readFile(path.join(f.home, "software-updates/releases", result.pendingSelection!.release, "core/build-info.json"), "utf8"));
+    assert.equal(info.version, `0.0.0+git.${revisions.core.slice(0, 12)}`);
+    await f.owner.afterExit(); assert.equal(f.owner.snapshot().phase, "activated");
   } finally { await f.cleanup(); }
 });
 
