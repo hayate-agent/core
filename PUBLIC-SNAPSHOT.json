@@ -1,5 +1,5 @@
 {
-  "contentDigest": "21a354f68c6c963294c7269545906e43facfb3a07e5e8060ebe8a422cbc84289",
+  "contentDigest": "12044ea1640d1778a4f4ae7b187e7910ed2335c2fb1c484684df90ff7ea25159",
   "files": [
     {
       "mode": "100644",
@@ -799,7 +799,7 @@
     {
       "mode": "100644",
       "path": "src/harness.ts",
-      "sha256": "c4363939319f0471537721e7bcdc4cc160e1d6b7e713a8954801266d101e48a8"
+      "sha256": "02b13de8381be662050fee2220ac9e942d370c05ea4ced73da221f0f3b2c3c07"
     },
     {
       "mode": "100644",
@@ -2879,7 +2879,7 @@
     {
       "mode": "100644",
       "path": "test/supervisor-admission.test.ts",
-      "sha256": "4ab9b77d2600f8e5e997f56a94ecd2c04cc5f0ed1308cd8e827aef99a764f693"
+      "sha256": "51efd3635bdd35088aadea6ed860f4446dafce45a141d13736f91f931a94347b"
     },
     {
       "mode": "100644",
@@ -2965,6 +2965,11 @@
       "mode": "100644",
       "path": "test/uncertain-reconciliation.test.ts",
       "sha256": "3826aeb13407974e321a8d4127fca2108a40810d41f722adc6106ab96a852f1b"
+    },
+    {
+      "mode": "100644",
+      "path": "test/unresolved-admission.test.ts",
+      "sha256": "63f18bba1a82f2d73530f83dea70adaf882fd5d3ef42f00b95519d3c6ab48e2c"
     },
     {
       "mode": "100644",
@@ -3390,5 +3395,5 @@
   "historyPolicy": "fresh-root; no source commits, tags, refs or deleted blobs",
   "pluginSHA": "224bf11abcf6dc9aca8a5a9c06f8674a69f50db1",
   "schema": 1,
-  "sourceSHA": "2b28654a35bacf412763f7dc4cf3b5ff3b9c68b8"
+  "sourceSHA": "1f1d39d54d2938087d3b612c93f2044ab09fb4d0"
 }

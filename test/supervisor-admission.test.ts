@@ -37,7 +37,7 @@ for (const verdict of ["blocked", "waiting", "completed", "replace", "exception"
         assert.doesNotMatch(runtime.sessions.get("mem:room1")!.prompts[1], /MODEL proposal/);
       } else {
         const task = h.snapshotSessions()[0].tasks![0];
-        const technical = ["exception", "invalid", "disabled", "missing"].includes(verdict);
+        const technical = ["exception", "invalid", "disabled", "missing", "undefined"].includes(verdict);
         assert.equal(task.state, technical ? "active" : ["waiting", "completed"].includes(verdict) ? verdict : "blocked");
         if (technical) {
           assert.equal(task.explicitBlocked, false);
