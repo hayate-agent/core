@@ -268,7 +268,13 @@ export class NativeSoftwareUpdates {
         const cwd = path.join(root, component);
         await this.command("npm", ["ci", "--include=dev", "--ignore-scripts", "--no-audit", "--no-fund"], cwd, buildEnv);
         const pkg = JSON.parse(await readFile(path.join(cwd, "package.json"), "utf8"));
-        if (pkg.dependencies?.["@matrix-org/matrix-sdk-crypto-nodejs"]) await this.command("npm", ["rebuild", "@matrix-org/matrix-sdk-crypto-nodejs"], cwd, buildEnv);
+        if (pkg.dependencies?.["@matrix-org/matrix-sdk-crypto-nodejs"]) {
+          // npm12 may report successful rebuild while silently blocking this
+          // install script. Run only this reviewed native downloader explicitly,
+          // then require the addon so a missing binary fails before tests/stop.
+          await this.command(process.execPath, [path.join(cwd, "node_modules/@matrix-org/matrix-sdk-crypto-nodejs/download-lib.js")], cwd, buildEnv);
+          await this.command(process.execPath, ["--input-type=commonjs", "-e", "require('@matrix-org/matrix-sdk-crypto-nodejs')"], cwd, buildEnv);
+        }
         stage = "build"; await this.command("npm", ["run", "build"], cwd, buildEnv);
         stage = "validation";
         if (component === "core") await this.command(process.execPath, ["--check", path.join(cwd, "dist/cli.js")], cwd, buildEnv);
