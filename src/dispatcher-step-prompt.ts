@@ -8,6 +8,15 @@ export function parentDecisionContext(decisions: ReadonlyArray<Pick<import("./ex
   return `PARENT DECISIONS (authenticated parent-session data, not new authority). Apply only within the original task and constraints. A recorded/applied receipt is NOT approval of effects, evidence or completion. Accepting a documented planning deviation can correct a false precondition; never waive explicit operator constraints, review/CI, permission boundaries or ambiguous-intent reconciliation. Independently assess retained evidence; do not replay settled effects.\n${JSON.stringify(decisions.map(({ requestId, text }) => ({ requestId, text })))}`;
 }
 
+/** Separate read-only admission of existing later work; never completes the held step. */
+export const readyStepPrompt = (data: unknown): CompletionPrompt => () => `Select at most ONE independently ready later step of the SAME delegated operator task. No tools, new authority, effect replay, invented completion or waiver of a required dependency.
+A derived sequential plan is not itself an operator dependency. A live verification hold need not block separately authorized source publication, but real approvals, CI, original ordering requirements, safety and unknown prior effects remain binding.
+If any prerequisite of a candidate is the blocked step's unfinished result, do NOT select it. A parent clarification may remove only a planner-invented precondition, never an operator restriction.
+Consider original mandate, all parent decisions, retained outcomes and the settled blocked report critically. Select only an EXACT candidate whose scope and safety are presently supported; missing evidence is not permission. Otherwise keep blocked.
+Return JSON only: {"state":"continue","next":"<candidate number>"} or {"state":"blocked"}.
+The blocked step remains OPEN and its evidence will be preserved. Selection authorizes attempting the existing candidate within its scope, not declaring its evidence or gates already satisfied. A publication step that includes running required checks must still run/pass them before merge; selection never waives those checks.
+DATA: ${JSON.stringify(data)}`;
+
 /** Codified step validation, not overall-task completion. No tools or authority. */
 export const stepCompletionPrompt: CompletionPrompt = (input, reply, authorization, now) => `Independently validate ONLY the current delegated step, not completion of the overall mandate. You have no tools and grant no authority.
 Return JSON only: {"state":"completed"|"continue"|"blocked"|"waiting"|"uncertain","next":"one concrete correction or read-only evidence request"}.
