@@ -143,6 +143,42 @@ test("delegated step uses selected dedicated provider, not legacy LLM", async t 
   assert.equal(task.status, "completed"); assert.equal(assessments, 1); assert.equal(env.calls.review.length, 0);
 });
 
+for (const manual of [false, true]) {
+  test(`structured validator failure survives reload; new scoped decision ${manual ? "does not cross manual pause" : "reassesses without replay"}`, async t => {
+    let broken = true;
+    const env = await setup(t, { verdict: () => {
+      if (broken) throw Object.assign(new Error("https://user:secret@private.invalid/?token=secret"), { code: "ECONNRESET", status: 503 });
+      return '{"state":"completed"}';
+    }, worker: () => "Existing effect settled; no second writer\nSTEP-STATUS: complete",
+      toolEvents: () => [{ name: "bash", detail: "existing authorized effect", result: "effect receipt 17" }],
+    }, { manualProgress: true });
+    const task = await env.run("Implement source only; preserve required tests, no live config effects");
+    assert.equal(task.status, "ready");
+    const retained = state(task.checkpoint).assessment!;
+    assert.deepEqual(retained.failure, { cause: "provider_error", code: "ECONNRESET", status: 503 });
+    assert.equal(retained.decisionRevision, 0);
+    assert.doesNotMatch(task.checkpoint!, /secret|private\.invalid/);
+    const reload = new ExecutionStore(env.file); await reload.load();
+    assert.deepEqual(state(reload.list()[0]!.checkpoint).assessment!.failure, retained.failure);
+    if (manual) await env.dispatcher.control("parent", task.id, "pause");
+    broken = false;
+    await env.dispatcher.decide("parent", task.id, "source-only-v1", "Source-only path accepted; required tests and original authority fences remain binding");
+    await env.dispatcher.waitForExecution(task.id);
+    const current = env.store.list()[0]!;
+    assert.equal(env.calls.worker.length, 1, "never replay settled effects");
+    assert.equal(env.calls.review.length, manual ? 1 : 2);
+    assert.equal(current.decisions![0]!.state, manual ? "pending" : "applied");
+    if (manual) {
+      assert.ok(["blocked", "paused"].includes(current.status));
+      assert.deepEqual(current.intent, task.intent);
+    } else {
+      assert.equal(current.status, "completed");
+      assert.match(env.calls.review[1]!, /Source-only path accepted/);
+      assert.equal(current.id, task.id);
+    }
+  });
+}
+
 test("disabled delegated-step provider retains evidence instead of declaring success", async t => {
   const validators = new ValidatorRegistry(); validators.select(false);
   const env = await setup(t, {}, { validators, manualProgress: true });
