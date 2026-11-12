@@ -778,7 +778,7 @@ export class PiRuntime implements AgentRuntime {
       if (!nativeCompaction.has(key)) nativeCompaction.set(key, settingsManager.getCompactionSettings(model));
       const baseline = nativeCompaction.get(key)!;
       const policy = this.opts.contextBudgets?.();
-      const child = options.ephemeral || childDeniedTools(sessionKey).length > 0;
+      const child = options.ephemeral || sessionKey.startsWith("cron:") || sessionKey.startsWith("api:cron-") || childDeniedTools(sessionKey).length > 0;
       const local = policy?.localModels?.some(ref => ref === key || ref === model.id) ?? false;
       const budget = (child ? policy?.workerContextTokens ?? this.opts.workerContextTokens?.() ?? 131072 : policy?.mainContextTokens ?? 262144) / (local ? 2 : 1);
       const bounded = policy ? contextCompactionSettings(model.contextWindow, baseline, budget)
