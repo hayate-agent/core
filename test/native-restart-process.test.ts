@@ -25,11 +25,14 @@ for (const entry of ["dist/cli.js", "dist/launcher.js"]) test(`${entry}: real /r
     assert.ok(condition(), `runtime did not reach expected state: ${stderr.join("").slice(-2000)}`);
   };
   try {
-    await waitFor(() => listeners().length >= 1);
+    await waitFor(() => listeners().length >= 1 && stdout.join("").includes("Gestartet und bereit."));
+    assert.doesNotMatch(stdout.join(""), /Neustart abgeschlossen/);
     const oldPort = listeners()[0];
     const began = Date.now();
     child.stdin.write("/restart\n");
-    await waitFor(() => listeners().length >= 2);
+    await waitFor(() => listeners().length >= 2 && stdout.join("").includes("Neustart abgeschlossen – wieder bereit."));
+    assert.equal([...stdout.join("").matchAll(/Neustart abgeschlossen – wieder bereit\./g)].length, 1);
+    assert.match(stdout.join(""), /Softwarestand:/);
     assert.equal(child.exitCode, null, "foreground owner must survive its runtime restart");
     assert.match(stdout.join(""), /Restarting: new input is fenced/);
     assert.ok(Date.now() - began < 10_000, "restart must not wait for the never-resolving plugin cleanup or the 60s drain");

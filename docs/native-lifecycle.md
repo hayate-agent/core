@@ -35,6 +35,31 @@ launchd `KeepAlive=false` still supports `/restart`. Supervisor SIGTERM stops th
 owner and its runtime without respawning during a pointer handoff. Disconnecting
 from the owner checkpoints gateway work too; it is not a user cancellation.
 
+## User-visible readiness after restart
+
+After outbound channels authenticate and startup/session recovery completes, the
+new runtime sends one durable status message to the configured home channel (or
+the selected local TUI conversation):
+
+> ✅ shikamaru: Neustart abgeschlossen – wieder bereit.
+> Softwarestand: 0.1.252 · abcdef123456.
+
+The first start says “Gestartet und bereit.” instead. Git-source installations
+with the base package version show their exact Core commit rather than suggesting
+a downgrade to release 0.1.0. This applies to command/tool restarts, native updates,
+service restarts and container replacements; it is not an old-process scheduling
+acknowledgement. Failed startup or shutdown during startup never claims readiness.
+
+The message uses the persisted outbox and stable delivery ID, so transport retries
+do not rerun the restart or ask a model to produce the notice. A delivery-only
+session prevents busy, paused or context-blocked business conversations from
+holding the status behind a working turn. Task identity, authority and pause state
+are untouched. With no configured home, exactly one unambiguous persisted user
+channel/room is used (not old API runs, worker destinations or historical threads).
+No broadcast to multiple historical rooms is performed. With no recipient or
+ambiguous rooms, readiness is logged locally only; configure `home_address` or the
+gateway home to select the intended notification channel.
+
 ## Native source updates
 
 Native installations enable hourly checks and automatic installation by default:
