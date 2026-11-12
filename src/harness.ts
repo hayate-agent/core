@@ -1838,6 +1838,25 @@ export class Harness {
       if (await this.opts.contextMaintenance?.recoveryStatus?.(s.key)) continue;
       for (const task of this.tasks(s)) {
       if (task.recoveryEnrollment === "held-legacy") continue;
+      // Older turn finalization persisted a missing decision as an explicit
+      // block. Repair only that recorded contradiction, never semantic blocks,
+      // operator termination, or unresolved dependency custody. This admits an
+      // independent assessment, not execution of the saved proposal.
+      if (task.state === "blocked" && task.supervisorDecision?.proposal === "continue" &&
+          task.supervisorDecision.verdict === "unresolved" && !task.supervisorDecision.dependencyHold &&
+          !task.termination && !task.recoveryAdmission && !task.wait && !task.lastWait &&
+          !!task.next?.trim() && Number.isSafeInteger(task.depth) && task.depth >= 0 &&
+          repetitions(task) < 20 && !this.paused && !this.stopping &&
+          !this.stoppingHostParents.has(s.key) && !s.stopPending &&
+          (task.expiresAt === undefined || Number.isSafeInteger(task.expiresAt) && task.expiresAt > this.now()) &&
+          !this.hasPendingDependency(s.key, task.id)) {
+        task.state = "active";
+        task.explicitBlocked = false;
+        task.recoveryAssessment = undefined;
+        task.recoveryRetry ??= { attempts: 1, nextAt: this.now() + 60000, diagnostic: "unavailable" };
+        s.unsaved = true;
+        await this.onStateChange?.();
+      }
       await this.reconcileBlockedDependency(s, task);
       const assessed = !task.recoveryAdmission;
       if (assessed) await this.assessStartupTask(s, task);
@@ -2466,11 +2485,14 @@ export class Harness {
           // Technical assessment failure is unresolved, not a semantic denial.
           // Keep the proposal untrusted; only independent admission permits work.
           if (repetitions(task) < 20 && task.supervisorDecision?.verdict === "unresolved" &&
-              (task.supervisorDecision.diagnostic === "technical" || task.supervisorDecision.diagnostic === "invalid_response" || task.supervisorDecision.diagnostic === "unavailable")) {
+              (task.supervisorDecision.proposal === "continue" ||
+               task.supervisorDecision.diagnostic === "technical" ||
+               task.supervisorDecision.diagnostic === "invalid_response" ||
+               task.supervisorDecision.diagnostic === "unavailable")) {
             task.state = "active";
             task.explicitBlocked = false;
             task.recoveryAssessment = "claimed";
-            task.recoveryRetry = { attempts: 1, nextAt: this.now() + 60000, diagnostic: task.supervisorDecision.diagnostic };
+            task.recoveryRetry = { attempts: 1, nextAt: this.now() + 60000, diagnostic: task.supervisorDecision.diagnostic ?? "unavailable" };
           }
           if (dependencyDecision) task.supervisorDecision = {
             ...(task.supervisorDecision ?? { verdict: "unresolved" }), dependencyHold: dependencyDecision };
