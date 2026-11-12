@@ -3,7 +3,7 @@ import type { AgentRuntime } from "../types.js";
 import type { AssessmentBackend as ReviewBackend } from "../assessment-backend.js";
 
 /** Shared by production wiring and live integration checks. */
-export function runtimeReviewer(runtime: AgentRuntime, purpose: "code-review" | "supervisor" = "code-review"): ReviewBackend {
+export function runtimeReviewer(runtime: AgentRuntime, purpose: "code-review" | "supervisor" | "handover" = "code-review"): ReviewBackend {
   return {
     async review(prompt, model, thinking, signal) {
       return auxiliaryAdmission(runtime, async () => {
