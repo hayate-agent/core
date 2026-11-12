@@ -240,6 +240,15 @@ export function sequentialStrategy(deps: SequentialDeps): DispatcherStrategy {
         delete state.assessment;
         await context.checkpoint(JSON.stringify(state));
       }
+      // A legacy claim may point at a metadata-only session after an assessment
+      // interruption. Preserve its checkpoint as bounded, execution-bound
+      // evidence; this is reconciliation of the same step, never explicit retry.
+      const reconcile = async (source: string, intentKey: string, index: number) => {
+        const retained = state && state !== "invalid" &&
+          (state.assessment?.index === index || state.correction?.index === index)
+          ? { executionId: task.id, intentKey, checkpoint: JSON.stringify(state) } : undefined;
+        await deps.harness.reconcileSession(source, sessionKey, retained);
+      };
       let recovering = !!task.intent && task.claimedRecoveryAction !== "retry";
       while (state.outcomes.length < state.plan.length) {
         const index = state.outcomes.length;
@@ -264,7 +273,7 @@ export function sequentialStrategy(deps: SequentialDeps): DispatcherStrategy {
           route = current.intent.route;
           if (recovering && !state.assessment) {
             if (!task.recoverySession) return block("Kein erhaltenes Worker-Transkript; explizit retry oder cancel.");
-            await deps.harness.reconcileSession(task.recoverySession, sessionKey);
+            await reconcile(task.recoverySession, intentKey, index);
           }
         } else {
           const exact = await exactRole(runtime, deps.roles()?.config, role);
@@ -397,16 +406,18 @@ Correctable vs blocked: a worker "blocked" claim or evidence shortfall that rest
             : (verdict?.next ?? "").slice(0, 1500);
           const correction: SequentialState = structuredClone(state!);
           correction.correction = { index, rounds: round + 1, note };
+          // Do not discard the settled assessment before evidence transfer is
+          // durable. An interrupted handover must retry from the same evidence.
+          if (assessmentRecovery) {
+            if (!task.recoverySession) return block("Kein erhaltenes Worker-Transkript für die Korrektur; kein Wiederholen von Effekten.");
+            if (task.recoverySession !== sessionKey) await reconcile(task.recoverySession, intentKey, index);
+            await context.workerSession?.(sessionKey);
+            assessmentRecovery = false;
+          }
           delete correction.assessment;
           await context.checkpoint(JSON.stringify(correction));
           state = correction;
           await context.status?.(`Schritt ${index + 1}/${state.plan.length}: Validator verlangt Fortsetzung desselben Schritts (Runde ${round + 1}).`).catch(() => {});
-          if (assessmentRecovery) {
-            if (!task.recoverySession) return block("Kein erhaltenes Worker-Transkript für die Korrektur; kein Wiederholen von Effekten.");
-            if (task.recoverySession !== sessionKey) await deps.harness.reconcileSession(task.recoverySession, sessionKey);
-            await context.workerSession?.(sessionKey);
-            assessmentRecovery = false;
-          }
           await authorize();
           deps.resetTurn(key);
           reply = await deps.runTurn(context, key, `dispatch:${key}:step:${index}:${role}:c${round + 1}`, `CONTINUE STEP ${index + 1}/${state.plan.length} in this same session. Independent validation found it unfinished. Do not repeat completed effects; reconcile actual state before any uncertain external effect. Stay within the original task scope.
