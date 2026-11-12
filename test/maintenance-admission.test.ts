@@ -136,6 +136,10 @@ test("identified admission is durable, idempotent and does not overwrite pending
     await again.admit("chat", "request-4", request, 3);
     const failing = { status: () => ({ sessionId: "session-2", contextPercent: 5 }), compact: async () => { throw Error("SECRET_DISK"); } } as unknown as RuntimeSession;
     await again.boundary("chat", failing, rotate);
+    assert.equal((await again.status("chat")).pending?.action, "handover");
+    // This deliberately incomplete runtime cannot archive a handover. That is
+    // a genuine prerequisite failure, unlike the original compact failure.
+    await again.beforeTurn("chat", failing, rotate);
     const receipt = await again.admissionStatus("chat");
     assert.deepEqual({ ...receipt, recovery: undefined }, { id: "request-4", version: 4, execution: "failed", recovery: undefined });
     assert.equal(receipt.recovery?.state, "blocked");
