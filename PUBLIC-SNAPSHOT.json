@@ -1,5 +1,5 @@
 {
-  "contentDigest": "24a693c8411056e4446cebc002b3a5de58a39fcef3ccdebc2c054f58fd434898",
+  "contentDigest": "aec600ec8d63c0143f6d5728852f6af80884825973ea2fc7e0629238fbe32c78",
   "files": [
     {
       "mode": "100644",
@@ -1019,7 +1019,7 @@
     {
       "mode": "100644",
       "path": "src/runtime/pi.ts",
-      "sha256": "84aad375e3b87d6b1782fd64eb852f5dd874d2356d5c217af1caac063f2edfbc"
+      "sha256": "ad785533089d2010194bd060fde1b36029fdc12c540240133ca4386a2b821d14"
     },
     {
       "mode": "100644",
@@ -1504,7 +1504,7 @@
     {
       "mode": "100644",
       "path": "test/context-budgets.test.ts",
-      "sha256": "08df0bb08dd7afabe5fd286b1427f622fe1b4c33c6ecc3fb80cd5255ac04aa58"
+      "sha256": "4730191a714bd7a9e191706fe55e782ecf84ba63a79f1c351148a1427f804d49"
     },
     {
       "mode": "100644",
@@ -3345,5 +3345,5 @@
   "historyPolicy": "fresh-root; no source commits, tags, refs or deleted blobs",
   "pluginSHA": "224bf11abcf6dc9aca8a5a9c06f8674a69f50db1",
   "schema": 1,
-  "sourceSHA": "e03b20e052cb0e8fdf5b0e9e21423e75e2efa1d3"
+  "sourceSHA": "ab2908d971a8e48908067ed2a9658dc0566e0e79"
 }
