@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { workerCompactionSettings } from '../src/worker-context.js';
 import { contextPolicy } from '../src/context-maintenance.js';
 import { PiRuntime } from '../src/runtime/pi.js';
+import { ModelRuntime } from '@earendil-works/pi-coding-agent';
 import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -25,9 +26,18 @@ test('absolute child trigger does not scale up with a million-token model', () =
 
 test('real PI worker applies native budget before prompt even with harness ownership; main stays unchanged', async () => {
   const home = await mkdtemp(path.join(os.tmpdir(), 'worker-context-'));
-  const runtime = new PiRuntime({cwd:home,sessionsDir:path.join(home,'sessions'),skillPaths:[],
+  // Do not inherit whichever provider/model happens to be the SDK default on
+  // a developer host or the credential-free CI runner. Unknown capacity must
+  // remain unknown in production; this test explicitly supplies a known window.
+  const models = await ModelRuntime.create();
+  models.registerProvider('worker-context-fixture', {api:'openai-completions',baseUrl:'https://offline.invalid',apiKey:'offline-fixture',models:[{
+    id:'known-window',name:'Known window fixture',api:'openai-completions',reasoning:false,input:['text'],contextWindow:200000,maxTokens:4096,
+    cost:{input:0,output:0,cacheRead:0,cacheWrite:0},
+  }]});
+  const runtime = new PiRuntime({cwd:home,sessionsDir:path.join(home,'sessions'),skillPaths:[],model:'worker-context-fixture/known-window',
     personaSections:async()=>[],compactionOwner:()=> 'harness',workerContextTokens:()=>32000,
     approvals:{mode:'off',tools:[]}});
+  (runtime as any).modelRuntime = async () => models;
   try {
     for (const key of ['dispatch:test:claim','subagent:test','matrix:test']) {
       const wrapped:any = await runtime.open(key); const session = wrapped.session;
