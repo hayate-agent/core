@@ -1,5 +1,5 @@
 {
-  "contentDigest": "aec600ec8d63c0143f6d5728852f6af80884825973ea2fc7e0629238fbe32c78",
+  "contentDigest": "02e2bde49ee9571a41ad5e4eed1f4013ea755b8ceeb3510a6b8170fac7734691",
   "files": [
     {
       "mode": "100644",
@@ -269,7 +269,7 @@
     {
       "mode": "100644",
       "path": "docs/native-lifecycle.md",
-      "sha256": "d83b5d6400e5bdbbd9e914b28c2d678c12bd99d5fc746f7fc65e56e8a0cfe764"
+      "sha256": "aa46bac5a015077e31c1fb5e5eaab8f7704794f5baa6ac9305b3b54fb0e82273"
     },
     {
       "mode": "100644",
@@ -624,7 +624,7 @@
     {
       "mode": "100644",
       "path": "src/cli.ts",
-      "sha256": "646220cebdd462f7e4d0e4a16dcf29ef5c9bd515905a4d3ab677b80955585c32"
+      "sha256": "a7f720eb87029fcfacbc0576cad06fd26aaf591f622e28a8b9ca39ca4a1ade7f"
     },
     {
       "mode": "100644",
@@ -1100,6 +1100,11 @@
       "mode": "100644",
       "path": "src/software-updates.ts",
       "sha256": "809e8c7c6d98419878d00e5237c50e04f8223f12eedaa049fdd4698db8bf8747"
+    },
+    {
+      "mode": "100644",
+      "path": "src/startup-notice.ts",
+      "sha256": "897c1006c53600d29bb8d4fdfc1c1b19dd61f37aa993d0353f8563ab20bc8645"
     },
     {
       "mode": "100644",
@@ -2224,7 +2229,7 @@
     {
       "mode": "100644",
       "path": "test/native-restart-process.test.ts",
-      "sha256": "b8f9186866eb06fc98f1994058af893fef44ad516eefc5fa8bf4b5d04d34d117"
+      "sha256": "1a7acb9eb4edaf3c40cf3aaca796d43e0ca0344f2545b2b0a9c399d4fb524989"
     },
     {
       "mode": "100644",
@@ -2808,6 +2813,16 @@
     },
     {
       "mode": "100644",
+      "path": "test/startup-failure-notice.test.ts",
+      "sha256": "77d2caccc0b2099b8f148e359120490eab34dfb2e6bc919ee532d79d13951e8d"
+    },
+    {
+      "mode": "100644",
+      "path": "test/startup-notice.test.ts",
+      "sha256": "00579c6fa93a6d9a645b6b4737c73b50819b5967a35733cd87cf6285a128c5b3"
+    },
+    {
+      "mode": "100644",
       "path": "test/state.test.ts",
       "sha256": "991faba5d667d7462a1076eb79107ad4b26bb2b098c58f2bdcfd1404de324f09"
     },
@@ -3345,5 +3360,5 @@
   "historyPolicy": "fresh-root; no source commits, tags, refs or deleted blobs",
   "pluginSHA": "224bf11abcf6dc9aca8a5a9c06f8674a69f50db1",
   "schema": 1,
-  "sourceSHA": "ab2908d971a8e48908067ed2a9658dc0566e0e79"
+  "sourceSHA": "e6c759ce4b28503ab1cf73f98b491d8c62436354"
 }
