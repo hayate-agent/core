@@ -7,6 +7,13 @@ on:
     paths:
       - '.forgejo/workflows/decision-interface.yml'
       - 'src/dispatcher*.ts'
+      - 'src/harness.ts'
+      - 'src/assessment-retry.ts'
+      - 'src/task-priority*.ts'
+      - 'src/priority-intent.ts'
+      - 'test/task-priority*.test.ts'
+      - 'test/*recovery*.test.ts'
+      - 'test/*continuation*.test.ts'
       - 'src/execution.ts'
       - 'src/plugins.ts'
       - 'src/cli.ts'
