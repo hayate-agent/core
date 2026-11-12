@@ -29,7 +29,15 @@ Direct dispatcher routing keeps existing first-match `dispatcher.rules` priority
 including catch-all rules. Only an unmatched, opted-in new turn makes a single
 bounded tool-free ephemeral assessment of task-data JSON. Its closed response
 schema is `{"complexity":"simple"|"medium"|"high","rationale"?:string}`;
-rationale is limited to 500 characters. Invalid responses, timeout, abort and
+rationale is limited to 500 characters. HTTP and session classifiers share the
+same lowest-sufficient-capability rubric: routine checks/runbooks are `simple`,
+bounded implementation, fixes and normal review are `medium`; `high` is reserved
+for genuinely unresolved hard reasoning (for example races, competing root-cause
+hypotheses or architectural trade-offs). Production risk, long instructions,
+number of files and required tests do not themselves select `high`. Ambiguous
+reasoning difficulty defaults to `medium`. These are model instructions, not a
+proof that a live classifier will comply; inspect observed route receipts.
+Invalid responses, timeout, abort and
 technical failures never create a second assessment or replay work. The selected
 worker pair is saved in the existing unsafe intent before Harness acceptance.
 Recovery retains that pair and never reclassifies uncertain work.

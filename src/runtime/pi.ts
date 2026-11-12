@@ -7,6 +7,7 @@ import { reasoningEffortNoneModels as reasoningEffortNoneModelsFromEnv } from ".
 import type { AdaptiveSkills } from "../adaptive-skills.js";
 import { toolGuardDenialReason } from "../tool-guard-error.js";
 import { childDeniedTools } from "../child-tools.js";
+import { workerCompactionSettings } from "../worker-context.js";
 import { DISPATCH_PLAN_SYSTEM_PROMPT } from "../planner-http.js";
 import { MaintenanceError, maintenanceStep, type MaintenanceStage } from "../context-maintenance.js";
 import type { PruningPolicy, ToolResultProjector } from "../tool-result-pruning.js";
@@ -80,6 +81,7 @@ export interface PiRuntimeOptions {
   sessionProvider?: () => SessionProvider | undefined;
   compaction?: () => CompactionStrategy;
   compactionOwner?: () => "harness" | "agent";
+  workerContextTokens?: () => number;
   /** Existing snapshot bindings stay on their provider until explicitly migrated. */
   legacySessionProvider?: SessionProvider;
   mcp?: { enabled: boolean };
@@ -221,6 +223,7 @@ export class PiSession implements RuntimeSession {
     private readonly beforePrompt?: () => Promise<void>,
     private readonly onSessionSelection?: (selection: { model?: string; thinking?: string }) => void | Promise<void>,
     private readonly reasoningEffortNoneModels: () => readonly string[] = reasoningEffortNoneModelsFromEnv,
+    private readonly prepareCompaction?: () => void,
   ) {}
 
   get busy(): boolean {
@@ -283,6 +286,7 @@ export class PiSession implements RuntimeSession {
         thinking: this.session.thinkingLevel,
       }) }); } catch { /* Telemetry cannot fail execution. */ }
       if (options.images?.length && !this.session.model?.input?.includes("image")) throw Error("Selected model does not support inbound images");
+      this.prepareCompaction?.();
       await this.session.prompt(text, { source: "rpc", images: options.images });
       await this.session.waitForIdle();
     } finally {
@@ -761,7 +765,18 @@ export class PiRuntime implements AgentRuntime {
     // The public next-turn hook precedes PI's prompt diff. Mutate the options
     // PI owns, keeping session.systemPrompt and the actual provider in step.
     const prepareNext = session.agent.prepareNextTurnWithContext;
+    const prepareWorkerCompaction = () => {
+      const model = session.model;
+      if (!model || options.ephemeral) return;
+      const bounded = workerCompactionSettings(sessionKey, model.contextWindow,
+        settingsManager.getCompactionSettings(model), this.opts.workerContextTokens?.());
+      if (bounded) settingsManager.applyOverrides({ compaction: { enabled: true,
+        modelOverrides: { [`${model.provider}/${model.id}`]: { reserveTokens: bounded.reserveTokens, keepRecentTokens: bounded.keepRecentTokens } } } });
+    };
     session.agent.prepareNextTurnWithContext = async (turn, signal) => {
+      // Runs BEFORE the SDK's native between-response compaction check, with
+      // all tool results settled. Never call manual compaction from a live tool.
+      prepareWorkerCompaction();
       await refreshPersona();
       updatePersonaPrompt(session, promptAddendum());
       return prepareNext?.(turn, signal);
@@ -883,7 +898,7 @@ export class PiRuntime implements AgentRuntime {
       selection = { ...selection, ...update };
       sessionManager.appendCustomEntry(selectionType, selection);
       await checkpoint?.();
-    }, this.opts.reasoningEffortNoneModels);
+    }, this.opts.reasoningEffortNoneModels, prepareWorkerCompaction);
     // From here the wrapper owns SDK shutdown and final checkpoint cleanup.
     unownedSession = undefined;
     try {

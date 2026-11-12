@@ -10,6 +10,8 @@ export interface ContextPolicy {
   /** Single automatic compaction owner; handover remains host-managed. */
   compactionOwner?: "harness" | "agent";
   enabled: boolean;
+  /** Absolute native compaction trigger for child sessions, including within a tool loop. */
+  workerContextTokens?: number;
   checkEveryTurns: number;
   assessPercent: number;
   compactPercent: number;
@@ -17,11 +19,12 @@ export interface ContextPolicy {
   autoHandover: boolean;
 }
 export const defaultContextPolicy: ContextPolicy = {
-  compactionOwner: "harness", enabled: true, checkEveryTurns: 5, assessPercent: 60, compactPercent: 75, cooldownTurns: 5, autoHandover: true,
+  compactionOwner: "harness", enabled: true, workerContextTokens: 48000, checkEveryTurns: 5, assessPercent: 60, compactPercent: 75, cooldownTurns: 5, autoHandover: true,
 };
 export function contextPolicy(input: Partial<ContextPolicy> = {}): ContextPolicy {
   const policy = { ...defaultContextPolicy, ...input };
   if (!["harness", "agent"].includes(policy.compactionOwner!)) throw new Error("Invalid compaction owner");
+  if (!Number.isSafeInteger(policy.workerContextTokens) || policy.workerContextTokens! < 8192) throw new Error("Invalid worker context token budget");
   if (typeof policy.enabled !== "boolean" || typeof policy.autoHandover !== "boolean" ||
       !Number.isInteger(policy.checkEveryTurns) || policy.checkEveryTurns < 1 ||
       !Number.isInteger(policy.cooldownTurns) || policy.cooldownTurns < 1 ||
