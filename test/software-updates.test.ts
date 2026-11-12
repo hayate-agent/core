@@ -75,7 +75,7 @@ test("install is durably scheduled outside command turn; three sources built, no
     assert.equal((await f.settled()).phase, "prepared");
     assert.equal(f.commands.filter(c => c.args[0] === "checkout").length, 3);
     assert.equal(f.commands.filter(c => c.command === "npm" && c.args[0] === "run").length, 2);
-    assert.ok(f.commands.some(c => c.command === "npm" && c.args[0] === "test"));
+    assert.ok(!f.commands.some(c => c.command === "npm" && c.args[0] === "test"), "development suites must not block installation or restart");
     assert.match(f.events.join("\n"), /available/); assert.match(f.events.join("\n"), /prepared/);
     await assert.rejects(readFile(path.join(f.home, "software-updates/selected.json")), /ENOENT/);
     assert.equal(f.owner.entrypoint("original"), "original");

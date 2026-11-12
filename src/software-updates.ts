@@ -276,12 +276,10 @@ export class NativeSoftwareUpdates {
           await this.command(process.execPath, ["--input-type=commonjs", "-e", "require('@matrix-org/matrix-sdk-crypto-nodejs')"], cwd, buildEnv);
         }
         stage = "build"; await this.command("npm", ["run", "build"], cwd, buildEnv);
-        stage = "validation";
+        // Development test suites belong to release CI, never to agent startup
+        // or update admission. Only qualify the installed runtime entrypoints.
+        stage = "runtime entrypoint check";
         if (component === "core") await this.command(process.execPath, ["--check", path.join(cwd, "dist/cli.js")], cwd, buildEnv);
-        if (component === "core" || pkg.scripts?.test) {
-          const validationHome = path.join(root, `validation-home-${component}`); await mkdir(validationHome, { mode: 0o700 });
-          await this.command("npm", ["test"], cwd, { ...buildEnv, HOME: validationHome, HAYATE_AGENT_HOME: path.join(validationHome, "agent"), HAYATE_TEST_CONCURRENCY: "2" });
-        }
       }
       component = "core"; stage = "source identity metadata";
       const corePackage = JSON.parse(await readFile(path.join(root, "core/package.json"), "utf8"));
