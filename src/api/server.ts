@@ -8,6 +8,7 @@
  */
 import { timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { createServer as createHttpsServer } from "node:https";
 import type { AddressInfo } from "node:net";
 import type { Address, Channel, DedupPins, Inbound, SendMeta, TurnEvent } from "../types.js";
 import { requestHash, type RunEvent, type RunRegistry, TERMINAL } from "./runs.js";
@@ -34,6 +35,8 @@ export interface ApiServerOptions {
   key: string;
   host?: string;
   port?: number;
+  /** Explicit TLS material; omitted preserves the existing HTTP listener. */
+  tls?: { key: Buffer; cert: Buffer };
   agent: string;
   runs: RunRegistry;
   /** Session controls the API needs from the harness. */
@@ -79,9 +82,10 @@ export class ApiChannel implements Channel {
 
   async start(deliverInbound: (input: Inbound) => Promise<void>, _dedup?: DedupPins): Promise<void> {
     this.deliver = deliverInbound;
-    this.server = createServer((req, res) => {
+    const handler = (req: IncomingMessage, res: ServerResponse) => {
       this.route(req, res).catch((err) => this.fail(res, err));
-    });
+    };
+    this.server = this.opts.tls ? createHttpsServer(this.opts.tls, handler) : createServer(handler);
     await new Promise<void>((resolve, reject) => {
       this.server!.once("error", reject);
       this.server!.listen(this.opts.port ?? 8642, this.opts.host ?? "0.0.0.0", () => resolve());

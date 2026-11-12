@@ -414,6 +414,14 @@ reference credentials by environment name, for example `"apiKey": "$MODEL_API_KE
 The secret is supplied to the process, not embedded in Git or the image.
 API authentication uses a separate `API_SERVER_KEY`. Do not reuse a model key.
 
+For native HTTPS on the run API, set both `API_SERVER_TLS_KEY_FILE` and
+`API_SERVER_TLS_CERT_FILE` to mounted PEM files. A missing pair, unreadable files
+or invalid TLS material fails startup; there is no fallback to HTTP when TLS is
+configured. Without these settings the existing HTTP mode is preserved. TLS does
+not replace the bearer key. Certificates are loaded at startup, so renewal
+requires a controlled restart. Clients must trust the issuing CA and verify the
+endpoint hostname; never disable certificate verification.
+
 The run API accepts configured `provider/model` references or unambiguous bare
 model IDs. A supplied provider must match the resolved model. Per-run model and
 reasoning choices do not replace the configured provider credentials.

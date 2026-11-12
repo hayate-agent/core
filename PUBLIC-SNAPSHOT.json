@@ -1,5 +1,5 @@
 {
-  "contentDigest": "762969e017ff97212dba535a2523b2e32abfd353a5800db5e117eac57b2bbc34",
+  "contentDigest": "cc857e1168db582d7b122b2f0e875ea56f96ec4a75097ef502cb55d931e48e9c",
   "files": [
     {
       "mode": "100644",
@@ -79,7 +79,7 @@
     {
       "mode": "100644",
       "path": "docs/configuration.md",
-      "sha256": "c3bf151c8a271d90c3b0b052261e2c5966dc187857e1cc4cd9dc3ccfefe1d971"
+      "sha256": "b6385b7d15da6ab2a30afadd079a2e84f489a3238a50cb868946cd9b57fd2a10"
     },
     {
       "mode": "100644",
@@ -504,7 +504,7 @@
     {
       "mode": "100644",
       "path": "src/api/server.ts",
-      "sha256": "b1a78a299eeceddff14920fe8932b8d72b6dab8c8778bb8dcc65e32df0e31bfc"
+      "sha256": "0f53eecc992d6b9d3929d73f0a0b0f00d3a8c627686489e87d2fa5f5ecf749c7"
     },
     {
       "mode": "100644",
@@ -619,7 +619,7 @@
     {
       "mode": "100644",
       "path": "src/cli.ts",
-      "sha256": "44f4255998d314c152bdf3fb6bc3b59231ca767cd3744422d379c5e62150ae7e"
+      "sha256": "a1e07595da6b195ddaba73ff89ab2d3961a62028e5ee8e40bd41a09df147b0fd"
     },
     {
       "mode": "100644",
@@ -1200,6 +1200,11 @@
       "mode": "100644",
       "path": "test/api-keepalive.test.ts",
       "sha256": "e9737ad56e3815365fcef0f1d6838e596da797e8da8c7dc574306728c9bc9a01"
+    },
+    {
+      "mode": "100644",
+      "path": "test/api-tls.test.ts",
+      "sha256": "0104c597cfe5c63a9c26fb2ab90939cda3ed4d2e19f4211fe4c4b6fa79e749e5"
     },
     {
       "mode": "100644",
@@ -3260,5 +3265,5 @@
   "historyPolicy": "fresh-root; no source commits, tags, refs or deleted blobs",
   "pluginSHA": "7ff45b2996a8312312bd3f13f2c4fdc633a519ae",
   "schema": 1,
-  "sourceSHA": "a29dea2c715491850279f524825c03a52498985e"
+  "sourceSHA": "3e3cfab55f6ee0d0cf4054ab8e903049ceb1f8e8"
 }

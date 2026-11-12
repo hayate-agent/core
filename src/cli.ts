@@ -10,7 +10,7 @@ import { gatewayManagerPlugin } from "./builtin-plugins/gateway-manager-plugin.j
 import { bundledGatewayModules } from "./builtin-plugins/gateway-baselines.js";
 import { reloadableToolsPlugin } from "./builtin-plugins/reloadable-tools-plugin.js";
 import { protectedContentPlugin } from "./builtin-plugins/protected-content-plugin.js";
-import { readdir } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { LocalSessions } from "./local-sessions.js";
@@ -545,6 +545,12 @@ async function main(argv: string[]): Promise<void> {
   gatewayTimer.unref();
   // Hermes-compatible HTTP API; enabled by explicit key or private loopback key file.
   const runs = new RunRegistry(path.join(config.home, "runs.json"));
+  const tlsKeyFile = process.env.API_SERVER_TLS_KEY_FILE;
+  const tlsCertFile = process.env.API_SERVER_TLS_CERT_FILE;
+  if (Boolean(tlsKeyFile) !== Boolean(tlsCertFile)) throw new Error("API TLS requires both key and certificate files");
+  if (tlsKeyFile && !apiKey) throw new Error("API TLS requires an API key");
+  const apiTls = tlsKeyFile && tlsCertFile
+    ? { key: await readFile(tlsKeyFile), cert: await readFile(tlsCertFile) } : undefined;
   if (apiKey) {
     await runs.load();
     harness.addChannel(
@@ -552,6 +558,7 @@ async function main(argv: string[]): Promise<void> {
         key: apiKey,
         host: process.env.API_SERVER_HOST,
         port: process.env.API_SERVER_PORT ? Number(process.env.API_SERVER_PORT) : undefined,
+        tls: apiTls,
         agent: config.agent,
         runs,
         updateAdmission: harness,
