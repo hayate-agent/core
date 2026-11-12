@@ -70,7 +70,8 @@ a fixed strategy retain that behavior; no provider replacement is performed.
 `use native` removes an optional wrapper and performs real native compaction.
 There is deliberately no no-op `disable` that could falsely acknowledge applied
 maintenance. Automatic-maintenance policy is separate. Timeout, abort, checkpoint
-after success, native overflow compaction and native handover summaries are unchanged.
+after success and native overflow compaction are unchanged. CLI handover summaries
+use an independent tool-free session, not this native compaction wrapper.
 Plugin registration/removal and code reload are not supplied by this command.
 Source merge/build does not activate a running installation.
 
@@ -86,7 +87,10 @@ contextMaintenance:
   checkEveryTurns: 5
   cooldownTurns: 5
   autoHandover: true
-  workerContextTokens: 48000
+  mainContextTokens: 262144
+  workerContextTokens: 131072
+  # Explicit inventory; location is not inferred from vendor/name/window size.
+  localModels: [my-provider/my-local-model]
 ```
 
 ### Worker context within a single Harness turn
@@ -94,13 +98,18 @@ contextMaintenance:
 A dispatcher/subagent worker may make many assistant/tool exchanges before its
 single Harness turn finishes. Harness before/after-turn maintenance cannot bound
 that inner loop. The PI adapter therefore enables **native between-response
-compaction for child sessions**, independent of the Main compaction owner, with
-an absolute `workerContextTokens` trigger (default 48,000; safe integer >= 8,192).
+compaction at explicit role budgets**. Frontier Main receives up to262,144 input
+tokens; workers, dispatcher assessments and validators receive131,072. Models
+explicitly listed in `localModels` receive half:131,072 for Main and65,536 for
+workers/assessments. Library callers without the composed policy retain legacy
+Main ownership; the CLI supplies the complete policy. Values are safe integers
+>=8,192 and cannot enlarge actual model capacity or remove native output headroom.
 The reserve is calculated from the **actually selected model** after per-turn
-routing and refreshed before the SDK's next-response check. Existing stricter
-per-model reserves are retained; recent retained context is at most one third of
-the remaining input threshold. Overrides are in-memory and child-session-local;
-Main and ephemeral classifiers are unchanged. No model context window is forged.
+routing and refreshed before the SDK's next-response check. The original stricter
+operator/native baseline is retained, not the previous managed override, so an
+approved budget increase does not stick at an older smaller threshold. Recent
+retained context is at most one third of the remaining input threshold. Overrides
+are in-memory and session-local. No model context window is forged.
 
 This is a compaction trigger, not a hard billing/output quota: an indivisible
 message or static system context can still exceed it, and compaction itself
@@ -261,10 +270,12 @@ an unreferenced archive; it is retained rather than deleting possible recovery d
 
 ## Maintenance cancellation and deadline
 
-Native compaction and handover summarization have a five-minute host deadline.
-At the deadline the Harness aborts the SDK compaction controller and reports
-failure, retaining the original session/prepared checkpoint rather than claiming
-a successful handover. `/stop` also aborts pre-turn maintenance even when no
+Native compaction has a five-minute host deadline. CLI handover summarization
+uses an independent tool-free session with a 30-second deadline. A failed or stalled
+summary falls back to an archive-backed checkpoint without claiming a generated
+retrospective; the full source transcript is durably archived before rotation.
+Compaction failure queues a handover when automatic maintenance and handover are
+enabled, rather than permanently fencing the conversation or retrying compact. `/stop` also aborts pre-turn maintenance even when no
 working prompt has started. This does not reset a review escalation or grant new
 authorization. A backend ignoring cancellation may still finish its remote
 request; cancellation is not a rollback of server-side computation.
@@ -287,18 +298,33 @@ in-session compaction and is not a synonym for `/handover`.
 
 Explicit tool requests can hand over even when automatic handover is disabled.
 Automatic handover is controlled by `autoHandover` (default true) and coexists
-with post-turn compaction under the semantic boundary policy described above. Native compaction produces the tool-free handover summary (and also compacts
-the old session); no extra working-model turn is used to generate it. The summary is
+with post-turn compaction under the semantic boundary policy described above.
+The CLI generates a retrospective in an independent, ephemeral, tool-free session
+using the source session's selected model. It receives bounded historical samples
+as evidence, not authority, and never calls the source session's native compact().
+Unavailable summaries use an explicit archive-backed checkpoint instead. The full
+source entries, including completed-effect evidence, remain in the archive. The checkpoint is
 saved as a prepared transition before a fresh runtime session is opened. The new
 session is seeded without executing tools. The next queued operator request reads
 that seed as context and continues; no artificial autonomous continuation is enqueued
 when there is no work. Channel, thread, queue, goals and review budgets remain owned
 by the same Harness session key. Old native session history remains on disk.
 
+Successful handover closes the old maintenance epoch: pending compaction,
+continuation-preparation flags, failure diagnostics, retry deadlines, pressure debt,
+usage observations and assessment counters are cleared. Turn/cooldown counters
+start at zero for the fresh runtime session. The completed operation ID remains
+as a receipt so a retained inbox prerequisite cannot compact the replacement again.
+Later automatic maintenance depends only on the new session's actual usage. Legacy
+completed handovers migrate once, rebasing any demonstrably newer turn counters.
+Host task identity, authority, deadlines, pauses and completed/uncertain external
+effects are unchanged; this is not a reset of business-task budgets.
+
 A failed rotation retains the prepared summary and fences uncertain effects for
 explicit reconciliation. When admitted recovery observes a changed old branch,
 it refreshes the summary before rotation. Unchanged branches reuse the checkpoint.
-If restart finds an interrupted in-flight reservation, it blocks for reconciliation;
+An interrupted read-only summary is retryable, not an uncertain rotation.
+If restart finds an interrupted rotation reservation, it blocks for reconciliation;
 known settled seed/archive-link failures may retry the saved handover after backoff.
 The PI adapter reuses an identical `harness-handover` message already on the active
 branch and still retries its provider checkpoint. Checkpoint/archive-link failures
@@ -307,10 +333,13 @@ session. Different handovers are not suppressed. This is recovery-oriented, not 
 exactly-once model/side-effect guarantee.
 
 Limitations: there is no automatic archival/pruning of native conversation history;
-no isolated summary model; no automatic continuation without queued input; and no
+no automatic continuation without queued input; and no
 UI notification for every maintenance operation yet. The service stores one small
 state/checkpoint file per Harness session in `<home>/context-maintenance/`. Rotation
 uses the existing session-provider binding contract; custom providers must honor it.
-A summary error retains the session/checkpoint without assuming that no compact
-occurred. Failed recovery retains intent and the working-prompt fence, routing a
-structured wait/blocker to the host rather than repeatedly throwing at boundaries.
+Failed native compaction and legacy native-summary failures are reconciled by
+handover without replaying the failed compaction when policy permits. Genuine
+policy, archive/persistence, seed and uncertain rotation holds retain intent and
+the working-prompt fence. Embedded hosts without an independent summary callback
+retain their runtime summary for normal handovers; failed-compaction recovery uses
+an archive-backed checkpoint instead of that possibly broken native method.

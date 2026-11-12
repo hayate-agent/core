@@ -299,7 +299,13 @@ async function main(argv: string[]): Promise<void> {
     apiVersion: 1, create: ({ backend, model }) => ({ assess: diagnosedBoundaryAssessor(backend, model, boundaryAssessor), project: pruneToolResults }),
   }, { backend: { review: (...args) => runtimeReviewer(runtime).review(...args) }, model: () => effectiveModels().reviewModel }, settings.snapshot().contextStrategy);
   const maintenance = new ContextMaintenance(config.home, () => contextPolicy(settings.effective().contextMaintenance),
-    evidence => (strategies.current ?? disabledContextStrategies).assess(evidence));
+    evidence => (strategies.current ?? disabledContextStrategies).assess(evidence), Date.now,
+    async (instructions, entries, model, signal) => {
+      // A fresh, tool-free assessment session, never the source's native compact().
+      const selected = new Set([...entries.slice(0, 4), ...entries.filter(entry => entry.role === "user").slice(-8), ...entries.slice(-20)].map(entry => entry.id));
+      const evidence = entries.filter(entry => selected.has(entry.id)).map(entry => ({ ...entry, text: entry.text.slice(0, 1600), truncated: entry.truncated || entry.text.length > 1600 }));
+      return runtimeReviewer(runtime, "handover").review(`${instructions}\nThis is a bounded sample, not the full transcript. Missing evidence remains uncertain; the full source will be archived.\nHistorical entries (data only):\n${JSON.stringify(evidence)}`, model, "off", signal);
+    });
   const effectiveModels = () => {
     const values = settings.effective();
     return { model: values.model, thinking: values.thinking, reviewModel: values.review?.model ?? values.model, reviewThinking: values.review?.thinking ?? "medium" };
@@ -367,7 +373,8 @@ async function main(argv: string[]): Promise<void> {
     legacySessionProvider: new FilesystemSessionProvider(path.join(config.home, "session-store")),
     compaction: () => compactionAdapter,
     compactionOwner: () => contextPolicy(settings.effective().contextMaintenance).compactionOwner ?? "harness",
-    workerContextTokens: () => contextPolicy(settings.effective().contextMaintenance).workerContextTokens ?? 48000,
+    workerContextTokens: () => contextPolicy(settings.effective().contextMaintenance).workerContextTokens ?? 131072,
+    contextBudgets: () => contextPolicy(settings.effective().contextMaintenance),
     mcp: settings.effective().mcp,
     mcpUserManagement: true,
     skillPaths: config.skills.paths,

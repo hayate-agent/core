@@ -12,8 +12,8 @@ const native = { reserveTokens: 16384, keepRecentTokens: 20000 };
 test('absolute child trigger does not scale up with a million-token model', () => {
   for (const window of [200000, 1000000]) {
     const p = workerCompactionSettings('dispatch:id:claim', window, native)!;
-    assert.equal(window - p.reserveTokens, 48000);
-    assert.equal(p.keepRecentTokens, 16000);
+    assert.equal(window - p.reserveTokens, 131072);
+    assert.equal(p.keepRecentTokens, 20000);
     assert.equal(p.enabled, true);
   }
   assert.equal(workerCompactionSettings('matrix:main', 200000, native), undefined);

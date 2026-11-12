@@ -1,5 +1,5 @@
 {
-  "contentDigest": "32d75fe6ddcfbc20d5177ba0f386393977a06caff265f4b4143699771f5ec196",
+  "contentDigest": "a502e3787722ff9df29d6cdf322ef32dd1b33514245986208e342c82dd0ca312",
   "files": [
     {
       "mode": "100644",
@@ -89,7 +89,7 @@
     {
       "mode": "100644",
       "path": "docs/context-maintenance.md",
-      "sha256": "34e4daeb28598794892ee598ef911331fa2dec9a74ed1dd284f0f338e58edc80"
+      "sha256": "321f7c3b9ff707e6be3fec2f0476d537555e65490ad718e63ed8e16bcc7f1090"
     },
     {
       "mode": "100644",
@@ -624,7 +624,7 @@
     {
       "mode": "100644",
       "path": "src/cli.ts",
-      "sha256": "6093bbe35ab63b290b80a8ec9940e9e8a34935e9eb18df0b4ba81dc98fe9024b"
+      "sha256": "646220cebdd462f7e4d0e4a16dcf29ef5c9bd515905a4d3ab677b80955585c32"
     },
     {
       "mode": "100644",
@@ -669,7 +669,7 @@
     {
       "mode": "100644",
       "path": "src/context-maintenance.ts",
-      "sha256": "55df09de7a294fbfda5b5b06e2576326e220743df70e089da27efa5420c550a3"
+      "sha256": "6350d2a2fd94d9a5696ba4ac1f54cd4506d5e60a7563ab30fac5cd93df3f2062"
     },
     {
       "mode": "100644",
@@ -1019,12 +1019,12 @@
     {
       "mode": "100644",
       "path": "src/runtime/pi.ts",
-      "sha256": "3be3d885c0c623fff2587dd407e9543625eba49e1398a62b723f299c19f641d5"
+      "sha256": "84aad375e3b87d6b1782fd64eb852f5dd874d2356d5c217af1caac063f2edfbc"
     },
     {
       "mode": "100644",
       "path": "src/runtime/reviewer.ts",
-      "sha256": "f1d27f786e629b639c9da228db6178e03f06cff278ecbbafaef31c04bc8b8f32"
+      "sha256": "d47131f87038b89d24461eaacecae2de46f6790b49b2d4a126881beaff00d95b"
     },
     {
       "mode": "100644",
@@ -1059,7 +1059,7 @@
     {
       "mode": "100644",
       "path": "src/settings.ts",
-      "sha256": "581ff9c95b52314000e3450eb9db29532d47fdb4f219f9293d19db4026bfbc10"
+      "sha256": "ba4188fcc976e5baf68a60ab4e33bf36629b837a229b8c48c66c2ac5528a544a"
     },
     {
       "mode": "100644",
@@ -1134,7 +1134,7 @@
     {
       "mode": "100644",
       "path": "src/types.ts",
-      "sha256": "a6d76b3225fa42ef0fc9aa7caf20254c08402cad8eb2eb11567aa3366bca93ce"
+      "sha256": "22f7e38aa139753e32ab95eaded891769b451501564ecfc65197f7c0c1c15183"
     },
     {
       "mode": "100644",
@@ -1169,7 +1169,7 @@
     {
       "mode": "100644",
       "path": "src/worker-context.ts",
-      "sha256": "6262cf080a54641e58b2862f04ba023d630347dbdcd163065394c55ee97cc4d4"
+      "sha256": "e28b2133098b0227b9759f2bcbfd95c7d77ac07d02d15683d11b330eb1c7fd12"
     },
     {
       "mode": "100644",
@@ -1493,8 +1493,13 @@
     },
     {
       "mode": "100644",
+      "path": "test/context-budgets.test.ts",
+      "sha256": "08df0bb08dd7afabe5fd286b1427f622fe1b4c33c6ecc3fb80cd5255ac04aa58"
+    },
+    {
+      "mode": "100644",
       "path": "test/context-coexistence.test.ts",
-      "sha256": "1bf6dcda22cc8706592e5b234fd0402220de0e2b19217e7126dff4ee83362331"
+      "sha256": "f673c4104dbfb4dc660603aaa2bae7d586653e1f5bda086582deca3e33a0e411"
     },
     {
       "mode": "100644",
@@ -1510,6 +1515,11 @@
       "mode": "100644",
       "path": "test/context-foreground-interrupt.test.ts",
       "sha256": "c39a17e36f437220753173c03fae65a0787c9dd97b9a1ebcf60819c23892550d"
+    },
+    {
+      "mode": "100644",
+      "path": "test/context-handover-epoch.test.ts",
+      "sha256": "d67aef9c837c50eceff278ab1c75f8d5ff840f3b04e3779b364cc4417ccf9a71"
     },
     {
       "mode": "100644",
@@ -1534,7 +1544,7 @@
     {
       "mode": "100644",
       "path": "test/context-recovery-terminal.test.ts",
-      "sha256": "caba5c44356dae37a16e114601bed27313b4e56a35fcddc7c133dec9d779ceae"
+      "sha256": "6b7fd226e33f2d89f75cc642ef047335ee1dc112d80d3560c1671e092bf562c3"
     },
     {
       "mode": "100644",
@@ -2004,7 +2014,7 @@
     {
       "mode": "100644",
       "path": "test/maintenance-admission.test.ts",
-      "sha256": "f77f5a423e718a93c984a3db6da765e5cb0aeaa27d573f88745eee91464755f4"
+      "sha256": "a1f7d3ed6b368fb076697a28125e4b558381acbe9becb5d34412e9955e7edbd7"
     },
     {
       "mode": "100644",
@@ -2644,7 +2654,7 @@
     {
       "mode": "100644",
       "path": "test/semantic-context-preparation.test.ts",
-      "sha256": "48c214a26151b370a0e753cad85b829860bba3e9fa79a1113468623df4b155e5"
+      "sha256": "f678c0ee9c630009d89eaf93df09107bd9cc6a599a7af9ab432db8527332c523"
     },
     {
       "mode": "100644",
@@ -2989,7 +2999,7 @@
     {
       "mode": "100644",
       "path": "test/worker-context.test.ts",
-      "sha256": "d3cf0d89a242e21654e7ec02b12e2dd4404b0bd9ae19fbc26533fa5f5bb6f438"
+      "sha256": "ee2492f3ad2163b8323ba96a38ce0e91198af718d72cabffaca99215be58dfba"
     },
     {
       "mode": "100644",
@@ -3325,5 +3335,5 @@
   "historyPolicy": "fresh-root; no source commits, tags, refs or deleted blobs",
   "pluginSHA": "7ff45b2996a8312312bd3f13f2c4fdc633a519ae",
   "schema": 1,
-  "sourceSHA": "629e6c7ded7fe0c43c60928bf7f1118889da0395"
+  "sourceSHA": "6a96812ad4795c26ab944ea748dc0cae2fe5023f"
 }

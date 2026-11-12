@@ -61,7 +61,7 @@ test("unknown usage is durable, observable, deduplicated and never fabricated", 
   await maintenance.boundary("chat", session, rotate, target);
   assert.equal((await maintenance.status("chat")).notices?.length ?? 0, 0);
 });
-test("uncertain compaction fences work until explicit handover reconciliation", async t => {
+test("failed compaction is reconciled by automatic handover without replaying compact",  async t => {
   const home = await fixture(t);
   let attempts = 0, rotations = 0;
   const session = { status: () => ({ sessionId: "old", contextPercent: 80 }), archiveEntries: () => [],
@@ -74,11 +74,9 @@ test("uncertain compaction fences work until explicit handover reconciliation", 
   assert.equal((await maintenance.status("chat")).pressureSinceCompaction, undefined);
   assert.match((await maintenance.status("chat")).lastError!, /failed/);
   await maintenance.beforeTurn("chat", session, rotate);
-  assert.equal(rotations, 0);
-  assert.equal((await maintenance.recoveryStatus("chat"))?.reason, "uncertain");
-  await maintenance.admit("chat", "reconcile", { action: "handover", preserve: "intent", resume: "next" });
-  await maintenance.beforeTurn("chat", session, rotate);
   assert.equal(rotations, 1);
+  assert.equal(await maintenance.recoveryStatus("chat"), undefined);
+  assert.equal((await maintenance.status("chat")).pending, undefined);
   assert.equal((await maintenance.status("chat")).lastError, undefined);
 });
 test("session sync clears old pressure debt even when guidance observes rotation first", async t => {
