@@ -1,8 +1,25 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Harness } from "../src/harness.js";
-import { StartupNotice } from "../src/startup-notice.js";
+import { StartupNotice, startupNoticeTarget } from "../src/startup-notice.js";
 import { FakeRuntime, MemoryChannel, ROOM } from "./fakes.js";
+
+test("missing home uses exactly one known user room, not stale API/worker destinations", () => {
+  const channels = new Set(["matrix", "api", "dispatch", "console"]);
+  const room = { channel: "matrix", target: "!user-room" };
+  const sessions = [
+    { key: "matrix:!user-room", replyTo: room },
+    { key: "matrix:!user-room:thread", replyTo: { ...room, thread: "$old-thread" } },
+    { key: "api:old-run", replyTo: { channel: "api", target: "old-run" } },
+    { key: "dispatch:worker", replyTo: { channel: "dispatch", target: "worker" } },
+    { key: "console:local", replyTo: { channel: "console", target: "local" } },
+  ];
+  assert.deepEqual(startupNoticeTarget(undefined, sessions, channels), room);
+  const explicit = { ...room, target: "!configured", thread: "$configured-thread" };
+  assert.deepEqual(startupNoticeTarget(explicit, sessions, channels), explicit);
+  assert.equal(startupNoticeTarget(undefined, [...sessions, { key: "matrix:!other", replyTo: { ...room, target: "!other" } }], channels), undefined);
+  assert.equal(startupNoticeTarget(undefined, sessions, new Set(["api"])), undefined);
+});
 
 const settle = () => new Promise(resolve => setImmediate(resolve));
 function notice(h: Harness, restarted = true) {
