@@ -593,6 +593,7 @@ async function main(argv: string[]): Promise<void> {
       }),
     );
   }
+  let announceStartup = () => {}; // TUI selection can finish after channel startup.
   // Console: interactive use, or when nothing else would receive input. A daemon with Matrix or
   // the API (e.g. a container without a TTY) does not read stdin unless asked to.
   if (interactive) {
@@ -625,7 +626,7 @@ async function main(argv: string[]): Promise<void> {
       prepareSession: async () => {
         const key = localSessions?.current?.key ?? "console:local";
         await harness.sessionFor(key);
-        if (hostAdmissionReady) { await dispatcher?.activateParent(key); await subagents.reconcile(sessionEnabled); await harness.activateSession(key); }
+        if (hostAdmissionReady) { await dispatcher?.activateParent(key); await subagents.reconcile(sessionEnabled); await harness.activateSession(key); announceStartup(); }
       },
       model: () => harness.sessions.get(localSessions?.current?.key ?? "console:local")?.session?.status().model ?? "unavailable",
       reasoning: () => harness.sessions.get(localSessions?.current?.key ?? "console:local")?.session?.status().thinking ?? "unavailable",
@@ -1045,15 +1046,23 @@ async function main(argv: string[]): Promise<void> {
     await persist();
     harness.releaseRestored();
   }
+  await persist(); // Complete failure-capable startup work before claiming readiness.
   if (stopping) return;
   hostAdmissionReady = true;
-  // Never acknowledge a restart from the old process or before startup recovery
-  // and channel authentication succeed. Outbox delivery is independent of work.
-  new StartupNotice({ agent: config.agent, build: BUILD_INFO, restarted: !!saved,
-    post: (input, text) => harness.post(input, text), log }).ready(localSessions?.current
-      ? { channel: "console", target: localSessions.current.key } : harness.home ?? config.home_address);
-  await persist();
-  if (!stopping && process.send && process.connected) process.send({ type: "hayate-runtime-ready" }, () => {});
+  // Never acknowledge from the old process or before startup recovery and
+  // channel authentication succeed. Delivery remains independent of work.
+  const startupNotice = new StartupNotice({ agent: config.agent, build: BUILD_INFO, restarted: !!saved,
+    post: (input, text) => harness.post(input, text), log });
+  announceStartup = () => {
+    if (stopping) return;
+    if (localSessions) {
+      // Do not fall back to a remote home while local selection is in flight.
+      const current = localSessions.current;
+      if (current) startupNotice.ready({ channel: "console", target: current.key });
+    } else startupNotice.ready(harness.home ?? config.home_address);
+  };
+  announceStartup();
+  if (process.send && process.connected) process.send({ type: "hayate-runtime-ready" }, () => {});
 }
 
 main(process.argv.slice(2)).catch(async (err) => {
