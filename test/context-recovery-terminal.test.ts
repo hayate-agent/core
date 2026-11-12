@@ -9,11 +9,11 @@ import { Harness } from "../src/harness.js";
 import { FakeRuntime, MemoryChannel, msg } from "./fakes.js";
 import type { RuntimeSession } from "../src/types.js";
 
-async function fixture(t: { after(fn: () => Promise<unknown>): void }) {
+async function fixture(t: { after(fn: () => Promise<unknown>): void }, autoHandover = true) {
   const home = await mkdtemp(path.join(os.tmpdir(), "recovery-terminal-"));
   t.after(() => rm(home, { recursive: true, force: true }));
   let now = 10000, seeds = 0, fail = true;
-  const create = () => new ContextMaintenance(home, () => contextPolicy(), undefined, () => now);
+  const create = () => new ContextMaintenance(home, () => contextPolicy({ autoHandover }), undefined, () => now);
   const old = { status: () => ({ sessionId: "old", contextPercent: 20 }), archiveEntries: () => [], summarize: async () => "CURRENT STATE AND NEXT STEPS: preserve operator intent" } as unknown as RuntimeSession;
   const next = { status: () => ({ sessionId: "new", contextPercent: 20 }), seedHandover: async () => {
     seeds++; if (fail) throw new MaintenanceError("seed", "EIO");
@@ -95,7 +95,7 @@ test("notice delivery retry retains ID and never repeats compaction/seed", async
 });
 
 test("uncertain compact failure blocks instead of replaying; diagnostics are bounded/redacted; handover admission reconciles", async t => {
-  const f = await fixture(t); let compacts = 0;
+  const f = await fixture(t, false); let compacts = 0;
   const key = "compact";
   const session = { ...f.old, compact: async () => {
     compacts++;
@@ -128,8 +128,8 @@ test("uncertain compact failure blocks instead of replaying; diagnostics are bou
   assert.equal(compacts, 1);
 });
 
-test("legacy exhausted retries and interrupted operations migrate once without budget reset", async t => {
-  const f = await fixture(t);
+test("legacy exhausted retries retain genuine holds when automatic handover is disabled", async t => {
+  const f = await fixture(t, false);
   const file = path.join(f.home, "context-maintenance", `${createHash("sha256").update("legacy").digest("hex")}.json`);
   const legacy = { version: 1, turns: 5, lastMaintenance: 4, pending: f.request, continuationPreparationRequired: true,
     recoveryRetry: { attempts: 7, notBefore: 1794420069565 }, failure: { stage: "compact", code: "failed", phase: "after", turn: 4, action: "compact" } };
@@ -186,7 +186,7 @@ for (const terminal of [false, true]) test(`host scheduler preserves inbox/task 
 });
 
 test("retained host prerequisite uses its durable operation receipt after explicit recovery, not another compact", async t => {
-  const f = await fixture(t); let compacts = 0, work = 0, checks = 0;
+  const f = await fixture(t, false); let compacts = 0, work = 0, checks = 0;
   const runtime = new FakeRuntime(() => { work++; return "verified"; });
   const open = runtime.open.bind(runtime);
   runtime.open = async (key, options) => {

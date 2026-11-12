@@ -4,7 +4,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Harness } from "../src/harness.js";
-import { ContextMaintenance, contextPolicy } from "../src/context-maintenance.js";
+import { ContextMaintenance, contextPolicy, MaintenanceError } from "../src/context-maintenance.js";
 import { assessCompletion } from "./completion-default.js";
 import { FakeRuntime, MemoryChannel, msg } from "./fakes.js";
 
@@ -44,6 +44,7 @@ for (const failure of [false, true]) {
       return session;
     };
     const maintenance = new ContextMaintenance(home, () => contextPolicy());
+    if (failure) maintenance.archives.create = async () => { throw new MaintenanceError("archive", "EIO"); };
     const h = new Harness({ runtime, tickMs: 60000, contextMaintenance: maintenance,
       completionCheck: async input => {
         assert.equal(input.completionAnchor?.task, mandate);
@@ -78,7 +79,7 @@ for (const failure of [false, true]) {
         assert.equal(runtime.sessions.get("mem:room1")?.prompts.length, 0);
         const saved = await maintenance.status("mem:room1");
         assert.equal(saved.continuationPreparationRequired, true);
-        assert.equal(saved.pending?.action, preparation);
+        assert.equal(saved.pending?.action, "handover");
       } else assert.equal(h.snapshotSessions()[0].task?.state, "completed");
     } finally { await h.stop(0); await rm(home, { recursive: true, force: true }); }
   });
@@ -121,6 +122,7 @@ for (const failure of [false, true]) {
     const maintenance = new ContextMaintenance(home, () => contextPolicy(), async () => {
       throw Error("unknown usage must not invent a threshold assessment");
     }, () => now);
+    if (failure) maintenance.archives.create = async () => { throw new MaintenanceError("archive", "EIO"); };
     const h = new Harness({ runtime, tickMs: 60000, contextMaintenance: maintenance,
       completionCheck: (input, reply, signal) => assessCompletion({ review: async () => {
         events.push("check");
@@ -138,7 +140,7 @@ for (const failure of [false, true]) {
       else {
         const saved = await maintenance.status("mem:room1");
         assert.equal(saved.continuationPreparationRequired, true);
-        assert.equal(saved.pending?.action, preparation);
+        assert.equal(saved.pending?.action, "handover");
         // A later recovery/new turn must not bypass the failed prerequisite during cooldown.
         const restarted = new ContextMaintenance(home, () => contextPolicy(), undefined, () => now);
         await restarted.beforeTurn("mem:room1", runtime.sessions.get("mem:room1")!, async () => {
