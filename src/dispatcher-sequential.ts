@@ -25,6 +25,8 @@ export interface SequentialState {
   plan: PlanStep[];
   /** Stable original step identities; reordering never reuses another step's effect intent. */
   stepIds?: number[];
+  /** Once-only adoption of independent ready-step assessment for saved plans. */
+  readyStepPolicy?: 1;
   /** Fresh ready-step admission is bound to the parent decision snapshot until effects begin. */
   readyAdmission?: { stepId: number; decisionRevision: number; from: number };
   /** Settled evidence for genuinely blocked steps moved behind independently ready work. */
@@ -160,6 +162,7 @@ function readState(task: Readonly<Execution>): SequentialState | undefined | "in
         (a.diagnostic !== undefined && !["technical", "inconclusive", "invalid_response", "unavailable"].includes(a.diagnostic)))) return "invalid";
     if (a?.route && (Object.keys(a.route).some(k => !["model", "thinking"].includes(k)) || typeof a.route.model !== "string" || a.route.model.length > 200 || (a.route.thinking !== undefined && (typeof a.route.thinking !== "string" || a.route.thinking.length > 40)))) return "invalid";
     if (a?.session !== undefined && (typeof a.session !== "string" || !a.session.startsWith(`dispatch:${task.id}:`) || a.session.length > 300)) return "invalid";
+    if (state.readyStepPolicy !== undefined && state.readyStepPolicy !== 1) return "invalid";
     const ids = state.stepIds;
     if (ids !== undefined && (!Array.isArray(ids) || ids.length !== state.plan.length || new Set(ids).size !== ids.length || ids.some(id => !Number.isSafeInteger(id) || id < 0 || id >= state.plan.length))) return "invalid";
     const admission = state.readyAdmission;
@@ -213,6 +216,22 @@ export interface SequentialDeps {
 export function sequentialStrategy(deps: SequentialDeps): DispatcherStrategy {
   return {
     name: "sequential", version: 1, replaySafe: false, reconcile: true,
+    refreshAssessment: (task, now) => {
+      const state = readState(task);
+      if (!state || state === "invalid" || state.readyStepPolicy === 1 || !state.assessment ||
+          state.outcomes.length + 1 >= state.plan.length) return;
+      const index = state.outcomes.length;
+      const role = state.escalation?.index === index ? state.escalation.to : state.plan[index]!.role;
+      const key = `step:${task.id}:${state.stepIds?.[index] ?? index}:${role}`;
+      // Exactly the same durable-evidence proof as the scoped decision boundary.
+      // An opaque interrupted worker, even one with a future timer, never qualifies.
+      if (task.intent ? task.intent.key !== key || !task.intent.route : task.settledEffect?.key !== key) return;
+      state.readyStepPolicy = 1;
+      state.assessment.nextAt = Math.min(state.assessment.nextAt ?? now, now);
+      const checkpoint = JSON.stringify(state);
+      if (checkpoint.length > 64000) return;
+      return { checkpoint, reason: "Prüfpolitik aktualisiert: erhaltenen Prüfbericht einmalig neu bewerten und separat mögliche Arbeit prüfen; keine Worker-Wiederholung, kein Budget-Reset." };
+    },
     decisionBoundary: task => {
       try {
         const state = readState(task);
@@ -260,7 +279,7 @@ export function sequentialStrategy(deps: SequentialDeps): DispatcherStrategy {
         if (text === undefined) return block("Planer technisch fehlgeschlagen; kein Modellwechsel.");
         const steps = parsePlan(text);
         if (!steps) return block("Planer lieferte keinen gültigen begrenzten Plan.");
-        state = { v: 1, planner: { requested, ...(observed ? { observed } : {}) }, plan: steps, outcomes: [] };
+        state = { v: 1, readyStepPolicy: 1, planner: { requested, ...(observed ? { observed } : {}) }, plan: steps, outcomes: [] };
         await context.checkpoint(JSON.stringify(state));
         await context.status?.(`Plan: ${steps.map((s, i) => `${i + 1}. ${s.role} – ${s.reason}`).join("; ")}`.slice(0, 8000)).catch(() => {});
       }

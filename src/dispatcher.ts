@@ -28,6 +28,7 @@ export interface DispatcherStrategy {
   version: number;
   replaySafe: boolean;
   reconcile?: boolean;
+  refreshAssessment?: import("./execution-recovery.js").RecoveryStrategy["refreshAssessment"];
   /** Trusted strategy opt-in; true only at a retained assessment boundary safe to wake. */
   decisionBoundary?(task: Readonly<Execution>): boolean;
   execute(task: Readonly<Execution>, context: DispatchContext): Promise<string>;

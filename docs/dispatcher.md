@@ -214,7 +214,14 @@ scheduler, ledger and worker bridge. It requires enabled [model roles](model-rol
    the overall task cannot complete while it remains held. A new parent clarification
    invalidates an unstarted readiness permit. No verdict, malformed selection or
    insufficient checkpoint space leaves the hold intact. This does not create a
-   second writer or invent a replacement plan. Progress delivery failures do not fail
+   second writer or invent a replacement plan. Existing current plans with a durable
+   settled assessment adopt this scheduling policy once at normal recovery: stale
+   assessment-only backoff becomes due for fresh independent evaluation, with the
+   attempt/correction budget, report, route and uncertain intent preserved. The
+   atomic policy marker prevents repeated wakeups on subsequent restarts. Manual
+   pauses, questions, stopped/expired/disabled and held-legacy work are not enrolled;
+   an opaque intent without a matching settled assessment is not eligible.
+   Progress delivery failures do not fail
    the persisted plan. The final result lists requested and
    observed model per step and is produced only when every step completed.
    `STEP-STATUS` is only the worker's step outcome signal inside the strategy; the

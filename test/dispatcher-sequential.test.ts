@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { DispatcherRuntime } from "../src/dispatcher-runtime.js";
@@ -268,6 +268,48 @@ test("ready-step scheduling honors dedicated validator selection without a legac
   const task = await env.run("Verify live gate and independently publish source within existing constraints.");
   assert.equal(task.status, "paused"); assert.equal(assessments, 2);
   assert.equal(env.calls.review.length, 0); assert.equal(env.calls.worker.length, 1);
+});
+
+for (const gate of ["current", "manual-pause", "held-legacy", "expired", "opaque-intent", "disabled"] as const) test(`saved pre-policy assessment refresh (${gate}) is once-only, read-only and respects recovery holds`, async t => {
+  const script: Script = { plan: steps(["live verification", "simple"], ["publish source", "medium"]),
+    ready: '{"state":"continue","next":"2"}',
+    worker: text => text.includes("STEP 1/2:\nlive verification") ? "Live gate missing\nSTEP-STATUS: blocked: external" : "source receipt\nSTEP-STATUS: complete",
+    verdict: text => JSON.parse(text.slice(text.lastIndexOf("DATA: ") + 6)).reply.includes("Live gate missing") ? '{"state":"blocked"}' : '{"state":"completed"}',
+  };
+  const old = await setup(t, { ...script, verdict: () => { throw Error("old read-only assessment interrupted"); } });
+  const first = await old.run("Verify live service only with credentials; independently publish source through required CI.");
+  await old.dispatcher.stop(); await old.harness.stop(1000);
+  // A stopped fixture models an old persisted release, never a live production ledger edit.
+  const saved = JSON.parse(await readFile(old.file, "utf8"));
+  const task = saved.executions[0], checkpoint = state(task.checkpoint);
+  delete checkpoint.readyStepPolicy;
+  checkpoint.assessment!.attempts = 15; checkpoint.assessment!.nextAt = Date.now() + 3600_000;
+  task.checkpoint = JSON.stringify(checkpoint); task.assessmentRetryAt = checkpoint.assessment!.nextAt;
+  if (gate === "manual-pause") { task.status = "paused"; task.diagnosticCode = "manual-pause"; }
+  if (gate === "held-legacy") task.recoveryEnrollment = "held-legacy";
+  if (gate === "expired") task.dependency = { taskId: "old", original: task.input, depth: 0, expiresAt: Date.now() - 1 };
+  if (gate === "opaque-intent") { delete checkpoint.assessment; task.checkpoint = JSON.stringify(checkpoint); }
+  await writeFile(old.file, JSON.stringify(saved));
+  const env = await setup(t, script, { home: old.home, file: old.file, retainedTranscript: "Retained original worker report" });
+  if (gate === "disabled") {
+    await env.store.recover(new Map([["sequential", env.bridge.sequential]]), undefined, undefined, () => false);
+  } else {
+    await env.dispatcher.start(); await env.dispatcher.waitForExecution(first.id);
+  }
+  const final = env.store.list()[0]!, current = state(final.checkpoint);
+  if (gate === "current") {
+    assert.equal(current.readyStepPolicy, 1);
+    assert.equal(current.outcomes.length, 1, "existing publication runs without waiting one stale hour");
+    assert.equal(env.calls.worker.length, 1, "only source worker, never old live effects");
+    assert.ok(current.assessment!.attempts >= 16, "old inference budget is retained");
+    const before = final.checkpoint, retry = final.workerRetry;
+    await env.store.recover(new Map([["sequential", env.bridge.sequential]]));
+    assert.equal(env.store.list()[0]!.checkpoint, before, "policy adoption never repeats");
+    assert.deepEqual(env.store.list()[0]!.workerRetry, retry);
+  } else {
+    assert.equal(current.readyStepPolicy, undefined);
+    assert.equal(env.calls.worker.length, 0); assert.equal(env.calls.review.length, 0);
+  }
 });
 
 test("delegated step uses selected dedicated provider, not legacy LLM", async t => {
