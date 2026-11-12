@@ -47,6 +47,9 @@ export interface ApiServerOptions {
   /** Unsent SSE bytes per connection before a slow client is dropped. */
   maxSseBufferBytes?: number;
   log?: (msg: string) => void;
+  /** Passive lifecycle guarantee for already-authorized native service owners.
+   * API inference credentials do not gain operator restart authority. */
+  lifecycle?: { timeoutSeconds: number; nativeSoftwareUpdates: boolean };
   updateAdmission?: Pick<Harness, "acquireUpdateAdmission" | "updateAdmissionStatus" | "releaseUpdateAdmission" | "withForegroundWork"> &
     Partial<Pick<Harness, "prepareUpdateAdmission" | "releaseMaintenanceAdmission">>;
 }
@@ -179,8 +182,11 @@ export class ApiChannel implements Channel {
       object: "hermes.api_server.capabilities",
       platform: "hayate-agent",
       agent: this.opts.agent,
+      ...(this.opts.lifecycle ? { lifecycle: { restart_timeout_seconds: this.opts.lifecycle.timeoutSeconds } } : {}),
       features: {
         run_submission: true,
+        durable_shutdown: !!this.opts.lifecycle,
+        native_software_updates: this.opts.lifecycle?.nativeSoftwareUpdates ?? false,
         update_admission: !!this.opts.updateAdmission,
         update_admission_maintenance: !!this.opts.updateAdmission?.prepareUpdateAdmission,
         run_status: true,

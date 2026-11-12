@@ -14,7 +14,9 @@ test("published starter parses as a safe opt-in profile using runtime defaults",
   assert.deepEqual(config.dispatcher, baseline.dispatcher);
   assert.deepEqual(config.gateways, baseline.gateways);
   assert.deepEqual(config.loop, baseline.loop);
-  assert.deepEqual(config.tools, ["read", "bash", "edit", "write", "grep", "find", "ls"]);
+  assert.deepEqual(config.tools, ["read", "bash", "edit", "write", "grep", "find", "ls", "plugin_software_update"]);
+  assert.deepEqual(config.lifecycle, baseline.lifecycle);
+  assert.deepEqual(config.softwareUpdates, baseline.softwareUpdates);
   assert.equal(config.model, undefined);
   assert.equal(config.thinking, undefined);
   assert.deepEqual(config.plugins, []);

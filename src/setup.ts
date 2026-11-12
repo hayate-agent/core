@@ -28,8 +28,10 @@ export async function initialize(opts: InitOptions): Promise<string[]> {
       agent: config.agent,
       cwd,
       ...(config.model ? { model: config.model } : {}),
-      tools: ["read", "bash", "edit", "write", "grep", "find", "ls"],
+      tools: ["read", "bash", "edit", "write", "grep", "find", "ls", "plugin_software_update"],
       loop: config.loop,
+      lifecycle: config.lifecycle,
+      softwareUpdates: config.softwareUpdates,
       gateways: config.gateways,
       dispatcher: config.dispatcher,
     }) + `
