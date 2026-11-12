@@ -70,6 +70,8 @@ import { loadPersona, personaSections } from "./persona.js";
 import { ProtectedContent } from "./protected-content.js";
 import { workflowTools } from "./workflow-tools.js";
 import { continuationPlugin } from "./builtin-plugins/continuation-plugin.js";
+import { taskPriorityPlugin } from "./task-priority-plugin.js";
+import { operatorPriorityIntent } from "./priority-intent.js";
 import { loopPlugin } from "./builtin-plugins/loop-plugin.js";
 import { OverlayUpdater } from "./update.js";
 import { SkillUpdates } from "./skill-updates.js";
@@ -722,7 +724,14 @@ async function main(argv: string[]): Promise<void> {
     },
   });
   let requestRestart: () => Promise<void> = async () => { throw Error("Lifecycle startup not complete; retry restart"); };
-  await plugins.load(config.plugins ?? [], { agent: config.agent, home: config.home, cwd: config.cwd, executionContexts: executionContextCapability, foregroundWork: work => harness.withForegroundWork(work) }, [...builtinCommandNames, "sessions", "resume", ...skills.map((s) => s.name)], ["console", "api", "dispatch", ...Object.keys(bundledGatewayModules()), ...harness.channels.keys()], [softwareLifecyclePlugin(() => requestRestart(), (action, key) => {
+  await plugins.load(config.plugins ?? [], { agent: config.agent, home: config.home, cwd: config.cwd, executionContexts: executionContextCapability, foregroundWork: work => harness.withForegroundWork(work) }, [...builtinCommandNames, "sessions", "resume", ...skills.map((s) => s.name)], ["console", "api", "dispatch", ...Object.keys(bundledGatewayModules()), ...harness.channels.keys()], [taskPriorityPlugin(harness, async (key, taskId, priority, signal) => {
+    const session = harness.sessions.get(key), input = session?.current;
+    const task = (session?.tasks ?? (session?.task ? [session.task] : [])).find(task => task.id === taskId);
+    if (!task || input?.source !== "channel" || !(input.replyTo?.channel === "console" || !!input.sender && admins.includes(input.sender))) return false;
+    const text = input.text;
+    const approved = await operatorPriorityIntent(runtimeReviewer(runtime, "supervisor"), text, { id: task.id, original: task.original }, priority, signal);
+    return approved && !signal?.aborted && harness.sessions.get(key)?.current === input && input.text === text;
+  }), softwareLifecyclePlugin(() => requestRestart(), (action, key) => {
     if (action === "install" && config.softwareUpdates?.enabled !== false && config.softwareUpdates?.autoInstall !== false) return true;
     if (action === "restart" && config.lifecycle?.agentRestart === true) return true;
     const input = harness.sessions.get(key)?.current;
@@ -780,7 +789,8 @@ async function main(argv: string[]): Promise<void> {
         replyTo: event.parent.startsWith("cron-followup:") ? undefined : target });
     }, error => log(`[dispatcher] ${String(error)}`), key => harness.dependencyCheckpoint(key), undefined, () => harness.updateFenced || harness.stopping,
     // Built-ins stay registered so tasks queued before a strategy switch are not stranded.
-    [dispatchRuntime.strategy, dispatchRuntime.sequential], sessionEnabled, parallelAdmission, key => harness.dispatchOrigin(key));
+    [dispatchRuntime.strategy, dispatchRuntime.sequential], sessionEnabled, parallelAdmission, key => harness.dispatchOrigin(key),
+    task => harness.taskPriority(task.parent, task.dependency?.taskId));
   }
   plugins.memoryOrchestration.select(config.memory.enabled ? config.memory.orchestration ?? "default" : "none");
   const memoryProvider = new MemoryProviderLifecycle(async () => {

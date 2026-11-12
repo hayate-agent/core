@@ -2,6 +2,7 @@ import type { ExecutionRecoveryPolicy } from "./execution-recovery.js";
 import { validateWorkerPin } from "./model-roles.js";
 import { ExecutionClaimConflict, ExecutionDecisionConflict, ExecutionDeadlineExpired, ExecutionWorkerFailure, ExecutionAssessmentHold, type Execution, type ExecutionEvent, type ExecutionStore } from "./execution.js";
 import { toolGuardDenialReason } from "./tool-guard-error.js";
+import { PriorityScheduler, type TaskPriority } from "./task-priority.js";
 
 export interface DispatchContext {
   readonly signal: AbortSignal;
@@ -27,6 +28,7 @@ export interface DispatcherStrategy {
   version: number;
   replaySafe: boolean;
   reconcile?: boolean;
+  refreshAssessment?: import("./execution-recovery.js").RecoveryStrategy["refreshAssessment"];
   /** Trusted strategy opt-in; true only at a retained assessment boundary safe to wake. */
   decisionBoundary?(task: Readonly<Execution>): boolean;
   execute(task: Readonly<Execution>, context: DispatchContext): Promise<string>;
@@ -44,7 +46,7 @@ export class Dispatcher {
   private active = new Map<string, { abort: AbortController; done: Promise<void> }>();
   private scheduling?: Promise<void>;
   private scheduleRequested = false;
-  private lastClaimed?: string;
+  private readonly priorities = new PriorityScheduler();
   private delivering?: Promise<void>;
   private stopped = false;
   private initialized = false;
@@ -65,6 +67,8 @@ export class Dispatcher {
     private readonly parallelAdmission?: import("./parallel-admission.js").ParallelAdmission,
     /** Host-captured address of the parent's current turn; persisted so results return to the requesting room. */
     private readonly origin?: (parent: string) => Execution["origin"],
+    /** Live parent metadata, never supplied by workers; undefined means normal. */
+    private readonly parentPriority?: (task: Execution) => TaskPriority | undefined,
   ) {
     if (!Number.isSafeInteger(capacity) || capacity < 1) throw Error("Invalid dispatcher capacity");
     for (const item of [strategy, ...retained])
@@ -180,12 +184,17 @@ export class Dispatcher {
   }
   private async schedule(): Promise<void> {
     void this.flushEvents().catch(this.report);
-    const tasks = this.store.list();
-    const last = tasks.findIndex(task => task.id === this.lastClaimed);
-    const ordered = last < 0 ? tasks : [...tasks.slice(last + 1), ...tasks.slice(0, last + 1)];
-    for (let task of ordered) {
-      if (task.recoveryEnrollment === "held-legacy") continue;
+    const tasks = this.store.list().filter(task => task.recoveryEnrollment !== "held-legacy" &&
+      !this.active.has(task.id) && this.parentEnabled(task.parent) && !!this.strategyFor(task) &&
+      (task.status === "ready" && this.store.assessmentDue(task) ||
+        ["worker-failed", "runtime-failure"].includes(task.diagnosticCode ?? "") && ["blocked", "paused", "ready"].includes(task.status) &&
+        (!task.workerRetry || this.store.assessmentDue(task) || task.dependency?.expiresAt !== undefined && task.dependency.expiresAt <= Date.now())));
+    while (tasks.length) {
       if (this.stopped || this.admissionFenced() || this.active.size >= this.capacity) break;
+      let task = this.priorities.pick(tasks, task => task.id,
+        task => this.parentPriority ? this.parentPriority(task) : task.dependency?.priority)!;
+      tasks.splice(tasks.indexOf(task), 1);
+      if (task.recoveryEnrollment === "held-legacy") continue;
       if (["worker-failed", "runtime-failure"].includes(task.diagnosticCode ?? "") &&
           (["blocked", "paused"].includes(task.status) || task.status === "ready" && task.workerRetry) &&
           !this.active.has(task.id) && this.parentEnabled(task.parent)) {
@@ -219,7 +228,6 @@ export class Dispatcher {
       const abort = new AbortController();
       const done = Promise.resolve().then(() => this.run(claimed, abort, strategy));
       this.active.set(task.id, { abort, done });
-      this.lastClaimed = task.id;
     }
   }
   private async run(task: Execution, abort: AbortController, strategy: DispatcherStrategy): Promise<void> {

@@ -39,7 +39,9 @@ export interface Execution {
   recoveryEnrollment?: "current" | "held-legacy";
   id: string;
   /** Host-captured parent mandate; never accepted from model tool arguments. */
-  dependency?: { taskId: string; depth: number; original: string; expiresAt?: number; anchor?: import("./types.js").Inbound["completionAnchor"] };
+  dependency?: { taskId: string; depth: number; original: string; expiresAt?: number; anchor?: import("./types.js").Inbound["completionAnchor"];
+    /** Scheduling snapshot; the live durable parent preference takes precedence. */
+    priority?: import("./task-priority.js").TaskPriority };
   /** Host-captured address of the submitting turn (room/thread); never from model tool arguments. */
   origin?: import("./types.js").Address;
   requestId: string;
@@ -830,6 +832,22 @@ export class ExecutionStore {
         } else {
           if (strategy && this.canAbandonClassifier(task, strategy)) task.classifierReceipt = { ...task.classifierReceipt!, phase: "abandoned" };
           task.status = "ready"; delete task.recoveryReason;
+          // Only a current, enabled mandate with no stop, expiry, manual pause or
+          // approval question may refresh its read-only assessment policy. This
+          // is atomic with claim reconstruction, never a second ledger writer.
+          if (task.recoveryEnrollment === "current" && !task.parentStopped && !task.question &&
+              task.diagnosticCode !== "manual-pause" &&
+              (task.dependency?.expiresAt === undefined || task.dependency.expiresAt > this.now())) {
+            const refresh = strategy?.refreshAssessment?.(structuredClone(task), this.now());
+            if (refresh) {
+              if (typeof refresh.checkpoint !== "string" || refresh.checkpoint.length > 64000 ||
+                  typeof refresh.reason !== "string" || !refresh.reason || refresh.reason.length > 8000) throw Error("Invalid assessment policy refresh");
+              task.checkpoint = refresh.checkpoint;
+              task.assessmentRetryAt = this.now();
+              if (task.workerRetry) task.workerRetry.nextAt = this.now();
+              this.event(draft, task, "status", refresh.reason);
+            }
+          }
         }
       }
       // Dispatcher inboxes never replay independently; after claim recovery
