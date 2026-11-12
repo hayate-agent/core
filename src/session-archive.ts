@@ -33,7 +33,11 @@ export class SessionArchives {
   }
   async load(key: string, id: string): Promise<SessionArchive> {
     const archive = JSON.parse(await readFile(this.file(key, id), "utf8"));
-    if (archive.version !== 1 || archive.id !== id || !Array.isArray(archive.entries)) throw new Error("Invalid session archive");
+    if (!archive || archive.version !== 1 || archive.id !== id || !Array.isArray(archive.entries) ||
+        archive.entries.some((entry: unknown) => !entry || typeof entry !== "object" || Array.isArray(entry) ||
+          typeof (entry as ArchiveEntry).id !== "string" || typeof (entry as ArchiveEntry).role !== "string" ||
+          typeof (entry as ArchiveEntry).text !== "string" ||
+          ((entry as ArchiveEntry).truncated !== undefined && typeof (entry as ArchiveEntry).truncated !== "boolean"))) throw new Error("Invalid session archive");
     return archive;
   }
   async link(key: string, id: string, targetSessionId: string): Promise<void> {
