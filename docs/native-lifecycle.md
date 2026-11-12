@@ -102,8 +102,9 @@ All three exact Git heads are captured as one plan, cloned into a new private
 `<home>/software-updates/releases/<id>` installation and checked out by exact
 revision. Existing operator worktrees, dirty files, credentials and agent state
 are never updated/reset/deleted. Core and WebUI dependencies are installed and
-built; Core's suite and available WebUI tests validate the candidate. Validation
-uses a separate temporary HOME, not the live agent profile.
+built. Runtime entrypoints and required native dependencies are checked locally.
+Development test suites run in release CI, not inside the agent's updater and
+not as a prerequisite for a restart.
 
 Core's immutable bundled-plugin hashes remain authoritative. Internal sources can
 fetch their locked Plugins revisions; public fresh-history snapshots use Core's
