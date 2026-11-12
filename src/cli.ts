@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { reasoningEffortNoneModels } from "./product-paths.js";
 import { BUILD_INFO } from "./build-info.js";
-import { StartupNotice } from "./startup-notice.js";
+import { StartupNotice, startupNoticeTarget } from "./startup-notice.js";
 import { McpManagement } from "./mcp-management.js";
 import { workingTreeEvidence } from "./repetition-budget.js";
 import { ToolGuardError } from "./tool-guard-error.js";
@@ -1059,7 +1059,8 @@ async function main(argv: string[]): Promise<void> {
       // Do not fall back to a remote home while local selection is in flight.
       const current = localSessions.current;
       if (current) startupNotice.ready({ channel: "console", target: current.key });
-    } else startupNotice.ready(harness.home ?? config.home_address);
+    } else startupNotice.ready(startupNoticeTarget(harness.home ?? config.home_address,
+      harness.snapshotSessions(), new Set(harness.channels.keys())));
   };
   announceStartup();
   if (process.send && process.connected) process.send({ type: "hayate-runtime-ready" }, () => {});
