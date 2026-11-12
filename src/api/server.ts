@@ -50,6 +50,8 @@ export interface ApiServerOptions {
   /** Passive lifecycle guarantee for already-authorized native service owners.
    * API inference credentials do not gain operator restart authority. */
   lifecycle?: { timeoutSeconds: number; nativeSoftwareUpdates: boolean };
+  /** Installed runtime identities, not the updater's available/prepared plan. */
+  software?: () => import("../component-versions.js").SoftwareVersions;
   updateAdmission?: Pick<Harness, "acquireUpdateAdmission" | "updateAdmissionStatus" | "releaseUpdateAdmission" | "withForegroundWork"> &
     Partial<Pick<Harness, "prepareUpdateAdmission" | "releaseMaintenanceAdmission">>;
 }
@@ -182,6 +184,7 @@ export class ApiChannel implements Channel {
       object: "hermes.api_server.capabilities",
       platform: "hayate-agent",
       agent: this.opts.agent,
+      ...(this.opts.software ? { software: this.opts.software() } : {}),
       ...(this.opts.lifecycle ? { lifecycle: { restart_timeout_seconds: this.opts.lifecycle.timeoutSeconds } } : {}),
       features: {
         run_submission: true,

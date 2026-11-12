@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { reasoningEffortNoneModels } from "./product-paths.js";
 import { BUILD_INFO } from "./build-info.js";
+import { readSoftwareVersions } from "./component-versions.js";
 import { StartupNotice, startupNoticeTarget } from "./startup-notice.js";
 import { McpManagement } from "./mcp-management.js";
 import { workingTreeEvidence } from "./repetition-budget.js";
@@ -584,6 +585,7 @@ async function main(argv: string[]): Promise<void> {
         tls: apiTls,
         agent: config.agent,
         runs,
+        software: () => readSoftwareVersions(BUILD_INFO, undefined, harness.channels.has("webui")),
         lifecycle: { timeoutSeconds: config.lifecycle?.restartTimeoutSeconds ?? 60,
           nativeSoftwareUpdates: !containerRuntime() && config.softwareUpdates?.enabled !== false },
         updateAdmission: harness,
@@ -1051,7 +1053,8 @@ async function main(argv: string[]): Promise<void> {
   hostAdmissionReady = true;
   // Never acknowledge from the old process or before startup recovery and
   // channel authentication succeed. Delivery remains independent of work.
-  const startupNotice = new StartupNotice({ agent: config.agent, build: BUILD_INFO, restarted: !!saved,
+  const startupNotice = new StartupNotice({ agent: config.agent,
+    build: readSoftwareVersions(BUILD_INFO, undefined, harness.channels.has("webui")), restarted: !!saved,
     post: (input, text) => harness.post(input, text), log });
   announceStartup = () => {
     if (stopping) return;
