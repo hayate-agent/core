@@ -5,12 +5,13 @@ import { StartupNotice, startupNoticeTarget } from "../src/startup-notice.js";
 import { FakeRuntime, MemoryChannel, ROOM } from "./fakes.js";
 
 test("missing home uses exactly one known user room, not stale API/worker destinations", () => {
-  const channels = new Set(["matrix", "api", "dispatch", "console"]);
+  const channels = new Set(["matrix", "api", "dispatch", "console", "webui"]);
   const room = { channel: "matrix", target: "!user-room" };
   const sessions = [
     { key: "matrix:!user-room", replyTo: room },
     { key: "matrix:!user-room:thread", replyTo: { ...room, thread: "$old-thread" } },
     { key: "api:old-run", replyTo: { channel: "api", target: "old-run" } },
+    { key: "webui:old-browser", replyTo: { channel: "webui", target: "old-browser" } },
     { key: "dispatch:worker", replyTo: { channel: "dispatch", target: "worker" } },
     { key: "console:local", replyTo: { channel: "console", target: "local" } },
   ];

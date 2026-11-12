@@ -14,7 +14,14 @@ Both `worker-failed` (for example a provider EOF) and the broader
 recovery owner. An internal `paused` or `blocked` state is not a terminal
 lifecycle state: its stored `workerRetry.nextAt` is consumed by the existing
 scheduler, including after host restart and for diagnosed legacy internal pauses.
-Cheap ticks never renew that due time. Explicit user pause (`manual-pause`),
+Cheap ticks never renew that due time.
+A sequential correction retains its settled assessment until the recovery handover
+is durably saved. If a legacy recovery session contains only metadata, the host
+may transfer the same execution's bounded correction/assessment checkpoint instead
+of a transcript. That packet explicitly marks prior effects as unknown: it is
+not a retry grant or evidence of success. The original worker must reconcile
+actual effects before any uncertain external action. Bare intents without a
+retained correction or assessment still fail closed on empty transcript evidence. Explicit user pause (`manual-pause`),
 cancellation, deadline expiry and unanswered questions are different holds and
 are never auto-resumed.
 

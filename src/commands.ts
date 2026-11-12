@@ -14,6 +14,7 @@ import { type SkillInfo, skillInvocationPrompt } from "./skills.js";
 import type { BusyMode, Inbound } from "./types.js";
 
 import { BUILD_INFO } from "./build-info.js";
+import { formatSoftwareVersions, readSoftwareVersions } from "./component-versions.js";
 import { renderBenchmarkReport } from "./benchmark/report.js";
 export const VERSION = BUILD_INFO.version;
 
@@ -708,7 +709,7 @@ export const COMMANDS: Command[] = [
     },
   },
   { name: "harness", help: "Locate built-in Hayate Agent customization/development guide", run: async () => `Hayate Agent development guide: ${developmentGuide}\nRead this guide before changing Hayate Agent. Identity/voice, tools and models are configurable; native plugins support commands/channels/model tools/text panels/lifecycle (see plugins.md); interactive plugin dialogs are available locally; automatic runtime promotion remains planned.` },
-  { name: "version", help: "Show version", run: async (_a, _i, ctx) => `Hayate Agent ${VERSION} (runtime: ${ctx.harness.runtime.name})` },
+  { name: "version", help: "Show installed Core, Plugins and local Web versions", run: async (_a, _i, ctx) => `Hayate Agent ${VERSION} (runtime: ${ctx.harness.runtime.name})\n${formatSoftwareVersions(readSoftwareVersions(BUILD_INFO, undefined, ctx.harness.channels.has("webui")))}` },
 ];
 
 const BY_NAME = new Map<string, Command>();

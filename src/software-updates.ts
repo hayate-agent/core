@@ -225,7 +225,7 @@ export class NativeSoftwareUpdates {
         const destination = path.join(root, component); await mkdir(destination);
         await this.command("git", ["init", "--quiet"], destination);
         await this.command("git", ["remote", "add", "origin", plan.sources[component].repository], destination);
-        await this.command("git", ["fetch", "--depth=1", "origin", plan.revisions[component]], destination);
+        await this.command("git", ["fetch", "--depth=64", "origin", plan.revisions[component]], destination);
         await this.command("git", ["checkout", "--detach", "FETCH_HEAD"], destination);
         if ((await this.command("git", ["rev-parse", "HEAD"], destination)).trim() !== plan.revisions[component]) throw Error("source checkout mismatch");
       }
@@ -283,9 +283,16 @@ export class NativeSoftwareUpdates {
       }
       component = "core"; stage = "source identity metadata";
       const corePackage = JSON.parse(await readFile(path.join(root, "core/package.json"), "utf8"));
-      // Source installs can be newer than the most recent release tag. Do not
-      // invent a published version; always retain the exact checked-out revision.
-      const version = typeof corePackage.version === "string" && /^\d+\.\d+\.\d+$/.test(corePackage.version) ? corePackage.version : "0.0.0";
+      // Match only tags on the installed commit or its checked-out ancestors.
+      // A newer uninstalled release must never become this runtime's version.
+      const { sourceVersion } = await import("./source-version.js");
+      let tags = "", history = "";
+      try {
+        const signal = AbortSignal.any([this.abort.signal, AbortSignal.timeout(5000)]);
+        tags = await this.runCommand("git", ["ls-remote", "--tags", "origin"], path.join(root, "core"), undefined, signal);
+        history = await this.runCommand("git", ["rev-list", "--first-parent", "--max-count=64", revisions.core], path.join(root, "core"), undefined, signal);
+      } catch { /* Version lookup is informational, never an installation gate. */ }
+      const version = sourceVersion(revisions.core, tags, history, corePackage.version);
       await writeFileDurable(path.join(root, "core/build-info.json"), JSON.stringify({ version, revision: revisions.core }) + "\n");
       const selection: Selection = { schema: 1, release, plan, installation: this.operatorInstall ? "operator" : "automatic", ...(this.baseline ? { baseline: this.baseline } : {}) };
       await writeFileDurable(path.join(root, "prepared.json"), JSON.stringify(selection) + "\n");
