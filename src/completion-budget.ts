@@ -20,9 +20,12 @@ export function prefix(text: string, limit: number): string {
  * explicitly incomplete legacy text. IDs are never shortened or invented. */
 export function projectObservation(text: string, role: string, limit: number): { text: string; truncated: boolean; totalChars: number } {
   const result = (value: string, truncated: boolean) => ({ text: value, truncated, totalChars: text.length });
-  if (text.length <= limit) return result(text, false);
   let payload: Record<string, any> | undefined;
   try { payload = JSON.parse(text); } catch { /* Do not repair legacy JSON. */ }
+  if (text.length <= limit) {
+    const known = payload?.type === "toolCall" || payload?.type === "toolResult" || payload?.type === "assistantBlocks";
+    return result(text, known && payload?.truncated === true);
+  }
   const tool = (value: Record<string, any>, size: number): object => {
     const call = value.type === "toolCall";
     const ids = call ? [value.id, value.name] : [value.toolCallId, value.toolName];
