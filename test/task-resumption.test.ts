@@ -49,9 +49,9 @@ test("retained task survives a question with no continuation declaration and ser
 });
 
 test("missing plan retains active mandate for bounded independent assessment rather than inventing waiting", async () => {
-  let checks = 0;
+  let checks = 0, now = Date.now();
   const runtime = new FakeRuntime();
-  const h = new Harness({ runtime, tickMs: 60000, completionCheck: async input => {
+  const h = new Harness({ runtime, now: () => now, tickMs: 60000, completionCheck: async input => {
     checks++;
     assert.equal(input.completionAnchor?.task, "Implement feature");
     return checks === 2 ? { state: "continue", next: "Verify original work" } : undefined;
@@ -61,7 +61,8 @@ test("missing plan retains active mandate for bounded independent assessment rat
     await h.accept(msg("Implement feature")); await h.drained();
     assert.equal(h.snapshotSessions()[0].task?.state, "active");
     runtime.answer = (_text, key) => { h.planContinuation(key, { state: "completed" }); return "done"; };
-    // The startup assessment reuses the original authorization, once, durably.
+    // The startup assessment reuses the original authorization after durable backoff.
+    now = h.snapshotSessions()[0].task!.recoveryRetry!.nextAt;
     await h.tick(); await h.drained();
     assert.equal(runtime.sessions.get("mem:room1")!.prompts.length, 2);
     assert.match(runtime.sessions.get("mem:room1")!.prompts[1], /Verify original work/);

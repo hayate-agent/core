@@ -70,11 +70,11 @@ for (const answer of ["", NO_REPLY, "Substep done; tests remain"])
 for (const verdict of ["malformed", "uncertain", "failed", "completed"] as const) {
   if (answer === "Substep done; tests remain" && verdict === "completed") continue;
   test(`unsupported completed checkpoint retains bounded recovery: answer=${JSON.stringify(answer)} verdict=${verdict}`, async () => {
-    let turns = 0, checks = 0;
+    let turns = 0, checks = 0, now = Date.now();
     const runtime = new FakeRuntime((_text, key) => {
       turns++; h.planContinuation(key, { state: "completed" }); return turns === 1 ? answer : "All tests verified";
     });
-    const h = new Harness({ runtime, tickMs: 60000, completionCheck: (input, reply, signal) =>
+    const h = new Harness({ runtime, now: () => now, tickMs: 60000, completionCheck: (input, reply, signal) =>
       assessCompletion({ review: async () => {
         checks++;
         if (checks > 1) return JSON.stringify(turns === 1 ? { state: "continue", next: "Reconcile test evidence before executing anything" } : { state: "completed" });
@@ -86,6 +86,7 @@ for (const verdict of ["malformed", "uncertain", "failed", "completed"] as const
       await h.submit(msg(mandate)); await h.drained();
       assert.equal(turns, 1, "a failed or empty verdict never authorizes immediate work");
       assert.equal(h.snapshotSessions()[0].task?.state, "active", "model completion alone must not seal unfinished authority");
+      now = h.snapshotSessions()[0].task!.recoveryRetry!.nextAt;
       await h.tick(); await h.drained();
       assert.equal(turns, 2); assert.equal(h.snapshotSessions()[0].task?.state, "completed");
       assert.match(runtime.sessions.get("mem:room1")!.prompts[1], /First reconcile/);
