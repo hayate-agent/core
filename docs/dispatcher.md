@@ -15,6 +15,20 @@ recovery owner. An internal `paused` or `blocked` state is not a terminal
 lifecycle state: its stored `workerRetry.nextAt` is consumed by the existing
 scheduler, including after host restart and for diagnosed legacy internal pauses.
 Cheap ticks never renew that due time.
+
+The parent supervisor also distinguishes **no decision** from an independent
+`blocked` verdict. A review skipped or invalidated by newer input, interrupted,
+unavailable or inconclusive retains the open mandate and a persisted read-only
+assessment retry (one minute, exponentially backed off up to one hour). No model
+proposal becomes an execution permit. New input cannot strand older work merely
+by displacing its review; the host records queued/interrupted deferrals. Restart
+retains the same retry owner. A fresh independent verdict replaces the old
+non-decision, including a genuine denial. Proven historical false blocks with
+`supervisorDecision.verdict: unresolved` are re-enrolled for assessment only;
+held-legacy tasks, stopped/completed tasks, terminated/exhausted work and expired
+mandates are not reactivated. Worker intents and effects are never replayed by
+this repair, and existing approval/dependency gates remain binding.
+
 A sequential correction retains its settled assessment until the recovery handover
 is durably saved. If a legacy recovery session contains only metadata, the host
 may transfer the same execution's bounded correction/assessment checkpoint instead

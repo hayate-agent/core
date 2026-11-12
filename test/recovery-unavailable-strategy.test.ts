@@ -22,7 +22,8 @@ test("absent production strategy holds work without inference or productive reco
     assert.equal(h.pendingInputs().length, 0);
     await h.tick(); await h.drained();
     assert.equal(turns, 1); assert.equal(reviewer.opened.length, 0);
-    assert.equal(h.snapshotSessions()[0].tasks![0].state, "blocked");
+    assert.equal(h.snapshotSessions()[0].tasks![0].state, "active");
+    assert.ok(h.snapshotSessions()[0].tasks![0].recoveryRetry, "backend unavailability retains assessment retry ownership");
     assert.equal(h.snapshotSessions()[0].tasks![0].recoveryAdmission, undefined);
     assert.equal(ch.texts().some(t => t.includes("Recovery angehalten")), false);
     await h.tick(); await h.drained(); assert.equal(turns, 1);

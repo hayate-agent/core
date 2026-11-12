@@ -47,7 +47,8 @@ for (const enabled of [undefined, false, true]) {
       try {
         await next.recoverTasks(); next.releaseRestored(); await next.drained(); await next.tick(); await next.drained();
         assert.equal(channel.sent.length, enabled === true ? 1 : 0);
-        assert.equal(next.state(key).task!.state, "blocked");
+        assert.equal(next.state(key).task!.state, "active");
+        assert.equal(next.state(key).task!.recoveryRetry?.attempts, 4);
       } finally { await next.stop(0); }
     } finally { await h.stop(0); }
   });
