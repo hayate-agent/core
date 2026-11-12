@@ -65,13 +65,16 @@ for (const mode of ['queued-before', 'queued-during', 'no-verdict', 'inconclusiv
 }
 
 test('fresh semantic denial supersedes a migrated non-decision and is not automatically retried', async () => {
-  let checks = 0;
-  const h = new Harness({ runtime: new FakeRuntime(() => { assert.fail('no work on semantic denial'); }), tickMs: 600000,
+  let checks = 0, now = 1000;
+  const h = new Harness({ runtime: new FakeRuntime(() => { assert.fail('no work on semantic denial'); }), now: () => now, tickMs: 600000,
     completionCheck: async () => { checks++; return { state: 'blocked' }; } });
   h.onStateChange = async () => {};
   h.restoreSessions([{ key, tasks: [{ id: 'p', original: 'Implement ORIGINAL', state: 'blocked', depth: 0,
-    recoveryEnrollment: 'current', explicitBlocked: true, supervisorDecision: { proposal: 'continue', verdict: 'unresolved' } }] }]);
+    recoveryEnrollment: 'current', explicitBlocked: true, next: 'Retained proposal', supervisorDecision: { proposal: 'continue', verdict: 'unresolved' } }] }]);
   try {
+    await h.recoverTasks();
+    assert.equal(checks, 0);
+    now += 60001;
     await h.recoverTasks(); await h.recoverTasks(); await h.tick();
     assert.equal(checks, 1);
     assert.equal(h.state(key).tasks![0].supervisorDecision?.verdict, 'blocked');
@@ -82,8 +85,8 @@ test('fresh semantic denial supersedes a migrated non-decision and is not automa
 
 for (const gate of ['none', 'semantic-blocked', 'stopped', 'expired', 'held-legacy'] as const) {
   test(`recover saved false block without overriding real gate: ${gate}`, async () => {
-    let checks = 0, effects = 0;
-    const h = new Harness({ runtime: new FakeRuntime(() => { effects++; return 'done'; }), now: () => 1000, tickMs: 600000,
+    let checks = 0, effects = 0, now = 1000;
+    const h = new Harness({ runtime: new FakeRuntime(() => { effects++; return 'done'; }), now: () => now, tickMs: 600000,
       completionCheck: async () => { if (effects) return { state: 'completed' }; checks++; return { state: 'continue', next: 'Reconcile receipt before remaining work' }; } });
     h.addChannel(new MemoryChannel()); h.onStateChange = async () => {};
     h.restoreSessions([{ key, tasks: [{ id: 'p', original: 'Implement ORIGINAL', state: gate === 'stopped' ? 'stopped' : 'blocked',
@@ -92,6 +95,9 @@ for (const gate of ['none', 'semantic-blocked', 'stopped', 'expired', 'held-lega
       ...(gate === 'expired' ? { expiresAt: 999 } : {}),
       supervisorDecision: { proposal: 'continue', verdict: gate === 'semantic-blocked' ? 'blocked' : 'unresolved' } }] }]);
     try {
+      await h.recoverTasks();
+      assert.equal(checks, 0);
+      now += 60001;
       await h.recoverTasks(); h.releaseRestored(); await h.drained();
       assert.equal(checks, gate === 'none' ? 1 : 0);
       assert.equal(effects, gate === 'none' ? 1 : 0);
