@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { DispatcherRuntime } from "../src/dispatcher-runtime.js";
@@ -24,7 +24,7 @@ const roles: ModelRoles = { enabled: true, roles: {
 const defaults = { model: "p/default", thinking: "high" };
 const steps = (...list: Array<[string, string]>) => JSON.stringify({ steps: list.map(([task, role]) => ({ task, role, reason: `${role} suffices`, evidence: `evidence of ${task}` })) });
 
-interface Script { verdictDelayMs?: number; verdict?: string | ((prompt: string) => string | Promise<string>); toolEvents?: (prompt: string) => Array<{ name: string; detail: string; result: string }>; plan?: string | (() => string); worker?: (prompt: string, model?: string) => string | Promise<string>; tools?: (prompt: string) => number }
+interface Script { ready?: string | (() => Promise<string>); verdictDelayMs?: number; verdict?: string | ((prompt: string) => string | Promise<string>); toolEvents?: (prompt: string) => Array<{ name: string; detail: string; result: string }>; plan?: string | (() => string); worker?: (prompt: string, model?: string) => string | Promise<string>; tools?: (prompt: string) => number }
 const fixtureCleanup = new WeakMap<import("node:test").TestContext, Array<{ home: string; stop(): Promise<void> }>>();
 function retainFixture(t: import("node:test").TestContext, fixture: { home: string; stop(): Promise<void> }): void {
   let fixtures = fixtureCleanup.get(t);
@@ -67,6 +67,7 @@ async function setup(t: import("node:test").TestContext, script: Script, opts: {
       if (options.assessmentPurpose === "supervisor") {
         calls.review.push(text);
         calls.reviewModels.push(o.model);
+        if (text.startsWith("Select at most ONE")) return typeof script.ready === "function" ? script.ready() : script.ready ?? '{"state":"blocked"}';
         return (typeof script.verdict === "function" ? script.verdict(text) : script.verdict) ?? '{"state":"completed"}';
       }
       if (key.startsWith("plan:")) {
@@ -132,6 +133,184 @@ async function setup(t: import("node:test").TestContext, script: Script, opts: {
     } };
 }
 const state = (checkpoint?: string) => JSON.parse(checkpoint!) as SequentialState;
+
+test("blocked verification does not strand independently admitted same-role publication or replay its settled worker", async t => {
+  const env = await setup(t, {
+    plan: steps(["live verification", "simple"], ["publish source", "simple"]),
+    ready: '{"state":"continue","next":"2"}',
+    worker: text => text.includes("STEP 1/2:\nlive verification") ? "Live gate missing; no call made\nSTEP-STATUS: blocked: external" : "source publication receipt\nSTEP-STATUS: complete",
+    verdict: text => JSON.parse(text.slice(text.lastIndexOf("DATA: ") + 6)).reply.includes("Live gate missing") ? '{"state":"blocked"}' : '{"state":"completed"}',
+  });
+  const task = await env.run("Verify live service when its credentials are available. Independently publish source through required CI. Never bypass the live credential gate.");
+  assert.equal(task.status, "paused", "live work remains genuinely blocked, not falsely completed");
+  assert.equal(env.calls.worker.length, 2, "same execution performs source work once without repeating live worker");
+  const checkpoint = state(task.checkpoint);
+  assert.equal(checkpoint.plan[0]!.task, "publish source");
+  assert.equal(checkpoint.outcomes.length, 1);
+  assert.match(checkpoint.outcomes[0]!.result, /source publication receipt/);
+  assert.match(checkpoint.assessment!.reply, /Live gate missing/);
+  assert.equal(checkpoint.assessment!.index, 1);
+  const reload = new ExecutionStore(env.file); await reload.load();
+  assert.deepEqual(state(reload.list()[0]!.checkpoint), checkpoint);
+  await env.dispatcher.control("parent", task.id, "resume");
+  await env.dispatcher.waitForExecution(task.id);
+  assert.equal(env.calls.worker.length, 2, "subsequent wake only reassesses retained live evidence");
+});
+
+test("restart after durable ready-step selection preserves old evidence and stable effect identity", async t => {
+  const script: Script = { plan: steps(["live verification", "simple"], ["publish source", "medium"]),
+    ready: '{"state":"continue","next":"2"}',
+    worker: text => text.includes("STEP 1/2:\nlive verification") ? "Live gate missing\nSTEP-STATUS: blocked: external" : "source receipt\nSTEP-STATUS: complete",
+    verdict: text => JSON.parse(text.slice(text.lastIndexOf("DATA: ") + 6)).reply.includes("Live gate missing") ? '{"state":"blocked"}' : '{"state":"completed"}',
+  };
+  const env = await setup(t, script);
+  const checkpoint = env.store.checkpoint.bind(env.store);
+  t.mock.method(env.store, "checkpoint", async (...args: Parameters<typeof checkpoint>) => {
+    await checkpoint(...args);
+    const saved = state(args[2]);
+    if (saved.deferred?.length && !saved.assessment) throw Error("simulated process loss after durable ordering");
+  });
+  const interrupted = await env.run("Verify live service only with credentials; independently publish source through required CI.");
+  assert.deepEqual(state(interrupted.checkpoint).stepIds, [1, 0]);
+  assert.equal(env.calls.worker.length, 1);
+  await env.dispatcher.stop(); await env.harness.stop(1000);
+  const restarted = await setup(t, script, { home: env.home, file: env.file, retainedTranscript: "Original read-only verification result retained" });
+  await restarted.dispatcher.start();
+  await restarted.dispatcher.control("parent", interrupted.id, "resume");
+  await restarted.dispatcher.waitForExecution(interrupted.id);
+  const final = restarted.store.list()[0]!;
+  assert.equal(final.status, "paused");
+  assert.equal(restarted.calls.worker.length, 1, "only publication runs after restart, old verification is reassessed without replay");
+  assert.match(restarted.calls.worker[0]!.prompt, /STEP 1\/2:\npublish source/);
+  assert.equal(state(final.checkpoint).outcomes.length, 1);
+  assert.equal(final.settledEffect!.key, `step:${interrupted.id}:0:simple`, "original step identity is restored, not renumbered to publication");
+});
+
+for (const next of [undefined, "1", "99", "2extra"]) test(`no independent readiness admission (${next ?? "blocked"}) never runs later work`, async t => {
+  const env = await setup(t, { plan: steps(["approval gate", "simple"], ["deploy", "medium"]),
+    ready: JSON.stringify(next ? { state: "continue", next } : { state: "blocked" }),
+    verdict: '{"state":"blocked"}', worker: () => "Approval missing\nSTEP-STATUS: blocked: approval",
+  });
+  const task = await env.run("Deploy only after required operator approval.");
+  assert.equal(task.status, "paused"); assert.equal(env.calls.worker.length, 1);
+  assert.equal(state(task.checkpoint).outcomes.length, 0);
+});
+
+test("a new parent restriction after the ready checkpoint invalidates the unstarted candidate", async t => {
+  const env = await setup(t, { plan: steps(["live verification", "simple"], ["publish source", "medium"]),
+    ready: async () => env.store.list()[0]!.decisions?.length ? '{"state":"blocked"}' : '{"state":"continue","next":"2"}',
+    worker: () => "Live gate missing\nSTEP-STATUS: blocked: external", verdict: '{"state":"blocked"}',
+  });
+  const checkpoint = env.store.checkpoint.bind(env.store);
+  let restricted = false;
+  t.mock.method(env.store, "checkpoint", async (...args: Parameters<typeof checkpoint>) => {
+    await checkpoint(...args);
+    if (state(args[2]).readyAdmission && !restricted) {
+      restricted = true;
+      await env.dispatcher.decide("parent", args[0], "operator-new-hold", "Publication is now on hold. Do not publish until the operator withdraws this restriction.");
+    }
+  });
+  const task = await env.run("Verify live service and independently publish source within the original constraints.");
+  assert.equal(task.status, "paused"); assert.equal(env.calls.worker.length, 1);
+  assert.equal(state(task.checkpoint).plan[0]!.task, "live verification");
+  assert.equal(state(task.checkpoint).readyAdmission, undefined);
+});
+
+test("restart between publication settlement and restoring the held assessment never republishes", async t => {
+  const script: Script = { plan: steps(["live verification", "simple"], ["publish source", "medium"]),
+    ready: '{"state":"continue","next":"2"}',
+    worker: text => text.includes("STEP 1/2:\nlive verification") ? "Live gate missing\nSTEP-STATUS: blocked: external" : "source receipt\nSTEP-STATUS: complete",
+    verdict: text => JSON.parse(text.slice(text.lastIndexOf("DATA: ") + 6)).reply.includes("Live gate missing") ? '{"state":"blocked"}' : '{"state":"completed"}',
+  };
+  const env = await setup(t, script);
+  const settle = env.store.settleIntent.bind(env.store);
+  t.mock.method(env.store, "settleIntent", async (...args: Parameters<typeof settle>) => {
+    await settle(...args);
+    if (state(args[4]).outcomes.length === 1) throw Error("simulated crash after settled publication");
+  });
+  const interrupted = await env.run("Verify live service only with credentials; independently publish source through required CI.");
+  assert.equal(state(interrupted.checkpoint).outcomes.length, 1);
+  assert.equal(env.calls.worker.length, 2);
+  await env.dispatcher.stop(); await env.harness.stop(1000);
+  const restarted = await setup(t, script, { home: env.home, file: env.file, retainedTranscript: "Retained live verification report" });
+  await restarted.dispatcher.start(); await restarted.dispatcher.control("parent", interrupted.id, "resume");
+  await restarted.dispatcher.waitForExecution(interrupted.id);
+  assert.equal(restarted.store.list()[0]!.status, "paused");
+  assert.equal(restarted.calls.worker.length, 0, "all effects remain settled; only live assessment is retried");
+});
+
+for (const gate of ["pause", "cancel", "expiry"] as const) test(`ready-step scheduling cannot cross concurrent ${gate}`, async t => {
+  const env = await setup(t, { plan: steps(["external verification", "simple"], ["source publication", "medium"]),
+    worker: () => "External dependency missing\nSTEP-STATUS: blocked: external",
+    verdict: '{"state":"blocked"}', ready: async () => {
+      const task = env.store.list()[0]!;
+      if (gate === "expiry") await env.tickAt(Date.now() + 2000);
+      else await env.dispatcher.control("parent", task.id, gate);
+      return '{"state":"continue","next":"2"}';
+    },
+  });
+  const task = await env.run("Verify the external dependency, independently publish source. Required gates stay binding.", { expiresAt: Date.now() + 1000 });
+  assert.equal(env.calls.worker.length, 1);
+  assert.equal(state(task.checkpoint).outcomes.length, 0);
+  assert.equal(state(task.checkpoint).stepIds, undefined, "no ordering checkpoint committed after authority was lost");
+});
+
+test("ready-step scheduling honors dedicated validator selection without a legacy fallback", async t => {
+  const validators = new ValidatorRegistry(); let assessments = 0;
+  validators.register({ apiVersion: 1, name: "dedicated", version: 1, async assess(request) {
+    assessments++;
+    assert.match(request.promptText, /Select at most ONE|Independently validate/);
+    return { state: "blocked" };
+  } }); validators.select("dedicated");
+  const env = await setup(t, { plan: steps(["external gate", "simple"], ["publish source", "medium"]),
+    worker: () => "Held\nSTEP-STATUS: blocked: external", verdict: () => { throw Error("legacy must not run"); },
+  }, { validators });
+  const task = await env.run("Verify live gate and independently publish source within existing constraints.");
+  assert.equal(task.status, "paused"); assert.equal(assessments, 2);
+  assert.equal(env.calls.review.length, 0); assert.equal(env.calls.worker.length, 1);
+});
+
+for (const gate of ["current", "manual-pause", "held-legacy", "expired", "opaque-intent", "disabled"] as const) test(`saved pre-policy assessment refresh (${gate}) is once-only, read-only and respects recovery holds`, async t => {
+  const script: Script = { plan: steps(["live verification", "simple"], ["publish source", "medium"]),
+    ready: '{"state":"continue","next":"2"}',
+    worker: text => text.includes("STEP 1/2:\nlive verification") ? "Live gate missing\nSTEP-STATUS: blocked: external" : "source receipt\nSTEP-STATUS: complete",
+    verdict: text => JSON.parse(text.slice(text.lastIndexOf("DATA: ") + 6)).reply.includes("Live gate missing") ? '{"state":"blocked"}' : '{"state":"completed"}',
+  };
+  const old = await setup(t, { ...script, verdict: () => { throw Error("old read-only assessment interrupted"); } });
+  const first = await old.run("Verify live service only with credentials; independently publish source through required CI.");
+  await old.dispatcher.stop(); await old.harness.stop(1000);
+  // A stopped fixture models an old persisted release, never a live production ledger edit.
+  const saved = JSON.parse(await readFile(old.file, "utf8"));
+  const task = saved.executions[0], checkpoint = state(task.checkpoint);
+  delete checkpoint.readyStepPolicy;
+  checkpoint.assessment!.attempts = 15; checkpoint.assessment!.nextAt = Date.now() + 3600_000;
+  task.checkpoint = JSON.stringify(checkpoint); task.assessmentRetryAt = checkpoint.assessment!.nextAt;
+  if (gate === "manual-pause") { task.status = "paused"; task.diagnosticCode = "manual-pause"; }
+  if (gate === "held-legacy") task.recoveryEnrollment = "held-legacy";
+  if (gate === "expired") task.dependency = { taskId: "old", original: task.input, depth: 0, expiresAt: Date.now() - 1 };
+  if (gate === "opaque-intent") { delete checkpoint.assessment; task.checkpoint = JSON.stringify(checkpoint); }
+  await writeFile(old.file, JSON.stringify(saved));
+  const env = await setup(t, script, { home: old.home, file: old.file, retainedTranscript: "Retained original worker report" });
+  if (gate === "disabled") {
+    await env.store.recover(new Map([["sequential", env.bridge.sequential]]), undefined, undefined, () => false);
+  } else {
+    await env.dispatcher.start(); await env.dispatcher.waitForExecution(first.id);
+  }
+  const final = env.store.list()[0]!, current = state(final.checkpoint);
+  if (gate === "current") {
+    assert.equal(current.readyStepPolicy, 1);
+    assert.equal(current.outcomes.length, 1, "existing publication runs without waiting one stale hour");
+    assert.equal(env.calls.worker.length, 1, "only source worker, never old live effects");
+    assert.ok(current.assessment!.attempts >= 16, "old inference budget is retained");
+    const before = final.checkpoint, retry = final.workerRetry;
+    await env.store.recover(new Map([["sequential", env.bridge.sequential]]));
+    assert.equal(env.store.list()[0]!.checkpoint, before, "policy adoption never repeats");
+    assert.deepEqual(env.store.list()[0]!.workerRetry, retry);
+  } else {
+    assert.equal(current.readyStepPolicy, undefined);
+    assert.equal(env.calls.worker.length, 0); assert.equal(env.calls.review.length, 0);
+  }
+});
 
 test("delegated step uses selected dedicated provider, not legacy LLM", async t => {
   const validators = new ValidatorRegistry(); let assessments = 0;

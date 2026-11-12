@@ -6,6 +6,7 @@
  */
 import { loadAttachments, validateAttachmentAdmission } from "./attachments.js";
 import { assessmentRetryDelay } from "./assessment-retry.js";
+import { PriorityScheduler, priorityRank, isTaskPriority, type TaskPriority } from "./task-priority.js";
 import { applyGatewaySettings, assertGatewayConversationSupport, gatewaySettings, type GatewayConfig } from "./gateway-settings.js";
 import { createHash, randomUUID } from "node:crypto";
 import { naturalBudgetReset, type OperatorBudgetGrant } from "./natural-budget-reset.js";
@@ -56,6 +57,8 @@ export interface DurableTask {
   recoveryHeldState?: DurableTask["state"];
   id: string;
   original: string;
+  /** Explicit operator preference, retained independently of model context. */
+  priority?: TaskPriority;
   state: "active" | "waiting" | "blocked" | "completed" | "stopped";
   next?: string;
   contextPreparation?: "compact" | "handover";
@@ -932,17 +935,47 @@ export class Harness {
     return ids.length ? { preexistingUnscoped: ids } : {};
   }
 
+  private readonly priorityWrites = new WeakMap<DurableTask, { previous?: TaskPriority; done: Promise<void> }>();
+  private committedPriority(task: DurableTask): TaskPriority | undefined {
+    const pending = this.priorityWrites.get(task);
+    return pending ? pending.previous : task.priority;
+  }
+  /** Metadata only: no authority, budget reset, hold release or preemption. */
+  async setTaskPriority(key: string, taskId: string, priority: TaskPriority): Promise<void> {
+    if (!isTaskPriority(priority)) throw Error("Invalid task priority");
+    const session = this.sessions.get(key), task = session && this.tasks(session).find(task => task.id === taskId);
+    if (!task) throw Error("Unknown task");
+    if (!this.onStateChange) throw Error("Durable state persistence required");
+    const pending = this.priorityWrites.get(task);
+    if (pending) { await pending.done; return this.setTaskPriority(key, taskId, priority); }
+    const previous = task.priority;
+    let release!: () => void;
+    this.priorityWrites.set(task, { previous, done: new Promise<void>(resolve => { release = resolve; }) });
+    task.priority = priority;
+    try { await this.outbox.barrier(); }
+    catch (error) { task.priority = previous; throw error; }
+    finally { this.priorityWrites.delete(task); release(); }
+  }
+  taskPriority(key: string, taskId?: string): TaskPriority | undefined {
+    const session = this.sessions.get(key);
+    const task = session && this.tasks(session).find(task => task.id === taskId);
+    return task ? this.committedPriority(task) : undefined;
+  }
+  private readonly taskSchedulers = new Map<string, PriorityScheduler>();
   /** Synchronous claim: queue and checkpoint are saved together before execution. */
-  private queueRunnableTask(s: SessionState): boolean {
+  private queueRunnableTask(s: SessionState, excludeTask?: string): boolean {
     if (!this.onStateChange || this.paused || this.stopping || s.queue.length || s.current ||
         s.key === "improvement:nightly" || this.stoppingHostParents.has(s.key) ||
         this.opts.externallyRecoveredSession?.(s.key)) return false;
     // A retained proposal without admission must not starve later admitted work.
-    const task = this.tasks(s).find(task => task.recoveryEnrollment !== "held-legacy" && task.state === "active" && task.recoveryAdmission && task.next?.trim() &&
+    const candidates = this.tasks(s).filter(task => task.recoveryEnrollment !== "held-legacy" && task.state === "active" && task.recoveryAdmission && task.next?.trim() &&
       !this.supersededByNewerTopic(s, task) && !this.hasPendingDependency(s.key, task.id) &&
       Number.isSafeInteger(task.depth) && task.depth >= 0 && repetitions(task) < 20 &&
       (task.expiresAt === undefined || (Number.isSafeInteger(task.expiresAt) && task.expiresAt > this.now())));
-    if (!task) return false;
+    const scheduler = this.taskSchedulers.get(s.key) ?? new PriorityScheduler();
+    this.taskSchedulers.set(s.key, scheduler);
+    const task = scheduler.pick(candidates, task => task.id, task => this.committedPriority(task), excludeTask);
+    if (!task || task.id === excludeTask) return false;
     const admission = task.recoveryAdmission;
     if (!admission) return false;
     if (admission && (admission.depth !== task.depth + 1 || admission.next !== task.next ||
@@ -1162,7 +1195,7 @@ export class Harness {
     if (input.source === "host" && !this.resultMandate(input)) return;
     const deadlines = [task.expiresAt, task.wait?.deadline, task.lastWait?.deadline, input.continuationExpiresAt]
       .filter((value): value is number => value !== undefined);
-    return { taskId: task.id, original: task.original, depth: input.continuationDepth ?? 0,
+    return { taskId: task.id, original: task.original, depth: input.continuationDepth ?? 0, ...(this.committedPriority(task) ? { priority: this.committedPriority(task) } : {}),
       expiresAt: deadlines.length ? Math.min(...deadlines) : undefined, anchor: structuredClone(task.anchor) };
   }
 
@@ -1188,7 +1221,7 @@ export class Harness {
         !task.id || !task.original.trim() ||
         !["active", "waiting", "blocked", "completed"].includes(task.state) || !Number.isSafeInteger(task.depth) || task.depth < 0 || !Number.isSafeInteger(repetitions(task)) ||
         (expiresAt !== undefined && (!Number.isSafeInteger(expiresAt) || expiresAt <= this.now()))) return;
-    return structuredClone({ taskId: task.id, original: task.original, depth: task.depth, expiresAt, anchor: task.anchor });
+    return structuredClone({ taskId: task.id, original: task.original, depth: task.depth, expiresAt, anchor: task.anchor, ...(this.committedPriority(task) ? { priority: this.committedPriority(task) } : {}) });
   }
 
   /** Explicit scope selection uses stored original authority, never the short question. */
@@ -1838,14 +1871,16 @@ export class Harness {
       if (this.opts.sessionEnabled?.(s.key) === false) continue;
       if (this.opts.externallyRecoveredSession?.(s.key)) continue;
       if (await this.opts.contextMaintenance?.recoveryStatus?.(s.key)) continue;
-      for (const task of this.tasks(s)) {
+      for (const task of [...this.tasks(s)].sort((a, b) => priorityRank(this.committedPriority(b)) - priorityRank(this.committedPriority(a)))) {
       if (task.recoveryEnrollment === "held-legacy") continue;
       // Older turn finalization persisted a missing decision as an explicit
       // block. Repair only that recorded contradiction, never semantic blocks,
       // operator termination, or unresolved dependency custody. This admits an
       // independent assessment, not execution of the saved proposal.
-      if (task.state === "blocked" && task.supervisorDecision?.proposal === "continue" &&
-          task.supervisorDecision.verdict === "unresolved" && !task.supervisorDecision.dependencyHold &&
+      if (task.state === "blocked" && task.supervisorDecision?.verdict === "unresolved" &&
+          (task.supervisorDecision.proposal === "continue" || task.explicitBlocked === false &&
+            ["technical", "invalid_response", "unavailable"].includes(task.supervisorDecision.diagnostic ?? "")) &&
+          !task.supervisorDecision.dependencyHold &&
           !task.termination && !task.recoveryAdmission && !task.wait && !task.lastWait &&
           !!task.next?.trim() && Number.isSafeInteger(task.depth) && task.depth >= 0 &&
           repetitions(task) < 20 && !this.paused && !this.stopping &&
@@ -1861,7 +1896,7 @@ export class Harness {
       }
       await this.reconcileBlockedDependency(s, task);
       const assessed = !task.recoveryAdmission;
-      if (assessed) await this.assessStartupTask(s, task);
+      if (assessed) await this.assessStartupTask(s, task, false, true);
       if (!this.tasks(s).includes(task) || (this.paused && (assessed || task.recoveryAdmission?.independent)) || this.stopping || task.state !== "active" || !task.next?.trim() || !Number.isSafeInteger(task.depth) || task.depth < 0 || repetitions(task) >= 20 ||
           (task.expiresAt !== undefined && (!Number.isSafeInteger(task.expiresAt) || task.expiresAt <= this.now())) ||
           s.current || s.queue.length || s.key === "improvement:nightly" || this.hasPendingDependency(s.key, task.id)) continue;
@@ -2040,15 +2075,21 @@ export class Harness {
     await this.onStateChange?.();
   }
 
-  private async assessStartupTask(s: SessionState, task: DurableTask, betweenTurns = false): Promise<void> {
+  private readonly startupWaitProbed = new WeakSet<DurableTask>();
+  private readonly startupWaitPending = new WeakSet<DurableTask>();
+  private async assessStartupTask(s: SessionState, task: DurableTask, betweenTurns = false, startup = false): Promise<void> {
     if (this.recoveringTasks.has(task)) return;
     this.recoveringTasks.add(task);
-    try { await this.assessRetainedTask(s, task, betweenTurns); }
+    try { await this.assessRetainedTask(s, task, betweenTurns, startup); }
     finally { this.recoveringTasks.delete(task); }
   }
 
-  private async assessRetainedTask(s: SessionState, task: DurableTask, betweenTurns: boolean): Promise<void> {
-    const eligible = () => this.tasks(s).includes(task) && task.recoveryEnrollment !== "held-legacy" && task.state === "active" && !task.recoveryAdmission &&
+  private async assessRetainedTask(s: SessionState, task: DurableTask, betweenTurns: boolean, startup: boolean): Promise<void> {
+    const waitingProbe = (startup || this.startupWaitPending.has(task)) && task.recoveryEnrollment === "current" && task.state === "waiting" &&
+      !task.wait && !task.explicitBlocked && !task.termination && !this.startupWaitProbed.has(task);
+    if (waitingProbe) this.startupWaitPending.add(task);
+    const eligible = () => this.tasks(s).includes(task) && task.recoveryEnrollment !== "held-legacy" &&
+      (task.state === "active" || waitingProbe && task.state === "waiting") && !task.recoveryAdmission && !task.termination &&
       !!task.id && !!task.original.trim() && task.original.length <= 8000 &&
       (!task.anchor || task.anchor.task === task.original) &&
       Number.isSafeInteger(task.depth) && task.depth >= 0 && repetitions(task) < 20 &&
@@ -2066,7 +2107,7 @@ export class Harness {
       await this.outbox.barrier();
       return;
     }
-    if (!this.opts.completionCheck || (task.recoveryAssessment && !retry)) {
+    if (!this.opts.completionCheck || (task.recoveryAssessment && !retry && !waitingProbe)) {
       // Assessor outage consumes assessment attempts, not the mandate.
       // Retain the proposal for diagnosis; no productive fallback on outage.
       this.reconcileUnassessedTask(task, true);
@@ -2074,6 +2115,7 @@ export class Harness {
       return;
     }
     if (retry && this.now() < retry.nextAt) return;
+    if (waitingProbe) { this.startupWaitProbed.add(task); this.startupWaitPending.delete(task); }
     // Reserve and save before inference. A crash consumes this attempt, not authority.
     // A usable decision releases the reservation and ends this failure sequence.
     const attempts = Math.min(Number.MAX_SAFE_INTEGER, (retry?.attempts ?? 0) + 1);
@@ -2104,7 +2146,8 @@ export class Harness {
     if (diagnostic) task.recoveryRetry.diagnostic = diagnostic;
     task.recoveryAssessment = "decided";
     if (diagnostic === "inconclusive" || diagnostic === "unavailable") {
-      // A non-decision cannot admit productive work, including reconciliation.
+      // Keep #369's read-only retry ownership: a missing verdict is neither a
+      // semantic block nor productive/replay permission.
       this.reconcileUnassessedTask(task, true);
       await this.outbox.barrier();
       return;
@@ -2112,6 +2155,8 @@ export class Harness {
     if (plan?.state === "continue" && typeof plan.next === "string" && plan.next.trim() && plan.next.length <= 4000 &&
         (plan.expiresAt === undefined || (Number.isSafeInteger(plan.expiresAt) && plan.expiresAt > this.now() &&
           (task.expiresAt === undefined || plan.expiresAt <= task.expiresAt)))) {
+      task.state = "active";
+      task.explicitBlocked = false;
       task.next = `First reconcile the actual task state and completed side effects; do not blindly replay external effects. Then: ${plan.next.trim()}`;
       task.anchor = input.completionAnchor;
       task.recoveryRetry = undefined;
@@ -2515,19 +2560,29 @@ export class Harness {
           }
         }
         this.completionDiagnostics.delete(input);
-        if ((input.source !== "host" || this.resultMandate(input)) && input.continuation?.state === "continue" && input.continuation.next && repetitions(task ?? { depth: input.continuationDepth ?? 0 }) < 20 && input.source !== "api" && s.key !== "improvement:nightly" && !s.queue.length && !this.stopping && !this.hasPendingDependency(s.key, input.taskId)) {
-          s.queue.push({ id: task?.recoveryAdmission?.id ?? randomUUID(), sessionKey: s.key, source: "cron", replyTo: input.replyTo ?? s.replyTo,
-            text: continuationRequest(task?.original ?? input.completionAnchor?.task ?? input.text, input.continuation.next),
-            taskId: targetId,
-            contextPreparation: input.continuation.contextPreparation,
-            continuationDepth: (targetId !== input.taskId ? task?.depth ?? 0 : input.continuationDepth ?? 0) + 1,
-            continuationExpiresAt: inheritedDeadline === Infinity ? undefined : inheritedDeadline,
-            completionAnchor: structuredClone(targetId !== input.taskId ? task?.anchor : input.completionAnchor) });
-        }
         try {
-          // A child checkpoint must not hide other retained, independently authorized work.
-          for (const retained of this.tasks(s)) {
-            if (retained.id !== input.taskId && retained.id !== targetId && !retained.next?.trim()) await this.assessStartupTask(s, retained, true);
+          // A continuous task must not suppress another due post-restart
+          // assessment. Assess at the idle boundary BEFORE queuing this task's
+          // next turn; still yield immediately to queued foreground input.
+          for (const retained of [...this.tasks(s)].sort((a, b) => priorityRank(this.committedPriority(b)) - priorityRank(this.committedPriority(a)))) {
+            if (s.queue.length || this.paused || this.stopping) break;
+            if (retained.id === input.taskId || retained.id === targetId) continue;
+            const before = retained.recoveryRetry?.attempts, admission = retained.recoveryAdmission;
+            await this.assessStartupTask(s, retained, true);
+            if (retained.recoveryRetry?.attempts !== before || retained.recoveryAdmission !== admission) break;
+          }
+          // s.current was cleared above after settling the turn. The pump still
+          // owns this boundary, but queueRunnableTask may now select another
+          // admitted task. The previous task's admission remains intact.
+          if (!s.queue.length) this.queueRunnableTask(s, targetId);
+          if ((input.source !== "host" || this.resultMandate(input)) && input.continuation?.state === "continue" && input.continuation.next && repetitions(task ?? { depth: input.continuationDepth ?? 0 }) < 20 && input.source !== "api" && s.key !== "improvement:nightly" && !s.queue.length && !this.stopping && !this.hasPendingDependency(s.key, input.taskId)) {
+            s.queue.push({ id: task?.recoveryAdmission?.id ?? randomUUID(), sessionKey: s.key, source: "cron", replyTo: input.replyTo ?? s.replyTo,
+              text: continuationRequest(task?.original ?? input.completionAnchor?.task ?? input.text, input.continuation.next),
+              taskId: targetId,
+              contextPreparation: input.continuation.contextPreparation,
+              continuationDepth: (targetId !== input.taskId ? task?.depth ?? 0 : input.continuationDepth ?? 0) + 1,
+              continuationExpiresAt: inheritedDeadline === Infinity ? undefined : inheritedDeadline,
+              completionAnchor: structuredClone(targetId !== input.taskId ? task?.anchor : input.completionAnchor) });
           }
           // The pump still owns the session: assess at most one retained parent
           // before starting the next unrelated queued turn, never concurrently.
@@ -3102,7 +3157,7 @@ export class Harness {
       // Reconcile orphaned open tasks through the existing admission path,
       // including saved next steps whose queue/admission was lost. No second
       // scheduler or inference for running, queued, admitted or not-due work.
-      if (task.state === "active" && !task.recoveryAdmission) await this.assessStartupTask(s, task);
+      if ((task.state === "active" || this.startupWaitPending.has(task)) && !task.recoveryAdmission) await this.assessStartupTask(s, task);
       if (this.queueRunnableTask(s)) break;
       if (this.hasPendingDependency(s.key, task.id) &&
           !(task.state === "waiting" && task.expiresAt !== undefined && at >= task.expiresAt) &&

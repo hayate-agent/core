@@ -11,6 +11,9 @@ export interface RecoveryStrategy {
   replaySafe: boolean;
   /** Recovery consumes retained evidence instead of replaying opaque effects. */
   reconcile?: boolean;
+  /** Trusted, idempotent policy migration for a durable read-only assessment boundary.
+   * Never a worker replay grant; the original recovery policy still applies. */
+  refreshAssessment?: (task: Readonly<Execution>, now: number) => { checkpoint: string; reason: string } | undefined;
 }
 export function recoveryBlock(task: Execution, strategy?: RecoveryStrategy, policy?: ExecutionRecoveryPolicy): string | undefined {
   if (!strategy || strategy.version !== task.strategyVersion) return `Strategy ${task.strategy}@${task.strategyVersion} unavailable; restore the matching plugin, then resolve and resume.`;

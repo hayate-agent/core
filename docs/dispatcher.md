@@ -204,8 +204,24 @@ scheduler, ledger and worker bridge. It requires enabled [model roles](model-rol
    passed as untrusted data.
 4. A step counts only with a final `STEP-STATUS: complete` line AND independent
    completion. A missing line can be repaired by a bounded report-only correction,
-   never by silently inferring success. Genuine holds or exhausted correction
-   budgets pause with a visible reason. Progress delivery failures do not fail
+   never by silently inferring success. A genuinely held step does not automatically
+   hold every later deliverable: the selected independent validator may admit one
+   exact existing later step only when it is authorized and independent of the hold.
+   Required ordering, approvals, CI and unknown-effect reconciliation remain binding.
+   The same execution retains the blocked step's report, correction budget, original
+   route/session and stable intent identity, persists the reordered suffix, and runs
+   only the admitted work. The held step stays open and is reassessed without replay;
+   the overall task cannot complete while it remains held. A new parent clarification
+   invalidates an unstarted readiness permit. No verdict, malformed selection or
+   insufficient checkpoint space leaves the hold intact. This does not create a
+   second writer or invent a replacement plan. Existing current plans with a durable
+   settled assessment adopt this scheduling policy once at normal recovery: stale
+   assessment-only backoff becomes due for fresh independent evaluation, with the
+   attempt/correction budget, report, route and uncertain intent preserved. The
+   atomic policy marker prevents repeated wakeups on subsequent restarts. Manual
+   pauses, questions, stopped/expired/disabled and held-legacy work are not enrolled;
+   an opaque intent without a matching settled assessment is not eligible.
+   Progress delivery failures do not fail
    the persisted plan. The final result lists requested and
    observed model per step and is produced only when every step completed.
    `STEP-STATUS` is only the worker's step outcome signal inside the strategy; the
