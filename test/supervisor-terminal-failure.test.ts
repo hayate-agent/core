@@ -49,7 +49,7 @@ for (const state of ["waiting", "blocked", "completed"] as const) {
           restored.restoreSessions(h.snapshotSessions()); await restored.recoverTasks();
           const recovered = restored.snapshotSessions()[0].tasks![0];
           assert.equal(recovered.original, task.original);
-          assert.deepEqual(recovered.supervisorDecision, task.supervisorDecision);
+          assert.deepEqual(recovered.supervisorDecision, { proposal: state, verdict: "continue" }, "a new independent decision supersedes the old non-decision");
           assert.equal(restored.pendingInputs().length, 1);
           assert.equal(restored.pendingInputs()[0].id, recovered.recoveryAdmission!.id);
         } finally { await restored.stop(0); }
