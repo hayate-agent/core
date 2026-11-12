@@ -126,6 +126,21 @@ authorize continuations. Approvals route to the trusted parent conversation.
 Plugins can supply other execution strategies; they are trusted process code,
 not sandboxed workers. Main cannot select replay policy in a tool call.
 
+Direct routing classification is tool-free and is not the delegated worker. If its
+HTTP outcome is interrupted or unknown, the host durably marks the receipt
+`abandoned` and uses the existing configured default worker model. It does not
+repeat the unknown classifier HTTP call. Startup and automatic recovery also
+adopt pre-existing classifier-only pauses, retaining the execution identity and
+receipt, provided the matching direct strategy supports reconciliation and no
+worker effect intent or settled effect exists. Manual pauses, cancellation,
+expired mandates, stopped parents and actual recovery policies remain enforced;
+productive worker effects are never made replay-safe by this fallback. This
+change does not apply to sequential planning or independent validation.
+
+The new receipt phase requires this Core version to read the ledger. Before
+rolling back to an older version, stop the runtime and use a reviewed compatible
+ledger migration or restore the pre-upgrade snapshot; do not discard receipts.
+
 `sequential` is an opt-in reserved built-in plan-and-execute strategy on the same
 scheduler, ledger and worker bridge. It requires enabled [model roles](model-roles.md):
 

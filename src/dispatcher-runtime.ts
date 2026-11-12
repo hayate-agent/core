@@ -98,10 +98,12 @@ export class DispatcherRuntime {
           else {
           const snapshot = this.roleSettings?.();
           if (snapshot?.config?.enabled) {
-            if (task.classifierReceipt && task.classifierReceipt.phase !== "observed") {
-              throw Error("Classifier HTTP outcome unknown; reconcile retained receipt before continuing");
+            let abandoned = task.classifierReceipt?.phase === "abandoned";
+            if (task.classifierReceipt && ["initial", "fallback"].includes(task.classifierReceipt.phase)) {
+              await this.store.abandonClassifier(task.id, task.token!);
+              abandoned = true;
             }
-            const dispatcher = await resolveModelRole(this.harness.runtime, snapshot.config, "dispatcher", snapshot.defaults);
+            const dispatcher = abandoned ? snapshot.defaults : await resolveModelRole(this.harness.runtime, snapshot.config, "dispatcher", snapshot.defaults);
             const requested = snapshot.config.roles?.dispatcher ?? snapshot.defaults;
             await this.store.observeClassifier(task.id, task.token!, requested);
             const target = executionTarget(task, this.harness.home);
@@ -114,7 +116,10 @@ export class DispatcherRuntime {
             let observed = Promise.resolve();
             let complexity: Awaited<ReturnType<typeof classifyComplexity>> = undefined;
             try {
-              if (task.classifierReceipt?.phase === "observed") {
+              if (abandoned) {
+                // Never repeat the unknown HTTP request. Classification only selects
+                // a route; the existing configured default can execute the mandate.
+              } else if (task.classifierReceipt?.phase === "observed") {
                 complexity = task.classifierReceipt.complexity;
                 await this.store.observeClassifier(task.id, task.token!, requested, task.classifierReceipt.actual);
               }
@@ -140,11 +145,19 @@ export class DispatcherRuntime {
                 activity.event(event);
                 if (event.type === "execution") observed = observed.then(() => this.store.observeClassifier(task.id, task.token!, requested, event.selection)).catch(() => {});
               });
+            } catch (error) {
+              const current = this.store.list(task.parent).find(item => item.id === task.id);
+              if (context.signal.aborted || !current?.classifierReceipt ||
+                  !["initial", "fallback"].includes(current.classifierReceipt.phase)) throw error;
+              // Owned durable mutation fences pause/cancel/expired mandates and
+              // persistence failures. Only routing is abandoned, never worker effects.
+              await this.store.abandonClassifier(task.id, task.token!);
+              abandoned = true;
             } finally {
               await observed;
               activity.finish(context.signal.aborted ? "cancelled" : complexity ? "completed" : "failed");
             }
-            selected = complexity ? await resolveModelRole(this.harness.runtime, snapshot.config, complexity, snapshot.defaults) : {};
+            selected = abandoned ? snapshot.defaults : complexity ? await resolveModelRole(this.harness.runtime, snapshot.config, complexity, snapshot.defaults) : {};
           }
         }
         }

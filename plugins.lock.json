@@ -11,7 +11,7 @@
     "cron-report-plugin.ts": "71bb9d6432985d25defb18d4ef45653342c2243f42e215b972b0eb586d24a260",
     "cron-report-processing.ts": "4e40d3f4c9801d87af1bdd8e2624a12f21e02ad49378a504abaea7a1bb49856f",
     "cron-reports.ts": "0bbf04e0c3ce1c8a499cdcc2e3bba1d27c88aacd71218f1b4027002591947991",
-    "dispatcher-plugin.ts": "ff57ec32d8bb7517063d95917ff79a17616774f6e2e95b435d870b7e6a583829",
+    "dispatcher-plugin.ts": "878eb10234dbed34c62b2e55f45f06f6ec70bf84a5927e3fd16213f6f21ad522",
     "execution-metadata.ts": "a19904571ba749a4821bcd47f4b9c4f496b067c553090a18cb36cc4bdd666cbc",
     "extension-manager-plugin.ts": "51ea7b167e2683b180f510a005305975afabb22819e02aa03aafbc434061200c",
     "gateway-baselines.ts": "7e4422bfef1e74ad4e767d4c88947b88082c45aeccb9b3da2193ccbff9baaa1c",
@@ -50,6 +50,6 @@
     "wasm-tools-plugin.ts": "438c6ac8899e283e4268f51ef451275bf16a37b584db84ee8302a26200cc70de"
   },
   "repository": "https://git.vanillacore.net/harness/plugins",
-  "revision": "7ff45b2996a8312312bd3f13f2c4fdc633a519ae",
+  "revision": "224bf11abcf6dc9aca8a5a9c06f8674a69f50db1",
   "schema": 1
 }

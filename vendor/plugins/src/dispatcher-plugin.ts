@@ -25,7 +25,10 @@ function diagnostic(row: { status: string; recoveryReason?: string; diagnosticCo
     if (/^Strategy .+@\d+ unavailable; restore the matching plugin, then resolve and resume\.$/.test(reason)) return `Recovery blocked: matching strategy unavailable. Restore the matching plugin. ${inspect}`;
     if (/^Recovery restart limit \d+ reached; inspect evidence and resolve before retrying\.$/.test(reason)) return `Recovery blocked: restart limit reached. ${inspect}`;
     if (reason === "Uncertain effect: strategy has no reconciliation support. Inspect evidence, then explicitly resolve retry (duplicates possible), or cancel.") return `Recovery blocked: uncertain effects without reconciliation support. ${inspect}`;
-    return `Recovery blocked by host policy; inspect the stored recovery evidence. ${inspect}`;
+    if (reason === "Classifier HTTP outcome unknown; retained receipt forbids automatic replay.") return `Recovery held: routing-classifier HTTP outcome was not durably recorded. This does not establish worker failure, a user prohibition, or missing authorization for the task. Automatic replay is disabled by the runtime. ${inspect}`;
+    if (reason === "Execution mandate deadline expired; no automatic work is authorized.") return `Recovery held: saved execution mandate deadline expired. ${inspect}`;
+    if (reason === "Matching strategy no longer supports reconciliation; automatic work held.") return `Recovery held: matching strategy no longer supports reconciliation. ${inspect}`;
+    return `Recovery held: an unclassified recovery reason is stored but not exposed here. No specific host policy or user prohibition is established by this diagnostic. ${inspect}`;
   }
   const codes: Record<string, string> = {
     "deadline-expired": "deadline-expired: Saved task deadline elapsed; unchanged execution cannot resume.",
@@ -124,7 +127,8 @@ export function dispatcherPlugin(get: () => Dispatcher | undefined): PluginModul
             mandate: row.dependency ? { taskId: row.dependency.taskId, expiresAt: row.dependency.expiresAt ?? null } : null });
         }
         if (!["pause", "resume", "cancel"].includes(String(action)) || typeof input.id !== "string") throw Error("Invalid dispatch action");
-        if (Object.keys(input).some(key => !["action", "id"].includes(key))) throw Error("Control does not accept task text or extra fields; use decide for scoped steering");
+        if (input.requestId !== undefined && (typeof input.requestId !== "string" || !input.requestId.trim())) throw Error("Invalid control requestId");
+        if (Object.keys(input).some(key => !["action", "id", "requestId"].includes(key))) throw Error("Control does not accept task text or extra fields; use decide for scoped steering");
         await dispatcher.control(context.sessionKey, input.id, action as "pause" | "resume" | "cancel");
         return "Control recorded";
       },
