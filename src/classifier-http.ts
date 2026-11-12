@@ -4,9 +4,11 @@ import { parseComplexity } from "./model-roles.js";
 import { DISPATCH_COMPLEXITY_POLICY } from "./dispatch-complexity-policy.js";
 import { resolveHttpAssessment, assessmentHttpAttempt } from "./assessment-http.js";
 
-/** Claim-bound receipt. Initial/fallback mean outcome unknown, never replay permission. */
+/** Claim-bound receipt. Initial/fallback mean outcome unknown, never replay permission.
+ * Abandoned retains an unknown HTTP outcome but commits local default routing;
+ * this classifier has no tools and cannot perform the delegated task. */
 export interface ClassifierReceipt {
-  phase: "initial" | "fallback" | "observed";
+  phase: "initial" | "fallback" | "observed" | "abandoned";
   actual: ModelPair;
   complexity?: Complexity;
 }

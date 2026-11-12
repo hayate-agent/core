@@ -203,7 +203,7 @@ export class ExecutionStore {
             typeof item.settledEffect.result !== "string" || item.settledEffect.result.length > 64000)) throw Error("Invalid settled effect");
         if (item.classifierReceipt !== undefined) {
           const receipt = item.classifierReceipt;
-          if (!receipt || !["initial", "fallback", "observed"].includes(receipt.phase) ||
+          if (!receipt || !["initial", "fallback", "observed", "abandoned"].includes(receipt.phase) ||
               typeof receipt.token !== "string" || !receipt.token || !receipt.actual ||
               typeof receipt.actual.model !== "string" || typeof receipt.actual.thinking !== "string" ||
               (receipt.complexity !== undefined && (receipt.phase !== "observed" ||
@@ -489,11 +489,26 @@ export class ExecutionStore {
       const task = this.owned(draft, id, token);
       const previous = task.classifierReceipt;
       if (receipt.phase === "initial" ? !!previous : !previous || previous.token !== token ||
-          previous.phase === "observed" || (receipt.phase === "fallback" && previous.phase !== "initial")) {
+          ["observed", "abandoned"].includes(previous.phase) || receipt.phase === "abandoned" || (receipt.phase === "fallback" && previous.phase !== "initial")) {
         throw Error("Classifier receipt cannot be replayed");
       }
       task.classifierReceipt = { ...receipt, token };
     });
+  }
+  /** Commit default routing without replaying an interrupted, tool-free classifier. */
+  abandonClassifier(id: string, token: string): Promise<void> {
+    return this.mutate(draft => {
+      const task = this.owned(draft, id, token);
+      if (task.parentStopped || task.dependency?.expiresAt !== undefined && task.dependency.expiresAt <= this.now())
+        throw new ExecutionDeadlineExpired();
+      if (!this.canAbandonClassifier(task)) throw Error("Classifier cannot be abandoned after worker effects");
+      task.classifierReceipt = { ...task.classifierReceipt!, phase: "abandoned" };
+    });
+  }
+  private canAbandonClassifier(task: Execution, strategy?: RecoveryStrategy): boolean {
+    return task.strategy === "direct" && task.strategyVersion === 1 && !task.intent && !task.settledEffect &&
+      !!task.classifierReceipt && ["initial", "fallback"].includes(task.classifierReceipt.phase) &&
+      (!strategy || strategy.version === task.strategyVersion && !!strategy.reconcile);
   }
   checkpoint(id: string, token: string, checkpoint: string, notice?: { key: string; text: string }): Promise<void> {
     return this.mutate(draft => {
@@ -715,7 +730,8 @@ export class ExecutionStore {
       delete task.workerRetry;
       return false;
     }
-    if (task.classifierReceipt !== undefined && task.classifierReceipt.phase !== "observed") {
+    if (task.classifierReceipt !== undefined && !["observed", "abandoned"].includes(task.classifierReceipt.phase) &&
+        !this.canAbandonClassifier(task, strategy)) {
       task.status = task.intent ? "blocked" : "paused";
       task.recoveryReason = "Classifier HTTP outcome unknown; retained receipt forbids automatic replay.";
       delete task.workerRetry;
@@ -731,6 +747,7 @@ export class ExecutionStore {
     }
     const reason = recoveryBlock(task, strategy, policy);
     if (reason) { task.status = task.intent ? "blocked" : "paused"; task.recoveryReason = reason; delete task.workerRetry; return false; }
+    if (this.canAbandonClassifier(task, strategy)) task.classifierReceipt = { ...task.classifierReceipt!, phase: "abandoned" };
     delete task.recoveryReason;
     if (!newFailure && task.workerRetry) {
       if (task.workerRetry.nextAt > this.now()) return false;
@@ -801,7 +818,8 @@ export class ExecutionStore {
         delete task.token;
         const reason = restartLimit !== undefined && task.restarts >= restartLimit
           ? `Recovery restart limit ${restartLimit} reached; inspect evidence and resolve before retrying.`
-          : task.classifierReceipt && task.classifierReceipt.phase !== "observed"
+          : task.classifierReceipt && !["observed", "abandoned"].includes(task.classifierReceipt.phase) &&
+              !(strategy && this.canAbandonClassifier(task, strategy))
             ? "Classifier HTTP outcome unknown; retained receipt forbids automatic replay."
             : recoveryBlock(task, strategy, policy);
         if (reason) {
@@ -809,7 +827,10 @@ export class ExecutionStore {
           delete task.workerRetry;
           task.status = "blocked";
           this.event(draft, task, "status", reason);
-        } else { task.status = "ready"; delete task.recoveryReason; }
+        } else {
+          if (strategy && this.canAbandonClassifier(task, strategy)) task.classifierReceipt = { ...task.classifierReceipt!, phase: "abandoned" };
+          task.status = "ready"; delete task.recoveryReason;
+        }
       }
       // Dispatcher inboxes never replay independently; after claim recovery
       // their orphan turn records carry no additional execution authority.
