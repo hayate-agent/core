@@ -57,3 +57,25 @@ for (const guard of ['none','semantic','terminated','expired','budget','paused',
   }finally{await h.stop(0);}
  });
 }
+
+test('operator clarification during assessment retains original continuation for reassessment',async()=>{
+ let h:Harness,now=1000,entered!:()=>void,release!:()=>void;
+ const started=new Promise<void>(r=>entered=r),gate=new Promise<void>(r=>release=r);
+ let calls=0;
+ const runtime=new FakeRuntime(text=>{
+  if(text==='Implement review owner')h.planContinuation('mem:room1',{state:'continue',next:'Inspect review owner implementation'});
+  return text==='Implement review owner'?'Implementation remains open':'Existing merge rights remain';
+ });
+ h=new Harness({runtime,now:()=>now,tickMs:600000,completionCheck:async(input)=>{
+  if(input.text==='Implement review owner'&&calls++===0){entered();await gate;return undefined;}
+  return {state:'completed'};
+ }});h.addChannel(new MemoryChannel());h.onStateChange=async()=>{};
+ try{
+  await h.submit(msg('Implement review owner'));await started;
+  await h.submit({...msg('Keep existing merge rights'),id:'clarification'});release();await h.drained();
+  const task=h.snapshotSessions()[0].tasks!.find(t=>t.original==='Implement review owner')!;
+  assert.equal(task.state,'active');assert.equal(task.supervisorDecision?.verdict,'unresolved');
+  assert.equal(task.next,'Inspect review owner implementation');assert.ok(task.recoveryRetry);
+  assert.equal(runtime.sessions.get('mem:room1')!.prompts.length,2);
+ }finally{release();await h.stop(0);}
+});
