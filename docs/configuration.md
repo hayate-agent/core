@@ -16,6 +16,23 @@ environment-enabled; WebUI is a separately installed local ESM gateway selected
 through `gatewayPlugins.webui.module`. Both use normal Harness command/execution
 routing; the UI is not Core functionality.
 
+## Native restart and software updates
+
+`lifecycle.restartTimeoutSeconds` defaults to60 and bounds the entire orderly
+checkpoint/stop, including active turns and cleanup. It does not wait for all
+business tasks, monitors or queued jobs to finish. The foreground owner starts
+the replacement only after the old runtime exits.
+
+`softwareUpdates` defaults to enabled hourly checks and automatic native
+installation. Configure `sources.core`, `sources.plugins`, and `sources.webui`
+with trusted repository URLs/branches in this agent's `hayate-agent.yaml`.
+Public defaults are `https://github.com/hayate-agent/{core,plugins,webui}.git`.
+Use `autoInstall:false` for explicit `/update install` approval, or
+`enabled:false` for an external native update owner. Containers never run native
+Git/npm installs. A restrictive `tools` allowlist must include
+`plugin_software_update` if the agent should initiate maintenance itself.
+See [the lifecycle contract and examples](native-lifecycle.md).
+
 ## Main completion validation
 
 The selected completion strategy judges the whole authorized task, including Main
