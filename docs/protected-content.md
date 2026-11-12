@@ -1,6 +1,6 @@
 # Infrastructure-pinned content
 
-`harness.yaml` can pin the SHA-256 of identity, voice, skills or other files:
+`hayate-agent.yaml` can pin the SHA-256 of identity, voice, skills or other files:
 
 ```yaml
 protectedContent:

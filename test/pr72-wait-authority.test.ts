@@ -1,3 +1,4 @@
+import { confirmNonproductive } from "./fakes.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -20,7 +21,7 @@ for (const revoke of ["none", "stop", "expiry"] as const) {
     const deadline = 1793350024703;
     const store = new ExecutionStore(path.join(dir, "executions.json")); await store.load();
     const runtime = new FakeRuntime();
-    const h = new Harness({ runtime, executionStore: store, now: () => now,
+    const h = new Harness({ completionCheck: confirmNonproductive, runtime, executionStore: store, now: () => now,
       hostEventAllowed: input => bridge.resultAllowed(key, input.hostEvent!.executionId) });
     const bridge = new DispatcherRuntime(h, store);
     h.addChannel(new MemoryChannel()); h.onStateChange = async () => {};
@@ -57,7 +58,7 @@ for (const revoke of ["none", "stop", "expiry"] as const) {
           h.planContinuation(key, { state: "completed" });
         }
       }
-      return "NO_REPLY";
+      return "Read-only rollout verification recorded";
     };
     try {
       await h.accept({ id: "review-event", sessionKey: key, source: "host", hostEvent: { executionId: child.id }, text: "Reviewed" });

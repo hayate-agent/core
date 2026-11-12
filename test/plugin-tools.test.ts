@@ -20,6 +20,7 @@ for(const tools of [undefined,[],['plugin_echo']]) {
  try {
   const s=wrapped.session;
   assert.equal(s.getActiveToolNames().includes('plugin_echo'),tools?.length!==0);
+  assert.equal(s.settingsManager.getCompactionSettings().enabled,false,'host owns compaction on open');
   const def=s.extensionRunner.getToolDefinition('plugin_echo');
   assert.ok(def);
   const result=await def.execute('call',{text:'hello'},undefined,undefined,{});
@@ -37,10 +38,11 @@ for(const tools of [undefined,[],['plugin_echo']]) {
   await s.reload(); await s.bindExtensions({});
   const history=JSON.stringify(s.messages);
   let prompts=0,reloads=0;
-  s.prompt=async()=>{prompts++;}; s.waitForIdle=async()=>{};
+  s.prompt=async()=>{assert.equal(s.settingsManager.getCompactionSettings().enabled,false,'host owns compaction after reload');prompts++;}; s.waitForIdle=async()=>{};
   const reload=s.reload.bind(s);
   s.reload=async()=>{reloads++; await reload();};
   catalog=[{...tool,name:'plugin_new',description:'New catalog tool'}];
+  s.settingsManager.applyOverrides({compaction:{enabled:true}});
   await wrapped.prompt('reconcile name');
   assert.equal(reloads,1);
   assert.equal(prompts,1);

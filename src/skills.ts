@@ -15,7 +15,7 @@ export interface SkillInfo {
   baseDir: string;
 }
 
-const FRONTMATTER = /^---\r?\n([\s\S]*?)\r?\n---/;
+const FRONTMATTER = /^---\r?\n([\s\S]*?)\r?\n---[ \t]*(?=\r?\n|$)/;
 
 export function parseSkill(content: string, filePath: string): SkillInfo | undefined {
   const m = FRONTMATTER.exec(content);

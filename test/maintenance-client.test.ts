@@ -63,7 +63,7 @@ test("fragmented cancel receipt and real CLI bypass invalid agent home", async (
   await new Promise<void>(resolve => server.listen(endpoint, resolve));
   try {
     assert.equal(await maintenanceClient([endpoint, "cancel", "req-1", "1"]), '{"cancelled":true}');
-    const env = { ...process.env, VANILLACORE_HARNESS_HOME: path.join(root, "missing-home") };
+    const env = { ...process.env, HAYATE_AGENT_HOME: path.join(root, "missing-home") };
     const result = await exec(process.execPath, ["--import", "tsx", "src/cli.ts", "maintenance", endpoint, "cancel", "req-1", "1"], { env, timeout: 15000 });
     assert.equal(result.stdout.trim(), '{"cancelled":true}');
     rejected = true;

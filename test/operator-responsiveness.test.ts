@@ -19,7 +19,7 @@ function gate() {
 }
 
 for (const busyMode of ["queue", "steer", "interrupt"] as const) {
-  test(`${busyMode}: slow host yields to durable question while dispatcher child remains running`, { timeout: 5000 }, async t => {
+  test(`${busyMode}: slow host keeps durable question separate while dispatcher child remains running`, { timeout: 5000 }, async t => {
     const home = await mkdtemp(path.join(os.tmpdir(), "operator-yield-"));
     const store = new ExecutionStore(path.join(home, "executions.json")); await store.load();
     const workerEntered = gate(), workerRelease = gate(), workerResult = gate();
@@ -46,7 +46,7 @@ for (const busyMode of ["queue", "steer", "interrupt"] as const) {
     await workerEntered.promise; // submit returned although execute is still blocked
     await harness.sessionFor(key);
     const session = runtime.sessions.get(key)!;
-    const entered = gate(), steered = gate(), finish = gate();
+    const entered = gate(), finish = gate();
     let active = 0, sideEffects = 0;
     session.prompt = async text => {
       assert.equal(++active, 1, "never concurrent prompts on one session");
@@ -54,7 +54,6 @@ for (const busyMode of ["queue", "steer", "interrupt"] as const) {
       try {
         if (text === "slow-result") {
           sideEffects++; entered.resolve();
-          await steered.promise; // a real runtime consumes steer at its next safe boundary
           await finish.promise;
           return "direct answer";
         }
@@ -67,23 +66,23 @@ for (const busyMode of ["queue", "steer", "interrupt"] as const) {
       assert.ok(saved.some(input => input.text === text), "durable before injection");
       assert.equal(harness.sessions.get(key)!.current!.source, "host");
       assert.deepEqual(harness.sessions.get(key)!.current!.hostEvent, { executionId: "slow-result" });
-      session.steered.push(text); steered.resolve();
+      session.steered.push(text);
     };
     await harness.accept(host("slow-result")); await entered.promise;
     await harness.accept(host("queued-result"));
     const question = { ...msg("question"), id: "operator", progressId: "operator-progress" };
     await harness.accept(question);
-    await steered.promise;
+    assert.deepEqual(session.steered, []);
     assert.equal(workerSignal.aborted, false);
     assert.equal(store.list()[0]!.status, "running");
     assert.equal(session.aborted, 0, "interrupt mode must not abort a result/tool turn");
-    assert.deepEqual(harness.pendingInputs().map(input => input.text), ["slow-result", "question", "queued-result"]);
+    assert.deepEqual(harness.pendingInputs().map(input => input.text), ["slow-result", "queued-result", "question"]);
     const restartInbox = structuredClone(harness.pendingInputs());
     finish.resolve(); await harness.waitForSessionIdle(key);
-    assert.deepEqual(ch.texts(), ["direct answer", "processed queued-result"]);
-    assert.equal(ch.sent[0]!.meta?.progressId, "operator-progress", "not an edit of stale host progress");
+    assert.deepEqual(ch.texts(), ["processed question"], "legacy host results do not borrow the latest operator address");
+    assert.equal(ch.sent[0]!.meta?.progressId, "operator-progress", "operator keeps its own progress");
     assert.equal(sideEffects, 1);
-    assert.deepEqual(committed, ["slow-result", "queued-result"]);
+    assert.deepEqual(committed, ["slow-result", "question", "queued-result"]);
     assert.equal(workerSignal.aborted, false);
     workerRelease.resolve(); await workerResult.promise; await harness.waitForSessionIdle(key);
     assert.equal(committed.filter(text => text === child.id).length, 1);

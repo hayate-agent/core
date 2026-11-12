@@ -11,6 +11,19 @@ import { ExecutionStore } from "../src/execution.js";
 import { FakeRuntime, MemoryChannel } from "./fakes.js";
 import type { Inbound } from "../src/types.js";
 
+test("execution submissions accept changeset-sized review inputs and reject oversized ones", async t => {
+  const home = await mkdtemp(path.join(os.tmpdir(), "shared-input-size-"));
+  t.after(() => rm(home, { recursive: true, force: true }));
+  const file = path.join(home, "executions.json");
+  const store = new ExecutionStore(file); await store.load();
+  await assert.rejects(store.submit("parent", "r", "x".repeat(1024 * 1024 + 1), "direct"), /Invalid execution submission/);
+  const task = await store.submit("parent", "r", "x".repeat(700000), "direct");
+  assert.ok(task.id);
+  const reopened = new ExecutionStore(file); await reopened.load();
+  const listed = reopened.list().find(item => item.requestId === "r");
+  assert.equal(listed?.input.length, 700000);
+});
+
 for (const key of ["main", "subagent:child"]) test(`shared ledger restores settled ${key} turn without runtime replay`, async t => {
   const home = await mkdtemp(path.join(os.tmpdir(), "shared-turn-"));
   t.after(() => rm(home, { recursive: true, force: true }));

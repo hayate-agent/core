@@ -19,6 +19,9 @@ test(`fallback snapshots candidate and cleans worktree: ${mode}`, async () => {
     await writeFile(path.join(home,"file.txt"),"after"); await writeFile(path.join(home,"new.txt"),"new");
     const abort = new AbortController();
     const runtime = new FakeRuntime(() => '{"findings":[]}'); const open = runtime.open.bind(runtime);
+    Object.assign(runtime, { forReviewWorktree: (cwd: string) => {
+      assert.notEqual(cwd, home); snapshot = cwd; return runtime;
+    }});
     runtime.open = async (key, options) => {
       assert.equal(options?.ephemeral,true); const session = await open(key,options);
       Object.assign(session,{seedHandover: async (text: string) => {

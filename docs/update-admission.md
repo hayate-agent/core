@@ -15,6 +15,49 @@ HEX owns installation, signals and supervisor integration.
 - `DELETE {"lease_id":"..."}`: 200 only for the current unexpired lease; stale,
   expired or foreign IDs return 409 without affecting another lease.
 
+## Durable maintenance checkpoint (explicit opt-in)
+
+`POST {"mode":"maintenance","request_id":"stable-operation-id","timeout_ms":60000,"ttl_ms":300000}`
+uses a durable checkpoint rather than requiring all tasks to finish. The request
+uses the same API authentication as idle admission; no model tool gains update or
+orchestration authority. `request_id` is 1–128 ASCII alphanumeric/`._:-`
+characters, starting alphanumeric; timeout is an integer 0–120000ms. Old clients
+and omitted/`idle` mode keep the existing idle behaviour.
+
+The host fences new input, scheduler claims and ordinary continuation pumps before
+its first await. Existing executing turns finish and checkpoint their provider
+transcripts; dispatcher steps yield at committed checkpoint/effect-receipt
+boundaries without changing task identity, original mandate, deadline, recovery
+enrollment or budgets. Waiting/paused tasks, runnable durable queues and undelivered
+settled results are retained, not reasons to wait for all-task-idle. In-flight
+operations and approvals remain blockers. An unsafe unresolved dispatcher intent
+or an orphan running claim returns an identifier-bound reconciliation diagnostic;
+neither is cleared or stolen. Unsupported plugin/gateway owners remain unsupported.
+
+After executing work drains, the host awaits ledger/context persistence, writes
+state (tasks, continuations, inbox/outbox and original authority), then fsyncs
+`update-maintenance.json` before returning 201 with `checkpointed:true`. Callers
+must require that flag: older runtimes may ignore unknown POST fields. The lease
+TTL starts after checkpoint. A duplicate request in the same live lease returns
+the same receipt. A settled, expired or postboot receipt is not permission to
+repeat effects; reconcile it and use a new operation ID only for genuinely new
+work. The bounded journal retains 64 receipts; deployment receipts must remain
+retained externally for longer-term install/restart reconciliation.
+
+Timeout returns 409 with actionable blockers. A pending fsync retains the fence
+until its outcome is known; GET reports checkpoint-in-progress. It cannot produce
+a late lease after timeout. Matching DELETE durably releases a maintenance lease
+before opening ingress; a failed release stays fenced. On boot the host marks
+interrupted checkpoint transactions recovered, without restoring process-local
+leases, installing code, replaying messages/tools or resetting any task budgets.
+Existing dispatcher/task ledgers remain the only work-recovery authority.
+
+This Core journal records **admission**, not installation. The native deployment
+owner must retain its own prepare/install/restart/verify transaction and rollback
+journal (see the overlays native-host reconciler). Source changes cannot give an
+already-running old process this new contract. No hot patch, lock deletion or
+unknown-effect replay is an acceptable bootstrap substitute.
+
 After 201, invoke the existing SIGTERM shutdown **before expires_at**, retaining a
 margin for transport/signal delay. There is no renewal or stop endpoint. A lease
 is process-local, exclusive and not durable across restart. Expiry/release clears
@@ -51,7 +94,55 @@ startup PluginModule owners may explicitly declare
 turns/tools or ingress; remaining resources must have ordered `onStop` cleanup.
 This is a trusted-owner assertion, not a sandbox or inferred safety guarantee.
 Legacy external plugins remain usable but make update admission unavailable with
-an owner reason. Independently loaded custom gateway/policy/extension/reloadable
-tool modules currently lack that contract and return explicit unavailable reasons;
-this does not disable supported core-only admission. No live configuration or
+an owner reason. Trusted custom gateway factories may likewise declare
+`updateAdmission: "foreground-owned"` on their GatewayModule. Construction must
+be inert, every producer/delivery must use host-owned ingress/outbox work, and
+Channel.stop must abort and drain remaining sync/retry/crypto resources. The host
+tracks the actual active instance (not desired settings); preparation and pending
+or running replacement block admission. A failed activation after attempted
+replacement leaves an irreversible process-local cleanup uncertainty blocker:
+restoring an old channel does not prove candidate resources were stopped. No
+settings change clears this blocker; runtime-owner reconciliation is required.
+Legacy factories remain unsupported.
+This assertion is not an audit or a sandbox. Policy/extension/reloadable tool
+modules still lack this contract and return explicit unavailable reasons;
+this does not disable supported core-only admission.
+
+## Optional WebUI ownership
+
+The separately installed WebUI plugin implements the existing foreground-owned
+contract as both a native gateway and, optionally, a settings-tool plugin. Core
+needs no transport-specific exemption. Browser/SSE connections are idle resources;
+actual agent work enters through host ingress/tools. The owner fences new input,
+closes sockets (including incomplete requests), drains entered host acceptance and
+presentation writes/refresh, then awaits module cleanup. Failed cleanup rejects
+shutdown/restart rather than declaring successful quiescence.
+
+UI modules must themselves explicitly assert foreground ownership and register
+resource cleanup; undeclared modules fail before activation. The assertion is
+trusted code, not validation that arbitrary JS is safe. Host work, approvals,
+pending delivery and unsupported unrelated plugins retain their normal blockers.
+See the [WebUI setup](gateways.md#2-browser-install-and-activate-the-webui-plugin)
+and its plugin guide for the exact module contract and tested limits.
+
+An older already-running prototype remains unsupported until an **explicitly
+authorized maintenance transition** restarts its owner with the new module.
+Changing files, reloading only the gateway, or observing no other blockers does
+not retroactively opt its startup PluginHost into admission. Never manufacture a
+lease, suppress blockers or remove security checks to perform that transition.
+
+## Managed Matrix recovery module
+
+The shipped `docs/gateways/matrix-recovery.mjs` is the managed version of the
+20261026 recovery gateway. It preserves both bounded Matrix429 retry/backoff and
+review audit-summary compaction; it inherits native Matrix stop/ingress/outbox
+ownership. Use its absolute installed path `/opt/hayate-agent/docs/gateways/matrix-recovery.mjs`
+in gatewayPlugins.matrix.module through the normal reviewed configuration owner.
+Do not copy it into an old install to claim old-process admission: old CLI code
+unconditionally rejects any custom gateway. Its closure cannot be hot-patched by
+reloading a module. Transitioning such an original process requires the existing
+runtime owner's separately authorized bootstrap/maintenance route; a release or
+GET idle is not permission to stop. Never remove the custom gateway simply to
+manufacture admission. This change supplies the contract for the next boot, not
+an override endpoint or an old-process lease. No live configuration or
 credentials are changed by this feature.

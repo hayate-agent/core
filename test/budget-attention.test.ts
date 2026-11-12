@@ -1,3 +1,4 @@
+import { confirmNonproductive } from "./fakes.js";
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { Harness } from '../src/harness.js';
@@ -12,7 +13,7 @@ const key = 'mem:room1';
 function fixture() {
   const runtime = new FakeRuntime();
   let now = 61000;
-  const h = new Harness({ runtime, now: () => now });
+  const h = new Harness({ completionCheck: confirmNonproductive, runtime, now: () => now });
   const channel = new MemoryChannel(); h.addChannel(channel);
   h.onStateChange = async () => {};
   h.restoreSessions([{ key, replyTo: { channel: 'mem', target: 'room1' }, task: {
@@ -57,7 +58,7 @@ test('pending wait -> shell status charge -> exhaustion -> blocked next and dura
   assert.match(f.channel.sent[0].text, /Aktionsbudget erschöpft/);
   const sessions = JSON.parse(JSON.stringify(f.h.snapshotSessions()));
   await f.h.stop(0);
-  const r = new FakeRuntime(); const h = new Harness({ runtime: r, now: () => 181000 });
+  const r = new FakeRuntime(); const h = new Harness({ completionCheck: confirmNonproductive, runtime: r, now: () => 181000 });
   const ch = new MemoryChannel(); h.addChannel(ch); h.onStateChange = async () => {};
   h.restoreSessions(sessions);
   try {
@@ -89,7 +90,7 @@ test('later completed dependency is consumed once at exhausted depth without wor
   t.after(() => rm(home, { recursive: true, force: true }));
   const store = new ExecutionStore(path.join(home, 'ledger.json')); await store.load();
   const runtime = new FakeRuntime(); const channel = new MemoryChannel();
-  const h = new Harness({ runtime, executionStore: store, now: () => 61000, hostEventAllowed: () => true });
+  const h = new Harness({ completionCheck: confirmNonproductive, runtime, executionStore: store, now: () => 61000, hostEventAllowed: () => true });
   h.addChannel(channel); h.onStateChange = async () => {};
   h.restoreSessions([{ key, replyTo: { channel: 'mem', target: 'room1' }, task: {
     id: 'parent', original: 'Complete approved tests only', state: 'blocked', depth: 20,

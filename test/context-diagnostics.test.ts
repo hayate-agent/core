@@ -58,8 +58,9 @@ test("failed maintenance exposes safe stage/code but retains pending intent for 
   assert.equal(failed.failure?.stage, "compact");
   fail = false;
   const restarted = new ContextMaintenance(home, policy);
-  assert.match((await restarted.boundary("chat", session, rotate))!, /Kontext kompaktiert/);
-  const recovered = await restarted.status("chat");
-  assert.equal(recovered.pending, undefined);
-  assert.equal(recovered.failure, undefined);
+  assert.equal(await restarted.boundary("chat", session, rotate), undefined);
+  const held = await restarted.recoveryStatus("chat");
+  assert.equal(held?.state, "blocked");
+  assert.equal(held?.reason, "uncertain");
+  assert.deepEqual((await restarted.status("chat")).pending, failed.pending);
 });

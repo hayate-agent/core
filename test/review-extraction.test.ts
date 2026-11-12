@@ -8,7 +8,7 @@ import { createHash } from "node:crypto";
 import { git } from "../src/changeset.js";
 import { ReviewService, type ReviewState } from "../src/builtin-plugins/review.js";
 import { createReviewEngine } from "../src/builtin-plugins/review-engine.js";
-import { reviewConfig } from "../src/review-config.js";
+import { reviewConfig } from "./review-test-config.js";
 import { PluginHost } from "../src/plugins.js";
 
 test("extracted engine reopens existing version1 ledger without resetting findings, grants, budget or bytes", async t => {

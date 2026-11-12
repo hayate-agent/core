@@ -12,6 +12,54 @@ function gate() {
   return { promise, resolve };
 }
 
+test("worker capacity bounds execution, not submission or independent completion delivery", async t => {
+  const home = await mkdtemp(path.join(os.tmpdir(), "dispatcher-parallel-"));
+  const store = new ExecutionStore(path.join(home, "ledger.json"));
+  await store.load();
+  const release = gate();
+  const started: string[] = [], delivered: string[] = [], errors: unknown[] = [];
+  const dispatcher = new Dispatcher(store, { name: "direct", version: 1, replaySafe: false,
+    execute: async task => {
+      started.push(task.requestId);
+      if (task.requestId === "publisher") await release.promise;
+      return task.requestId;
+    } }, 2, async event => { delivered.push(event.executionId); }, error => errors.push(error));
+  t.after(async () => { release.resolve(); await dispatcher.stop(); await rm(home, { recursive: true, force: true }); });
+  await dispatcher.start();
+  const publisher = await dispatcher.submit("p", "publisher", "publish");
+  const review = await dispatcher.submit("p", "review", "independent review");
+  await until(() => delivered.includes(review.id) && dispatcher.workers.active === 1);
+  assert.equal(store.list().find(task => task.id === publisher.id)?.status, "running");
+  assert.equal(dispatcher.workers.capacity, 2);
+  assert.equal(dispatcher.workers.active, 1);
+  assert.equal(dispatcher.workers.queued, 0);
+  assert.deepEqual(started, ["publisher", "review"]);
+  assert.deepEqual(errors, []);
+});
+
+test("full worker pool still accepts queued tasks and starts them on settlement without ticks", async t => {
+  const home = await mkdtemp(path.join(os.tmpdir(), "dispatcher-pool-"));
+  const store = new ExecutionStore(path.join(home, "ledger.json"));
+  await store.load();
+  const releases = Array.from({ length: 6 }, gate);
+  const started: number[] = [];
+  const dispatcher = new Dispatcher(store, { name: "direct", version: 1, replaySafe: false,
+    execute: async task => { const i = Number(task.input); started.push(i); await releases[i].promise; return "done"; }
+  }, 4, async () => {}, error => assert.fail(String(error)));
+  t.after(async () => { releases.forEach(item => item.resolve()); await dispatcher.stop(); await rm(home, { recursive: true, force: true }); });
+  await dispatcher.start();
+  for (let i = 0; i < releases.length; i++) await dispatcher.submit("p", String(i), String(i));
+  await until(() => started.length === 4);
+  assert.deepEqual(dispatcher.workers, { capacity: 4, active: 4, queued: 2 });
+  releases[2].resolve();
+  await until(() => started.includes(4));
+  assert.deepEqual(dispatcher.workers, { capacity: 4, active: 4, queued: 1 });
+  assert.equal(store.list().filter(task => task.status === "running").length, 4);
+  releases[0].resolve();
+  await until(() => started.includes(5));
+  assert.deepEqual(dispatcher.workers, { capacity: 4, active: 4, queued: 0 });
+});
+
 test("update inventory covers a submission before durable claim and fences new producers", async t => {
   const home = await mkdtemp(path.join(os.tmpdir(), "dispatcher-admission-"));
   const entered = gate(), release = gate();
@@ -254,4 +302,35 @@ test("failed delivery retains the same event for explicit retry without spinning
   assert.equal(attempts, 2);
   assert.deepEqual(store.events(), []);
   await dispatcher.stop();
+});
+
+test("strategy switch keeps retained built-in tasks runnable; new work uses the selected strategy", async t => {
+  const home = await mkdtemp(path.join(os.tmpdir(), "dispatcher-"));
+  const store = new ExecutionStore(path.join(home, "ledger.json"));
+  await store.load();
+  await store.submit("parent", "old", "queued before switch", "direct");
+  const ran: string[] = [];
+  const direct = { name: "direct", version: 1, replaySafe: false, execute: async () => { ran.push("direct"); return "old done"; } };
+  const sequential = { name: "sequential", version: 1, replaySafe: false, reconcile: true, execute: async () => { ran.push("sequential"); return "new done"; } };
+  const dispatcher = new Dispatcher(store, sequential, 1, async () => {}, () => {}, undefined, undefined, () => false, [direct, sequential]);
+  t.after(async () => { await dispatcher.stop(); await rm(home, { recursive: true, force: true }); });
+  await dispatcher.start();
+  await until(() => store.list()[0]!.status === "completed");
+  const task = await dispatcher.submit("parent", "new", "after switch");
+  assert.equal(task.strategy, "sequential");
+  await until(() => store.list().every(item => item.status === "completed"));
+  assert.deepEqual(ran, ["direct", "sequential"]);
+  assert.deepEqual(store.list().map(item => item.result), ["old done", "new done"]);
+});
+
+test("unregistered strategy still blocks visibly on recovery", async t => {
+  const home = await mkdtemp(path.join(os.tmpdir(), "dispatcher-"));
+  const store = new ExecutionStore(path.join(home, "ledger.json"));
+  await store.load();
+  await store.submit("parent", "old", "queued", "removed-plugin");
+  const dispatcher = new Dispatcher(store, { name: "direct", version: 1, replaySafe: false, execute: async () => assert.fail("must not run") }, 1, async () => {}, () => {});
+  t.after(async () => { await dispatcher.stop(); await rm(home, { recursive: true, force: true }); });
+  await dispatcher.start();
+  assert.equal(store.list()[0]!.status, "blocked");
+  assert.match(store.list()[0]!.recoveryReason ?? "", /removed-plugin@1 unavailable/);
 });

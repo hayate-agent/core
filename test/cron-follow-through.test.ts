@@ -1,3 +1,4 @@
+import { confirmNonproductive } from "./fakes.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, rm, mkdir, writeFile, chmod } from "node:fs/promises";
@@ -18,7 +19,7 @@ test("explicit cron report archives before delivery, survives archive failure wi
   const runtime = new FakeRuntime(() => "Problem found; inspect logs");
   let offline = true;
   const channel = new MemoryChannel();
-  const h = new Harness({ runtime, executionStore: ledger, tickMs: 60000,
+  const h = new Harness({ completionCheck: confirmNonproductive, runtime, executionStore: ledger, tickMs: 60000,
     reportOutput: async (input, output) => {
       if (offline) throw Error("storage offline");
       const m = input.cronReport!;
@@ -46,7 +47,7 @@ test("internal and explicit script-only reports use same archive path without le
   const script = path.join(home, "scripts", "report.sh"); await writeFile(script, "#!/bin/sh\nprintf 'script report'\n"); await chmod(script, 0o700);
   const runtime = new FakeRuntime(() => "internal findings"), channel = new MemoryChannel();
   const archived: string[] = [];
-  const h = new Harness({ runtime, tickMs: 60000, reportOutput: async (_i, text) => { archived.push(text); } });
+  const h = new Harness({ completionCheck: confirmNonproductive, runtime, tickMs: 60000, reportOutput: async (_i, text) => { archived.push(text); } });
   h.addChannel(channel); h.home = { channel: "mem", target: "room1" }; h.onStateChange = async () => {};
   const scheduler = new Scheduler(h, { timezone: "UTC", scriptsDir: path.join(home, "scripts") });
   try {
@@ -80,7 +81,7 @@ test("scheduled worker receives configured mandate and internal result cannot le
   const home = await mkdtemp(path.join(os.tmpdir(), "cron-worker-"));
   const store = new ExecutionStore(path.join(home, "ledger.json")); await store.load();
   const runtime = new FakeRuntime((_text, key) => { h.planContinuation(key, { state: "completed" }); return "internal result acknowledged"; });
-  const h = new Harness({ runtime, executionStore: store, tickMs: 60000, hostEventAllowed: () => true });
+  const h = new Harness({ completionCheck: confirmNonproductive, runtime, executionStore: store, tickMs: 60000, hostEventAllowed: () => true });
   const channel = new MemoryChannel(); h.addChannel(channel); h.home = { channel: "mem", target: "room1" }; h.onStateChange = async () => {};
   let workers = 0;
   const dispatcher = new Dispatcher(store, { name: "test", version: 1, replaySafe: true, execute: async execution => {

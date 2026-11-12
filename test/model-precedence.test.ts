@@ -16,6 +16,8 @@ import assert from 'node:assert/strict';
 import {PiRuntime} from './src/runtime/pi.ts';
 import {ModelRuntime} from '@earendil-works/pi-coding-agent';
 import {FilesystemSessionProvider} from './src/sessions.ts';
+import {SettingsService} from './src/settings.ts';
+import {writeFile,unlink} from 'node:fs/promises';
 const home=process.env.TEST_HOME;
 const models=await ModelRuntime.create();
 models.checkAuth=async()=>true;
@@ -122,6 +124,24 @@ const fresh=await make().open('local',{fresh:true});
 assert.equal(fresh.status().model,A);
 assert.equal(fresh.status().thinking,'high');
 await fresh.dispose();
+// Real file refresh at the existing beforeRequest boundary, no generation.
+const file=home+'/settings.local.yaml';
+const settings=new SettingsService(file,{model:A,thinking:'medium'});
+await settings.load();
+const live=new PiRuntime({...options,modelDefaults:()=>({revision:settings.revision,...settings.effective()}),beforeRequest:()=>settings.reload()});
+live.modelRuntime=async()=>models;
+const unpinned=await live.open('file-inherit'), pinned=await live.open('file-pin');
+prepare(unpinned);prepare(pinned);
+await pinned.setThinking('low');
+await writeFile(file,'model: '+B+'\\nthinking: high\\n');
+await unpinned.prompt('file changed');await pinned.prompt('file changed');
+assert.equal(unpinned.status().model,B);assert.equal(unpinned.status().thinking,'high');
+assert.equal(pinned.status().model,B);assert.equal(pinned.status().thinking,'low');
+await unlink(file);
+await unpinned.prompt('file removed');await pinned.prompt('file removed');
+assert.equal(unpinned.status().model,A);assert.equal(unpinned.status().thinking,'medium');
+assert.equal(pinned.status().model,A);assert.equal(pinned.status().thinking,'low');
+await unpinned.dispose();await pinned.dispose();
 console.log('PRECEDENCE_OK');`;
     const result = await promisify(execFile)(process.execPath, ["--import", "tsx", "--input-type=module", "-e", code], {
       env: { ...process.env, TEST_HOME: home, PI_CODING_AGENT_DIR: home }, timeout: 30000,

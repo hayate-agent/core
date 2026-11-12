@@ -11,6 +11,12 @@ import type {
   TurnEvent,
 } from "../src/types.js";
 
+/** Explicit independent verdict for fixtures testing routing/accounting, not assessment accuracy. */
+export async function confirmNonproductive(input: Inbound): Promise<Inbound["continuation"]> {
+  const state = input.continuation?.state;
+  return state && state !== "continue" ? { state } : undefined;
+}
+
 export class FakeSession implements RuntimeSession {
   busy = false;
   prompts: string[] = [];

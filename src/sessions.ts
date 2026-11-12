@@ -38,8 +38,11 @@ export class FilesystemSessionProvider implements SessionProvider {
   private binding(key: string): string { return path.join(this.root, `binding-${createHash("sha256").update(key).digest("hex")}.json`); }
   async load(id: string): Promise<SessionRecord> { return JSON.parse(await readFile(this.file(id), "utf8")); }
   async active(key: string): Promise<string | undefined> {
-    try { return JSON.parse(await readFile(this.binding(key), "utf8")).id; }
+    let id: string;
+    try { id = JSON.parse(await readFile(this.binding(key), "utf8")).id; }
     catch (e) { if ((e as NodeJS.ErrnoException).code === "ENOENT") return undefined; throw e; }
+    if ((await this.load(id)).key !== key) throw new Error("Session belongs to a different conversation");
+    return id;
   }
   async bind(key: string, id: string): Promise<void> {
     const record = await this.load(id);

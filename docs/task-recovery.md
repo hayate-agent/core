@@ -63,7 +63,13 @@ the original work resumes, even when the question arrived during a working turn.
 Completion of the question cannot complete another task. Live, paused or blocked
 background executions suppress execution of their associated task, not independent
 assessment or unrelated retained work. Legacy executions without a task identity
-conservatively suppress all autonomous execution. Completed host results are
+conservatively suppress all autonomous execution. They are not evidence that
+any particular historical task owns the worker: no independent-step assessment
+or admission may be derived from unknown provenance. Previously saved independent
+admissions cannot bypass this fence merely because their snapshot hash matches.
+The workers and original task evidence remain retained for explicit reconciliation;
+new tasks that durably recorded these workers as preexisting remain isolated.
+Completed host results are
 matched to their original task identity rather than the latest question.
 
 Independent post-turn assessment also runs for explicit continuation and timed-wait

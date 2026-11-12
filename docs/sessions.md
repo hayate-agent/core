@@ -57,6 +57,50 @@ continues appending normally. The Harness inbox retains unfinished turns for rep
 remains at-least-once, not exactly-once. Failed final checkpoints fail the turn.
 Revision conflicts require resolving competing writers, not blind overwrite.
 
+## Home and session locking
+
+Core uses process-bound OS file locks, not a database, PID-file lease or heartbeat.
+It requires Linux/macOS `flock(2)` semantics and Python 3 with standard-library
+`fcntl`. A short isolated helper locks an inherited descriptor and exits; the
+Node process retains the same open file description and therefore the lock.
+Normal close and process exit release ownership in the kernel. Acquisition
+returns only after the helper exits. If the Node process crashes during acquisition,
+a remaining helper can briefly retain its inherited descriptor; the helper has its
+own ten-second alarm. A process suspended by the OS can still retain a lock until
+resumed or terminated: inspect it rather than deleting a lock file. No helper
+needs to stay alive during normal operation. A missing helper or unsupported locking fails closed, with
+no fallback. The permanent lock inode must not be unlinked or replaced while in use.
+
+Core does not import or initialize SQLite. The external Matrix encryption SDK's
+own storage is a separate, explicit exception; it does not provide Core locking,
+conversation storage, memory or scheduling.
+
+An older lock-protocol marker is rejected rather than silently migrated. Upgrade
+an existing home only offline: stop **all** older owners, verify no process holds
+its home/session locks, preserve the old markers, and change the markers to
+`hayate-session-lock:flock:v2` followed by a newline without replacing their inodes.
+Do not perform a mixed-version takeover or use lock-file deletion as recovery.
+Legacy lock backend files can be quarantined offline; they contain no conversation
+history. Do not modify Matrix crypto stores, state, pending inputs or JSONL sessions.
+
+## Fresh terminal sessions and interruption
+
+A fresh interactive start creates a new conversation. Pending inputs, undelivered
+replies, recurring work and delegated workers of older local conversations remain
+stored under their original owners; startup does not execute or deliver them in
+the new conversation. Opening an unrelated conversation does not consume an old
+input's crash/replay allowance. Use `/resume <id>` to activate an old conversation
+explicitly. `/restart` retains the selected conversation and may resume its pending
+work, subject to the normal ownership, stop, expiry and recovery rules.
+
+Ctrl+C exits through the immediate interruption path, including when a dialog is
+open. It cancels the current turn but preserves other queued human inputs and
+other conversations. `/quit` is graceful shutdown; `/restart` drains then replaces
+the process. Terminal hangup and loss of the foreground launcher also request
+shutdown, preventing a detached runtime from retaining the Home lock. A terminal
+multiplexer that merely detaches keeps its process alive by design; that is not a
+stale lock. Never delete a live owner's lock to start a competing process.
+
 ## Existing conversations
 
 With an explicitly selected external provider, first opening imports the latest

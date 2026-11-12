@@ -1,28 +1,33 @@
-# Developing and extending VanillaCore Agent Harness
+# Developing and extending Hayate Agent
 
 This guide ships with the installed package and image. It describes this version,
 not a promise that every planned interface is already implemented. `/harness`
 locates it. PI is a replaceable runtime adapter, not the product's identity.
 
-## Default working rule: vertical slices and KISS
+## Architecture: behaviour belongs in extensions
 
-The default CLI supplies **ALWAYS vertical slices. ALWAYS KISS.** through
-`capabilityContext` on every working turn, including dispatcher and managed
-subagent workers. It is independent of persona files, memory, skill discovery,
-tool selection and dispatcher enablement. Core owns this shared instruction path;
-`harness/plugins` owns the dispatcher tool adapter, which has no instruction hook.
+**Behaviours should be expressed via either plugins or codified extensions.
+The core should remain clear and clean.** Core provides lifecycle, routing,
+persistence and explicit extension contracts; concrete behavioural policies belong
+in plugins or codified extensions rather than unconditional Core prompt text.
+Operator-specific working rules belong in the operator-managed SOUL.md. Prefer
+existing extension points; introduce a Core hook only when the required capability
+cannot be expressed through them. This principle does not remove infrastructure
+correctness checks or external access controls.
 
-Build the smallest simple end-to-end slice from the concrete request to a verified
-result before expanding horizontally. Include persistence, restart, continuation
-and activation when relevant and authorized. Avoid speculative abstractions,
-additional state machines and approval loops; justify added complexity with the
-request and evidence. Tests, merge and image builds are intermediate evidence,
-not proof of live completion. Safety, authorization and required review remain
-unchanged. Always make small focused changes and small PRs: one purpose per PR,
-independently deployable increments and explicit real dependencies. Do not batch
-unrelated fixes, hold ready fixes for unrelated work, or ship unusable horizontal
-fragments. This shared default preserves required CI and grants no automatic
-rollout permission. This is a model instruction, not mechanical correctness enforcement.
+## Operator-owned workflow
+
+Core's capability context reports available tools and host facts. It does not
+prescribe KISS, vertical slices, PR size, review, merge, GitOps, platform-specific
+publication restrictions or a prohibition on merging one's own PRs. These working
+rules belong in an operator-authored initial `SOUL.md` or explicit rollout
+configuration when the operator wants them; the product does not insert them.
+Plugins likewise must not invent an independent workflow policy. The bundled
+review plugin is disabled by default and its mandatory gates are individually
+opt-in. The nightly strategy only reports PR/merge restrictions when explicitly
+configured; missing configuration is not rendered as a prohibition or a grant.
+Technical access controls and actual external repository protections remain in
+force and are separate from model working instructions.
 
 Activation requires shipping the rebuilt Core package/image through the authorized
 rollout and restarting the process; source edits and local builds do not alter a
@@ -34,8 +39,13 @@ context themselves, as with the other CLI capability instructions.
 ## Local targeted tests and integration checkpoints
 
 Use `npm ci --include=dev` in your own checkout (development tools are needed even
-when the shell has `NODE_ENV=production`). For each local vertical slice, run the
-relevant tests and `npm run typecheck`; a full suite is not required after every edit.
+when the shell has `NODE_ENV=production`). Run `npm test` for the complete suite:
+it builds the required runtime files first and uses a canonical, short temporary
+directory (important for macOS symlinks and Unix socket path limits). Local-memory
+worker tests require `flock` on PATH: Linux util-linux or macOS `brew install flock`.
+The lock is acquired on an inherited descriptor before the worker is executed.
+For each local vertical slice, run the relevant tests and `npm run typecheck`;
+a full suite is not required after every edit.
 
 ```sh
 npm run test:targeted -- --list                  # explain selection, no execution/network
@@ -79,8 +89,8 @@ pipeline. A source edit does not activate a running Harness.
 |---|---|
 | Identity, role, duties | Harness home SOUL.md; no product-code change |
 | Tone | VOICE.md and personalities/*.md |
-| Model/provider | harness.yaml model + PI models.json/auth, local /model and /login |
-| Exposed tools | harness.yaml tools: literal names, [] disables model-visible tools |
+| Model/provider | hayate-agent.yaml model + PI models.json/auth, local /model and /login |
+| Exposed tools | hayate-agent.yaml tools: literal names, [] disables model-visible tools |
 | Reusable task instructions | skills/<name>/SKILL.md with name/description frontmatter |
 | Scheduled work | cron/jobs.yaml and /cron; /goal, /heartbeat, /loop for persistent work |
 | PI tools/providers/hooks | PI extensions in its configured agent/project directories |
@@ -113,8 +123,9 @@ contract and roadmap.md for outstanding deployment and integration requirements.
 
 The active project may be unrelated to the Harness. Inspect it before editing.
 The installed guide path identifies the package, not ownership or write permission.
-Use a user-owned checkout of https://git.vanillacore.net/harness/core.git on a
-feature branch. Never use root to overwrite an immutable installation. Deployment
+Use a user-owned checkout of https://github.com/hayate-agent/core.git on a
+feature branch; published source is available on `main`. Never use root to
+overwrite an immutable installation. Deployment
 specifics belong in a private overlay, credentials never in either repository.
 
 ## Implement and verify

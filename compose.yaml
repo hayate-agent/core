@@ -11,8 +11,8 @@ services:
       MODEL_API_KEY: ${MODEL_API_KEY:?Set MODEL_API_KEY in your environment}
     volumes:
       - harness-home:/home/node
-      - ./config/harness.yaml:/home/node/.vanillacore-harness/harness.yaml:ro
-      - ./config/SOUL.md:/home/node/.vanillacore-harness/SOUL.md:ro
+      - ./config/hayate-agent.yaml:/home/node/.hayate-agent/hayate-agent.yaml:ro
+      - ./config/SOUL.md:/home/node/.hayate-agent/SOUL.md:ro
       - ./config/models.json:/home/node/.pi/agent/models.json:ro
     security_opt:
       - no-new-privileges:true

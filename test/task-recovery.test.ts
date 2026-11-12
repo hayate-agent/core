@@ -6,7 +6,7 @@ import {FakeRuntime,MemoryChannel,msg} from "./fakes.js";
 function restored(state: "active"|"waiting"|"blocked"|"completed"|"stopped"="active") {
  const runtime=new FakeRuntime();const h=new Harness({runtime,tickMs:60000,now:()=>1000});
  h.addChannel(new MemoryChannel());h.onStateChange=async()=>{};
- h.restoreSessions([{key:"mem:room1",task:{id:"original",original:"Implement feature",state,next:"Run tests",depth:2},replyTo:{channel:"mem",target:"room1"}}]);
+ h.restoreSessions([{key:"mem:room1",task:{id:"original",original:"Implement feature",state,next:"Run tests",depth:2,recoveryAdmission:{id:"task:original:3",depth:3,next:"Run tests",original:"Implement feature"}},replyTo:{channel:"mem",target:"room1"}}]);
  return {h,runtime};
 }
 test("startup recovers one checkpointed next step and preserves original scope",async()=>{
@@ -76,7 +76,7 @@ test("restart from committed completion resumes only the already queued next ste
  let h:Harness;let turns=0;
  h=new Harness({runtime:new FakeRuntime(()=>{
   turns++;h.planContinuation("mem:room1",{state:"continue",next:"verify remaining tests"});return "first side effect completed";
- }),tickMs:60000});
+ }),tickMs:60000,completionCheck:async()=> turns===1 ? {state:"continue",next:"verify remaining tests"} : {state:"completed"}});
  h.addChannel(new MemoryChannel());
  let checkpoint:{sessions:any[];pending:any[];outbox:any[]}|undefined;
  h.onStateChange=async()=>{};

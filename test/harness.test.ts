@@ -105,7 +105,7 @@ test("turn-end continuation checkpoints one bounded follow-up and does not insta
     harness.planContinuation("mem:room1", { state: "continue", next: "authorized next step" });
     return "checkpoint";
   });
-  harness = new Harness({ runtime, tickMs: 60000 });
+  harness = new Harness({ runtime, tickMs: 60000, completionCheck: async () => ({ state: "continue", next: "authorized next step", progress: { advanced: false } }) });
   harness.addChannel(new MemoryChannel());
   const snapshots: any[] = [];
   harness.onStateChange = async () => { snapshots.push(structuredClone(harness.pendingInputs())); };
@@ -972,7 +972,7 @@ test("completed assessment preserves terminal boundaries and retains inconclusiv
     h.addChannel(new MemoryChannel());h.onStateChange=async()=>{};
     try {
       await h.submit({...msg("original task"),...(boundary==="depth"?{continuationDepth:20}:{})});await h.drained();
-      assert.equal(turns,1,boundary);
+      assert.equal(turns,boundary==="depth"?0:1,boundary);
       assert.equal(checks,["finished","invalid","failed","denied","waiting","blocked"].includes(boundary)?1:0,boundary);
       if(["finished","expired","pause"].includes(boundary)) assert.equal(h.state("mem:room1").task?.state,"completed",boundary);
       if(["invalid","failed","denied"].includes(boundary)) assert.equal(h.state("mem:room1").task?.state,"active",boundary);

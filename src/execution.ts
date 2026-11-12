@@ -1,3 +1,4 @@
+import { executionMetadata, type ExecutionMetadata } from "./builtin-plugins/execution-metadata.js";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
@@ -6,23 +7,73 @@ import { recoveryBlock, type RecoveryStrategy, type ExecutionRecoveryPolicy } fr
 
 /** Expected contention with a control or another claimant, not a storage failure. */
 export class ExecutionClaimConflict extends Error {}
+/** New parent data invalidated a verdict, not the retained worker evidence. */
+export class ExecutionDecisionConflict extends Error {}
+export interface ExecutionDecision {
+  requestId: string;
+  text: string;
+  recordedAt: number;
+  state: "pending" | "applied";
+  /** Applied means delivered to a strategy boundary, NOT approved or completed. */
+  appliedAt?: number;
+  /** Non-secret claim correlation, never an ownership credential. */
+  appliedClaim?: string;
+}
+
+/** Closed host-owned causes; exception/worker text is never persisted here. */
+export type ExecutionDiagnosticCode = "runtime-failure" | "worker-failed" | "worker-cancelled" | "maintenance-blocked" | "manual-pause" | "deadline-expired";
+export class ExecutionDeadlineExpired extends Error {
+  constructor() { super("deadline-expired: saved execution deadline has elapsed"); }
+}
+export class ExecutionAssessmentHold extends Error {
+  constructor(readonly state: "blocked" | "waiting", readonly step: number, reason: string) { super(reason); }
+}
+
+export class ExecutionWorkerFailure extends Error {
+  constructor(readonly diagnosticCode: "worker-failed" | "worker-cancelled" | "maintenance-blocked") { super(diagnosticCode); }
+}
 
 export type ExecutionStatus = "ready" | "running" | "paused" | "blocked" | "completed" | "cancelled";
 export interface Execution {
+  /** Old paused failures require explicit resolution, not automatic retry on upgrade. */
+  recoveryEnrollment?: "current" | "held-legacy";
   id: string;
   /** Host-captured parent mandate; never accepted from model tool arguments. */
   dependency?: { taskId: string; depth: number; original: string; expiresAt?: number; anchor?: import("./types.js").Inbound["completionAnchor"] };
+  /** Host-captured address of the submitting turn (room/thread); never from model tool arguments. */
+  origin?: import("./types.js").Address;
   requestId: string;
+  /** Append-only bounded audit; retries never replace a decision. */
+  decisions?: ExecutionDecision[];
   parent: string;
   input: string;
   strategy: string;
   strategyVersion: number;
   status: ExecutionStatus;
+  execution?: ExecutionMetadata;
+  /**
+   * Host-pinned worker model pair, set only by trusted host submitters (the
+   * benchmark runner). It bypasses dispatcher rules and complexity
+   * classification and is honoured strictly, without role fallback.
+   */
+  pinned?: import("./model-roles.js").WorkerPin;
+  classifier?: { requested: ExecutionMetadata; actual?: ExecutionMetadata };
+  /** Retained across claims. Unknown sends require explicit reconciliation, never replay. */
+  classifierReceipt?: import("./classifier-http.js").ClassifierReceipt & { token: string };
   checkpoint?: string;
+  /** Host-scheduled read-only assessment retry, never a worker replay grant. */
+  assessmentRetryAt?: number;
+  /** Internal worker/strategy pauses have a durable dispatcher wake-up, not a parent nudge. */
+  workerRetry?: { attempts: number; nextAt: number };
+  /** Independent semantic hold: retain actionable attention while rechecking. */
+  assessmentHold?: { state: "blocked" | "waiting"; step: number };
+  /** Bounded host event dedup receipts, committed atomically with checkpoints. */
+  checkpointNotices?: string[];
   result?: string;
   token?: string;
   restarts: number;
   recoveryReason?: string;
+  diagnosticCode?: ExecutionDiagnosticCode;
   /** Prior token-scoped transcript, never an ownership credential. */
   recoverySession?: string;
   resolutions?: Array<{ actor: string; action: "continue" | "retry"; evidence: string; at: number }>;
@@ -34,7 +85,7 @@ export interface Execution {
   question?: { id: string; text: string; answer?: string };
   /** Parent stop permanently revokes result delivery as well as execution. */
   parentStopped?: boolean;
-  intent?: { key: string; replay: "safe" | "unsafe"; result?: string };
+  intent?: { key: string; replay: "safe" | "unsafe"; result?: string; route?: import("./model-roles.js").ModelPair };
   /** Last committed effect outcome, retained across the completion commit gap. */
   settledEffect?: { key: string; result: string };
 }
@@ -46,6 +97,9 @@ export interface ExecutionEvent {
   text: string;
   /** State at event creation, not the potentially newer state at delivery. */
   status?: ExecutionStatus;
+  /** Host-owned automatic wake-up, distinguishes backoff from a human attention hold. */
+  automaticRetryAt?: number;
+  requiresAttention?: boolean;
 }
 export interface TurnSettlement {
   repetition?: import("./repetition-budget.js").RepetitionBudget;
@@ -116,11 +170,30 @@ export class ExecutionStore {
             !Number.isSafeInteger(item.strategyVersion) || item.strategyVersion < 1 ||
             !["ready", "running", "paused", "blocked", "completed", "cancelled"].includes(item.status) ||
             !Number.isSafeInteger(item.restarts) || item.restarts < 0) throw Error("Invalid execution record");
+        if (item.decisions !== undefined && (!Array.isArray(item.decisions) || item.decisions.length > 32 ||
+            new Set(item.decisions.map(d => d?.requestId)).size !== item.decisions.length ||
+            Buffer.byteLength(JSON.stringify(item.decisions.map(d => ({ requestId: d?.requestId, text: d?.text }))), "utf8") > 16000 ||
+            item.decisions.some(d => !d || !validDecisionInput(d.requestId, d.text) || !Number.isFinite(d.recordedAt) ||
+              !["pending", "applied"].includes(d.state) || (d.state === "applied"
+                ? !Number.isFinite(d.appliedAt) || typeof d.appliedClaim !== "string" || !/^[a-f0-9]{64}$/.test(d.appliedClaim)
+                : d.appliedAt !== undefined || d.appliedClaim !== undefined)))) throw Error("Invalid execution decisions");
         if (item.question !== undefined && (!item.question || typeof item.question.id !== "string" || !item.question.id ||
             typeof item.question.text !== "string" || !item.question.text.trim() || item.question.text.length > 8000 ||
             (item.question.answer !== undefined && (typeof item.question.answer !== "string" || item.question.answer.length > 8000)))) throw Error("Invalid execution question");
         if (item.terminalAt !== undefined && (!Number.isSafeInteger(item.terminalAt) || item.terminalAt < 0)) throw Error("Invalid terminal timestamp");
         if (item.parentStopped !== undefined && typeof item.parentStopped !== "boolean") throw Error("Invalid parent stop marker");
+        if (item.origin !== undefined && !validAddress(item.origin)) throw Error("Invalid execution origin");
+        if (item.checkpointNotices !== undefined && (!Array.isArray(item.checkpointNotices) || item.checkpointNotices.length > 32 ||
+            item.checkpointNotices.some(k => typeof k !== "string" || !k || k.length > 100))) throw Error("Invalid checkpoint notice receipts");
+        if (item.workerRetry !== undefined && (!item.workerRetry || !Number.isSafeInteger(item.workerRetry.attempts) ||
+            item.workerRetry.attempts < 1 || !Number.isSafeInteger(item.workerRetry.nextAt) || item.workerRetry.nextAt < 0))
+          throw Error("Invalid worker retry");
+        if (item.assessmentHold !== undefined && (!item.assessmentHold ||
+            !["blocked", "waiting"].includes(item.assessmentHold.state) ||
+            !Number.isSafeInteger(item.assessmentHold.step) || item.assessmentHold.step < 0))
+          throw Error("Invalid assessment hold");
+        if (item.assessmentRetryAt !== undefined && (!Number.isSafeInteger(item.assessmentRetryAt) || item.assessmentRetryAt < 0))
+          throw Error("Invalid assessment retry timestamp");
         for (const value of [item.checkpoint, item.result, item.token]) {
           if (value !== undefined && (typeof value !== "string" || value.length > 64000)) throw Error("Invalid execution field");
         }
@@ -128,6 +201,14 @@ export class ExecutionStore {
             !["safe", "unsafe"].includes(item.intent.replay))) throw Error("Invalid execution intent");
         if (item.settledEffect !== undefined && (!item.settledEffect || typeof item.settledEffect.key !== "string" || !item.settledEffect.key.trim() ||
             typeof item.settledEffect.result !== "string" || item.settledEffect.result.length > 64000)) throw Error("Invalid settled effect");
+        if (item.classifierReceipt !== undefined) {
+          const receipt = item.classifierReceipt;
+          if (!receipt || !["initial", "fallback", "observed"].includes(receipt.phase) ||
+              typeof receipt.token !== "string" || !receipt.token || !receipt.actual ||
+              typeof receipt.actual.model !== "string" || typeof receipt.actual.thinking !== "string" ||
+              (receipt.complexity !== undefined && (receipt.phase !== "observed" ||
+                !["simple", "medium", "high"].includes(receipt.complexity)))) throw Error("Invalid classifier receipt");
+        }
         if (item.claimedRecoveryAction !== undefined) throw Error("Invalid persisted claim-only recovery action");
         if (item.recoveryGrant !== undefined && (!item.recoveryGrant ||
             !["continue", "retry"].includes(item.recoveryGrant.action) ||
@@ -139,6 +220,11 @@ export class ExecutionStore {
         if (!event || typeof event.id !== "string" || !event.id || eventIds.has(event.id) || !ids.has(event.executionId) ||
             data.executions.find(item => item.id === event.executionId)?.parent !== event.parent || typeof event.parent !== "string" ||
             !["accepted", "status", "question", "result"].includes(event.type) || typeof event.text !== "string") throw Error("Invalid execution event");
+        if (event.automaticRetryAt !== undefined && (event.type !== "status" ||
+            !Number.isSafeInteger(event.automaticRetryAt) || event.automaticRetryAt <= 0))
+          throw Error("Invalid automatic retry event");
+        if (event.requiresAttention !== undefined && typeof event.requiresAttention !== "boolean")
+          throw Error("Invalid event attention flag");
         eventIds.add(event.id);
       }
       if (data.turns !== undefined) {
@@ -174,8 +260,15 @@ export class ExecutionStore {
     this.queue = next;
     return next;
   }
-  private event(draft: Ledger, task: Execution, type: ExecutionEvent["type"], text: string): void {
-    draft.events.push({ id: randomUUID(), executionId: task.id, parent: task.parent, type, text, status: task.status });
+  /** Await all accepted ledger writes; failure must not produce a maintenance lease. */
+  async drain(): Promise<void> { await this.queue; }
+
+  private event(draft: Ledger, task: Execution, type: ExecutionEvent["type"], text: string, attention = false): void {
+    draft.events.push({ id: randomUUID(), executionId: task.id, parent: task.parent, type, text, status: task.status,
+      ...(attention ? { requiresAttention: true } : {}),
+      ...(type === "status" && !task.parentStopped && !(task.question && task.question.answer === undefined) &&
+        task.workerRetry && ["runtime-failure", "worker-failed"].includes(task.diagnosticCode ?? "") &&
+        ["paused", "blocked", "ready"].includes(task.status) ? { automaticRetryAt: task.workerRetry.nextAt } : {}) });
   }
   private find(draft: Ledger, id: string): Execution {
     const task = draft.executions.find(item => item.id === id);
@@ -268,6 +361,12 @@ export class ExecutionStore {
       turn.settlement = structuredClone(turn.stopped ? this.stoppedSettlement(settlement) : settlement);
     });
   }
+  /** Conversation-scoped durable lookup, including compacted terminal records. */
+  async findRequest(parent: string, requestId: string): Promise<Execution | undefined> {
+    const task = this.data.executions.find(item => item.parent === parent && item.requestId === requestId)
+      ?? await this.archived(parent, requestId);
+    return task ? structuredClone(task) : undefined;
+  }
   list(parent?: string): Execution[] {
     return structuredClone(this.data.executions.filter(item => parent === undefined || item.parent === parent));
   }
@@ -287,42 +386,129 @@ export class ExecutionStore {
       draft.waitAuthorityDenials = [...(draft.waitAuthorityDenials ?? []), safe].slice(-100);
     });
   }
-  submit(parent: string, requestId: string, input: string, strategy: string, strategyVersion = 1, dependency?: Execution["dependency"]): Promise<Execution> {
+  submit(parent: string, requestId: string, input: string, strategy: string, strategyVersion = 1, dependency?: Execution["dependency"], pinned?: Execution["pinned"], origin?: Execution["origin"]): Promise<Execution> {
     return this.mutate(async draft => {
-      if (![parent, requestId, input, strategy].every(value => typeof value === "string" && value.trim()) || input.length > 64000 ||
+      if (![parent, requestId, input, strategy].every(value => typeof value === "string" && value.trim()) || input.length > 1024 * 1024 ||
           !Number.isSafeInteger(strategyVersion) || strategyVersion < 1) throw Error("Invalid execution submission");
       const old = draft.executions.find(item => item.parent === parent && item.requestId === requestId) ?? await this.archived(parent, requestId);
       if (old) {
-        if (old.input !== input || old.strategy !== strategy || old.strategyVersion !== strategyVersion) throw Error("Conflicting execution request ID");
+        if (old.dependency?.taskId !== dependency?.taskId) throw Error("execution-context-mismatch: requestId belongs to another task");
+        if (dependency?.expiresAt !== undefined && dependency.expiresAt < (old.dependency?.expiresAt ?? Infinity))
+          throw Error("execution-context-mismatch: retained request has a looser mandate deadline; reconcile its authority before retrying");
+        if (old.input !== input || old.strategy !== strategy || old.strategyVersion !== strategyVersion ||
+            JSON.stringify(old.pinned ?? null) !== JSON.stringify(pinned ?? null)) throw Error("Conflicting execution request ID");
         return old;
       }
       if (draft.executions.length >= 2000) throw Error("Retained execution limit reached; archive only after reconciliation");
-      const task: Execution = { dependency: structuredClone(dependency), id: randomUUID(), parent, requestId, input, strategy, strategyVersion, status: "ready", restarts: 0 };
+      if (origin !== undefined && !validAddress(origin)) throw Error("Invalid execution origin");
+      const task: Execution = { recoveryEnrollment: "current", dependency: structuredClone(dependency), ...(origin ? { origin: structuredClone(origin) } : {}), pinned: structuredClone(pinned), id: randomUUID(), parent, requestId, input, strategy, strategyVersion, status: "ready", restarts: 0 };
       draft.executions.push(task);
       this.event(draft, task, "accepted", "Auftrag angenommen");
       return task;
     });
   }
+  /** Persist before dispatcher startup: accepted/interrupted work stays current;
+   * old paused/blocked failures are retained without automatic re-enrollment. */
+  holdLegacyRecovery(): Promise<void> {
+    return this.mutate(draft => {
+      for (const task of draft.executions) {
+        if (task.recoveryEnrollment) continue;
+        task.recoveryEnrollment = task.status === "running" ||
+          task.status === "ready" && !task.workerRetry && !task.diagnosticCode ? "current" : "held-legacy";
+      }
+    });
+  }
   /** Current policy is supplied by the trusted host registry, never by model input.
    * Recovery is not itself a replay grant: policy is checked again at claim time. */
+  assessmentDue(task: Readonly<Execution>): boolean {
+    return (task.assessmentRetryAt === undefined || task.assessmentRetryAt <= this.now()) &&
+      (task.workerRetry === undefined || task.workerRetry.nextAt <= this.now());
+  }
   claim(id: string, current?: RecoveryStrategy & { strategy: string }, policy?: ExecutionRecoveryPolicy): Promise<Execution> {
     return this.mutate(draft => {
       const task = this.find(draft, id);
-      if (task.status !== "ready") throw new ExecutionClaimConflict("Execution not ready");
-      const reason = task.intent ? recoveryBlock(task, current?.strategy === task.strategy ? current : undefined, policy) : undefined;
+      if (task.recoveryEnrollment === "held-legacy" || task.status !== "ready" || !this.assessmentDue(task))
+        throw new ExecutionClaimConflict("Execution not ready");
+      const reason = task.intent ? recoveryBlock(task, current?.strategy === task.strategy ? current : undefined, policy)
+        : task.workerRetry ? policy?.evaluate(structuredClone(task)) : undefined;
       if (reason) throw Error(reason);
       const claimedRecoveryAction = task.recoveryGrant?.restarts === task.restarts ? task.recoveryGrant.action : undefined;
       delete task.recoveryGrant;
+      delete task.execution; // A new attempt has no observed selection yet.
+      delete task.classifier;
+      const assessmentRetry = task.assessmentRetryAt !== undefined;
+      delete task.assessmentRetryAt;
       task.token = randomUUID();
       task.status = "running";
-      this.event(draft, task, "status", "Ausführung gestartet");
+      if (!assessmentRetry) this.event(draft, task, "status", "Ausführung gestartet");
       return { ...task, claimedRecoveryAction };
     });
   }
-  checkpoint(id: string, token: string, checkpoint: string): Promise<void> {
+  /** Trusted strategy yields its slot while retaining settled evidence and intent.
+   * The next claim must reconcile, never start an opaque worker again. */
+  deferAssessment(id: string, token: string, nextAt: number, decisionRevision?: number): Promise<void> {
+    return this.mutate(draft => {
+      const task = this.owned(draft, id, token);
+      this.checkDecisionRevision(task, decisionRevision);
+      if (!Number.isSafeInteger(nextAt) || nextAt <= this.now() || !task.checkpoint || !task.intent)
+        throw Error("Invalid assessment deferral");
+      task.assessmentRetryAt = nextAt;
+      task.recoverySession ??= `dispatch:${task.id}:${token}`;
+      task.status = "ready";
+      delete task.token;
+    });
+  }
+  /** A committed sequential step can release capacity without replaying effects. */
+  yieldStep(id: string, token: string): Promise<void> {
+    return this.mutate(draft => {
+      const task = this.owned(draft, id, token);
+      if (task.intent || !task.checkpoint) throw Error("Cannot yield an unsettled step");
+      task.status = "ready";
+      delete task.token;
+    });
+  }
+  /** Roll back only a scheduler claim that never reached its strategy. */
+  releaseUnstartedClaim(id: string, token: string, recoveryAction?: "continue" | "retry"): Promise<void> {
+    return this.mutate(draft => {
+      const task = this.owned(draft, id, token);
+      task.status = "ready";
+      if (recoveryAction) task.recoveryGrant = { action: recoveryAction, restarts: task.restarts };
+      delete task.token;
+    });
+  }
+  observeExecution(id: string, token: string, selection: ExecutionMetadata): Promise<void> {
+    return this.mutate(draft => { this.owned(draft, id, token).execution = executionMetadata(selection); });
+  }
+  observeClassifier(id: string, token: string, requested: ExecutionMetadata, actual?: ExecutionMetadata): Promise<void> {
+    return this.mutate(draft => { this.owned(draft, id, token).classifier = {
+      requested: executionMetadata(requested), ...(actual ? { actual: executionMetadata(actual) } : {}),
+    }; });
+  }
+  classifierAssessment(id: string, token: string, receipt: import("./classifier-http.js").ClassifierReceipt): Promise<void> {
+    return this.mutate(draft => {
+      const task = this.owned(draft, id, token);
+      const previous = task.classifierReceipt;
+      if (receipt.phase === "initial" ? !!previous : !previous || previous.token !== token ||
+          previous.phase === "observed" || (receipt.phase === "fallback" && previous.phase !== "initial")) {
+        throw Error("Classifier receipt cannot be replayed");
+      }
+      task.classifierReceipt = { ...receipt, token };
+    });
+  }
+  checkpoint(id: string, token: string, checkpoint: string, notice?: { key: string; text: string }): Promise<void> {
     return this.mutate(draft => {
       if (typeof checkpoint !== "string" || checkpoint.length > 64000) throw Error("Invalid checkpoint");
       const task = this.owned(draft, id, token);
+      if (notice) {
+        if (typeof notice.key !== "string" || !notice.key || notice.key.length > 100 ||
+            typeof notice.text !== "string" || !notice.text || notice.text.length > 8000) throw Error("Invalid checkpoint notice");
+        const receipts = task.checkpointNotices ??= [];
+        if (!receipts.includes(notice.key)) {
+          if (receipts.length >= 32) throw Error("Checkpoint notice receipt limit exceeded");
+          receipts.push(notice.key);
+          this.event(draft, task, "status", notice.text);
+        }
+      }
       task.checkpoint = checkpoint;
       task.restarts = 0;
     });
@@ -334,17 +520,22 @@ export class ExecutionStore {
       task.recoverySession = key;
     });
   }
-  intent(id: string, token: string, key: string, replay: "safe" | "unsafe"): Promise<void> {
+  intent(id: string, token: string, key: string, replay: "safe" | "unsafe", route?: import("./model-roles.js").ModelPair, decisionRevision?: number): Promise<void> {
+    if (route !== undefined && (!route || typeof route !== "object" || Array.isArray(route) || Object.keys(route).some(k => !["model", "thinking"].includes(k)) ||
+        (route.model !== undefined && (typeof route.model !== "string" || route.model.length > 200)) ||
+        (route.thinking !== undefined && (typeof route.thinking !== "string" || route.thinking.length > 40)))) throw Error("Invalid selected route");
     return this.mutate(draft => {
       if (typeof key !== "string" || !key.trim() || !["safe", "unsafe"].includes(replay)) throw Error("Invalid effect intent");
       const task = this.owned(draft, id, token);
+      this.checkDecisionRevision(task, decisionRevision);
       if (task.intent) throw Error("Resolve previous effect intent first");
-      task.intent = { key, replay };
+      task.intent = { key, replay, ...(route ? { route: structuredClone(route) } : {}) };
     });
   }
-  settleIntent(id: string, token: string, key: string, result: string, checkpoint: string): Promise<void> {
+  settleIntent(id: string, token: string, key: string, result: string, checkpoint: string, decisionRevision?: number): Promise<void> {
     return this.mutate(draft => {
       const task = this.owned(draft, id, token);
+      this.checkDecisionRevision(task, decisionRevision);
       if (task.intent?.key !== key) throw Error("Unknown effect intent");
       if (typeof result !== "string" || typeof checkpoint !== "string" || result.length > 64000 || checkpoint.length > 64000) throw Error("Invalid effect result");
       task.checkpoint = checkpoint;
@@ -372,8 +563,68 @@ export class ExecutionStore {
       if (typeof text !== "string" || !text.trim() || text.length > 8000) throw Error("Invalid question");
       task.question = { id: randomUUID(), text };
       task.status = "paused";
+      delete task.workerRetry;
+      delete task.assessmentHold;
       delete task.token;
       this.event(draft, task, "question", `Question ${task.question.id}: ${text}`);
+    });
+  }
+  /** Parent is supplied by the authenticated host session, never tool arguments.
+   * wake is trusted strategy code proving a retained assessment boundary.
+   * Recording never changes a token, clears intent, or grants replay authority. */
+  recordDecision(parent: string, id: string, requestId: string, text: string,
+      wake?: (task: Readonly<Execution>) => boolean): Promise<ExecutionDecision> {
+    return this.mutate(draft => {
+      if (/^(dispatch|subagent):/.test(parent)) throw Error("Nested worker decisions are disabled");
+      if (!validDecisionInput(requestId, text)) throw Error("Invalid decision requestId or text");
+      const task = this.find(draft, id);
+      if (task.parent !== parent || task.parentStopped || ["completed", "cancelled"].includes(task.status))
+        throw Error("Execution cannot accept a decision in this conversation");
+      const receipts = task.decisions ??= [];
+      const prior = receipts.find(d => d.requestId === requestId);
+      if (prior) {
+        if (prior.text !== text) throw Error("Conflicting decision requestId reuse");
+        return prior;
+      }
+      if (receipts.length >= 32) throw Error("Execution decision limit reached");
+      const receipt: ExecutionDecision = { requestId, text, recordedAt: this.now(), state: "pending" };
+      if (Buffer.byteLength(JSON.stringify([...receipts, receipt].map(({ requestId, text }) => ({ requestId, text }))), "utf8") > 16000)
+        throw Error("Execution decision data limit reached");
+      receipts.push(receipt);
+      if (!task.token && !task.recoveryReason && !(task.question && task.question.answer === undefined) && wake?.(structuredClone(task))) {
+        if (["blocked", "paused"].includes(task.status) && task.diagnosticCode !== "manual-pause") task.status = "ready";
+        if (task.status === "ready") {
+          delete task.assessmentRetryAt;
+          if (task.workerRetry) task.workerRetry.nextAt = this.now();
+        }
+      }
+      this.event(draft, task, "status", `Decision recorded: ${requestId}; pending strategy consumption`);
+      return receipt;
+    });
+  }
+  /** Delivery receipt at an owned boundary; never a semantic approval. */
+  applyDecisions(id: string, token: string): Promise<ExecutionDecision[]> {
+    return this.mutate(draft => {
+      const task = this.owned(draft, id, token);
+      for (const d of task.decisions ?? []) if (d.state === "pending") {
+        d.state = "applied"; d.appliedAt = this.now(); d.appliedClaim = createHash("sha256").update(token).digest("hex");
+      }
+      return task.decisions ?? [];
+    });
+  }
+  private checkDecisionRevision(task: Execution, revision?: number): void {
+    if (revision !== undefined && revision !== (task.decisions?.length ?? 0))
+      throw new ExecutionDecisionConflict("Parent decision arrived at execution boundary");
+  }
+  fenceDecisions(id: string, token: string, revision: number): Promise<void> {
+    return this.mutate(draft => this.checkDecisionRevision(this.owned(draft, id, token), revision));
+  }
+  /** Only our own drained claim may yield; keep all evidence and intent. */
+  deferDecision(id: string, token: string): Promise<void> {
+    return this.mutate(draft => {
+      const task = this.owned(draft, id, token);
+      task.status = "ready";
+      delete task.token;
     });
   }
   answer(parent: string, id: string, questionId: string, text: string): Promise<void> {
@@ -384,15 +635,19 @@ export class ExecutionStore {
       if (typeof text !== "string" || !text.trim() || text.length > 8000) throw Error("Invalid answer");
       task.question.answer = text;
       task.status = "ready";
+      if (task.workerRetry) task.workerRetry.nextAt = this.now();
       this.event(draft, task, "status", "Antwort gespeichert; Ausführung bereit");
     });
   }
-  complete(id: string, token: string, result: string): Promise<void> {
+  complete(id: string, token: string, result: string, decisionRevision?: number): Promise<void> {
     return this.mutate(draft => {
       if (typeof result !== "string" || result.length > 64000) throw Error("Invalid execution result");
       const task = this.owned(draft, id, token);
+      this.checkDecisionRevision(task, decisionRevision);
       if (task.intent) throw Error("Unresolved effect intent");
       task.status = "completed";
+      delete task.assessmentHold;
+      delete task.workerRetry;
       task.terminalAt = this.now();
       task.result = result;
       delete task.token;
@@ -411,18 +666,104 @@ export class ExecutionStore {
       draft.events = draft.events.filter(event => event.parent !== parent);
     });
   }
+  /** Token fencing prevents a late failure from pausing a replacement claim. */
+  fail(id: string, token: string, code: ExecutionDiagnosticCode,
+    recovery?: { strategy: RecoveryStrategy; policy?: ExecutionRecoveryPolicy; assessmentHold?: Execution["assessmentHold"] }): Promise<void> {
+    return this.mutate(draft => {
+      const task = this.find(draft, id);
+      if (task.status !== "running" || task.token !== token) return;
+      task.status = task.intent ? "blocked" : "paused";
+      const priorHold = task.assessmentHold;
+      task.assessmentHold = recovery?.assessmentHold;
+      task.diagnosticCode = code;
+      if (!["runtime-failure", "worker-failed"].includes(code)) delete task.workerRetry;
+      if (code === "worker-failed" || code === "worker-cancelled") task.recoverySession = `dispatch:${task.id}:${token}`;
+      else task.recoverySession ??= `dispatch:${task.id}:${token}`;
+      delete task.token;
+      const scheduled = recovery && this.scheduleWorkerRetry(task, recovery.strategy, recovery.policy);
+      this.event(draft, task, "status", scheduled
+        ? task.assessmentHold ? "Unabhängige Prüfung meldet weiter eine Blockade oder externe Wartebedingung. Ursache prüfen; Dispatcher bewertet automatisch erneut, ohne abgeschlossene Effekte zu wiederholen."
+          : "Interne Ausführungsunterbrechung; automatischer Wiederanlauf nach Backoff, keine Nutzeraktion erforderlich."
+        : code === "deadline-expired" ? `${task.status}: deadline-expired` : task.status,
+        !!task.assessmentHold && (priorHold?.state !== task.assessmentHold.state || priorHold?.step !== task.assessmentHold.step));
+    });
+  }
+  /** Host-only recovery of a failed worker. Preserve intent and transcript;
+   * the matching strategy must reconcile uncertain effects in a new worker claim.
+   * Manual pauses, semantic blockers, questions and expired authority never qualify.
+   */
+  retryWorker(id: string, strategy: RecoveryStrategy, policy?: ExecutionRecoveryPolicy): Promise<void> {
+    return this.mutate(draft => {
+      const task = this.find(draft, id);
+      const reason = task.recoveryReason;
+      if (this.scheduleWorkerRetry(task, strategy, policy, false))
+        this.event(draft, task, "status", "Interne Pause mit dauerhaftem automatischem Wiederanlauf und Backoff; keine Nutzeraktion erforderlich.");
+      else if (task.recoveryReason && task.recoveryReason !== reason)
+        this.event(draft, task, "status", task.diagnosticCode === "deadline-expired"
+          ? "Auftragsfrist abgelaufen; automatische Wiederaufnahme beendet."
+          : "Automatische Wiederaufnahme durch konfigurierte Recovery-Regel verhindert; gespeicherte Ursache prüfen.");
+    });
+  }
+  private scheduleWorkerRetry(task: Execution, strategy: RecoveryStrategy, policy?: ExecutionRecoveryPolicy, newFailure = true): boolean {
+    if (task.recoveryEnrollment === "held-legacy" || !["blocked", "paused", "ready"].includes(task.status) ||
+        !["worker-failed", "runtime-failure"].includes(task.diagnosticCode ?? "") ||
+        task.parentStopped || task.question && !task.question.answer) return false;
+    if (task.dependency?.expiresAt !== undefined && task.dependency.expiresAt <= this.now()) {
+      task.status = task.intent ? "blocked" : "paused";
+      task.diagnosticCode = "deadline-expired";
+      task.recoveryReason = "Execution mandate deadline expired; no automatic work is authorized.";
+      delete task.workerRetry;
+      return false;
+    }
+    if (task.classifierReceipt !== undefined && task.classifierReceipt.phase !== "observed") {
+      task.status = task.intent ? "blocked" : "paused";
+      task.recoveryReason = "Classifier HTTP outcome unknown; retained receipt forbids automatic replay.";
+      delete task.workerRetry;
+      return false;
+    }
+    if (!strategy.reconcile) {
+      if (task.workerRetry) {
+        task.status = task.intent ? "blocked" : "paused";
+        task.recoveryReason = "Matching strategy no longer supports reconciliation; automatic work held.";
+        delete task.workerRetry;
+      }
+      return false;
+    }
+    const reason = recoveryBlock(task, strategy, policy);
+    if (reason) { task.status = task.intent ? "blocked" : "paused"; task.recoveryReason = reason; delete task.workerRetry; return false; }
+    delete task.recoveryReason;
+    if (!newFailure && task.workerRetry) {
+      if (task.workerRetry.nextAt > this.now()) return false;
+      if (task.status === "ready") return false; // eligible ready retry may now be claimed
+      task.status = "ready";
+      return true;
+    }
+    const attempts = Math.min(Number.MAX_SAFE_INTEGER, (task.workerRetry?.attempts ?? 0) + 1);
+    task.workerRetry = { attempts, nextAt: this.now() + Math.min(300000, 15000 * 2 ** Math.min(attempts - 1, 5)) };
+    // Runtime/validator holds stay observable during backoff, but unlike manual
+    // pauses have a durable wake-up owner. Worker transport retries keep ready.
+    task.status = task.diagnosticCode === "runtime-failure" ? (task.intent ? "blocked" : "paused") : "ready";
+    return true;
+  }
   control(id: string, action: "pause" | "resume" | "cancel"): Promise<void> {
     return this.mutate(draft => {
       const task = this.find(draft, id);
       if (["completed", "cancelled"].includes(task.status)) return;
       if (action === "resume") {
+        if (task.dependency?.expiresAt !== undefined && task.dependency.expiresAt <= this.now()) throw new ExecutionDeadlineExpired();
         if (task.status !== "paused" || task.intent || (task.question && task.question.answer === undefined)) throw Error("Execution cannot resume without resolving its blocker");
+        task.recoveryEnrollment = "current";
         task.status = "ready";
+        if (task.workerRetry) task.workerRetry.nextAt = this.now();
+        delete task.diagnosticCode;
       } else if (action === "pause") {
         // Pause is not a blocker-resolution API. Revoking an in-flight effect
         // leaves its outcome ambiguous, even before startup recovery runs.
-        if (task.status === "blocked") return;
-        task.status = task.intent ? "blocked" : "paused";
+        // An existing blocker retains its effects; explicit pause adds a hold.
+        if (task.status !== "blocked") task.status = task.intent ? "blocked" : "paused";
+        task.diagnosticCode = "manual-pause";
+        delete task.assessmentHold;
+        delete task.workerRetry;
       } else { task.status = "cancelled"; task.terminalAt = this.now(); }
       // Revoke the old worker before any replacement can claim the task.
       delete task.token;
@@ -431,11 +772,11 @@ export class ExecutionStore {
   }
   /** Startup reconstruction is separate from scheduling. Unknown strategies/versions
    * and ambiguous external effects stay blocked. Both old and new replay policy must agree. */
-  recover(strategies: ReadonlyMap<string, RecoveryStrategy>, restartLimit?: number, policy?: ExecutionRecoveryPolicy): Promise<void> {
+  recover(strategies: ReadonlyMap<string, RecoveryStrategy>, restartLimit?: number, policy?: ExecutionRecoveryPolicy, enabled: (task: Execution) => boolean = () => true): Promise<void> {
     if (restartLimit !== undefined && (!Number.isSafeInteger(restartLimit) || restartLimit < 0)) throw Error("Invalid recovery restart limit");
     return this.mutate(draft => {
       for (const task of draft.executions) {
-        if (!["ready", "running"].includes(task.status)) continue;
+        if (!enabled(task) || !["ready", "running"].includes(task.status)) continue;
         const strategy = strategies.get(task.strategy);
         const interrupted = task.status === "running";
         if (interrupted) task.restarts++;
@@ -460,9 +801,12 @@ export class ExecutionStore {
         delete task.token;
         const reason = restartLimit !== undefined && task.restarts >= restartLimit
           ? `Recovery restart limit ${restartLimit} reached; inspect evidence and resolve before retrying.`
-          : recoveryBlock(task, strategy, policy);
+          : task.classifierReceipt && task.classifierReceipt.phase !== "observed"
+            ? "Classifier HTTP outcome unknown; retained receipt forbids automatic replay."
+            : recoveryBlock(task, strategy, policy);
         if (reason) {
           task.recoveryReason = reason;
+          delete task.workerRetry;
           task.status = "blocked";
           this.event(draft, task, "status", reason);
         } else { task.status = "ready"; delete task.recoveryReason; }
@@ -482,9 +826,11 @@ export class ExecutionStore {
       if (!task.recoverySession && task.token && task.intent) task.recoverySession = `dispatch:${task.id}:${task.token}`;
       delete task.token;
       (task.resolutions ??= []).push({ actor, action, evidence, at: this.now() });
+      task.recoveryEnrollment = "current";
       task.recoveryGrant = { action, restarts: task.restarts };
       delete task.recoveryReason;
       task.status = "ready";
+      if (task.workerRetry) task.workerRetry.nextAt = this.now();
       this.event(draft, task, "status", `${actor}: ${action}; uncertain effects may duplicate. Evidence: ${evidence}`);
     });
   }
@@ -515,4 +861,20 @@ export class ExecutionStore {
   ack(eventId: string): Promise<void> {
     return this.mutate(draft => { draft.events = draft.events.filter(event => event.id !== eventId); });
   }
+}
+
+function validDecisionInput(requestId: unknown, text: unknown): boolean {
+  return typeof requestId === "string" && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(requestId) &&
+    typeof text === "string" && !!text.trim() && Buffer.byteLength(text, "utf8") <= 4000;
+}
+
+function validAddress(value: unknown): value is import("./types.js").Address {
+  const a = value as import("./types.js").Address;
+  return !!a && typeof a === "object" && typeof a.channel === "string" && !!a.channel && typeof a.target === "string" && !!a.target &&
+    (a.thread === undefined || typeof a.thread === "string") && Object.keys(a).every(k => ["channel", "target", "thread"].includes(k));
+}
+
+/** Delivery target of an execution: task anchor, else submitting turn's origin, else configured home. Never another session's address. */
+export function executionTarget(task: Pick<Execution, "dependency" | "origin"> | undefined, home: import("./types.js").Address | undefined): import("./types.js").Address | undefined {
+  return task?.dependency?.anchor?.replyTo ?? task?.origin ?? home;
 }

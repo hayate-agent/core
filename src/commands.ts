@@ -2,6 +2,8 @@
  * Hermes-compatible slash commands (gateway-relevant subset; TUI-only commands are left out).
  * Names and aliases follow hermes_cli/commands.py so operators can keep their habits.
  */
+import { validateModelRoles } from "./model-roles.js";
+import { McpUserError } from "./mcp-management.js";
 import type { PluginCommand, PluginUI } from "./plugins.js";
 import { developmentGuide } from "./development.js";
 import { randomUUID } from "node:crypto";
@@ -12,15 +14,18 @@ import { type SkillInfo, skillInvocationPrompt } from "./skills.js";
 import type { BusyMode, Inbound } from "./types.js";
 
 import { BUILD_INFO } from "./build-info.js";
+import { renderBenchmarkReport } from "./benchmark/report.js";
 export const VERSION = BUILD_INFO.version;
 
 export interface CommandContext {
   harness: Harness;
+  mcp?: import("./mcp-management.js").McpManagement;
   modelSettings?: {
     get: () => import("./model-settings.js").ModelSettings;
     source?: (key: import("./model-settings.js").ModelSetting) => string;
     set: (key: import("./model-settings.js").ModelSetting, value?: string) => Promise<void>;
   };
+  modelRoles?: { get(): import("./model-roles.js").ModelRoles | undefined; set(value: import("./model-roles.js").ModelRoles | undefined): Promise<void> };
   scheduler?: Scheduler;
   updater?: import("./update.js").OverlayUpdater;
   /** Mutable approval settings shared with the runtime. */
@@ -39,11 +44,14 @@ export interface CommandContext {
   /** Who may resolve approvals. Empty: same as admins. Independent of admin rights otherwise. */
   approvers?: string[];
   agent: string;
+  cwdFor?: (sessionKey: string) => string;
   pluginCommands?: ReadonlyMap<string, PluginCommand>;
   pluginUI?: () => PluginUI | undefined;
   localSessionKey?: () => string;
   /** Graceful restart (supervisor brings the process back). */
   restart: () => Promise<void>;
+  /** Pinned model/reasoning benchmarking; absent when the dispatcher is not enabled. */
+  benchmark?: import("./benchmark/index.js").BenchmarkService;
 }
 
 interface Command {
@@ -129,6 +137,39 @@ function recurringCommand(kind: "heartbeat" | "loop"): Command["run"] {
 
 export const COMMANDS: Command[] = [
   {
+    name: "model-roles", admin: true, help: "Inspect or configure persistent model roles",
+    run: async (args, input, ctx) => {
+      // Unlike historical openAdmin commands, this surface is never public.
+      if (input.source !== "channel" || !(input.replyTo?.channel === "console" || (!!input.sender && ctx.admins.includes(input.sender)))) return "⛔ authenticated admin only";
+      if (!ctx.modelRoles) throw Error("Model roles unavailable");
+      const { modelRoleNames } = await import("./model-roles.js");
+      const parts = args.trim().split(/\s+/);
+      const [op, role, model, thinking] = parts;
+      if (!args.trim() || op === "show") return JSON.stringify(ctx.modelRoles.get() ?? { enabled: false });
+      let value = structuredClone(ctx.modelRoles.get() ?? { enabled: false });
+      if ((op === "enable" || op === "disable") && parts.length === 1) value.enabled = op === "enable";
+      else if (op === "reset" && parts.length === 1) { await ctx.modelRoles.set(undefined); return "model roles reset (next route)"; }
+      else if (op === "set" && (parts.length === 3 || parts.length === 4) && modelRoleNames.includes(role as any)) {
+        value.roles ??= {}; value.roles[role as import("./model-roles.js").ModelRole] = { model, ...(thinking ? { thinking } : {}) };
+      } else if (op === "reset" && parts.length === 2 && modelRoleNames.includes(role as any)) delete value.roles?.[role as import("./model-roles.js").ModelRole];
+      else return "usage: /model-roles [show|enable|disable|set <role> <provider/model> [thinking]|reset [role]]";
+      validateModelRoles(value);
+      await ctx.modelRoles.set(value);
+      return "model roles saved (next route; active turns unchanged)";
+    },
+  },
+  {
+    name: "task-resume", admin: true,
+    help: "<task-id> — explicitly enroll one held historical task in this conversation; preserve deadlines and budgets",
+    run: async (args, input, ctx) => {
+      if (input.source !== "channel" || !(input.replyTo?.channel === "console" ||
+          !!input.sender && ctx.admins.includes(input.sender))) return "⛔ authenticated operator channel required";
+      const [id, extra] = args.trim().split(/\s+/);
+      if (!id || extra) return "usage: /task-resume <exact-task-id>";
+      return ctx.harness.resumeHeldTask(input.sessionKey, id);
+    },
+  },
+  {
     name: "task-budget", admin: true,
     help: "inspect|reset|resume|reset-resume <session-key> <task-id> [<token> <request-id>] (authenticated operator only)",
     run: async (args, input, ctx) => {
@@ -150,6 +191,64 @@ export const COMMANDS: Command[] = [
   },
   // -- Session
   {
+    name: "hashtags", help: "List tags or find retained messages: /hashtags [#slug]",
+    run: async (args, input, ctx) => {
+      const refs = ctx.harness.state(input.sessionKey).hashtags ?? [];
+      if (!args.trim()) return [...new Set(refs.map(ref => ref.tag))].sort().map(tag => `#${tag}`).join("\n") || "No hashtags indexed yet.";
+      if (!/^#[a-zA-Z][a-zA-Z0-9]*(?:-[a-zA-Z0-9]+)*$/.test(args.trim())) return "usage: /hashtags [#slug]";
+      const matches = refs.filter(ref => ref.tag === args.trim().slice(1).toLowerCase());
+      if (!matches.length) return "No references for this hashtag.";
+      const rows: string[] = [];
+      for (const ref of matches) {
+        try {
+          if (!ctx.harness.runtime.sessionHistory) throw new Error("Runtime history retrieval unavailable");
+          const entries = await ctx.harness.runtime.sessionHistory(input.sessionKey, ref.sessionId);
+          const message = entries.find(entry => entry.id === ref.messageId && entry.role === "user");
+          if (!message) throw new Error("Referenced message no longer retained");
+          rows.push(`${ref.date} · ${ref.sessionId}\n  ${message.text.replace(/\s+/g, " ").slice(0, 180)}\n  /resume ${ref.sessionId}`);
+        } catch (error) {
+          rows.push(`${ref.date} · ${ref.sessionId} · unavailable: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
+      return rows.join("\n");
+    },
+  },
+  // -- Benchmark
+  {
+    name: "benchmark", admin: true, help: "Pinned model benchmarks: /benchmark [list|status|report [suite]|<suite>]",
+    run: async (args, input, ctx) => {
+      const service = ctx.benchmark;
+      if (!service) return "Benchmarking ist hier nicht verfügbar (Dispatcher aktiviert sein).";
+      const parts = args.trim().split(/\s+/).filter(Boolean);
+      const sub = (parts[0] ?? "").toLowerCase();
+      const status = service.status();
+      const summary = [
+        `Benchmark ${status.enabled ? "aktiv" : "deaktiviert"} · capacity ${status.config.capacity} · repeats ${status.config.repeats} · Fall-Budget ${Math.round(status.config.caseTimeoutMs / 60_000)} min`,
+        `Suites: ${status.suitesDir}`,
+        status.running ? `Läuft: ${status.running.suite} seit ${new Date(status.running.startedAt).toISOString()}` : "",
+      ].filter(Boolean).join("\n");
+      if (!sub || sub === "list") {
+        const suites = await service.suites();
+        return `${summary}\n${suites.length ? `Bekannte Suites: ${suites.join(", ")}` : "Noch keine Suite angelegt."}\nStart: /benchmark <suite> · Bericht: /benchmark report [suite]`;
+      }
+      if (sub === "status") return summary;
+      if (sub === "report") return await service.report(parts[1]);
+      if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(sub)) return "usage: /benchmark [list|status|report [suite]|<suite>]";
+      if (!status.enabled) return `Benchmark "${sub}" ist deaktiviert. benchmark.enabled in den Settings setzen.`;
+      const report = (text: string) => ctx.harness.deliver(undefined, text).catch(() => undefined);
+      const running = service.run(sub, input.sessionKey, outcome => void report(
+        `Benchmark ${outcome.caseId}#${outcome.repeat} [${outcome.pin.thinking}] ${outcome.status} · `
+        + `${outcome.attempts.length} Attempt(s) · `
+        + `${outcome.fixed.length ? `fixed: ${outcome.fixed.join(",")}` : "nichts gefixt"}`
+        + `${outcome.tampered.length ? ` · manipuliert: ${outcome.tampered.join(",")}` : ""} · `
+        + `${outcome.thinkingLevel ? `gesehen ${outcome.model}/${outcome.thinkingLevel} · ` : ""}`
+        + (outcome.verified ? "verifiziert" : "NICHT verifiziert")));
+      void running.then(record => report(renderBenchmarkReport([record])),
+        error => report(`Benchmark ${sub} fehlgeschlagen: ${error instanceof Error ? error.message : String(error)}`));
+      return `Benchmark "${sub}" gestartet. Fortschritt und Bericht kommen, während die lokalen Worker laufen. Aufzeichnung: ${status.runsDir}`;
+    },
+  },
+  {
     name: "sessions", help: "List conversation sessions: /sessions [page]",
     run: async (args, input, ctx) => {
       const page = args.trim() ? Number(args) : 1;
@@ -170,10 +269,10 @@ export const COMMANDS: Command[] = [
   {
     name: "new",
     aliases: ["reset"],
-    help: "Start a new session (fresh history)",
+    help: "Fresh context; abort parent turn/drop parent queue, not durable tasks or recurring sources",
     run: async (_a, input, ctx) => {
       await ctx.harness.resetSession(input.sessionKey);
-      return "🆕 New session.";
+      return `🆕 Fresh context in the same conversation; parent turn aborted if running and parent queue discarded.\n${ctx.harness.remainingWorkNotice(input.sessionKey)}`;
     },
   },
   {
@@ -182,7 +281,7 @@ export const COMMANDS: Command[] = [
     run: async (_a, input, ctx) => {
       const last = ctx.harness.state(input.sessionKey).lastInput;
       if (!last) return "nothing to retry";
-      ctx.harness.enqueue({ ...last });
+      await ctx.harness.enqueueChannel({ ...last }, true);
     },
   },
   {
@@ -213,10 +312,10 @@ export const COMMANDS: Command[] = [
   },
   {
     name: "stop",
-    help: "Stop the running turn and clear this session's queue",
+    help: "Revoke this conversation's turn, queue, continuations and children; recurring sources stay enabled",
     run: async (_a, input, ctx) => {
       const dropped = await ctx.harness.stopConversation(input.sessionKey);
-      return `⏹️ Stopped${dropped ? `, ${dropped} queued dropped` : ""}.`;
+      return `⏹️ Stopped${dropped ? `, ${dropped} queued dropped` : ""}. Recurring sources are unchanged: enabled loops, heartbeats, standing goals and cron schedules can create new work. External effects already performed are not rolled back.`;
     },
   },
   {
@@ -231,7 +330,7 @@ export const COMMANDS: Command[] = [
         s.queue.length = 0;
         return "queue cleared";
       }
-      ctx.harness.enqueue({ ...input, text: a });
+      await ctx.harness.enqueueChannel({ ...input, text: a });
       return s.running ? `queued (#${s.queue.length})` : undefined;
     },
   },
@@ -243,7 +342,7 @@ export const COMMANDS: Command[] = [
       const s = ctx.harness.state(input.sessionKey);
       if (!args.trim()) return "usage: /steer <text>";
       if (!s.running || !s.session) {
-        ctx.harness.enqueue({ ...input, text: args.trim() });
+        await ctx.harness.enqueueChannel({ ...input, text: args.trim() });
         return;
       }
       await s.session.steer(args.trim());
@@ -423,7 +522,7 @@ export const COMMANDS: Command[] = [
         return `personality: ${ctx.personality.current ?? "none"}\navailable: ${all.join(", ") || "none"}`;
       }
       await ctx.personality.set(a === "none" ? undefined : a);
-      return `personality: ${a} (use /new to apply to this conversation)`;
+      return `personality: ${a} (applies on the next model call)`;
     },
   },
   {
@@ -515,6 +614,34 @@ export const COMMANDS: Command[] = [
     },
   },
   {
+    name: "reload-models",
+    aliases: ["reload_models"],
+    admin: true,
+    help: "Reload provider/model configuration; preserve model choices and update idle sessions at their next turn",
+    run: async (_a, _i, ctx) => {
+      if (!ctx.harness.runtime.reloadModels) throw Error("This runtime does not support model catalog reload");
+      await ctx.harness.runtime.reloadModels();
+      const queued = await ctx.harness.retryTopicLabels();
+      return `Model catalog reloaded; existing model selections are preserved and refreshed on their next turn. ${queued} queued topic-label retry/retries released.`;
+    },
+  },
+  {
+    name: "mcp",
+    admin: true,
+    help: "Manage MCP servers, connections, tools and OAuth: /mcp help",
+    run: async (args, input, ctx) => {
+      if (!ctx.mcp) return "MCP management is unavailable in this runtime";
+      const op = {
+        owner: JSON.stringify([input.replyTo?.channel ?? "console", input.replyTo?.target ?? "local", input.replyTo?.thread ?? null, input.sender ?? "console:local", input.sessionKey]),
+        cwd: ctx.cwdFor?.(input.sessionKey) ?? process.cwd(),
+        notify: (text: string) => ctx.harness.post(input, text),
+        ui: input.replyTo?.channel === "console" && input.sessionKey === (ctx.localSessionKey?.() ?? "console:local") ? ctx.pluginUI?.() : undefined,
+      };
+      try { return args.trim() ? await ctx.mcp.execute(args, op) : await ctx.mcp.menu(op); }
+      catch (error) { return error instanceof McpUserError ? error.message : "MCP operation failed. Check the server name/configuration and /mcp status. Credential and callback details are withheld. /mcp help lists commands."; }
+    },
+  },
+  {
     name: "reload-skills",
     aliases: ["reload_skills", "reload-mcp", "reload_mcp"],
     help: "Re-scan skills; reload session resources/MCP before each session's next turn",
@@ -557,19 +684,19 @@ export const COMMANDS: Command[] = [
   {
     name: "help",
     aliases: ["commands"],
-    help: "Show Harness commands and registered plugin commands",
+    help: "Show Hayate Agent commands and registered plugin commands",
     run: async (_args, _input, ctx) => {
       const commands = [
-        ...COMMANDS.map((c) => ({ ...c, origin: "Harness" })),
+        ...COMMANDS.map((c) => ({ ...c, origin: "Hayate Agent" })),
         ...[...(ctx.pluginCommands?.values() ?? [])].map((c) => ({ ...c, aliases: undefined, origin: "Plugin" })),
       ].sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
       const group = (admin: boolean) => commands.filter((c) => Boolean(c.admin) === admin)
         .map((c) => `/${c.name}${c.aliases?.length ? ` (${c.aliases.map((a) => `/${a}`).join(" ")})` : ""}${c.admin ? " [admin]" : ""} [${c.origin}]: ${c.help}`).join("\n");
-      return `VanillaCore Agent Harness commands ([admin] requires administrator access):\n\nGeneral commands:\n${group(false)}\n\nAdmin commands:\n${group(true)}`;
+      return `Hayate Agent commands ([admin] requires administrator access):\n\nGeneral commands:\n${group(false)}\n\nAdmin commands:\n${group(true)}`;
     },
   },
-  { name: "harness", help: "Locate built-in Harness customization/development guide", run: async () => `VanillaCore Agent Harness development guide: ${developmentGuide}\nRead this guide before changing the Harness. Identity/voice, tools and models are configurable; native plugins support commands/channels/model tools/text panels/lifecycle (see plugins.md); interactive plugin dialogs are available locally; automatic runtime promotion remains planned.` },
-  { name: "version", help: "Show version", run: async (_a, _i, ctx) => `vanillacore-harness ${VERSION} (runtime: ${ctx.harness.runtime.name})` },
+  { name: "harness", help: "Locate built-in Hayate Agent customization/development guide", run: async () => `Hayate Agent development guide: ${developmentGuide}\nRead this guide before changing Hayate Agent. Identity/voice, tools and models are configurable; native plugins support commands/channels/model tools/text panels/lifecycle (see plugins.md); interactive plugin dialogs are available locally; automatic runtime promotion remains planned.` },
+  { name: "version", help: "Show version", run: async (_a, _i, ctx) => `Hayate Agent ${VERSION} (runtime: ${ctx.harness.runtime.name})` },
 ];
 
 const BY_NAME = new Map<string, Command>();
@@ -635,7 +762,7 @@ export function installCommands(ctx: CommandContext): void {
         if (plugin.admin && !isAdmin(ctx, input)) reply(ctx, input, "⛔ admin only");
         else {
           try {
-            const text = await plugin.run(parsed.args, { sessionKey: input.sessionKey, sender: input.sender,
+            const text = await plugin.run(parsed.args, { sessionKey: input.sessionKey, sender: input.sender, cwd: ctx.cwdFor?.(input.sessionKey),
               ui: input.replyTo?.channel === "console" && input.sessionKey === (ctx.localSessionKey?.() ?? "console:local") ? ctx.pluginUI?.() : undefined });
             if (text) reply(ctx, input, text);
           } catch { reply(ctx, input, `⚠️ /${plugin.name}: plugin command failed (details withheld)`); }
@@ -647,7 +774,7 @@ export function installCommands(ctx: CommandContext): void {
       await ctx.reloadSkills();
       const skill = ctx.skills().find((s) => s.name === parsed.name);
       if (!skill) return false;
-      ctx.harness.enqueue({ ...input, text: skillInvocationPrompt(skill, parsed.args) });
+      await ctx.harness.enqueueChannel({ ...input, text: skillInvocationPrompt(skill, parsed.args) });
       return true;
     }
     let out: string | void;

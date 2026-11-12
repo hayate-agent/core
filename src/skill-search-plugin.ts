@@ -23,10 +23,10 @@ export function skillSearchPlugin(catalog: SkillCatalog): PluginModule {
         additionalProperties: false,
       },
       async execute(input) {
-        const q = String(input.query).toLowerCase();
+        const q = String(input.query).trim().toLowerCase();
         const limit = Math.max(1, Math.min(20, Number(input.limit) || 8));
         const hits = catalog.skills
-          .filter((s) => s.name.toLowerCase().includes(q) || s.description.toLowerCase().includes(q))
+          .filter((s) => q.length > 0 && (s.name.toLowerCase().includes(q) || s.description.toLowerCase().includes(q)))
           .slice(0, limit)
           .map((s) => ({ name: s.name, description: s.description }));
         return hits.length

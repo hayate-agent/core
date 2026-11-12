@@ -33,35 +33,47 @@ test("answered informational turn with independent completed verdict stays compl
   } finally { await h.stop(0); }
 });
 
-for (const mode of ["interrupted", "unavailable", "inconclusive", "failed", "mismatched"] as const) {
+for (const mode of ["interrupted", "unavailable", "inconclusive", "failed", "mismatched", "invalid", "exhausted", "technical", "parse", "technical-saved", "parse-saved"] as const) {
   test(`${mode}: actionable notice crosses disk/restart/delivery barriers once without raw diagnostics`, async () => {
     const home = await mkdtemp(path.join(os.tmpdir(), "actionable-recovery-"));
     const store = new StateStore(path.join(home, "state.json"));
     const channel = new MemoryChannel();
-    const task: DurableTask = { id: "retained", original: "Was ist mit Deinem Self-Improvement?!", state: "active", depth: 2 };
+    const task: DurableTask = { id: "retained", original: "Was ist mit Deinem Self-Improvement?!", lastReply: "PRIVATE_RESULT_EVIDENCE", state: "active", depth: 2 };
     if (mode === "interrupted") task.recoveryAssessment = "claimed";
-    // Integration with bounded retries: attention is emitted only after the
-    // third inconclusive/failed attempt, never on the first transient failure.
+    // Retry counts do not terminalize inference; notices remain durable and deduplicated.
     if (mode === "inconclusive" || mode === "failed")
       task.recoveryRetry = { attempts: 2, nextAt: 0 };
+    if (mode === "invalid" || mode === "exhausted") task.recoveryRetry = { attempts: mode === "invalid" ? 0 : 3, nextAt: 0 };
+    if (mode === "technical" || mode === "parse") task.recoveryRetry = { attempts: 2, nextAt: 0 };
+    if (mode === "technical-saved" || mode === "parse-saved") {
+      task.recoveryAssessment = "decided";
+      task.recoveryRetry = { attempts: 3, nextAt: 0, diagnostic: mode === "technical-saved" ? "technical" : "invalid_response" };
+    }
     if (mode === "mismatched") {
       task.next = "Verify existing effects";
       task.recoveryAssessment = "decided";
       task.recoveryAdmission = { id: "task:retained:3", depth: 3, next: "different", original: task.original };
     }
     const runtime = new FakeRuntime();
-    const h = new Harness({ runtime, tickMs: 60000, ...(mode === "unavailable" ? {} : { completionCheck: async () => {
+    const h = new Harness({ runtime, tickMs: 60000, gateways: { recoveryDiagnostics: true }, ...(mode === "unavailable" ? {} : { completionCheck: async (input, reply, signal, diagnostic) => {
+      assert.notEqual(mode, "invalid");
+      if (["technical", "parse", "technical-saved", "parse-saved"].includes(mode)) return assessCompletion({ review: async () => {
+        if (mode === "technical" || mode === "technical-saved") throw Error("PRIVATE_PROVIDER_TOKEN raw provider error");
+        return "PRIVATE_PROVIDER_TOKEN invalid JSON";
+      } }, input, reply, { task: input.completionAnchor!.task }, signal, undefined, undefined, undefined, diagnostic);
       if (mode === "failed") throw Error("PRIVATE_PROVIDER_TOKEN raw provider error");
       return undefined;
     } }) });
-    h.addChannel(channel); h.restoreSessions([{ key, task, replyTo: { channel: "mem", target: "room1" } }]);
+    h.addChannel(channel);
+    await store.save({ version: 1, paused: false, busyMode: "queue", sessions: [{ key, task, replyTo: { channel: "mem", target: "room1" } }] });
+    h.restoreSessions((await store.load())!.sessions);
     let offline = true;
     const save = () => store.save({ version: 1, paused: false, busyMode: "queue", sessions: h.snapshotSessions(), pending: h.pendingInputs(), outbox: h.outboxEntries() });
     h.onStateChange = async () => { if (offline) throw Error("disk unavailable"); await save(); };
     let next: Harness | undefined;
     try {
-      // Persist the assessment claim first; fail the subsequent attention barrier.
-      if (mode === "inconclusive" || mode === "failed") {
+      // Persist the assessment claim first; fail the subsequent recovery barrier.
+      if (["inconclusive", "failed", "technical", "parse", "technical-saved", "parse-saved", "exhausted"].includes(mode)) {
         h.onStateChange = async () => {
           if (h.state(key).task?.recoveryAssessment === "claimed") await save();
           else if (offline) throw Error("disk unavailable"); else await save();
@@ -70,20 +82,70 @@ for (const mode of ["interrupted", "unavailable", "inconclusive", "failed", "mis
       await assert.rejects(h.recoverTasks(), /disk unavailable/);
       assert.equal(channel.sent.length, 0);
       assert.equal(h.pendingInputs().length, 0);
+      const retrying = !["interrupted", "unavailable", "invalid", "mismatched"].includes(mode);
+      if (mode === "interrupted" || mode === "unavailable") {
+        assert.equal(h.state(key).task!.state, "blocked");
+        assert.match(h.state(key).task!.next!, /Independent supervisor admission unavailable/);
+        assert.equal(h.state(key).task!.recoveryAdmission, undefined);
+        assert.equal(h.outboxEntries().length, 0);
+        offline = false; await save();
+        const checkpoint = (await store.load())!;
+        const saved = checkpoint.sessions[0]!.task!;
+        assert.equal(saved.state, "blocked");
+        if (mode === "technical" || mode === "parse") {
+          assert.equal(saved.recoveryRetry?.attempts, 3);
+          assert.equal(saved.recoveryRetry?.diagnostic, mode === "technical" ? "technical" : "invalid_response");
+        }
+        assert.doesNotMatch(JSON.stringify(checkpoint), /PRIVATE_PROVIDER_TOKEN|raw provider error/);
+        let turns = 0;
+        next = new Harness({ runtime: new FakeRuntime(() => { turns++; return "Receipt verified"; }), tickMs: 60000,
+          completionCheck: async () => ({ state: "completed" }) }); next.addChannel(channel);
+        next.restoreSessions(checkpoint.sessions); next.restorePending(checkpoint.pending ?? []);
+        next.onStateChange = () => store.save({ ...checkpoint, sessions: next!.snapshotSessions(), pending: next!.pendingInputs() });
+        await next.recoverTasks();
+        assert.equal(next.pendingInputs().length, 0);
+        next.releaseRestored(); await next.drained();
+        await next.tick(); await next.drained();
+        assert.equal(turns, 0);
+        assert.equal(next.state(key).task!.state, "blocked");
+        return;
+      }
       assert.equal(h.outboxEntries().length, 1);
       const notice = h.outboxEntries()[0]!;
-      assert.match(notice.text, /Auftrag: Was ist mit Deinem Self-Improvement/);
-      assert.match(notice.text, /Verifizierter Stand:/);
-      assert.match(notice.text, /Entscheidung nötig:/);
-      assert.match(notice.text, /konkreten nächsten Schritt/);
+      assert.match(notice.text, /^Recovery assessment paused:/);
+      assert.match(notice.text, /Task: "retained"/);
+      assert.match(notice.text, /completion is unverified/);
+      assert.match(notice.text, /\/task-budget inspect/);
+      assert.ok(notice.text.length < 800);
+      assert.doesNotMatch(notice.text, /Recovery angehalten|Auftrag:|Self-Improvement|PRIVATE_RESULT_EVIDENCE|UNVERIFIED EVIDENCE/);
       assert.doesNotMatch(notice.text, /PRIVATE_PROVIDER_TOKEN|raw provider error|fehlende Berechtigung|operator reconciliation required/);
-      const reason = { interrupted: /unterbrochen/, unavailable: /nicht konfiguriert/, inconclusive: /Bewertungsbudget ist ausgeschöpft/, failed: /fehlgeschlagen/, mismatched: /passt nicht/ }[mode];
+      const reason = { interrupted: /no durable result/, unavailable: /unavailable/, inconclusive: /invalid_response/, failed: /technical/, mismatched: /does not match/, invalid: /retry state is invalid/, exhausted: /invalid_response/, technical: /technical/, parse: /invalid_response/, "technical-saved": /technical/, "parse-saved": /invalid_response/ }[mode];
       assert.match(notice.text, reason);
+      if (mode === "invalid") assert.doesNotMatch(notice.text, /exhausted|3-attempt/);
+      if (retrying) {
+        assert.match(notice.text, /retried with backoff/);
+        assert.match(notice.id, /^task-recovery:/);
+        assert.equal(h.state(key).task!.termination, undefined);
+        assert.equal(h.state(key).task!.state, "active");
+      }
       offline = false; await save();
       const checkpoint = (await new StateStore(store.file).load())!;
-      assert.equal(checkpoint.sessions[0]!.task!.state, "blocked");
+      assert.equal(checkpoint.sessions[0]!.task!.state, retrying ? "active" : "blocked");
+      const savedRetry = checkpoint.sessions[0]!.task!.recoveryRetry;
+      if (mode === "technical" || mode === "parse") {
+        assert.equal(savedRetry?.attempts, 3);
+        assert.equal(savedRetry?.diagnostic, mode === "technical" ? "technical" : "invalid_response");
+      }
+      assert.equal(checkpoint.sessions[0]!.task!.depth, 2);
+      if (retrying) {
+        assert.equal(checkpoint.sessions[0]!.task!.termination, undefined);
+        assert.equal(checkpoint.sessions[0]!.task!.recoveryAttentionId, notice.id);
+        assert.equal(savedRetry?.attempts, ["technical-saved", "parse-saved", "exhausted"].includes(mode) ? 4 : 3);
+      }
+      assert.doesNotMatch(JSON.stringify(checkpoint), /PRIVATE_PROVIDER_TOKEN|raw provider error/);
       assert.equal(checkpoint.outbox![0]!.id, notice.id);
-      next = new Harness({ runtime: new FakeRuntime(), tickMs: 60000 }); next.addChannel(channel);
+      next = new Harness({ runtime: new FakeRuntime(), tickMs: 60000, gateways: { recoveryDiagnostics: true },
+        completionCheck: async () => { throw Error("not due"); } }); next.addChannel(channel);
       next.restoreSessions(checkpoint.sessions); next.restorePending(checkpoint.pending ?? []); next.restoreOutbox(checkpoint.outbox ?? []);
       next.onStateChange = () => store.save({ ...checkpoint, sessions: next!.snapshotSessions(), pending: next!.pendingInputs(), outbox: next!.outboxEntries() });
       await next.recoverTasks(); next.releaseRestored(); await next.drained();

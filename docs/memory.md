@@ -3,7 +3,7 @@
 Memory is a native Harness capability, not a PI session extension. Plugins can
 register `registerMemoryProvider(name, factory)`; `local` is reserved. Factories
 receive `{ home, config }` and return `MemoryProvider` from `src/memory.ts`.
-Local is bundled, enabled by default, and requires Linux `flock`. No SQLite,
+Local is bundled, enabled by default, and requires `flock` (Linux util-linux or macOS `brew install flock`). No SQLite,
 additional database, npm dependency or permanently running LLM is required.
 
 ## Configuration
@@ -107,7 +107,7 @@ not an automatic graph traversal or permission bypass.
 
 `/memory status|search <query>|show <id>|forget <id> <revision>|reindex` is admin-only.
 Automatic recall fetches up to `memory.recallLimit` (default 3, range 1–20, configurable
-via harness.yaml or settings.local.yaml) conversation-scoped memories, bounded to
+via hayate-agent.yaml or settings.local.yaml) conversation-scoped memories, bounded to
 5,000 characters and framed as untrusted historical data, never authorization.
 A read does not renew verification or expiry.
 

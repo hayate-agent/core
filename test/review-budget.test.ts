@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { captureChangeset, git } from "../src/changeset.js";
-import { reviewConfig } from "../src/review-config.js";
+import { reviewConfig } from "./review-test-config.js";
 import { ReviewService } from "../src/builtin-plugins/review.js";
 
 test("admin extension preserves history, persists and grants exactly two candidate-bound rounds", async t => {

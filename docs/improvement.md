@@ -3,7 +3,7 @@
 ## Strategy ownership
 
 The bundled work prompt, experiment receipt parser/deduplication, productivity and
-completion decisions, and bounded report renderer are owned by `harness/plugins`.
+completion decisions, and bounded report renderer are owned by [hayate-agent/plugins](https://github.com/hayate-agent/plugins).
 Core retains calendar scheduling, durable turn reservations/window checks, inbox/
 outbox coordination and the infrastructure-pinned evaluator/process runner. Existing
 state files and report archives require no migration.
@@ -84,9 +84,11 @@ bounds work.
 The controller policy is enabled by default, including when `<home>/improvement.yaml`
 is missing or omits `enabled`. An explicit `enabled: false` opts out and is preserved.
 Defaults remain 23:00–05:00 in the Harness timezone (UTC without an override),
-20 turns, `pullRequest: false`, `merge: false`, no evaluator and no report destination.
-Default enablement grants no new project access, publication or merge permission;
-independent evaluation and review protections are unchanged. A configured nightly
+20 turns, no implicit `pullRequest` or `merge` restriction, no evaluator and no
+report destination. An absent PR/merge setting is neither a prohibition nor a
+permission grant. Explicit boolean settings are reported as operator configuration.
+The prompt does not add mandatory review, evaluator-gated merge or GitOps-only
+rollout. Default enablement grants no new project access or delivery authority. A configured nightly
 strategy is still required. Reports use an explicit `reportTo`, then the Harness
 home address, otherwise local-only storage; no channel broadcast is inferred.
 The controller reads the policy on each scheduler check, without needing a
@@ -121,9 +123,9 @@ write releases the old night so subsequent nights can run. Local-only reports ar
 not automatically sent if a destination is configured later; retention is manual.
 The Harness home lock owns this controller.
 
-The prompt requires isolated experiments, baseline/acceptance criteria, tests,
-review, licensing/provenance and read-only authorized study of other agents. No
-foreign project reassignment or secret copying is permitted. Global pause is
+The prompt requests baseline/acceptance criteria, tests and licensing/provenance.
+The operator's task, SOUL and explicit settings define project scope and delivery
+workflow; the strategy does not impose a separate blanket foreign-project ban. Global pause is
 respected. No extra experiment starts at the morning boundary; an active turn is
 not forcibly aborted. Reports must not contain credentials or sensitive history.
 
@@ -182,5 +184,11 @@ night session cannot use another conversation's archives/memory implicitly; only
 explicitly authorized sources exposed by existing providers can be read.
 
 Enabling the file only activates a version that contains this controller. Publishing,
-merging and building do not update running installations. The five-minute work
-heartbeat is separate from this controller and not a structured task/run watchdog.
+merging and building do not update running installations. The controller's five-minute calendar tick retries a missed nightly start only
+inside the configured window. It retains the same night ID, turn budget, pause,
+foreground and strategy guards; completion callbacks remain state-only. Scheduled
+tick failures log only a fixed error class (never exception text/stack), at most
+once per five minutes per controller, and the next tick can retry.
+
+The five-minute work heartbeat is separate from this controller and not a
+structured task/run watchdog.

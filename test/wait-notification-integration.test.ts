@@ -1,3 +1,4 @@
+import { confirmNonproductive } from "./fakes.js";
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { Harness } from '../src/harness.js';
@@ -13,7 +14,7 @@ for (const depth of [19, 20]) {
     const host = new PluginHost();
     const channel = new MemoryChannel(); channel.editableProgress = true;
     const runtime = new FakeRuntime();
-    const h = new Harness({ runtime, now: () => 61000 });
+    const h = new Harness({ completionCheck: confirmNonproductive, runtime, now: () => 61000 });
     h.addChannel(channel);
     h.onStateChange = async () => {};
     h.restoreSessions([{ key, replyTo: { channel: 'mem', target: 'room1' }, task: {

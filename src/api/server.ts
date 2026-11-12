@@ -47,7 +47,8 @@ export interface ApiServerOptions {
   /** Unsent SSE bytes per connection before a slow client is dropped. */
   maxSseBufferBytes?: number;
   log?: (msg: string) => void;
-  updateAdmission?: Pick<Harness, "acquireUpdateAdmission" | "updateAdmissionStatus" | "releaseUpdateAdmission" | "withForegroundWork">;
+  updateAdmission?: Pick<Harness, "acquireUpdateAdmission" | "updateAdmissionStatus" | "releaseUpdateAdmission" | "withForegroundWork"> &
+    Partial<Pick<Harness, "prepareUpdateAdmission" | "releaseMaintenanceAdmission">>;
 }
 
 class HttpError extends Error {
@@ -104,7 +105,8 @@ export class ApiChannel implements Channel {
 
   /** Result of a run's turn (through the harness outbox: resolves once recorded durably). */
   async send(to: Address, text: string, meta?: SendMeta): Promise<void> {
-    await this.opts.runs.finish(to.target, text, meta?.outcome);
+    if (meta?.maintenance && meta.maintenance.state !== "blocked") return;
+    await this.opts.runs.finish(to.target, text, meta?.maintenance?.state === "blocked" ? "failed" : meta?.outcome);
   }
 
   turnEvent(to: Address, event: TurnEvent): void {
@@ -121,7 +123,7 @@ export class ApiChannel implements Channel {
   private async route(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const url = new URL(req.url ?? "/", "http://localhost");
     const p = url.pathname.replace(/\/+$/, "") || "/";
-    if (req.method === "GET" && (p === "/health" || p === "/v1/health")) return this.json(res, 200, { status: "ok", platform: "vanillacore-harness" });
+    if (req.method === "GET" && (p === "/health" || p === "/v1/health")) return this.json(res, 200, { status: "ok", platform: "hayate-agent" });
     if (!this.authorized(req)) throw new HttpError(401, "Invalid API key", "invalid_api_key");
     if (p === "/v1/update-admission") {
       const owner = this.opts.updateAdmission;
@@ -132,13 +134,24 @@ export class ApiChannel implements Channel {
         const ttl = body.ttl_ms ?? 60000;
         if (typeof ttl !== "number" || !Number.isSafeInteger(ttl) || ttl < 1000 || ttl > 300000)
           throw new HttpError(400, "ttl_ms must be an integer from 1000 to 300000", "invalid_request");
-        const result = owner.acquireUpdateAdmission(ttl);
-        return this.json(res, result.status === "admitted" ? 201 : result.status === "unavailable" ? 503 : 409, result);
+        if (body.mode !== undefined && body.mode !== "idle" && body.mode !== "maintenance")
+          throw new HttpError(400, "mode must be idle or maintenance", "invalid_request");
+        if (body.mode === "maintenance" && (!owner.prepareUpdateAdmission || typeof body.request_id !== "string" ||
+            !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(body.request_id) ||
+            (body.timeout_ms !== undefined && (typeof body.timeout_ms !== "number" || !Number.isSafeInteger(body.timeout_ms) || body.timeout_ms < 0 || body.timeout_ms > 120000))))
+          throw new HttpError(400, "maintenance requires supported owner, request_id and timeout_ms from 0 to 120000", "invalid_request");
+        const result = body.mode === "maintenance"
+          ? await owner.prepareUpdateAdmission!(body.request_id as string, ttl, (body.timeout_ms as number | undefined) ?? 60000)
+          : owner.acquireUpdateAdmission(ttl);
+        return this.json(res, result.status === "admitted" ? 201 : result.status === "unavailable" ? 503 : 409,
+          body.mode === "maintenance" && result.status === "admitted" ? { ...result, checkpointed: true } : result);
       }
       if (req.method === "DELETE") {
         const body = await readJson(req);
         if (typeof body.lease_id !== "string" || !body.lease_id) throw new HttpError(400, "lease_id required", "invalid_request");
-        return this.json(res, owner.releaseUpdateAdmission(body.lease_id) ? 200 : 409, owner.updateAdmissionStatus());
+        const released = owner.releaseMaintenanceAdmission
+          ? await owner.releaseMaintenanceAdmission(body.lease_id) : owner.releaseUpdateAdmission(body.lease_id);
+        return this.json(res, released ? 200 : 409, owner.updateAdmissionStatus());
       }
     }
     if (req.method === "GET" && p === "/v1/capabilities") return this.json(res, 200, this.capabilities());
@@ -164,11 +177,12 @@ export class ApiChannel implements Channel {
   private capabilities(): Record<string, unknown> {
     return {
       object: "hermes.api_server.capabilities",
-      platform: "vanillacore-harness",
+      platform: "hayate-agent",
       agent: this.opts.agent,
       features: {
         run_submission: true,
         update_admission: !!this.opts.updateAdmission,
+        update_admission_maintenance: !!this.opts.updateAdmission?.prepareUpdateAdmission,
         run_status: true,
         run_events_sse: true,
         run_stop: true,
@@ -204,7 +218,7 @@ export class ApiChannel implements Channel {
   private async modelList(): Promise<Record<string, unknown>> {
     const { refs, aliases } = await this.modelIds();
     const ids = new Set([...refs, ...aliases.keys()]);
-    return { object: "list", data: [...ids].sort().map((id) => ({ id, object: "model", owned_by: "vanillacore-harness" })) };
+    return { object: "list", data: [...ids].sort().map((id) => ({ id, object: "model", owned_by: "hayate-agent" })) };
   }
 
   private run(runId: string) {

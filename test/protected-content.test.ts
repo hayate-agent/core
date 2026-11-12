@@ -16,7 +16,7 @@ test("configured pins survive defaults and YAML loading and enforce integrity", 
   const sha256 = createHash("sha256").update(text).digest("hex");
   const manifest = { files: [{ path: "SOUL.md", sha256 }] };
   assert.deepEqual(defaultConfig({ home, protectedContent: manifest }).protectedContent, manifest);
-  await writeFile(path.join(home, "harness.yaml"), `protectedContent:\n  files:\n    - path: SOUL.md\n      sha256: ${sha256}\n`);
+  await writeFile(path.join(home, "hayate-agent.yaml"), `protectedContent:\n  files:\n    - path: SOUL.md\n      sha256: ${sha256}\n`);
   const config = await loadConfig(home);
   assert.deepEqual(config.protectedContent, manifest);
   const policy = new ProtectedContent(config.home, config.protectedContent);
@@ -59,15 +59,15 @@ test("local settings cannot override infrastructure protected-content manifest",
   const file = path.join(home, "settings.local.yaml");
   const text = "infrastructure-controlled identity";
   const manifest = { files: [{ path: "SOUL.md", sha256: createHash("sha256").update(text).digest("hex") }] };
-  await writeFile(path.join(home, "harness.yaml"), `protectedContent:\n  files:\n    - path: SOUL.md\n      sha256: ${manifest.files[0].sha256}\n`);
+  await writeFile(path.join(home, "hayate-agent.yaml"), `protectedContent:\n  files:\n    - path: SOUL.md\n      sha256: ${manifest.files[0].sha256}\n`);
   const config = await loadConfig(home);
   const warnings: string[] = [];
   const settings = new SettingsService(file, { reasoningEffortNoneModels: ["p/base"] }, message => warnings.push(message));
   for (const [index, model] of ["p/startup", "p/reloaded"].entries()) {
-    // Removing the pins is forbidden; a valid live-editable sibling must still apply.
+    // Startup salvages independent fields; invalid live files retain last-good.
     await writeFile(file, `protectedContent:\n  files: []\nreasoningEffortNoneModels: [${model}]\n`);
     if (index === 0) await settings.load(); else await settings.reload();
-    assert.deepEqual(settings.effective().reasoningEffortNoneModels, [model]);
+    assert.deepEqual(settings.effective().reasoningEffortNoneModels, ["p/startup"]);
     assert.equal(Object.hasOwn(settings.snapshot(), "protectedContent"), false);
     assert.equal(Object.hasOwn(settings.effective(), "protectedContent"), false);
     const effective = { ...config, ...settings.effective() };
@@ -78,7 +78,7 @@ test("local settings cannot override infrastructure protected-content manifest",
     await writeFile(path.join(home, "SOUL.md"), "tampered");
     await assert.rejects(policy.verify(), /integrity check failed/);
     assert.equal(settings.diagnostics.length, 1);
-    assert.match(settings.diagnostics[0], /Ignored protectedContent/);
+    assert.match(settings.diagnostics[0], /Ignored (protectedContent|invalid local settings overlay)/);
     assert.ok(settings.diagnostics[0].length <= 240);
   }
   assert.equal(warnings.length, 2, "one bounded warning per startup/reload, not per pin");

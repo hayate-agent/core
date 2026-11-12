@@ -1,163 +1,156 @@
-# VanillaCore Agent Harness
+# Hayate Agent
 
-A persistent AI agent for your terminal and messaging gateways. Use it to work on
-code interactively, or keep it running to handle conversations, scheduled tasks
-and longer-term goals.
+<img src="docs/assets/hayate-agent.jpg" alt="Hayate Agent" width="640">
 
-The Harness owns scheduling, queues and message delivery. PI is the current model
-and tool runtime; you do not need a separate PI installation to install the Harness.
-Existing PI provider configuration can be reused.
+**An AI agent for your terminal, browser and Matrix.** Work on code interactively, pick up
+conversations later, or run Hayate as an always-on assistant for scheduled tasks
+and longer projects.
 
-## Install and start
+Hayate manages conversations, task queues, scheduling and message delivery. It
+uses [Pi](https://github.com/badlogic/pi-mono) as its current model and tool
+runtime; no separate Pi installation is required.
 
-You need **Git and Node.js with npm**. Node **24.22.1 LTS** is recommended;
-the native CLI requires at least Node 22.19.0. Linux, macOS and Windows through
-WSL2 are supported.
+## Get started
+
+You need **Git and Node.js 22.19 or newer** with npm. Node 24 LTS is recommended.
+Linux, macOS and Windows through WSL2 are supported.
 
 ```sh
-git clone https://git.vanillacore.net/harness/core.git "$HOME/vanillacore-harness"
-cd "$HOME/vanillacore-harness"
+git clone https://github.com/hayate-agent/core.git "$HOME/hayate-agent"
+cd "$HOME/hayate-agent"
 npm ci
 npm install --global --prefix "$HOME/.local" .
 export PATH="$HOME/.local/bin:$PATH"
 
 cd /path/to/your/project
-vanillacore-harness
+hayate-agent
 ```
 
-Keep the checkout: this local installation links to it. Add the PATH line to your
-shell profile to make the command available in future terminals. No `sudo` or
-initialization wizard is required. `npm ci` also builds the CLI.
+Keep the checkout: the local installation links to it. Add the PATH setting to
+your shell profile if needed. In the terminal interface, use `/login` to connect
+a model provider and `/model` to choose a model. Existing Pi provider settings in
+`~/.pi/agent` can be reused; custom providers are configured in `models.json`.
 
-In the terminal interface, use **`/login`** to connect a supported provider and
-**`/model`** to select a model. Custom providers use PI's `models.json`; see
-[configuration](docs/configuration.md). Existing PI settings in `~/.pi/agent`
-are reused, so changes there can affect other PI-based applications.
+Ask Hayate to inspect a project, explain code, make a change or run tests. Use
+`/help` to explore commands and `/sessions` to return to an earlier conversation.
 
-**Your first session:** ask the agent to inspect your project, use `/help` to
-browse commands, and `/sessions` or `/resume` to return to an earlier conversation.
-Each interactive launch starts a fresh conversation scoped to the current workspace.
+## What Hayate can do
 
-For Docker Compose, Kubernetes and background services, see
-[installation](docs/installation.md). Native Windows outside WSL2 is not supported.
+- **Code in the terminal:** streaming responses, tool activity, session history
+  and configurable tools in a fullscreen interface.
+- **Work across conversations:** keep independent conversations and durable queues,
+  with explicit session selection and resumption.
+- **Run ongoing tasks:** heartbeats, cron jobs, recurring loops and standing goals.
+- **Delegate work:** route tasks to model roles and validate sequential steps
+  before moving on. Models and reasoning levels are configurable.
+- **Use a browser:** the independently installed [WebUI](https://github.com/hayate-agent/webui)
+  provides projects, conversations and connected-agent management through the
+  agent's backend API.
+- **Connect through Matrix:** DMs and rooms, encrypted conversations, user
+  allowlists, mention rules and tool-approval handling.
+- **Integrate with applications:** an HTTP run API with streamed progress,
+  optional MCP tools and trusted plugins for commands, channels and policies.
+- **Make it your own:** `SOUL.md` for identity, `VOICE.md` for tone and skills for
+  reusable procedures.
 
-## What you can do
+## Choose your interface and starting configuration
 
-| Capability | What it means in practice |
-|---|---|
-| **Interactive coding** | A fullscreen terminal interface with streaming answers, tool activity and a fixed input area. Configure which tools the model may use. |
-| **Persistent conversations** | Keep history across restarts, name sessions, and explicitly resume work. Native PI session storage is the default. |
-| **Always-on work** | Run heartbeats, recurring loops, cron jobs and standing goals without keeping a terminal open. |
-| **Parallel conversations** | Separate conversations can run concurrently; each conversation processes its own queue in order. |
-| **Matrix gateway** | Talk to the same Harness through DMs or rooms, with allowlists, mention rules, threads and approval handling. |
-| **HTTP run API** | Submit runs programmatically and stream progress through a Hermes-compatible API. AgentOS integration is optional. |
-| **Identity and skills** | Use `SOUL.md` for identity, `VOICE.md` for tone, and discoverable skills for reusable procedures. |
-| **Trusted plugins** | Add commands, channels, tools, terminal panels and interactive dialogs through local ESM modules. Storage and manual compaction also have extension points. |
-| **Optional MCP** | Enable PI-backed MCP integration when needed; it is not a required service. |
+The terminal works without an initialization step. For an explicit profile:
 
-Approvals are **off by default**. You can enable manual approval for selected
-tools. Plugins are trusted process code, not sandboxed extensions.
+```sh
+hayate-agent init --home "$HOME/.hayate-agent" --cwd /absolute/path/to/workspace
+# After enabling the desired gateways:
+hayate-agent run --home "$HOME/.hayate-agent"
+```
+
+`init` creates a commented starter configuration and identity files, without
+replacing existing files or installing plugins. A
+[copyable starter YAML](docs/examples/hayate-agent.yaml) is included in Core.
+
+Follow the **[terminal, WebUI, Matrix and dispatcher setup guide](docs/gateways.md)**:
+
+| Interface / feature | Activation |
+| --- | --- |
+| Terminal | Run `hayate-agent`; use `/login`, `/model` and `/help` |
+| Standalone WebUI | Follow the [WebUI setup](https://github.com/hayate-agent/webui#readme); install its compatible backend separately |
+| Bundled legacy WebUI | This Core snapshot still packages `dist/optional-plugins/webui`; use `gatewayPlugins.webui.module` and IPv4 loopback only |
+| Matrix | Bundled plugin; inject `MATRIX_HOMESERVER`, bot credentials and sender/room policy |
+| Dispatcher | Optional; verify backend concurrency, then enable `dispatcher` and restart |
+| HTTP run API | Separately enabled with `API_SERVER_KEY` or a private loopback key file |
+
+The packaged legacy WebUI remains local-only; do not expose that listener to a
+network. The current [standalone WebUI](https://github.com/hayate-agent/webui#readme)
+is a separate frontend with explicit TLS/backend configuration; install its
+compatible authenticated backend from [Plugins](https://github.com/hayate-agent/plugins).
+It does not replace Core's runtime, history or access-control policy. Matrix encryption requires persistent device
+and crypto state. Supply credentials through your secret manager or environment,
+never through a public configuration file. Use a supervisor for always-on use.
+
+The default configuration does **not** start background dispatch, prescribe a
+model/context size or grant remote operator rights. See the setup guide for
+explicit admin/approver configuration and optional WebUI customization tools.
 
 ## Everyday commands
 
-- **Sessions:** `/new`, `/title`, `/sessions`, `/resume`, `/compact`.
-- **While working:** `/stop`, `/queue`, `/steer`, `/busy`.
-- **Ongoing tasks:** `/goal`, `/heartbeat`, `/loop`, `/cron`. See [Cron reports](docs/cron-reports.md) for internal/user audiences and retained follow-through.
-- **Configuration:** `/model`, `/reasoning`, `/personality`, `/skills`.
-- **Discoverability:** `/help`, `/status`, `/harness` (bundled development guide).
+| Task | Commands |
+| --- | --- |
+| Start or resume a conversation | `/new`, `/title`, `/sessions`, `/resume` |
+| Control current work | `/stop`, `/queue`, `/steer`, `/busy` |
+| Schedule work | `/goal`, `/heartbeat`, `/loop`, `/cron` |
+| Choose models and reasoning | `/model`, `/reasoning`, `/model-roles`, `/reload-models` |
+| Manage context | `/compact`, `/skills` |
+| Find help | `/help`, `/status` |
 
-Not every command is available on every channel. Use `/help` in your current
-interface rather than memorizing the full command list.
+Command availability depends on the channel and your permissions. Use
+`/reload-models` after changing provider/model configuration and `/reload-skills`
+after changing skills. `/restart` restarts the installed native CLI after draining
+work; it resumes the selected interactive conversation.
 
-## Run as a gateway
+## Configuration and safety
 
-```sh
-vanillacore-harness run
-```
+Agent state defaults to `~/.hayate-agent`. Set `HAYATE_AGENT_HOME` to use a separate
+profile. An optional `hayate-agent.yaml` configures the agent, tools, scheduling
+and model roles. Provider credentials live separately in `~/.pi/agent` or the
+configured `PI_CODING_AGENT_DIR`. Back up both locations for persistent services.
 
-This starts the same Harness without the interactive TUI. Configure Matrix with
-`MATRIX_HOMESERVER` and either `MATRIX_ACCESS_TOKEN` or password-login settings.
-Set `MATRIX_ALLOWED_USERS` and the room/approval policy before connecting it to
-other people. A configured model provider is required to answer messages.
+Tool approvals are off by default; enable them for tools that require human
+confirmation. Plugins run as trusted process code, not inside a sandbox. Queue
+persistence does not make external side effects exactly-once: after an interrupted
+operation, reconcile its actual result before repeating it.
 
-The HTTP API is enabled with `API_SERVER_KEY`; supply secrets through your runtime
-environment, not source control. For native HTTPS, set both
-`API_SERVER_TLS_KEY_FILE` and `API_SERVER_TLS_CERT_FILE` to mounted PEM files.
-A missing pair, unreadable files or invalid TLS material fails startup; there is
-no fallback to HTTP when TLS is configured. Without these settings the existing
-HTTP mode is preserved. Set `API_SERVER_HOST` explicitly and restrict network
-access; TLS does not replace the bearer key. Certificates are loaded at startup,
-so renewal requires a controlled restart. Clients must trust the issuing CA and
-verify the endpoint hostname; never disable certificate verification.
-Use a supervisor or container deployment for an always-on service. `/restart` drains work and exits with status 75; the supervisor
-is responsible for starting it again.
+Slack and Telegram adapters are not bundled with Core. Optional integrations are
+installed separately from [Plugins](https://github.com/hayate-agent/plugins).
+The [standalone WebUI](https://github.com/hayate-agent/webui) is likewise a separate
+project, not a built-in Core web server.
 
-See [configuration](docs/configuration.md) for settings and
-[operations](docs/operations.md) for durable delivery, retries, memory pressure
-and shutdown behavior.
+## Documentation and related projects
 
-## Configuration and data
+- [Installation](docs/installation.md) — native CLI and background services
+- [Gateway quickstart](docs/gateways.md) — terminal, WebUI, Matrix and dispatcher
+- [Starter configuration](docs/examples/hayate-agent.yaml) — commented safe defaults
+- [Configuration](docs/configuration.md) — providers, tools, identity and access
+- [Sessions](docs/sessions.md) — history, resumption and storage
+- [Model roles](docs/model-roles.md) · [Dispatcher](docs/dispatcher.md)
+- [MCP](docs/mcp.md) · [Plugin API](docs/plugins.md)
+- [Operations](docs/operations.md) — recovery, delivery and shutdown
+- [hayate-agent/plugins](https://github.com/hayate-agent/plugins) — plugin adapters and backend services
+- [hayate-agent/webui](https://github.com/hayate-agent/webui) — independent browser dashboard and presentation gateway
+- [hayate-agent/deployments](https://github.com/hayate-agent/deployments) — deployment examples
 
-Harness state defaults to **`~/.vanillacore-harness`**. Use
-`VANILLACORE_HARNESS_HOME` for a separate agent home. A minimal optional
-`harness.yaml` looks like this:
+## Contributing
 
-```yaml
-agent: example-agent
-timezone: Europe/Berlin
-loop:
-  busyMode: queue
-  drainSeconds: 60
-```
-
-Model/provider credentials and PI settings live separately in `~/.pi/agent`
-(or `PI_CODING_AGENT_DIR`). Persistent installations need to retain both locations.
-`init` creates missing starter files; `doctor` checks local configuration. Neither
-is required for normal interactive use.
-
-The container runs as UID/GID 1000 and includes Chromium runtime libraries,
-Python virtual environments and native build tools. Agents can install their own
-CLI tools in writable persistent storage; no particular browser CLI is required.
-See [browser tooling](docs/browser-tools.md). Kubernetes examples use immutable
-image digests and expect private configuration and secrets to be supplied separately.
-
-## Current boundaries
-
-- **Matrix E2EE is not yet supported.** Do not use encrypted rooms expecting the
-  current released adapter to decrypt or answer them.
-- **Slack and Telegram adapters are not included.** The plugin channel interface
-  supports additional transports, but does not implement them automatically.
-- A Web UI and automatic activation/rollback of agent-built runtime versions are
-  not shipped features.
-- Matrix supports optional [gateway progress and status reactions](docs/gateway-progress.md),
-  with global defaults and per-gateway overrides. A generic secret-manager context
-  is still under development.
-- Durable queues reduce lost work, but crash recovery is **at least once**, not
-  exactly once. External tool effects may be repeated after a crash.
-
-## Documentation
-
-- [Installation](docs/installation.md) — native, Compose and Kubernetes
-- [Configuration](docs/configuration.md) — models, tools, identity and access settings
-- [Sessions](docs/sessions.md) — resume, storage providers and compaction
-- [MCP](docs/mcp.md) · [Plugins](docs/plugins.md) — integrations and extension APIs
-- [Operations](docs/operations.md) — recovery and service operation
-- [Self-development](docs/self-development.md) · [Development guide](docs/development.md)
-
-## Contribute
-
-Use a user-owned checkout, make changes on a feature branch, and run:
+Create a feature branch, add tests for your change and run:
 
 ```sh
-npm ci
+npm ci --include=dev
 npm run typecheck
 npm test
 npm run build
 ```
 
-Submit changes through a pull request. Keep deployment identities, internal
-endpoints and credentials out of the public repository.
+Open a pull request with the problem, the change and its verification. See the
+[development guide](docs/development.md) for architecture and testing details.
 
 ## License
 
-Apache License 2.0. See [LICENSE](LICENSE).
+[Apache-2.0](LICENSE).

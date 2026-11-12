@@ -20,7 +20,11 @@ does not migrate, erase or grant permission to reset them. The bundled default
 continues using the unchanged ledger and budgets. Review configuration/model
 compatibility still lives in the host; this is not universal settings extraction.
 
-The review plugin ships with the Harness and is enabled by default. No local ESM
+The review plugin ships with the Harness and is **disabled by default**. No
+local, publication or merge gate is enabled unless the operator explicitly configures
+it. Enabling the plugin alone provides advisory review; `mandatory` defaults to
+`{local: false, publish: false, merge: false}`. The configuration below is an
+**opt-in example**, not a starter-profile default. No local ESM
 module or PI extension installation is required. The source plugin repository owns
 the engine, ledger implementation, budget, lifecycle/guards and default composition;
 Core supplies configuration compatibility, generic policy execution and runtime
@@ -76,8 +80,20 @@ It never uses the working agent's general assessment backend as a fallback:
 3. Primary execution unavailable/failed: an explicit fresh-session review handover
    with a detached local candidate worktree. Cancellation never starts a fallback.
 
+Routing model/thinking for the dedicated review worker follows the dispatcher rules
+(see "Dispatcher model routing rules" in configuration.md); rules are validated on
+startup and through `settings.local.yaml` overlays, where `dispatcher.rules` and
+`reasoningEffortNoneModels` are live-editable and apply at the next worker dispatch
+or request boundary.
+
 The host uses a separate Dispatcher execution transport for review, not the ordinary
-working-tool strategy or its capacity queue. This avoids a waiting parent consuming
+working-tool strategy or its capacity queue. Review submissions may carry the full
+changeset prompt: task inputs are validated up to 1 MiB at submission (dispatcher.md
+"Submission and control"), which covers the 512 KiB changeset limit after JSON
+escaping. The dedicated review worker deadline is 30 minutes (1800000 ms): local
+flash providers show multi-minute latency variance for large review prompts, and
+shorter deadlines cancelled real rounds mid-computation; the deadline stays
+fail-closed for hung workers. This avoids a waiting parent consuming
 all worker slots and triggering review recursion. `review-executions.json` is an
 execution ledger, not a new review budget. Existing review rounds, findings and
 approval fingerprints remain owned by the plugin. Cancelled primary execution is
@@ -184,15 +200,17 @@ round budget remain enforced; a second empty/invalid response still fails.
 Some local OpenAI-compatible servers require `reasoning_effort: "none"` rather
 than their ordinary thinking switch. Opt in only models verified to accept that
 parameter — through the Harness process environment or, preferred, the
-`reasoningEffortNoneModels` key in `harness.yaml` (the process environment
-variable keeps working and both lists are merged):
+`reasoningEffortNoneModels` key in `hayate-agent.yaml` (the process environment
+variable keeps working and all lists are merged; a `settings.local.yaml` overlay
+with the same key is live-editable and applies at the next request boundary, see
+configuration.md "Reasoning effort none opt-in"):
 
 ```sh
 HARNESS_REASONING_EFFORT_NONE_MODELS='homelab/deepseek-v4-flash,homelab/glm-5.3-flash'
 ```
 
 ```yaml
-# harness.yaml
+# hayate-agent.yaml
 reasoningEffortNoneModels:
   - homelab/deepseek-v4-flash
   - homelab/glm-5.3-flash

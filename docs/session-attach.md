@@ -7,7 +7,7 @@ maintenance API. No TCP listener or administrative credential is introduced.
 Opt in when starting the owner:
 
 ```sh
-vanillacore-harness run --home /path/to/home \
+hayate-agent run --home /path/to/home \
   --observe-directory /path/to/private-observer --observe-session 'matrix:exact-key'
 ```
 
@@ -19,7 +19,7 @@ not a runtime transcript ID. No listener starts by default.
 Connect from another local terminal:
 
 ```sh
-vanillacore-harness attach /path/to/private-observer/observe.sock
+hayate-agent attach /path/to/private-observer/observe.sock
 ```
 
 The client prints JSON status lines containing running/prompting/queued/paused and

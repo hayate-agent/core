@@ -19,6 +19,7 @@ async function fixture(progress: "off" | "tools" = "off") {
     allowAllUsers: false, requireMention: true, autoThread: true, dmAutoThread: false,
     processNotices: false, batchDelayMs: 0, syncStateFile: path.join(home, "sync.json"),
     fetch: (async (url: string, init: RequestInit) => {
+      if (url.endsWith("/state/m.room.encryption")) return new Response("{}", { status: 404 });
       calls.push({ url, body: JSON.parse(String(init.body)) });
       if (!ids.has(url)) ids.set(url, `$event${ids.size}`);
       return new Response(JSON.stringify({ event_id: ids.get(url) }));

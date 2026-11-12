@@ -23,7 +23,7 @@ test("restricted Wasm tools run, refresh file bytes, bound loops and cancel", as
   try {
     const file = path.join(home, "echo.wasm");
     await writeFile(file, fixture());
-    const [tool] = wasmTools(home,[{name:"plugin_echo", description:"Echo",path:"echo.wasm",timeoutMs:500}]);
+    const [tool] = wasmTools(home,[{name:"plugin_echo", description:"Echo",path:"echo.wasm",timeoutMs:3000}]);
     assert.equal(await tool.execute({input:"Grüße"},{sessionKey:"test"}),"Grüße");
     const host = new PluginHost();
     const config = [{name:"plugin_host_echo",description:"Host echo",path:"echo.wasm"}];

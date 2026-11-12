@@ -13,16 +13,16 @@ spec:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: vanillacore-harness
+  name: hayate-agent
 spec:
   replicas: 1
   strategy:
     type: Recreate
   selector:
-    matchLabels: {app: vanillacore-harness}
+    matchLabels: {app: hayate-agent}
   template:
     metadata:
-      labels: {app: vanillacore-harness}
+      labels: {app: hayate-agent}
     spec:
       automountServiceAccountToken: false
       terminationGracePeriodSeconds: 90
@@ -34,7 +34,7 @@ spec:
         seccompProfile: {type: RuntimeDefault}
       containers:
         - name: harness
-          image: registry.example.org/vanillacore-harness:replace-me
+          image: registry.example.org/hayate-agent:replace-me
           securityContext:
             allowPrivilegeEscalation: false
             capabilities: {drop: [ALL]}
@@ -54,8 +54,8 @@ spec:
             limits: {cpu: '2', memory: 4Gi}
           volumeMounts:
             - {name: home, mountPath: /home/node}
-            - {name: config, mountPath: /home/node/.vanillacore-harness/harness.yaml, subPath: harness.yaml, readOnly: true}
-            - {name: config, mountPath: /home/node/.vanillacore-harness/SOUL.md, subPath: SOUL.md, readOnly: true}
+            - {name: config, mountPath: /home/node/.hayate-agent/hayate-agent.yaml, subPath: hayate-agent.yaml, readOnly: true}
+            - {name: config, mountPath: /home/node/.hayate-agent/SOUL.md, subPath: SOUL.md, readOnly: true}
             - {name: config, mountPath: /home/node/.pi/agent/models.json, subPath: models.json, readOnly: true}
       volumes:
         - name: home
@@ -66,8 +66,8 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: vanillacore-harness
+  name: hayate-agent
 spec:
-  selector: {app: vanillacore-harness}
+  selector: {app: hayate-agent}
   ports:
     - {name: api, port: 8642, targetPort: api}

@@ -13,7 +13,7 @@ are not preserved when subsequent settings updates serialize the document.
 
 ## Source ownership and build
 
-Bundled plugin adapters are maintained in `harness/plugins`, not copied into this
+Bundled plugin adapters are maintained in [hayate-agent/plugins](https://github.com/hayate-agent/plugins), not copied into this
 repository. `plugins.lock.json` pins an immutable revision and SHA-256 per source
 file. Build, typecheck and test materialize verified sources into ignored
 `src/builtin-plugins/`; generated files are never edited or committed. Core owns
@@ -46,7 +46,7 @@ Other plugins are explicitly enabled local ESM modules. They execute trusted Jav
 with the process user's permissions: this is NOT a sandbox. Review code and pin
 its dependencies. No discovery/download/installation from incoming chat messages.
 
-In harness.yaml:
+In hayate-agent.yaml:
 
 ```yaml
 plugins:
@@ -136,6 +136,27 @@ Cleanup must terminate promptly; there is no timeout/sandbox guarantee. Invalid
 plugins fail startup rather than silently disappear. External side effects are
 not transactional. Use /help to inspect registered commands.
 
+## Completion validator providers
+
+Completion assessment is separate from code-review policies. The bundled
+`completion-validator-plugin` (implementation in `harness/plugins`) registers the
+`legacy-llm` provider. Core owns only the versioned contract/registry and authority
+fences; task, nightly and delegated-step assessment use the same host registry.
+
+Dedicated plugins use `api.registerValidatorProvider({ apiVersion: 1, name,
+version, assess })` during activation. Names are unique, versions positive integers.
+`assess(request)` returns an unknown semantic answer; the validator plugin checks
+its shape. The request includes authorization, evidence, bounded prompt, selected
+model, backend and cancellation signal. A provider never grants authority, supplies
+execution receipts or overrides actual worker outcomes/context preparation.
+
+Installation setting `completionCheck.provider` selects a registered name,
+defaulting to `legacy-llm`; `false` disables assessments. Missing, disabled, failing
+or invalid providers produce no verdict, not success or an implicit fallback.
+Providers are startup registrations, not tool-only reload modules. A restart is
+required for installation/selection changes. Existing `completionStrategy` prompt
+selection and persisted continuation/checkpoint formats remain compatible.
+
 ## Composable policy hooks
 
 Trusted startup plugins may call `api.registerPolicy({id, prepare?, beforeTool?,
@@ -168,7 +189,7 @@ wait for its own in-flight calls; the registry does not dispose implementation
 resources or grant authority to reload arbitrary code.
 
 The review engine, ledger implementation, guards, lifecycle and bundled default
-composition are owned by `harness/plugins`. Ledger format/path and persistent
+composition are owned by [hayate-agent/plugins](https://github.com/hayate-agent/plugins). Ledger format/path and persistent
 budgets are unchanged; extraction does not grant new review rounds. General plugin
 registration is startup-only; the separate [runtime policy module manager](policy-plugins.md)
 supports admin-selected local ESM overrides, persistent desired state and lifecycle
@@ -218,7 +239,7 @@ failed persistence leave the active selection unchanged. `disable` persists `non
 enabling an orchestrator requires restart. Provider, tools and stored data are
 unchanged; this is neither provider migration nor plugin hot reload.
 
-Plugins must clean up their own resources with `onStop`. The bundled default engine is owned by `harness/plugins` and materialized from the
+Plugins must clean up their own resources with `onStop`. The bundled default engine is owned by [hayate-agent/plugins](https://github.com/hayate-agent/plugins) and materialized from the
 immutable pin; it retains the existing pending-write persistence behavior. Core
 still owns provider reconnection, contracts and selection. Engine source updates
 require image rollout; dynamic registration/removal lifecycle is not provided here. No

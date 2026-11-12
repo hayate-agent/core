@@ -47,7 +47,7 @@ export class ReviewSubagents {
       createdAt: Date.now(), state: "running", tools: "disabled" };
     await writeFileDurable(file, JSON.stringify(record));
     try {
-      const result = await isolatedReview(this.runtime, record.sessionKey, request, signal);
+      const result = await isolatedReview(this.runtime, record.sessionKey, request, signal, id);
       await writeFileDurable(file, JSON.stringify({ ...record, state: "completed", finishedAt: Date.now(), result }));
       return { kind: "subagent", executionId: id, isolated: true, fingerprint: request.fingerprint, result };
     } catch (error) {

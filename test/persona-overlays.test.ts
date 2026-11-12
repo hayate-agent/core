@@ -1,0 +1,51 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { mkdtemp, mkdir, writeFile, rm, symlink } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { loadPersona, personaSections } from "../src/persona.js";
+import { defaultConfig } from "../src/config.js";
+
+ test("all explicitly defined overlays: 1 and 50, stable order, edit/add/delete, legacy profile remains opt-in", async t => {
+  const home = await mkdtemp(path.join(os.tmpdir(), "persona-set-"));
+  t.after(() => rm(home, { recursive: true, force: true }));
+  const files = defaultConfig({ home }).persona;
+  files.overlaysDir = path.join(home, "overlays");
+  await mkdir(files.overlaysDir); await mkdir(files.personalitiesDir);
+  await writeFile(files.soul, "OWN SOUL"); await writeFile(files.voice, "OWN VOICE");
+  await writeFile(path.join(files.personalitiesDir, "other.md"), "LEGACY OTHER");
+  await writeFile(path.join(files.overlaysDir, "00.md"), "OVERLAY 00");
+  assert.equal((await loadPersona(files)).overlays?.length, 1);
+  for (let i = 49; i > 0; i--) await writeFile(path.join(files.overlaysDir, `${String(i).padStart(2, "0")}.md`), `OVERLAY ${i}`);
+  await writeFile(path.join(files.overlaysDir, "technical.yaml"), "password: NOT IN PROMPT");
+  const loaded = await loadPersona(files);
+  assert.equal(loaded.overlays?.length, 50);
+  assert.deepEqual(loaded.overlays?.map(o => o.name), Array.from({length:50}, (_, i) => `${String(i).padStart(2,"0")}.md`));
+  assert.doesNotMatch(personaSections(loaded).join("\n"), /LEGACY OTHER|password/);
+  assert.match(personaSections(await loadPersona(files, "other")).join("\n"), /LEGACY OTHER/);
+  await writeFile(path.join(files.overlaysDir, "00.md"), "EDITED");
+  await rm(path.join(files.overlaysDir, "01.md"));
+  await writeFile(path.join(files.overlaysDir, "50.md"), "ADDED");
+  const changed = await loadPersona(files);
+  assert.equal(changed.overlays?.length, 50);
+  assert.equal(changed.overlays?.[0]?.text, "EDITED");
+  assert.equal(changed.overlays?.at(-1)?.text, "ADDED");
+  files.overlays = [path.join(files.personalitiesDir, "other.md")];
+  assert.equal((await loadPersona(files)).overlays?.[0]?.text, "LEGACY OTHER", "existing operator file can be explicitly migrated without selection");
+});
+
+test("deleted overlays inherit lower layers; invalid files, symlinks, nonfiles and UTF-8 fail closed", async t => {
+  const home = await mkdtemp(path.join(os.tmpdir(), "persona-invalid-"));
+  t.after(() => rm(home, {recursive:true, force:true}));
+  const files = defaultConfig({home}).persona;
+  const file = path.join(home,"instruction.md"); files.overlays = [file];
+  assert.deepEqual((await loadPersona(files)).overlays, []);
+  await writeFile(file, Buffer.from([0xff])); await assert.rejects(loadPersona(files), /Cannot load persona instruction/);
+  await rm(file); await mkdir(file); await assert.rejects(loadPersona(files), /Cannot load persona instruction/);
+  await rm(file,{recursive:true}); await writeFile(path.join(home,"secret"),"secret"); await symlink(path.join(home,"secret"),file);
+  await assert.rejects(loadPersona(files), /Cannot load persona instruction/);
+  files.overlays = [path.join(home,"technical.yaml")]; await assert.rejects(loadPersona(files), /Markdown/);
+  assert.throws(() => defaultConfig({home, persona:{...files,overlays: [3] as any}}), /paths/);
+  const normalized = defaultConfig({home,persona:{...files, overlays:["personalities/severus-delivery.md"]}});
+  assert.equal(normalized.persona.overlays?.[0],path.join(home,"personalities/severus-delivery.md"));
+});

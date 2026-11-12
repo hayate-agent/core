@@ -23,6 +23,21 @@ function terminal() {
   return { t, type: (s: string) => { for (const ch of s) input(ch); }, send: (s: string) => input(s), output: () => output };
 }
 
+test("TUI shows observed selection rather than configured defaults and resets next turn", async () => {
+  const term = terminal(); term.t.columns = 220;
+  const channel = new HarnessTuiChannel({ agent: "test", status: () => "running", model: () => "configured/default", quit: () => {}, terminal: term.t });
+  await channel.start(async () => {});
+  try {
+    await channel.typing({ channel: "tui", target: "main" }, true);
+    assert.match((channel as any).activityLabel(), /preparing model selection/);
+    channel.turnEvent({ channel: "tui", target: "main" }, { type: "execution", selection: { model: "actual/worker", thinking: "off" } });
+    assert.match((channel as any).activityLabel(), /model actual\/worker · reasoning off/);
+    await channel.typing({ channel: "tui", target: "main" }, true);
+    assert.match((channel as any).activityLabel(), /preparing model selection/);
+    assert.doesNotMatch((channel as any).activityLabel(), /actual\/worker/);
+  } finally { await channel.stop(); }
+});
+
 test("plugin UI supports input, selection, custom keyboard widgets and abort", async () => {
   const term = terminal();
   const channel = new HarnessTuiChannel({ agent: "test", status: () => "running", quit: () => {}, terminal: term.t });
@@ -72,17 +87,24 @@ test("plugin panels are bounded plain text and rendering failures do not break e
   } finally { await ui.stop(); }
 });
 
-test("fullscreen layout keeps the editor at the bottom after long output", async () => {
+test("fullscreen layout keeps the editor at the bottom after long output", async (t) => {
   const term = terminal();
   const ui = new HarnessTuiChannel({ agent: "test", status: () => "running", quit: () => {}, terminal: term.t });
   try {
     await ui.start(async () => {});
     await ui.send({ channel: "console", target: "local" }, Array.from({ length: 150 }, (_, i) => `Output line ${i}`).join("\n"));
-    await new Promise((r) => setTimeout(r, 30));
+    // The render scheduler may be delayed behind other tests on a busy runner.
+    // Wait for actual output, not a timing assumption; missing output still fails.
+    const screen = await t.waitFor(() => {
+      const lines = (ui as unknown as { tui: { getScreenLines(): string[] } }).tui.getScreenLines();
+      assert.equal(lines.length, term.t.rows);
+      assert.match(lines.join("\n"), /Output line 149/);
+      return lines;
+    }, { interval: 10, timeout: 5000 });
     // Inspect the rendered viewport, not merely presence of terminal escape sequences.
-    const screen = (ui as unknown as { tui: { getScreenLines(): string[] } }).tui.getScreenLines();
     assert.equal(screen.length, term.t.rows);
-    assert.match(screen.slice(0, 3).join("\n"), /VanillaCore Agent Harness/);
+    assert.match(screen.join("\n"), /Output line 149/);
+    assert.match(screen.slice(0, 3).join("\n"), /Hayate Agent/);
     assert.match(screen.slice(-8).join("\n"), /\/help/);
     assert.ok(!screen.some((line) => /Output line 0$/.test(line)));
   } finally { await ui.stop(); }
@@ -185,7 +207,7 @@ test("TUI submits into the actual Harness and displays its delivered answer", as
     assert.deepEqual(runtime.sessions.get("console:local")!.prompts, ["hello"]);
     term.type("/quit\r");
     assert.equal(quit, true);
-    assert.match(term.output(), /VanillaCore Agent Harness/);
+    assert.match(term.output(), /Hayate Agent/);
   } finally { await harness.stop(); }
 });
 
@@ -318,7 +340,10 @@ test("local TUI isolates sessions, blocks busy switches, restores visible histor
     await ui.send({ channel: "console", target: first.key }, "foreign secret answer");
     await settle();
     assert.ok(!(ui as any).tui.getScreenLines().join("\n").includes("foreign secret answer"));
-    term.type(`/resume ${first.id}\r`); await settle();
+    term.type(`/resume ${first.id}\r`);
+    const resumeDeadline = Date.now() + 5000;
+    while (sessions.current?.id !== first.id && Date.now() < resumeDeadline) await settle();
+    await settle();
     assert.equal(sessions.current?.id, first.id);
     assert.match((ui as any).tui.getScreenLines().join("\n"), /visible previous history/);
     term.type("/title Renamed\r");

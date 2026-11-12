@@ -1,7 +1,7 @@
 # Cron audiences and retained follow-through
 
 Retention, report context, analysis and proposal planning are supplied by the
-`cronReportPlugin` in the independently versioned `harness/plugins` repository.
+`cronReportPlugin` in the independently versioned [hayate-agent/plugins](https://github.com/hayate-agent/plugins) repository.
 Core provides settlement/delivery hooks, `ReportProcessingRegistry` and host-owned
 dispatch authority, not a concrete archive or analyzer. Trusted plugins can register
 another implementation through `api.registerReportProcessing(name, implementation)`;

@@ -40,6 +40,20 @@ function setup(opts: { admins?: string[]; approvers?: string[]; skills?: SkillIn
   return { runtime, harness, ch, ctx, send, approvals };
 }
 
+test("channel command expansion assigns semantic tags before queueing with classifier enabled", async () => {
+  const { harness, send, ch } = setup();
+  harness.opts.topicLabeler = async text => {
+    assert.ok(!text.startsWith("/"));
+    return ["database-repair"];
+  };
+  try {
+    await send("/queue repair the database");
+    assert.ok(ch.texts().some(text => text.startsWith("#database-repair ·")));
+    await send("/retry");
+    assert.equal(harness.state("mem:room1").lastInput?.completionAnchor?.outputTags?.[0], "database-repair");
+  } finally { await harness.stop(1000); }
+});
+
 test("usage and tokens alias report session/cache/cost with honest scope and unknown fallback", async () => {
   const { harness, send, ch } = setup();
   try {
@@ -135,7 +149,7 @@ test("all relevant Hermes gateway commands exist", () => {
 test("commands do not reach the agent; replies go to the chat", async () => {
   const { send, runtime, ch } = setup();
   await send("/version");
-  assert.match(ch.texts()[0], /vanillacore-harness/);
+  assert.match(ch.texts()[0], /^Hayate Agent /);
   assert.equal(runtime.sessions.size, 0);
 });
 
@@ -174,7 +188,7 @@ for (const name of ["restart", "reload"]) {
       assert.equal(runtime.reloads, 0);
       assert.equal(ch.texts().filter(t => t === "♻️ restarting after current work…").length, 4);
       await send("/help", "owner");
-      assert.match(ch.texts().at(-1)!, /\/restart \(\/reload\) \[admin\] \[Harness\]/);
+      assert.match(ch.texts().at(-1)!, /\/restart \(\/reload\) \[admin\] \[Hayate Agent\]/);
     } finally { await harness.stop(1000); }
   });
 
@@ -203,6 +217,22 @@ for (const name of ["restart", "reload"]) {
     } finally { await harness.stop(1000); }
   });
 }
+
+test("model reload is explicit, admin-only and separate from skill/MCP resources", async () => {
+  const { send, harness, runtime, ch, ctx } = setup({ admins: ["owner"] });
+  let catalogs = 0, skills = 0;
+  Object.assign(runtime, { reloadModels: async () => { catalogs++; } });
+  ctx.reloadSkills = async () => { skills++; };
+  try {
+    await send("/reload-models", "stranger");
+    assert.equal(catalogs, 0); assert.match(ch.texts().at(-1)!, /admin only/);
+    await send("/reload-models", "owner");
+    await send("/reload_models", "owner");
+    assert.equal(catalogs, 2); assert.equal(skills, 0); assert.equal(runtime.reloads, 0);
+    assert.match(ch.texts().at(-1)!, /Model catalog reloaded/);
+    assert.equal(runtime.sessions.size, 0);
+  } finally { await harness.stop(1000); }
+});
 
 test("skills/MCP reload aliases still reload resources without restarting", async () => {
   const { send, harness, runtime, ch, ctx } = setup({ admins: ["owner"] });
@@ -331,8 +361,8 @@ test("help identifies Harness and plugin commands, admin access and YOLO scope",
   for (const command of ["/help", "/commands"]) {
     await send(command);
     const text = ch.texts().at(-1)!;
-    assert.match(text, /^VanillaCore Agent Harness commands/);
-    assert.match(text, /\/yolo \[admin\] \[Harness\]: on\|off\|status/);
+    assert.match(text, /^Hayate Agent commands/);
+    assert.match(text, /\/yolo \[admin\] \[Hayate Agent\]: on\|off\|status/);
     assert.match(text, /does not bypass permissions or review/);
     assert.match(text, /same state as \/yolo/);
     assert.match(text, /\/extension \[admin\] \[Plugin\]: Extension command/);
@@ -347,7 +377,7 @@ test("help identifies Harness and plugin commands, admin access and YOLO scope",
     assert.ok(!general.includes("[admin]"));
     assert.ok(names(admin).includes("/z-extension"));
     assert.ok(admin.split("\n").every((line) => line.includes("[admin]")));
-    assert.match(general, /\/help \(\/commands\) \[Harness\]/);
+    assert.match(general, /\/help \(\/commands\) \[Hayate Agent\]/);
     assert.ok(!names(general).includes("/commands"));
   }
 });
@@ -527,7 +557,7 @@ test("approval prompt delivery retries with a stable delivery id, then denies", 
   };
   harness.state("mem:room1").replyTo = ROOM;
   const pending = harness.requestApproval("mem:room1", "bash", {});
-  await new Promise((r) => setTimeout(r, 30));
+  for (const limit = Date.now() + 5000; ids.length < 3 && Date.now() < limit;) await new Promise((r) => setTimeout(r, 5));
   assert.equal(ids.length, 3);
   assert.equal(new Set(ids).size, 1);
   ch.send = async () => {};

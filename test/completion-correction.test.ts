@@ -18,8 +18,8 @@ for (const state of ["completed", "stopped"] as const) {
       return assessCompletion({ review: async prompt => {
         const data = JSON.parse(prompt.slice(prompt.indexOf("DATA: ") + 6));
         assert.equal(data.task, request);
-        assert.ok(data.context.tasks.some((t: { id: string; state: string }) => t.id === "old" && t.state === state));
-        assert.ok(data.context.recent.some((m: { role: string; text: string }) => m.role === "user" && m.text === request));
+        assert.ok(data.context.resolved.ingress.some((t: { id: string; state: string }) => t.id === "old" && t.state === state));
+        assert.ok(data.context.resolved.ingress.some((m: { text: string }) => m.text === request));
         assert.match(prompt, /NOT additional authorization/);
         return JSON.stringify({ state: "continue", next: "Test the remaining architecture contract within the fresh request" });
       } }, input, "step finished", { task: input.completionAnchor.task }, new AbortController().signal,

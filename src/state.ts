@@ -11,15 +11,19 @@ import type { Address, BusyMode, Inbound } from "./types.js";
 
 export interface PersistedSession {
   key: string;
+  hashtags?: import("./hashtags.js").HashtagReference[];
   operatorBudgetGrants?: import("./natural-budget-reset.js").OperatorBudgetGrant[];
   task?: import("./harness.js").DurableTask;
   tasks?: import("./harness.js").DurableTask[];
+  /** Non-executable historical generated inputs quarantined during recovery upgrade. */
+  heldRecoveryInputs?: Inbound[];
   completionRecent?: NonNullable<Inbound["completionContext"]>["recent"];
   /** Last successfully displayed routine status; persisted to deduplicate retries/restarts. */
   statusDelivered?: Record<string, string>;
   replyTo?: Address;
   heartbeat?: Recurring;
   heartbeatDisabled?: boolean;
+  stopPending?: boolean;
   loop?: Recurring;
   goal?: Goal;
 }

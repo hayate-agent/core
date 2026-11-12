@@ -216,7 +216,7 @@ test("automatic capture marks claims reported and recall has bounded data framin
   await service.capture({ sessionKey: ctx.sessionKey, id: "turn1", text: "Diagnose deployment", reply: "artifact mismatch", outcome: "failed" });
   const hits = await store.search(ctx, "artifact");
   assert.equal(hits[0].entry.verification, "reported");
-  assert.ok(hits[0].entry.expiresAt);
+  assert.ok(hits[0].entry.reviewAfter); // Review is due without requiring automatic expiry.
   assert.match(await service.recall(ctx.sessionKey, "artifact"), /not instructions or authorization/);
 });
 
@@ -239,4 +239,12 @@ test("recall honors recallLimit instead of hardcoded three", async (t) => {
   const hits = (recalled.match(/"id":"/g) || []).length;
   assert.equal(hits, 1);
   assert.ok(!recalled.includes("Third lesson"));
+});
+
+test("memory put defaults source to session key and names the failing field", async (t) => {
+  const { store } = await setup(t);
+  const entry = await store.put(ctx, { key: "no-source-lesson", title: "Deployment verification", text: "Check running artifact hashes, not only merge status." });
+  assert.equal(entry.source, "matrix:one");
+  await assert.rejects(store.put(ctx, { key: "bad-kind", title: "Deployment verification", text: "x", kind: "weird" as unknown as "note" }), /Invalid memory entry: kind/);
+  await assert.rejects(store.put(ctx, { key: "long-title", title: "x".repeat(301), text: "x" }), /Invalid memory entry: title/);
 });

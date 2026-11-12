@@ -1,6 +1,6 @@
 # Terminal presentation
 
-The interactive UI is a Harness channel. PI is embedded through its SDK
+The Hayate Agent interactive UI is a harness channel. PI is embedded through its SDK
 (`createAgentSession`, `AgentSession.subscribe`); no PI CLI subprocess is used.
 UI labels are English and do not prescribe the language of model responses.
 The conversation markers are language-independent; there is no "You:"/"Agent:" label.

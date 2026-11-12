@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile, rename, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { Harness } from '../src/harness.js';
@@ -8,7 +8,8 @@ import { accountRepetition, repetitions } from '../src/repetition-budget.js';
 import { FakeRuntime, MemoryChannel, msg } from './fakes.js';
 
 test('independently assessed analysis continues beyond 20 without Git, including durable restart', async () => {
-  let turns = 0; let checks = 0;
+  let turns = 0; let checks = 0; let first: Harness | undefined; let restored: Harness | undefined;
+  let writes = Promise.resolve();
   const runtime = new FakeRuntime(() => { turns++; return 'analysis checkpoint'; });
   const options = { runtime, now: () => 1000, completionCheck: async () => {
     checks++;
@@ -17,24 +18,42 @@ test('independently assessed analysis continues beyond 20 without Git, including
   const home = await mkdtemp(path.join(os.tmpdir(), 'nongit-continuation-'));
   try {
     const file = path.join(home, 'sessions.json');
-    const first = new Harness(options); first.addChannel(new MemoryChannel());
-    first.onStateChange = async () => {
-      await writeFile(file, JSON.stringify(first.snapshotSessions()));
-      if (checks === 25) first.paused = true;
+    first = new Harness(options); first.addChannel(new MemoryChannel());
+    // Serialize the test persistence adapter: background saveSoon callbacks may
+    // overlap awaited writes. A paused turn alone is not a persistence barrier.
+    let pauseReached!: () => void;
+    const paused = new Promise<void>(resolve => { pauseReached = resolve; });
+    first.onStateChange = () => {
+      const snapshot = JSON.stringify(first!.snapshotSessions());
+      if (checks === 25) { first!.paused = true; pauseReached(); }
+      writes = writes.then(async () => {
+        await writeFile(file + '.next', snapshot);
+        await rename(file + '.next', file);
+      });
+      return writes;
     };
     await first.accept(msg('Analyze original scope'));
-    for (let i = 0; i < 1000 && !first.paused; i++) await new Promise(resolve => setTimeout(resolve, 1));
+    let checkpointTimer: NodeJS.Timeout | undefined;
+    try {
+      await Promise.race([paused, new Promise<never>((_resolve, reject) => {
+        checkpointTimer = setTimeout(() => reject(Error('Continuation checkpoint not reached within 10 seconds')), 10000);
+      })]);
+    } finally { clearTimeout(checkpointTimer); }
     assert.equal(first.paused, true);
+    await writes;
     assert.equal(turns, 25); assert.equal(checks, 25);
     const snapshot = JSON.parse(await readFile(file, 'utf8'));
     assert.equal(snapshot[0].tasks[0].state, 'active');
     assert.equal(snapshot[0].tasks[0].repetition.repetitions, 0);
-    const restored = new Harness(options); restored.addChannel(new MemoryChannel()); restored.onStateChange = async () => {};
+    restored = new Harness(options); restored.addChannel(new MemoryChannel()); restored.onStateChange = async () => {};
     restored.restoreSessions(snapshot); await restored.tick(); await restored.drained();
     assert.equal(turns, 45); assert.equal(checks, 45);
     assert.equal(restored.snapshotSessions()[0]!.tasks![0]!.state, 'completed');
     assert.equal(repetitions(restored.snapshotSessions()[0]!.tasks![0]!), 1); // terminal turn, not a continue
-  } finally { await rm(home, { recursive: true, force: true }); }
+  } finally {
+    await first?.stop(0); await restored?.stop(0); await writes;
+    await rm(home, { recursive: true, force: true });
+  }
 });
 
 test('identical successful validation receipts stay bounded despite changing model plans', async () => {
@@ -64,7 +83,9 @@ for (const mode of ['fresh', 'error', 'missing'] as const) {
       if (turns < 35) h.planContinuation(key, { state: 'continue', next: 'Validate original scope' });
       return 'checkpoint';
     });
-    h = new Harness({ runtime, now: () => 1000 }); h.addChannel(new MemoryChannel()); h.onStateChange = async () => {};
+    h = new Harness({ runtime, now: () => 1000,
+      completionCheck: async () => turns < 35 ? { state: 'continue', next: 'Validate original scope', progress: { advanced: false } } : { state: 'completed' } });
+    h.addChannel(new MemoryChannel()); h.onStateChange = async () => {};
     await h.accept(msg('Validate original scope')); await h.drained();
     assert.equal(turns, mode === 'fresh' ? 35 : 20);
     if (mode !== 'fresh') assert.equal(h.snapshotSessions()[0]!.tasks![0]!.state, 'blocked');

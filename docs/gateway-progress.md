@@ -1,11 +1,12 @@
 # Gateway progress and status reactions
 
-Configure global defaults and optional per-gateway overrides in harness.yaml:
+Configure global defaults and optional per-gateway overrides in hayate-agent.yaml:
 
 ```yaml
 gateways:
   progress: reduced
   statusReactions: true
+  recoveryDiagnostics: false # default; opt in to host recovery diagnostics
   overrides:
     matrix:
       progress: full
@@ -27,13 +28,46 @@ objects do not reset existing values. Existing per-channel and explicit
 Matrix environment overrides retain precedence. Active progress collectors adopt
 changed progress mode on the next turn; reaction settings apply immediately.
 
-Defaults: progress off, statusReactions false. Each omitted override field
+Defaults: progress off, statusReactions false, recoveryDiagnostics false. Each omitted override field
 inherits the global setting. Explicit off/false disables an inherited setting.
 Names are channel names, including plugin gateways. This does not install an
 adapter or add capabilities it does not implement. The Harness applies the
 resolved policy through optional configureGateway before channel startup;
 plugins can implement this hook with turnEvent/turnStatus. Existing TUI/API
 streaming is unchanged by gateway notification policy.
+
+## Technical recovery diagnostics
+
+`gateways.recoveryDiagnostics: true` opts in to concise, English host-generated
+“Recovery assessment paused” diagnostics. The same boolean may be set under
+`gateways.overrides.<channel>.recoveryDiagnostics`; an explicit false overrides a
+global true. Configure it in `hayate-agent.yaml`, `settings.local.yaml`, or a managed
+`settings.d/*.yaml` drop-in (normal settings precedence). There is no diagnostic
+chat command or environment override. File changes take effect on the next start.
+
+Default-off suppresses only newly generated recovery-assessment notices before the
+shared durable outbox, for every channel (including plugin gateways and TUI/API
+addresses). It does not filter assistant replies, results, genuine blockers,
+operator decisions, approval requests or productive task-budget escalation notices.
+All internal recovery-assessment diagnostics respect this setting, including
+exhaustion after three attempts. The terminal `recovery_assessment_failed` state,
+retry budget and inspection/reset controls remain intact; a failed assessment is
+not evidence that the user's operation failed.
+
+Opt-in notices contain only task/session identifiers and bounded diagnostic codes,
+never the original request, last model response, provider error or automatic-reset
+instructions. Inspect the retained task using `/task-budget inspect` before any
+explicit administrator reset. Existing stops, approvals and deadlines remain binding.
+
+On restart, already queued host recovery diagnostics are suppressed when disabled
+or when their task is no longer blocked. With diagnostics enabled, retained legacy
+notices are replaced with the concise English format, preserving the delivery ID.
+This migration matches the reserved host recovery ID family and known diagnostic
+prefix, not ordinary reply text. Assistant replies, approvals and genuine blockers
+are not filtered. The migration is saved before any delivery. Already delivered
+messages are not deleted. Blocked tasks, recovery markers, logs and task status
+remain durable; no completion, retry, authority, depth, budget or deadline changes.
+Opting in later does not replay previously silent notices.
 
 Matrix environment variables are optional explicit overrides. Precedence:
 environment > per-gateway YAML > global YAML > defaults.
@@ -42,8 +76,11 @@ If unset, they do not mask inherited YAML settings.
 - MATRIX_PROGRESS=off: typing indicator only.
 - MATRIX_PROGRESS=reduced: tool starts/ends without arguments/results; active tools
   emit a truthful elapsed-time heartbeat every 15 seconds, including long reviews.
-- MATRIX_PROGRESS=full: tool starts/ends, bounded arguments/results. No private
-  model reasoning is exported. Final assistant text uses the normal durable reply.
+- MATRIX_PROGRESS=full: tool starts/ends, bounded arguments/results. Direct MCP
+  server tools (`mcp__*`) and MCP resource helpers never include arguments/results;
+  only their names and status are shown. This does not inspect nested calls through
+  general-purpose tools such as codemode; use reduced mode to hide all tool payloads.
+  No private model reasoning is exported. Final assistant text uses the normal durable reply.
 - MATRIX_STATUS_REACTIONS=true: 📥 after durable receipt (including queued messages), 👀 at turn start; ✅ when processing completes,
   ❌ on failure, ⏹️ on cancellation. Default false. For batched inputs each original
   message is annotated. Obsolete receipt/start reactions are redacted when the

@@ -36,13 +36,16 @@ test('host Git evidence ignores arguments, untracked files and metadata, detects
 
 test('serialized task beyond depth20 resumes once under original scope and retains evidence history', async () => {
   const task: DurableTask = { id: 't', original: 'original scope', state: 'active', depth: 35, next: 'check effect', expiresAt: 100000,
-    repetition: { version: 1, repetitions: 0, attempts: 35, evidence: ['old'] } };
+    repetition: { version: 1, repetitions: 0, attempts: 35, evidence: ['old'] },
+    recoveryAdmission: { id: 'task:t:36', depth: 36, next: 'check effect', original: 'original scope', expiresAt: 100000 } };
   let h: Harness; let calls = 0;
   const runtime = new FakeRuntime(text => {
     calls++; assert.match(text, /original scope/);
     h.planContinuation('mem:room1', { state: 'completed' }); return 'verified';
   });
-  h = new Harness({ runtime, now: () => 1000 }); h.addChannel(new MemoryChannel()); h.onStateChange = async () => {};
+  h = new Harness({ runtime, now: () => 1000,
+    completionCheck: async () => ({ state: 'completed' }) });
+  h.addChannel(new MemoryChannel()); h.onStateChange = async () => {};
   h.restoreSessions(JSON.parse(JSON.stringify([{ key: 'mem:room1', tasks: [task], replyTo: { channel: 'mem', target: 'room1' } }])));
   await h.tick(); await h.drained(); await h.tick(); await h.drained();
   assert.equal(calls, 1);

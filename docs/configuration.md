@@ -1,14 +1,85 @@
 # Configuration
 
+## Start with a working profile
+
+For an end-to-end setup, use the [terminal/WebUI/Matrix guide](gateways.md), then
+add the optional [dispatcher](gateways.md#4-optional-background-delegation-enable-the-dispatcher).
+Core includes a [commented starter YAML](examples/hayate-agent.yaml);
+`hayate-agent init --home <home> --cwd /absolute/workspace` creates the same kind of
+safe baseline without overwriting existing files. No provider credentials, model
+IDs, context lengths or mandatory reasoning levels are prescribed.
+
+`hayate-agent.yaml` owns startup tools/plugins, authority and dispatcher policy.
+`settings.local.yaml` owns explicit writable overrides, including `gatewayPlugins`.
+`gateways` only controls transport feedback, not activation. Matrix is bundled and
+environment-enabled; WebUI is a separately installed local ESM gateway selected
+through `gatewayPlugins.webui.module`. Both use normal Harness command/execution
+routing; the UI is not Core functionality.
+
+## Main completion validation
+
+The selected completion strategy judges the whole authorized task, including Main
+responses, not just delegated worker results. Verified milestones, promised/open
+steps and genuine holds are considered separately. A future-tense promise is not
+completion. A generated continuation, worker grant or saved plan is not a new human
+instruction and cannot invent an operator prohibition or broaden permission.
+
+An independent `continue` admits one concrete next step under the original scope,
+stop/expiry, dependency and budget fences. Technical/invalid judgments retain the
+settled Main reply for existing bounded assessment retry; they never replay the
+productive turn. Genuine semantic uncertainty grants no execution. The prompt
+strategy remains replaceable through the existing completion-strategy extension;
+no external JEV backend is required by the default LLM implementation.
+
+CLI Main validation has a 30-second default request budget. Configure 1–120 seconds:
+
+```yaml
+completionCheck:
+  timeoutMs: 30000
+```
+
+Existing explicit `completionCheck.authorizations` remain supported. The validator
+model still uses Validator → Review → Default, without silently replacing an
+explicitly selected unavailable model. Restart after changing the timeout.
+
+## Reloading model configuration
+
+Use **`/reload-models`** after editing the provider/model catalog (`models.json`).
+This administrator command refreshes local configuration without a model request,
+preserves selected model IDs and reasoning settings, and rebinds existing idle
+sessions to fresh model metadata at their next turn. This includes API/protocol
+changes for the same provider/model ID. Active prompts must finish first. Invalid
+configuration fails closed until corrected and reloaded; it never silently falls
+back to another model. Queued topic-label inputs are retried without resending.
+
+**`/reload-skills`** and **`/reload-mcp`** reload skills/session resources only;
+they do not reload the model catalog or restart the agent.
+
+
 Each instance supplies its own configuration; identity and providers are not
 hardcoded in the application.
 
-- `VANILLACORE_HARNESS_HOME`: harness configuration, personality and persistent state
-  (default `~/.vanillacore-harness`).
-- `VANILLACORE_HARNESS_AGENT`: default agent key; `agent` in harness.yaml overrides it.
-- `PI_CODING_AGENT_DIR`: PI provider/settings/extension directory.
+- `HAYATE_AGENT_HOME`: configuration, personality and persistent state
+  (default `~/.hayate-agent`).
+- `HAYATE_AGENT_AGENT`: default agent key; `agent` in hayate-agent.yaml overrides it.
+- `HAYATE_AGENT_REASONING_EFFORT_NONE_MODELS`: comma-separated provider/model opt-ins
+  for reasoning effort `none`, merged with `reasoningEffortNoneModels` in YAML.
+- `PI_CODING_AGENT_DIR`: PI provider/settings/extension directory (third-party PI).
 
-## harness.yaml
+### Home selection
+
+Explicit `--home` wins, then `HAYATE_AGENT_HOME`, then `~/.hayate-agent`.
+An explicitly selected directory may have any name; no directory is moved or
+deleted. Only `hayate-agent.yaml` is loaded from the selected home. Other home
+names, environment aliases and configuration filenames are not discovered.
+`init` preserves an existing `hayate-agent.yaml`.
+
+Already-running local agents require a separate deployment transition before
+upgrading: explicitly select their authoritative persistent home and mount their
+configuration as `hayate-agent.yaml`. Preserve sessions, memory and pending work
+in place; this application does not perform that operational transition.
+
+## hayate-agent.yaml
 
 ```yaml
 agent: example-agent
@@ -27,8 +98,58 @@ files describe identity and tone, not secrets. Every session also receives a gen
 Harness foundation: product identity, runtime distinction, task context and truthful
 self-development instructions. It does not hardcode a persona or claim unavailable
 integrations. SOUL and VOICE add your configured identity and writing style even when
-no named personality overlay is selected. Existing live sessions need a restart or
-`/new` to receive changed system context. See README for Matrix settings.
+no named personality overlay is selected. See the [gateway guide](gateways.md) for
+Matrix credentials/access controls and WebUI activation.
+
+### Composed persona instructions (not alternative profiles)
+
+```yaml
+persona:
+  # Relative overlay paths resolve against Harness home, never the working repository.
+  overlays:
+    - personalities/severus-delivery.md
+  # Optional: all direct .md children, ordered by filename; no recursion.
+  # overlaysDir: persona-overlays
+```
+
+Every explicitly listed file is loaded, followed by every Markdown child of the
+explicit directory. There is no selection and no file-count limit. List order,
+then filename order, is stable; duplicate absolute paths load once. By default,
+`SOUL.md.d/` and `VOICE.md.d/` beside the configured base files append all direct
+`.md` children in lexical filename order (1 or 50 files, no limit). Base identity
+and voice remain present. `personalities/` remains the legacy alternative-profile
+store, loaded only by an explicit `/personality name`. To migrate the already
+written `personalities/severus-delivery.md`, add the `overlays` entry shown above;
+do not select a profile or copy other agents' SOUL/VOICE files. An operator may
+instead explicitly designate a directory as overlays after verifying that **all**
+its Markdown files are their own cumulative instructions. YAML/technical settings
+are never inferred as prompt content; overlay Markdown must contain instructions,
+not secrets. Config changes still require the normal configuration activation;
+this implementation does not hot-reload hayate-agent.yaml.
+
+Prompt order is foundation, own SOUL, own VOICE, optional legacy selected profile,
+ordered overlays, conversation guidance, skill metadata and current run instructions.
+Overlays supplement the configured agent key/name and VOICE; they are not a new
+identity selector or authorization source.
+
+After configuration activation, the complete set is reread at the next model call
+in **existing** conversations and managed/dispatcher workers, including continuation
+and tool iterations. Additions, edits and deletions take effect without `/new`,
+transcript replay or restart. In-flight provider requests are not changed. Read-only
+ephemeral reviews intentionally have no working-agent persona. Native and external
+session storage use the same refresh path. PI 1.4 requires a small version-pinned
+adapter bridge to update both owned prompt snapshots; its normal structured system
+patches preserve user/assistant/tool history. Other runtime adapters must implement
+this next-call contract rather than caching instructions at session creation.
+
+Invalid UTF-8, symlinks or nonregular files produce an actionable path diagnostic.
+Initial invalid persona loading fails; after a complete baseline, invalid edits retain
+the **whole** last good prompt and the next call continues safely, allowing repair.
+Removing a configured file, directory or child intentionally restores lower layers;
+a missing base SOUL/VOICE retains legacy optional-file semantics. No watcher, new
+permission state, arbitrary size/count cap or automatic repository Markdown scan
+is introduced. The model's context limit still applies. This is trusted local
+operator configuration, not a sandbox against an operator replacing parent paths.
 
 ## Dispatcher model routing rules
 
@@ -59,18 +180,20 @@ dispatcher:
 ```
 
 Rules are validated on startup and through `settings.local.yaml` overlays (the
-`dispatcher` key accepts `rules` too). Rules apply only to dispatcher worker turns;
+`dispatcher` key accepts `rules` too). `dispatcher.rules` is one of the live-editable
+overlay keys: an overlay update applies at the next worker dispatch boundary without
+restart. Rules apply only to dispatcher worker turns;
 the parent agent keeps the session model. Reasoning levels above `off` require models
 that handle `reasoning_content` correctly; models listed in
-`HARNESS_REASONING_EFFORT_NONE_MODELS` or `reasoningEffortNoneModels` are exempt for
+`HAYATE_AGENT_REASONING_EFFORT_NONE_MODELS` or `reasoningEffortNoneModels` are exempt for
 `thinking: off` turns.
 
 ## Reasoning effort none opt-in
 
 Some OpenAI-compatible servers only accept `reasoning_effort: "none"` instead of a
 thinking switch. Opt in models verified to accept that parameter via
-`reasoningEffortNoneModels` in `harness.yaml` (preferred, config-owned) or the
-`HARNESS_REASONING_EFFORT_NONE_MODELS` environment variable; both lists are merged:
+`reasoningEffortNoneModels` in `hayate-agent.yaml` (preferred, config-owned) or the
+`HAYATE_AGENT_REASONING_EFFORT_NONE_MODELS` environment variable; both lists are merged:
 
 ```yaml
 reasoningEffortNoneModels:
@@ -79,8 +202,10 @@ reasoningEffortNoneModels:
 
 For opted-in `openai-completions` models, a per-turn thinking `off` injects
 `samplingParamsByThinkingLevel.off.reasoning_effort = "none"` into the selected
-model and restores the original selection after the turn. Requires a restart or
-`/restart` after changing `harness.yaml`.
+model and restores the original selection after the turn. Changing `hayate-agent.yaml`
+requires a restart or `/restart`; a `settings.local.yaml` overlay with the same key
+(`reasoningEffortNoneModels`) is live-editable and applies at the next request
+boundary, merged with the config and environment lists.
 
 ## Skill catalog
 
@@ -108,7 +233,7 @@ conversation. A skill created during a running prompt becomes discoverable on th
 next prompt; it can also be read directly immediately. No filesystem watcher is
 required. `/reload-skills` remains a manual fallback.
 
-Skill metadata injection is configurable via `skills.context` (harness.yaml) or
+Skill metadata injection is configurable via `skills.context` (hayate-agent.yaml) or
 `skills.context` in `settings.local.yaml`:
 
 - `auto` (default): inject the catalog metadata once per session, cached; the
@@ -124,7 +249,8 @@ query, so late-discovered skills are usable without a session restart.
 
 ## Built-in review
 
-Changeset review ships enabled by default, with a three-round persistent budget and
+Changeset review is disabled by default, with no mandatory local/publish/merge gates.
+When explicitly enabled, it offers a three-round persistent budget and
 configurable reviewer model/reasoning. See [review.md](review.md) for configuration,
 False-Positive assessment, operator escalation and publication enforcement limits.
 
@@ -157,7 +283,7 @@ Core commands (global changes require administrator rights):
 - `/model --global` and `/reasoning --global` show the effective defaults.
 
 Chat overrides live in `<home>/settings.local.yaml`, not `state.json` or the
-potentially read-only `harness.yaml`. Only explicit overrides are stored, not a copy
+potentially read-only `hayate-agent.yaml`. Only explicit overrides are stored, not a copy
 of all defaults. Setters validate and serialize updates, atomically save, then publish
 the new effective values. Output identifies whether a value comes from the local
 overlay or installation/default. `--global` must be the final argument.
@@ -171,7 +297,7 @@ Unknown keys, secrets, plugin paths and security policy are rejected, not merged
 ### Live routing and request compatibility overlay
 
 The existing `<home>/settings.local.yaml` is the writable surface above the
-installation's (possibly root-owned/read-only) `harness.yaml`. No base write,
+installation's (possibly root-owned/read-only) `hayate-agent.yaml`. No base write,
 permission change or restart is needed for these two live keys:
 
 ```yaml
@@ -280,11 +406,21 @@ an immutable installation baseline and a separate local replacement overlay.
 
 ## Models and credentials
 
-Provider definitions live in PI's `models.json`; examples are in
-`deploy/kubernetes/models.json`. Choose the actual endpoint and model IDs, and
+Provider definitions live in PI's `models.json`. The public repository does not
+include a model configuration bundle; create one for your provider using
+[PI's model configuration reference](https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/docs/models.md).
+Choose the actual endpoint and model IDs, and
 reference credentials by environment name, for example `"apiKey": "$MODEL_API_KEY"`.
 The secret is supplied to the process, not embedded in Git or the image.
 API authentication uses a separate `API_SERVER_KEY`. Do not reuse a model key.
+
+For native HTTPS on the run API, set both `API_SERVER_TLS_KEY_FILE` and
+`API_SERVER_TLS_CERT_FILE` to mounted PEM files. A missing pair, unreadable files
+or invalid TLS material fails startup; there is no fallback to HTTP when TLS is
+configured. Without these settings the existing HTTP mode is preserved. TLS does
+not replace the bearer key. Certificates are loaded at startup, so renewal
+requires a controlled restart. Clients must trust the issuing CA and verify the
+endpoint hostname; never disable certificate verification.
 
 The run API accepts configured `provider/model` references or unambiguous bare
 model IDs. A supplied provider must match the resolved model. Per-run model and

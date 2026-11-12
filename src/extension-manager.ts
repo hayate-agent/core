@@ -27,7 +27,7 @@ export class ExtensionManager {
     this.pending.set(id, ++this.generation);
   }
   async load(): Promise<void> {
-    for (const id of Object.keys(this.settings.effective().extensionPlugins ?? {})) this.request(id);
+    for (const id of Object.keys(this.settings.desired().extensionPlugins ?? {})) this.request(id);
     await this.tick();
     if (this.errors.size || this.pending.size) throw Error("Initial extension activation failed");
   }
@@ -112,7 +112,7 @@ export class ExtensionManager {
         await this.boundary.atIdleBoundary(async () => {
           entered = true;
           const old = this.active.get(id);
-          const spec = this.settings.effective().extensionPlugins?.[id];
+          const spec = this.settings.desired().extensionPlugins?.[id];
           let next: Generation | undefined;
           let detached = false;
           try {
@@ -126,6 +126,7 @@ export class ExtensionManager {
               this.active.set(id, next);
             } else this.active.delete(id);
             this.errors.delete(id);
+            this.settings.appliedPlugin("extensionPlugins", id, spec);
             if (old) void this.retire(old).catch(() => this.errors.set(id, "Retired extension cleanup failed; inspect local module/restart"));
           } catch {
             if (next && this.active.get(id) !== next) this.detach(next);

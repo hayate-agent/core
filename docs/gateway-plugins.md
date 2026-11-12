@@ -1,13 +1,26 @@
 # Runtime gateway modules (v1)
 
+For first-time setup rather than module implementation, start with the
+[terminal, WebUI, Matrix and dispatcher walkthrough](gateways.md).
+Matrix's normal baseline is already bundled and activates from `MATRIX_*`
+configuration. The optional WebUI is built/installed separately and selected with
+`gatewayPlugins.webui.module` in `settings.local.yaml`. `gateways.progress` is
+feedback policy, not an activation switch.
+
 The CLI consumes a bundled gateway-module catalog rather than constructing Matrix
 or naming its factory. Matrix factory, transport, sync recovery and native activity
-delivery are maintained in `harness/plugins` and materialized from the immutable
+delivery are maintained in [hayate-agent/plugins](https://github.com/hayate-agent/plugins) and materialized from the immutable
 `plugins.lock.json` revision into generated `builtin-plugins/` modules. The default
 factory implements `src/gateway-provider.ts`; MATRIX_* settings remain compatible.
 Existing local GatewayModule overrides and disable/baseline operations are unchanged.
 This is source ownership separation: bundled modules still compile into the image;
 changing that pin requires a build and rollout, not runtime hot replacement.
+
+Gateways may explicitly expose model-discoverable text messaging through the
+optional `Channel.messaging` contract. Live capabilities are included in working
+turns and `plugin_message` provides bounded destination discovery, explicit
+operator-authorized sends and no-replay receipts. Adapters that do not opt in
+remain reply-only; see [native messaging](messaging.md).
 
 A module exports default `{ apiVersion: 1, async create(context) { ... } }`.
 Context supplies home, agent and initial approvers. Return `{ channel, home?,

@@ -10,14 +10,31 @@ const idPattern = /^[a-f0-9]{64}$/;
 const words = (s: string) => [...new Set(s.toLocaleLowerCase().match(/[\p{L}\p{N}_-]{2,}/gu) ?? [])];
 function validDate(value: unknown): boolean { return value === undefined || (typeof value === "string" && Number.isFinite(Date.parse(value))); }
 function validate(e: MemoryEntry): void {
-  if (!e || !idPattern.test(e.id) || typeof e.sessionKey !== "string" || !e.sessionKey || e.sessionKey.length > 1000 ||
-      typeof e.title !== "string" || !e.title.trim() || e.title.length > 300 || typeof e.text !== "string" || !e.text.trim() || e.text.length > 12000 ||
-      !["note", "lesson", "decision", "operation"].includes(e.kind) || !["reported", "observed"].includes(e.verification) ||
-      !["active", "revoked", "archived"].includes(e.state) || typeof e.source !== "string" || e.source.length > 1000 ||
-      typeof e.revision !== "string" || !e.revision || !validDate(e.createdAt) || !validDate(e.updatedAt) || !e.createdAt || !e.updatedAt ||
-      !validDate(e.expiresAt) || !validDate(e.reviewAfter) || !Array.isArray(e.links) || e.links.length > 20 || e.links.some((x) => typeof x !== "string" || !idPattern.test(x))) throw Error("Invalid memory entry");
+  const fail = (field: string) => { throw Error(`Invalid memory entry: ${field}`); };
+  if (!e) fail("entry missing");
+  if (!idPattern.test(e.id)) fail("id");
+  if (typeof e.sessionKey !== "string" || !e.sessionKey || e.sessionKey.length > 1000) fail("sessionKey");
+  if (typeof e.title !== "string" || !e.title.trim() || e.title.length > 300) fail("title");
+  if (typeof e.text !== "string" || !e.text.trim() || e.text.length > 12000) fail("text");
+  if (!["note", "lesson", "decision", "operation"].includes(e.kind)) fail("kind");
+  if (!["reported", "observed"].includes(e.verification)) fail("verification");
+  if (!["active", "revoked", "archived"].includes(e.state)) fail("state");
+  if (typeof e.source !== "string" || e.source.length > 1000) fail("source");
+  if (typeof e.revision !== "string" || !e.revision) fail("revision");
+  if (!validDate(e.createdAt) || !e.createdAt) fail("createdAt");
+  if (!validDate(e.updatedAt) || !e.updatedAt) fail("updatedAt");
+  if (!validDate(e.expiresAt)) fail("expiresAt");
+  if (!validDate(e.reviewAfter)) fail("reviewAfter");
+  if (!Array.isArray(e.links) || e.links.length > 20 || e.links.some((x) => typeof x !== "string" || !idPattern.test(x))) fail("links");
 }
-interface Row { entry: MemoryEntry; contentHash: string; inputHash?: string; vector?: number[]; model?: string }
+interface Row { entry: MemoryEntry; contentHash: string; inputHash?: string; vector?: number[]; model?: string; usage?: { count: number; lastUsed: number } }
+
+/** Bounded preference among relevant matches, never an expiry or an access grant. */
+export function memoryUsageWeight(usage: Row["usage"], now: number): number {
+  if (!usage || !Number.isSafeInteger(usage.count) || usage.count < 1 || !Number.isFinite(usage.lastUsed)) return 1;
+  const ageDays = Math.max(0, now - usage.lastUsed) / 86400000;
+  return 1 + Math.min(0.25, Math.log2(1 + usage.count) * 0.025) / (1 + ageDays / 30);
+}
 export class FileMemoryStore implements MemoryProvider {
   readonly capabilities;
   private rows = new Map<string, Row>();
@@ -88,7 +105,7 @@ export class FileMemoryStore implements MemoryProvider {
       entry.revision = hash(raw); // detects manual edits, not just provider-generated revisions
       const old = this.rows.get(id);
       const contentHash = hash(entry.title + "\n" + entry.text);
-      return { entry, contentHash, inputHash: meta.inputHash, ...(old?.contentHash === contentHash ? { vector: old.vector, model: old.model } : {}) };
+      return { entry, contentHash, inputHash: meta.inputHash, ...(old?.contentHash === contentHash ? { vector: old.vector, model: old.model, usage: old.usage } : {}) };
     } catch (err) { if ((err as NodeJS.ErrnoException).code === "ENOENT") return undefined; throw err; }
   }
   private async write(row: Row): Promise<void> {
@@ -128,7 +145,7 @@ export class FileMemoryStore implements MemoryProvider {
     return this.serial(async () => {
       if (!input || typeof input.key !== "string" || !input.key || input.key.length > 500 || !ctx.sessionKey) throw Error("Invalid memory write key");
       const id = hash(ctx.sessionKey + "\0" + input.key);
-      const normalized = { title: input.title, text: input.text, kind: input.kind ?? "note", source: input.source, links: input.links ?? [], reviewAfter: input.reviewAfter, expiresAt: input.expiresAt };
+      const normalized = { title: input.title, text: input.text, kind: input.kind ?? "note", source: input.source ?? ctx.sessionKey, links: input.links ?? [], reviewAfter: input.reviewAfter, expiresAt: input.expiresAt };
       // Retry identity includes validity deadlines; persisted capture jobs retain them.
       const inputHash = hash(JSON.stringify(normalized));
       const existing = await this.read(id);
@@ -139,7 +156,7 @@ export class FileMemoryStore implements MemoryProvider {
       if (this.rows.size >= this.config.maxEntries) throw Error("Memory entry budget exceeded");
       const now = new Date().toISOString();
       const entry: MemoryEntry = { id, revision: randomUUID(), sessionKey: ctx.sessionKey, title: input.title, text: input.text,
-        kind: input.kind ?? "note", verification: "reported", source: input.source, createdAt: now, updatedAt: now,
+        kind: input.kind ?? "note", verification: "reported", source: input.source ?? ctx.sessionKey, createdAt: now, updatedAt: now,
         ...(input.reviewAfter !== undefined ? { reviewAfter: input.reviewAfter } : {}), ...(input.expiresAt !== undefined ? { expiresAt: input.expiresAt } : {}), state: "active", links: input.links ?? [] };
       await this.write({ entry, contentHash: hash(entry.title + "\n" + entry.text), inputHash });
       // Markdown is authoritative: snapshot failure cannot uncommit a durable write.
@@ -211,13 +228,27 @@ export class FileMemoryStore implements MemoryProvider {
     }
     const hits: MemoryHit[] = []; const now = Date.now();
     // Revalidate authoritative source, including deletions, revocations and expiry.
-    for (const [id, score] of [...scores].sort((a, b) => b[1] - a[1]).slice(0, 200)) {
+    const ranked = [...scores].map(([id, score]) => [id, score * memoryUsageWeight(this.rows.get(id)?.usage, now)] as const);
+    for (const [id, score] of ranked.sort((a, b) => b[1] - a[1]).slice(0, 200)) {
       let row: Row | undefined;
       try { row = await this.read(id); } catch { continue; }
       if (!row || row.entry.sessionKey !== ctx.sessionKey || (!options.historical && (row.entry.state !== "active" || (row.entry.expiresAt && Date.parse(row.entry.expiresAt) <= now)))) continue;
       hits.push({ entry: row.entry, score, reviewDue: Boolean(row.entry.reviewAfter && Date.parse(row.entry.reviewAfter) <= now) });
       if (hits.length >= (options.limit ?? 5)) break;
     }
+    // Only returned, source-validated hits count, not every candidate scanned. Derived
+    // usage lives in the index snapshot: source revisions and idempotency stay intact.
+    await this.serial(async () => {
+      for (const hit of hits) {
+        const row = this.rows.get(hit.entry.id);
+        if (!row || row.entry.revision !== hit.entry.revision) continue;
+        const previous = row.usage;
+        row.usage = { count: Math.min(1000000, (previous && Number.isSafeInteger(previous.count) && previous.count > 0 ? previous.count : 0) + 1), lastUsed: now };
+        this.dirty = true;
+      }
+      // Retrieval remains available if the derived snapshot cannot be saved.
+      await this.snapshot().catch(() => { this.error = "Memory usage snapshot unavailable"; });
+    });
     return hits;
   }
   reindex(): Promise<void> {

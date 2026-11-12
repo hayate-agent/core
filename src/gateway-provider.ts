@@ -8,13 +8,22 @@ export interface GatewayInstance {
   approvers?: string[];
 }
 export interface GatewayFactoryContext {
+  /** Versioned durable, session-bound attachment reference contract. */
+  inboundAttachments?: 1;
+  /** Host verifies/stages explicit binary sends and binds their origin session. */
+  outboundAttachments?: 1;
   home: string;
   agent: string;
   approvers: string[];
   admins?: string[];
+  /** Read-only lookup of explicitly installed trusted backend plugin services. */
+  services?: import("./plugins.js").PluginServices;
 }
 export interface GatewayModule {
   apiVersion: 1;
+  /** Trusted assertion: create is inert, all work is host-owned ingress/delivery,
+   * and Channel.stop drains every remaining resource. Not a sandbox. */
+  updateAdmission?: "foreground-owned";
   create(context: GatewayFactoryContext): Promise<GatewayInstance | undefined>;
 }
 export interface GatewayOverride { module?: string; disabled?: boolean }

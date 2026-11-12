@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import os from "node:os";
+import { agentHome, configurationFile } from "./product-paths.js";
 import path from "node:path";
 import { parse } from "yaml";
 import { validateGatewayConfig, type GatewayConfig } from "./gateway-settings.js";
@@ -8,6 +8,7 @@ import { contextPolicy } from "./context-maintenance.js";
 import { memoryConfig, type MemoryConfig } from "./memory.js";
 import { reviewConfig } from "./review-config.js";
 import { validateWasmTools } from "./wasm-tools.js";
+import { validateModelRoles, type ModelRoles } from "./model-roles.js";
 import { dispatcherConfig } from "./dispatcher-config.js";
 
 export interface ReviewConfig {
@@ -43,7 +44,7 @@ export interface HarnessConfig {
   tools?: string[];
   /** Trusted local ESM plugin paths, relative to Harness home or absolute. */
   plugins?: string[];
-  /** Models that accept reasoning_effort "none" for thinking "off" turns; merged with HARNESS_REASONING_EFFORT_NONE_MODELS at the runtime call site. */
+  /** Models that accept reasoning_effort "none" for thinking "off" turns; merged with HAYATE_AGENT_REASONING_EFFORT_NONE_MODELS at the runtime call site. */
   reasoningEffortNoneModels?: string[];
   /** Trusted tool-only ESM modules with explicit generation replacement. */
   reloadableToolPlugins?: string[];
@@ -56,7 +57,10 @@ export interface HarnessConfig {
   protectedContent?: import("./protected-content.js").ProtectedContentConfig;
   skillUpdateSource?: import("./skill-updates.js").SkillUpdateSource;
   /** Infrastructure-owned semantic continuation grants, keyed by exact conversation. */
-  completionCheck?: { authorizations: Record<string, import("./completion-check.js").CompletionAuthorization> };
+  completionCheck?: { provider?: string | false; authorizations?: Record<string, import("./completion-check.js").CompletionAuthorization>; timeoutMs?: number };
+  /** Explicit installation review selections, before normalization adds defaults. */
+  reviewOverrides?: { model?: string; thinking?: string };
+  modelRoles?: ModelRoles;
   dispatcher?: Partial<import("./dispatcher-config.js").DispatcherConfig>;
   sessions?: { provider: string; options?: unknown };
   compaction?: { strategy: string };
@@ -73,6 +77,10 @@ export interface HarnessConfig {
     voice: string;
     /** Named personalities selectable via /personality, file per name. */
     personalitiesDir: string;
+    /** Explicit trusted Markdown instruction paths, in order (not technical configuration). */
+    overlays?: string[];
+    /** Direct Markdown children are composed in filename order. Legacy profiles stay separate. */
+    overlaysDir?: string;
   };
   skills: {
     /** Extra skill dirs in addition to PI's global/project discovery. */
@@ -120,6 +128,11 @@ export function defaultConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
   }
   if (overrides.reportProcessing !== undefined && (typeof overrides.reportProcessing !== "string" || !/^[a-z][a-z0-9_-]*$/.test(overrides.reportProcessing))) throw Error("Invalid reportProcessing");
   if (overrides.autoReloadToolPlugins !== undefined && typeof overrides.autoReloadToolPlugins !== "boolean") throw Error("autoReloadToolPlugins must be a boolean");
+  if (overrides.completionCheck?.provider !== undefined && overrides.completionCheck.provider !== false &&
+      (typeof overrides.completionCheck.provider !== "string" || !/^[a-z][a-z0-9-]{0,79}$/.test(overrides.completionCheck.provider))) throw Error("Invalid completionCheck.provider");
+  if (overrides.completionCheck?.timeoutMs !== undefined && (!Number.isSafeInteger(overrides.completionCheck.timeoutMs) ||
+      overrides.completionCheck.timeoutMs < 1000 || overrides.completionCheck.timeoutMs > 120000)) throw Error("completionCheck.timeoutMs must be between 1000 and 120000 milliseconds");
+  if (overrides.modelRoles !== undefined) validateModelRoles(overrides.modelRoles);
   dispatcherConfig(overrides.dispatcher);
   validateWasmTools(overrides.wasmTools ?? []);
   if (overrides.mcp !== undefined && (overrides.mcp === null || typeof overrides.mcp !== "object" || typeof overrides.mcp.enabled !== "boolean")) {
@@ -146,15 +159,16 @@ export function defaultConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
       (activity.maxAlive !== undefined && (!Number.isInteger(activity.maxAlive) || activity.maxAlive < 0 || activity.maxAlive > 120)))) {
     throw Error("Invalid activity policy");
   }
-  const home = overrides.home ?? process.env.VANILLACORE_HARNESS_HOME ?? path.join(os.homedir(), ".vanillacore-harness");
+  const home = agentHome(overrides.home);
   return {
     activity: overrides.activity,
-    agent: overrides.agent ?? process.env.VANILLACORE_HARNESS_AGENT ?? "agent",
+    agent: overrides.agent ?? process.env.HAYATE_AGENT_AGENT ?? "agent",
     home,
     cwd: overrides.cwd ?? process.cwd(),
     timezone: overrides.timezone ?? process.env.TZ ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
     model: overrides.model,
     thinking: overrides.thinking,
+    reviewOverrides: { model: overrides.review?.model, thinking: overrides.review?.thinking },
     review: reviewConfig(overrides.review),
     reviewEngine: overrides.reviewEngine,
     contextStrategy: overrides.contextStrategy,
@@ -169,6 +183,7 @@ export function defaultConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
     protectedContent: overrides.protectedContent,
     skillUpdateSource: overrides.skillUpdateSource,
     completionCheck: overrides.completionCheck,
+    modelRoles: overrides.modelRoles,
     dispatcher: dispatcherConfig(overrides.dispatcher),
     sessions: overrides.sessions ?? { provider: "native" },
     compaction: overrides.compaction ?? { strategy: "native" },
@@ -182,6 +197,12 @@ export function defaultConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
       voice: path.join(home, "VOICE.md"),
       personalitiesDir: path.join(home, "personalities"),
       ...overrides.persona,
+      ...(overrides.persona?.overlays === undefined ? {} : {
+        overlays: instructionPaths(overrides.persona.overlays).map(file => path.resolve(home, file)),
+      }),
+      ...(overrides.persona?.overlaysDir === undefined ? {} : {
+        overlaysDir: path.resolve(home, instructionPaths([overrides.persona.overlaysDir])[0]!),
+      }),
     },
     skills: { paths: [path.join(home, "skills")], context: "auto", ...overrides.skills },
     cron: { jobsFile: path.join(home, "cron", "jobs.yaml"), ...overrides.cron },
@@ -194,10 +215,17 @@ export function defaultConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
   };
 }
 
-/** Load `<home>/harness.yaml` (if present) over the defaults. */
+function instructionPaths(value: unknown): string[] {
+  if (!Array.isArray(value) || value.some(file => typeof file !== "string" || !file.trim())) {
+    throw new Error("persona overlays must be nonempty file/directory paths");
+  }
+  return value;
+}
+
+/** Load canonical configuration, falling back to the pre-rename file on upgrade. */
 export async function loadConfig(home?: string): Promise<HarnessConfig> {
   const base = defaultConfig(home ? { home } : {});
-  const file = path.join(base.home, "harness.yaml");
+  const file = configurationFile(base.home);
   let raw: Partial<HarnessConfig> = {};
   try {
     raw = (parse(await readFile(file, "utf8")) ?? {}) as Partial<HarnessConfig>;

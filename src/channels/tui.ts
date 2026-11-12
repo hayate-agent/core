@@ -1,4 +1,5 @@
 import { Editor, Input, SelectList, ProcessTerminal, Text, TuiAltScreen, VStack, ScrollView, matchesKey, truncateToWidth, type Component, type Terminal } from "@earendil-works/pi-tui";
+import { taskContextLabel, activityExecutionLabel, executionMetadata, type ExecutionMetadata } from "../builtin-plugins/execution-metadata.js";
 import { ConversationTranscript } from "./transcript.js";
 import { tint, type TranscriptEntry, type MessageKind } from "./presentation.js";
 import type { LocalSessions } from "../local-sessions.js";
@@ -10,6 +11,8 @@ export interface TuiOptions {
   color?: boolean;
   sessions?: LocalSessions;
   canSwitchSession?: () => boolean;
+  /** Snapshot the old owner before creating a different conversation. */
+  remainingWorkNotice?: () => string;
   panels?: () => Iterable<PluginPanel>;
   status: () => string;
   workState?: () => { running: boolean; queued: number };
@@ -17,6 +20,8 @@ export interface TuiOptions {
   reasoning?: () => string;
   prepareSession?: () => Promise<void>;
   quit: () => void;
+  /** Explicit terminal interrupt: abort current work rather than draining queued work. */
+  interrupt?: () => void;
   terminal?: Terminal;
   models?: () => Promise<string[]>;
   login?: (ui: LoginUI) => Promise<void>;
@@ -46,6 +51,10 @@ export class HarnessTuiChannel implements Channel {
   private get color(): boolean { return this.opts.color ?? (process.env.NO_COLOR === undefined && process.env.TERM !== "dumb"); }
   private partial = "";
   private working = false;
+  private execution?: ExecutionMetadata;
+  private executionState: "pending" | "observed" | "unavailable" = "pending";
+  private classifiers = new Map<string, { target: string; label: string }>();
+  private readonly mainActivity = new Map<string, { id: string; sequence?: number; settled: boolean }>();
   private pendingSubmissions = 0;
   private startedAt = 0;
   private finishedAt = 0;
@@ -124,7 +133,7 @@ export class HarnessTuiChannel implements Channel {
         this.tui.requestRender();
         return { consume: true };
       }
-      if (matchesKey(data, "ctrl+c")) { if (this.cancelDialog) this.cancelDialog(); else this.opts.quit(); return { consume: true }; }
+      if (matchesKey(data, "ctrl+c")) { (this.opts.interrupt ?? this.opts.quit)(); return { consume: true }; }
       return undefined;
     });
     if (this.opts.sessions?.current) this.note(`New session: ${this.opts.sessions.current.id}\nWorkspace: ${this.opts.sessions.workspace}\nNo previous conversation loaded. /sessions · /resume <id> · /new [title]`);
@@ -160,10 +169,12 @@ export class HarnessTuiChannel implements Channel {
       this.resetActivity();
       this.note(`Resumed session: ${row.title} · ${row.id.slice(0, 8)}\nWorkspace: ${store.workspace}${history.length > 80 ? "\nShowing the last 80 conversation messages; older context may remain in the model history." : ""}`);
     } else {
+      const remaining = this.opts.remainingWorkNotice?.() ?? "Remaining-work inventory unavailable; old conversation work may continue.";
+      const previous = store.current?.id;
       const row = await store.create(argument || "Untitled");
       this.lines = [];
       this.resetActivity();
-      this.note(`New session: ${row.id} · ${row.title}\nWorkspace: ${store.workspace}\nNo previous conversation loaded.`);
+      this.note(`New session: ${row.id} · ${row.title}\nWorkspace: ${store.workspace}\nNo previous conversation loaded.\n${remaining}\nOld work is not transferred here.${previous ? ` /resume ${previous} to manage the old owner.` : ""}`);
     }
     this.tui.resetTextSelection();
     this.conversationScroll.scrollToEnd();
@@ -258,6 +269,8 @@ export class HarnessTuiChannel implements Channel {
   private resetActivity(): void {
     this.routineStatus = "";
     this.partial = "";
+    this.execution = undefined;
+    this.executionState = "pending";
     this.working = false;
     this.startedAt = 0;
     this.finishedAt = 0;
@@ -297,7 +310,7 @@ export class HarnessTuiChannel implements Channel {
       const tools = [...this.activeTools].map(([name, count]) => `${name}${count > 1 ? ` ×${count}` : ""}`);
       const phase = tools.length ? `Running: ${tools.slice(0, 2).join(", ")}${tools.length > 2 ? ` (+${tools.length - 2})` : ""}`
         : this.partial ? "Writing response" : "Working · waiting for model/SDK";
-      return `${spinner} ${phase} · ${elapsed}s${counts}${queue} · /stop`;
+      return `${spinner} ${phase} · ${elapsed}s${counts}${queue} · ${activityExecutionLabel(this.execution, this.executionState)} · /stop`;
     }
     if (this.pendingSubmissions || queued) return `◌ Processing input${queue}`;
     if (this.startedAt) return `${this.outcome === "failed" ? "✕ Failed" : this.outcome === "cancelled" ? "■ Cancelled" : this.failedTools ? "⚠ Completed with tool errors" : "✓ Done"} · ${elapsed}s${counts}`;
@@ -315,16 +328,57 @@ export class HarnessTuiChannel implements Channel {
         panelLines.push(...lines.slice(0, 4 - panelLines.length).map((s) => s.slice(0, 500).replace(/[\x00-\x1f\x7f-\x9f]/g, " ")));
       } catch { panelLines.push(`[${panel.name}] panel unavailable`); }
     }
+    panelLines.push(...[...this.classifiers.values()].filter(row => row.target === this.address.target).slice(-2).map(row => row.label));
     this.panelText.setText(panelLines.join("\n"));
-    this.header.setText(`VanillaCore Agent Harness · ${this.opts.agent}\n${this.opts.status()}${this.opts.sessions?.current ? `\nSession: ${this.opts.sessions.current.id} · ${this.opts.sessions.current.title} · ${this.opts.sessions.workspace}` : ""}`);
+    this.header.setText(`Hayate Agent · ${this.opts.agent}\n${this.opts.status()}${this.opts.sessions?.current ? `\nSession: ${this.opts.sessions.current.id} · ${this.opts.sessions.current.title} · ${this.opts.sessions.workspace}` : ""}`);
     // Stream into the scrollable conversation, leaving the status area compact.
     this.transcript.setEntries([...this.lines, ...(this.partial ? [{ kind: "assistant" as const, text: this.partial }] : [])], this.color);
     if (!this.dialog) this.activity.setText(tint(this.routineStatus || this.activityLabel(), this.outcome === "failed" || this.failedTools ? "31" : this.working || this.opts.workState?.().running || this.outcome === "cancelled" ? "33" : this.startedAt ? "32" : "2", this.color));
     this.tui.requestRender();
   }
 
+  taskActivity(to: Address, event: import("../activity.js").ActivityEvent): void {
+    if (this.opts.sessions && to.target !== this.sessionKey) return;
+    const s = event.snapshot;
+    const executionState = s.executionState ?? (s.phase === "starting" ? "pending" : "unavailable");
+    const settled = ["completed", "failed", "cancelled"].includes(s.phase);
+    const rowKey = s.role === "main" ? `main:${to.target}` : s.id;
+    if (s.role === "main") {
+      const current = this.mainActivity.get(to.target);
+      if (current) {
+        if (current.sequence !== undefined && s.sequence === undefined) return;
+        if (s.sequence !== undefined && current.sequence !== undefined) {
+          if (s.sequence < current.sequence || (s.sequence === current.sequence && s.id !== current.id)) return;
+          if (s.sequence === current.sequence && current.settled) return;
+        } else if (s.sequence === undefined) {
+          // Legacy producers have no generation. Only a starting event can transfer ownership.
+          if (s.id !== current.id && s.phase !== "starting") return;
+          if (s.id === current.id && current.settled && s.phase !== "starting") return;
+        }
+      }
+      this.mainActivity.set(to.target, { id: s.id, sequence: s.sequence, settled });
+      this.execution = s.execution;
+      this.executionState = executionState;
+    }
+    if (s.role === "main" && settled) {
+      this.classifiers.delete(rowKey);
+      this.render();
+      return;
+    }
+    this.classifiers.set(rowKey, { target: to.target, label: `${s.role === "dispatcher-classifier" ? "Dispatcher classifier" : s.role === "worker" ? "Worker" : "Main"} · ${taskContextLabel(s.parent ?? s.id, s.outputTags)} · ${s.phase} · ${activityExecutionLabel(s.execution, executionState)}` });
+    while (this.classifiers.size > 16) {
+      const oldest = [...this.classifiers.keys()].find(key => key !== `main:${to.target}`)!;
+      this.classifiers.delete(oldest);
+    }
+    this.render();
+  }
+
   turnEvent(_to: Address, event: TurnEvent): void {
     if (this.opts.sessions && _to.target !== this.sessionKey) return;
+    if (event.type === "execution") {
+      this.execution = executionMetadata(event.selection);
+      this.executionState = this.execution.model && this.execution.thinking ? "observed" : "unavailable";
+    } else if (this.executionState === "pending" && ["text", "tool", "usage"].includes(event.type)) this.executionState = "unavailable";
     if (event.type === "text") this.partial += event.delta;
     if (event.type === "tool") {
       const count = this.activeTools.get(event.name) ?? 0;

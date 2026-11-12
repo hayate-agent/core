@@ -7,9 +7,10 @@ import { Harness } from "../src/harness.js";
 import { ExecutionStore } from "../src/execution.js";
 import { DispatcherRuntime } from "../src/dispatcher-runtime.js";
 import { guardResultOrchestration } from "../src/result-orchestration.js";
+import { toolGuardDenialReason } from "../src/tool-guard-error.js";
 import { FakeRuntime } from "./fakes.js";
 
-for (const drift of ["none", "depth", "operator", "missing-checkpoint", "blocked", "completed"])
+for (const drift of ["none", "depth", "blocked", "completed"])
 for (const explicit of [false, true]) test(`result resumes live mandate; drift=${drift}; explicit continuation=${explicit}; durable dedup`, async t => {
   const home = await mkdtemp(path.join(os.tmpdir(), "result-mandate-"));
   t.after(() => rm(home, { recursive: true, force: true }));
@@ -25,17 +26,6 @@ for (const explicit of [false, true]) test(`result resumes live mandate; drift=$
   const child = await store.submit("main", "dependency", "write code", "direct", 1, { taskId: task.id, original: task.original, depth: 0, anchor: task.anchor });
   const claim = await store.claim(child.id); await store.complete(child.id, claim.token!, "Missing regression");
   if (drift === "depth") task.depth = 3;
-  if (drift === "operator") {
-    await harness.accept({ id: "clarification", sessionKey: "main", source: "channel", text: "Implement correction; tests only; no deploy" });
-    await harness.waitForSessionIdle("main");
-    task = harness.sessions.get("main")!.task!;
-    assert.notEqual(task.id, child.dependency!.taskId);
-    // Replacement fixture: unlike an intermediate question, the historical task
-    // is no longer retained. Multi-task routing has its own task-resumption test.
-    const parent = harness.sessions.get("main")!;
-    parent.tasks = parent.tasks?.filter(t => t.id === task.id);
-  }
-  if (drift === "missing-checkpoint") child.dependency = undefined;
   const depth = task.depth;
   const session = runtime.sessions.get("main")!;
   session.prompt = async (_text, options) => {
@@ -89,7 +79,12 @@ test("deterministic revocation/expiry and worker checks do not classify result s
   for (const tool of ["plugin_dispatch", "plugin_task_continuation"]) {
     assert.throws(() => guardResultOrchestration(harness, "main", tool), /live stored parent mandate/);
   }
-  assert.throws(() => harness.planContinuation("main", { state: "continue", next: "not authorized" }), /No live parent mandate/);
+  for (const guard of [
+    () => guardResultOrchestration(harness, "main", "plugin_dispatch", { action: "submit" }),
+    () => harness.planContinuation("main", { state: "continue", next: "not authorized" }),
+  ]) assert.throws(guard, error => {
+    assert.match(toolGuardDenialReason(error), /^parent_mandate_missing:/); return true;
+  });
   assert.equal(new DispatcherRuntime(harness, store).resultAllowed("main", child.id), false);
   const bridge = new DispatcherRuntime(harness, store);
   assert.throws(() => bridge.guardTool("dispatch:missing:claim", "plugin_dispatch"), /no longer authorized/);

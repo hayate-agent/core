@@ -113,8 +113,8 @@ test("persona: SOUL + VOICE + personality become prompt sections", async () => {
   await writeFile(path.join(dir, "personalities", "warm.md"), "Etwas wärmer heute.");
   const files = { soul: path.join(dir, "SOUL.md"), voice: path.join(dir, "VOICE.md"), personalitiesDir: path.join(dir, "personalities") };
   const sections = personaSections(await loadPersona(files, "warm"));
-  assert.match(sections[0], /^# Agent foundation[\s\S]*VanillaCore Agent Harness/);
-  assert.match(sections[1], /# Harness development resources/);
+  assert.match(sections[0], /^# Agent foundation[\s\S]*Hayate Agent/);
+  assert.match(sections[1], /# Hayate Agent development resources/);
   assert.match(sections[2], /^# Identity[\s\S]*Example Agent/);
   assert.match(sections[3], /^# Voice[\s\S]*ironisch/);
   assert.match(sections[4], /^# Personality: warm/);

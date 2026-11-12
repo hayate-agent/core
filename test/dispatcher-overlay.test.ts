@@ -12,7 +12,7 @@ test("local dispatcher overlay activates and preserves inherited fields", async 
  await writeFile(file,"dispatcher:\n  enabled: true\n  capacity: 2\n");
  const settings = new SettingsService(file,{dispatcher:{enabled:false,concurrentRequests:true,strategy:"direct",retentionDays:14}});
  await settings.load();
- assert.deepEqual(settings.effective().dispatcher,{enabled:true,concurrentRequests:true,strategy:"direct",capacity:2,retentionDays:14});
+ assert.deepEqual(settings.effective().dispatcher,{enabled:true,concurrentRequests:true,strategy:"direct",capacity:2,retentionDays:14,countAuxiliaryRuns:false});
  await writeFile(file,"dispatcher:\n  enabled: true\n");
  const unsafe = new SettingsService(file,{}); await unsafe.load(); assert.equal(unsafe.effective().dispatcher?.enabled,false);
  await writeFile(file,"dispatcher:\n  enabled: false\n  unexpected: true\n");

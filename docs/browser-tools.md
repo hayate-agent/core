@@ -12,7 +12,7 @@ restarts when home is persistent. Python tools can use python3 -m venv in home.
 The image includes pip, venv and a C/C++ build toolchain for native extensions.
 Record exact versions in package.json/lockfiles.
 Additional OS packages require an image change and the normal reviewed build/
-GitOps rollout. Do not modify /opt/vanillacore-harness at runtime.
+GitOps rollout. Do not modify /opt/hayate-agent at runtime.
 
 The non-root acceptance script test/browser-smoke.sh installs agent-browser 0.39.2
 and its browser, opens a local page and checks the title. It uses --no-sandbox

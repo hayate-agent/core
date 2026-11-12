@@ -7,7 +7,7 @@ commands, shell execution, transcript access or provider replacement.
 Start the owner explicitly with both options:
 
 ```sh
-vanillacore-harness run --maintenance-directory /private/path --maintenance-session 'exact:key'
+hayate-agent run --maintenance-directory /private/path --maintenance-session 'exact:key'
 ```
 
 No listener is enabled by default. The owner fixes the key; clients cannot choose
@@ -33,9 +33,9 @@ and reconcile before retrying an uncertain/disconnected admission.
 Use the dedicated CLI without starting another runtime or acquiring a home lock:
 
 ```sh
-vanillacore-harness maintenance /private/path/maintenance.sock status
-vanillacore-harness maintenance /private/path/maintenance.sock admit maintenance-1 0 request.json
-vanillacore-harness maintenance /private/path/maintenance.sock cancel maintenance-1 1
+hayate-agent maintenance /private/path/maintenance.sock status
+hayate-agent maintenance /private/path/maintenance.sock admit maintenance-1 0 request.json
+hayate-agent maintenance /private/path/maintenance.sock cancel maintenance-1 1
 ```
 
 `request.json` contains only `action`, `preserve`, and `resume`. The client reads a
