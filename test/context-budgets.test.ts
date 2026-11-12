@@ -15,7 +15,7 @@ test('frontier main256Ki/children128Ki; explicit local main128Ki/children64Ki wi
   for(const id of ['frontier','local']) {
    const runtime=new PiRuntime({cwd:home,sessionsDir:path.join(home,id),skillPaths:[],model:'budget-fixture/'+id,personaSections:async()=>[],compactionOwner:()=> 'agent',contextBudgets:()=>contextPolicy({localModels:['budget-fixture/local']}),approvals:{mode:'off',tools:[]}});
    (runtime as any).modelRuntime=async()=>models;
-   for(const [key,ephemeral]of [['matrix:main',false],['dispatch:worker:claim',false],['subagent:worker',false],['assessment:validator',true]]as const){
+   for(const [key,ephemeral]of [['matrix:main',false],['dispatch:worker:claim',false],['subagent:worker',false],['assessment:validator',true],['cron:status',false],['api:cron-migrated-status',false]]as const){
     const wrapped:any=await runtime.open(key,{ephemeral});const session=wrapped.session;
     session.prompt=async()=>{const s=session.settingsManager.getCompactionSettings(session.model);const expected=(key==='matrix:main'?262144:131072)/(id==='local'?2:1);assert.equal(session.model.contextWindow,1000000);assert.equal(session.model.contextWindow-s.reserveTokens,expected,`${id}/${key}`);assert.equal(s.enabled,true);};session.waitForIdle=async()=>{};
     await wrapped.prompt('read-only fixture');await wrapped.dispose();
