@@ -87,7 +87,10 @@ contextMaintenance:
   checkEveryTurns: 5
   cooldownTurns: 5
   autoHandover: true
-  workerContextTokens: 48000
+  mainContextTokens: 262144
+  workerContextTokens: 131072
+  # Explicit inventory; location is not inferred from vendor/name/window size.
+  localModels: [my-provider/my-local-model]
 ```
 
 ### Worker context within a single Harness turn
@@ -95,13 +98,18 @@ contextMaintenance:
 A dispatcher/subagent worker may make many assistant/tool exchanges before its
 single Harness turn finishes. Harness before/after-turn maintenance cannot bound
 that inner loop. The PI adapter therefore enables **native between-response
-compaction for child sessions**, independent of the Main compaction owner, with
-an absolute `workerContextTokens` trigger (default 48,000; safe integer >= 8,192).
+compaction at explicit role budgets**. Frontier Main receives up to262,144 input
+tokens; workers, dispatcher assessments and validators receive131,072. Models
+explicitly listed in `localModels` receive half:131,072 for Main and65,536 for
+workers/assessments. Library callers without the composed policy retain legacy
+Main ownership; the CLI supplies the complete policy. Values are safe integers
+>=8,192 and cannot enlarge actual model capacity or remove native output headroom.
 The reserve is calculated from the **actually selected model** after per-turn
-routing and refreshed before the SDK's next-response check. Existing stricter
-per-model reserves are retained; recent retained context is at most one third of
-the remaining input threshold. Overrides are in-memory and child-session-local;
-Main and ephemeral classifiers are unchanged. No model context window is forged.
+routing and refreshed before the SDK's next-response check. The original stricter
+operator/native baseline is retained, not the previous managed override, so an
+approved budget increase does not stick at an older smaller threshold. Recent
+retained context is at most one third of the remaining input threshold. Overrides
+are in-memory and session-local. No model context window is forged.
 
 This is a compaction trigger, not a hard billing/output quota: an indivisible
 message or static system context can still exceed it, and compaction itself
