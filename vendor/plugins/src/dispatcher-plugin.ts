@@ -128,7 +128,12 @@ export function dispatcherPlugin(get: () => Dispatcher | undefined): PluginModul
         }
         if (!["pause", "resume", "cancel"].includes(String(action)) || typeof input.id !== "string") throw Error("Invalid dispatch action");
         if (input.requestId !== undefined && (typeof input.requestId !== "string" || !input.requestId.trim())) throw Error("Invalid control requestId");
-        if (Object.keys(input).some(key => !["action", "id", "requestId"].includes(key))) throw Error("Control does not accept task text or extra fields; use decide for scoped steering");
+        // Some native transports expose every property as required rather than
+        // nullable. Accept ONLY the complete inert placeholder envelope. Sparse
+        // extras and any meaningful value still fail closed; no steering is read.
+        const placeholders: Record<string, unknown> = { task: "", taskId: "", questionId: "", answer: "", decision: "", offset: 0, limit: 1, field: "input", charOffset: 0 };
+        const fullPlaceholderEnvelope = Object.entries(placeholders).every(([key, value]) => Object.hasOwn(input, key) && input[key] === value);
+        if (Object.keys(input).some(key => !["action", "id", "requestId"].includes(key) && !(fullPlaceholderEnvelope && Object.hasOwn(placeholders, key)))) throw Error("Control does not accept task text or extra fields; use decide for scoped steering");
         await dispatcher.control(context.sessionKey, input.id, action as "pause" | "resume" | "cancel");
         return "Control recorded";
       },

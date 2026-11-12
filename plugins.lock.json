@@ -4,14 +4,14 @@
     "compaction-strategy-plugin.ts": "8dadb434b15443524827b302af9c98c22ce40e892e0c0c2bc60e558dae33c932",
     "completion-prompt.ts": "004a7ac8b8b7c737c4b23fc52320fca3f9c005b62681c64368ad748bcee0b96e",
     "completion-strategy-plugin.ts": "5f69464b4648d9b360020eac5b967e924549236eaff92f3c5e68f79826503b6f",
-    "completion-validator-plugin.ts": "dca11e5beb4cabdfac439143dd4a16497990a5dd312317bd3a465480620e4045",
+    "completion-validator-plugin.ts": "1c64766ed46bf6d6532366a31f250db541da0c746e550f78831dda1816cc4032",
     "context-plugin.ts": "1da424038b5f5dd8e88999d86c4b26fecca5d21ca4170b83fdba9958eef787f0",
     "context-strategy-plugin.ts": "104c0e4a9b9619d361a8089b43724986366bc3665993c2146268e5f847698643",
     "continuation-plugin.ts": "e5485881f09b871912fa5574af6fe9c7b323abe01b03b8876cd235b436595a7d",
     "cron-report-plugin.ts": "71bb9d6432985d25defb18d4ef45653342c2243f42e215b972b0eb586d24a260",
     "cron-report-processing.ts": "4e40d3f4c9801d87af1bdd8e2624a12f21e02ad49378a504abaea7a1bb49856f",
     "cron-reports.ts": "0bbf04e0c3ce1c8a499cdcc2e3bba1d27c88aacd71218f1b4027002591947991",
-    "dispatcher-plugin.ts": "878eb10234dbed34c62b2e55f45f06f6ec70bf84a5927e3fd16213f6f21ad522",
+    "dispatcher-plugin.ts": "8dcafde10d1aa6676835b89571ef9dfaf51bdbb026cec81aa133b7e9c7be27c6",
     "execution-metadata.ts": "a19904571ba749a4821bcd47f4b9c4f496b067c553090a18cb36cc4bdd666cbc",
     "extension-manager-plugin.ts": "51ea7b167e2683b180f510a005305975afabb22819e02aa03aafbc434061200c",
     "gateway-baselines.ts": "7e4422bfef1e74ad4e767d4c88947b88082c45aeccb9b3da2193ccbff9baaa1c",
@@ -50,6 +50,6 @@
     "wasm-tools-plugin.ts": "438c6ac8899e283e4268f51ef451275bf16a37b584db84ee8302a26200cc70de"
   },
   "repository": "https://git.vanillacore.net/harness/plugins",
-  "revision": "224bf11abcf6dc9aca8a5a9c06f8674a69f50db1",
+  "revision": "1e63d4edc35db75c486323d2aaba53e109482363",
   "schema": 1
 }

@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { assessmentRetryDelay } from "./assessment-retry.js";
 import type { AgentRuntime } from "./types.js";
 import { assessCompletion, type CompletionDiagnostic } from "./completion-check.js";
+import type { CompletionFailureDetail } from "./validator.js";
 import { runtimeReviewer } from "./runtime/reviewer.js";
 import { ExecutionDeadlineExpired, ExecutionAssessmentHold } from "./execution.js";
 import { derivedPlanBoundary, stepCompletionPrompt, parentDecisionContext } from "./dispatcher-step-prompt.js";
@@ -16,7 +17,7 @@ type StepRole = typeof stepRoles[number];
 export interface PlanStep { task: string; role: StepRole; reason: string; evidence: string }
 export interface StepOutcome { role: StepRole; requested: ModelPair; observed?: ModelPair; result: string; escalatedFrom?: StepRole }
 type StepEvidence = NonNullable<NonNullable<import("./types.js").Inbound["completionContext"]>["tools"]>;
-interface StepAssessment { decisionRevision?: number; index: number; reply: string; tools: number; evidence: StepEvidence; observed?: ModelPair; attempts: number; nextAt?: number; diagnostic?: CompletionDiagnostic }
+interface StepAssessment { decisionRevision?: number; index: number; reply: string; tools: number; evidence: StepEvidence; observed?: ModelPair; attempts: number; nextAt?: number; diagnostic?: CompletionDiagnostic; failure?: CompletionFailureDetail }
 /** Persisted in Execution.checkpoint before any worker turn. Prior outcomes are data, not authority. */
 export interface SequentialState {
   v: 1;
@@ -31,7 +32,7 @@ export interface SequentialState {
   /** Host-observed successful tool-result receipts, not prose or validator notes.
    * No-progress corrections are paced, never terminalized by their count. */
   progress?: { index: number; stalls: number; receipts: string[] };
-  prior?: { index: number; result: string; validation?: { diagnostic: CompletionDiagnostic; timeoutMs: number } };
+  prior?: { index: number; result: string; validation?: { diagnostic: CompletionDiagnostic; timeoutMs: number; failure?: CompletionFailureDetail } };
   /** Settled worker result and bounded inference budget; restart revalidates, never replays its effects. */
   assessment?: StepAssessment;
 }
@@ -300,7 +301,7 @@ export function sequentialStrategy(deps: SequentialDeps): DispatcherStrategy {
         // Keep a settled worker result separate from its independent assessment.
         // Inference failure/restart must never execute this worker's effects again.
         const retain = async (attempts: number, diagnostic?: CompletionDiagnostic, nextAt?: number,
-          notice?: { key: string; text: string }) => {
+          notice?: { key: string; text: string }, failure?: CompletionFailureDetail) => {
           const retained = structuredClone(state as SequentialState);
           delete retained.prior; // assessment now owns this reply; do not duplicate it in the checkpoint
           const boundedEvidence = evidence.slice(-STEP_EVIDENCE_LIMIT).map(e => ({
@@ -309,7 +310,7 @@ export function sequentialStrategy(deps: SequentialDeps): DispatcherStrategy {
             ...(e.result !== undefined ? { result: e.result.slice(0, 600) } : {}),
           }));
           const assessment: StepAssessment = { decisionRevision, index, reply, tools, evidence: boundedEvidence, ...(observed ? { observed } : {}), attempts,
-            ...(nextAt !== undefined ? { nextAt } : {}), ...(diagnostic ? { diagnostic } : {}) };
+            ...(nextAt !== undefined ? { nextAt } : {}), ...(diagnostic ? { diagnostic } : {}), ...(failure ? { failure } : {}) };
           retained.assessment = assessment;
           // Leave 1K below ExecutionStore's 64K cap for final diagnostics/prior metadata.
           // Keep authority/plan/outcomes exact; project only untrusted evidence,
@@ -334,6 +335,7 @@ export function sequentialStrategy(deps: SequentialDeps): DispatcherStrategy {
         if (status === "inadequate" && state.prior?.index === index && state.assessment) status = "blocked";
         let verdictState: string | undefined;
         let validation: CompletionDiagnostic | undefined;
+        let failure: CompletionFailureDetail | undefined;
         // Worker prose is only a proposal. Independently validate the exact step
         // before persisting completion or admitting any successor. A validator
         // "continue" means unfinished work of THIS step: resume it in the same
@@ -364,13 +366,14 @@ Correctable vs blocked: a worker "blocked" claim or evidence shortfall that rest
             let nextAt = Date.now() + assessmentRetryDelay(attempt);
             await retain(attempt, validation, nextAt);
             validation = undefined;
+            failure = undefined;
             verdict = await assessCompletion({ review: (text, _model, _thinking, signal) =>
               backend.review(text, reviewer.model!, reviewer.thinking ?? "off", signal) }, {
               id: `validate:${task.id}:${index}`, sessionKey, source: "host", text: prompt,
               completionContext: { recent: [], tasks: [], tools: evidence },
             }, reply, { task: `Original mandate (scope and limits):\n${task.input}\n${parentDecisionContext(decisions)}\nValidate ONLY step ${index + 1}:\n${step.task}\nRequired evidence:\n${step.evidence}\n${authority}`,
               ...(task.dependency?.expiresAt !== undefined ? { expiresAt: task.dependency.expiresAt } : {}) },
-            context.signal, reviewer.model, Date.now, stepCompletionPrompt, value => { validation = value; }, STEP_VALIDATION_TIMEOUT_MS, deps.validators);
+            context.signal, reviewer.model, Date.now, stepCompletionPrompt, (value, detail) => { validation = value; failure = detail; }, STEP_VALIDATION_TIMEOUT_MS, deps.validators);
             await authorize();
             if (!verdict) nextAt = Date.now() + assessmentRetryDelay(attempt);
             // Commit the diagnostic event and dedup receipt together with the
@@ -378,7 +381,7 @@ Correctable vs blocked: a worker "blocked" claim or evidence shortfall that rest
             await retain(attempt, validation, verdict ? undefined : nextAt, !verdict ? {
               key: `step-assessment:${index}`,
               text: "Technische Schrittprüfung ausstehend; erneute Prüfung mit Backoff, ohne Worker-Wiederholung.",
-            } : undefined);
+            } : undefined, failure);
             if (!verdict) {
               if (!context.deferAssessment) return block("Assessment retry scheduler unavailable; retained evidence requires reconciliation.");
               await context.deferAssessment(nextAt);
@@ -464,7 +467,7 @@ End your reply with exactly one final line: "STEP-STATUS: complete" only if the 
           delete next.escalation; delete next.correction;
         } else {
           next.prior = { index, result: verdictState === "technical" ? "[settled worker report retained in assessment]" : result,
-            ...(verdictState === "technical" ? { validation: { diagnostic: validation ?? "technical", timeoutMs: STEP_VALIDATION_TIMEOUT_MS } } : {}) };
+            ...(verdictState === "technical" ? { validation: { diagnostic: validation ?? "technical", timeoutMs: STEP_VALIDATION_TIMEOUT_MS, ...(failure ? { failure } : {}) } } : {}) };
           const higher = stepRoles[stepRoles.indexOf(role) + 1];
           // Bounded: one level, only on explicit inadequacy with no tool call (no possible effect).
           if (status === "inadequate" && tools === 0 && higher && role === step.role) {
