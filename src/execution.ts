@@ -39,7 +39,9 @@ export interface Execution {
   recoveryEnrollment?: "current" | "held-legacy";
   id: string;
   /** Host-captured parent mandate; never accepted from model tool arguments. */
-  dependency?: { taskId: string; depth: number; original: string; expiresAt?: number; anchor?: import("./types.js").Inbound["completionAnchor"] };
+  dependency?: { taskId: string; depth: number; original: string; expiresAt?: number; anchor?: import("./types.js").Inbound["completionAnchor"];
+    /** Scheduling snapshot; the live durable parent preference takes precedence. */
+    priority?: import("./task-priority.js").TaskPriority };
   /** Host-captured address of the submitting turn (room/thread); never from model tool arguments. */
   origin?: import("./types.js").Address;
   requestId: string;

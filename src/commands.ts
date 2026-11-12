@@ -4,6 +4,7 @@
  */
 import { validateModelRoles } from "./model-roles.js";
 import { McpUserError } from "./mcp-management.js";
+import { isTaskPriority } from "./task-priority.js";
 import type { PluginCommand, PluginUI } from "./plugins.js";
 import { developmentGuide } from "./development.js";
 import { randomUUID } from "node:crypto";
@@ -367,6 +368,16 @@ export const COMMANDS: Command[] = [
     run: async (args, input, ctx) => {
       if (!args.trim()) return "usage: /btw <question>";
       ctx.harness.enqueue({ sessionKey: `${input.sessionKey}:btw`, text: args.trim(), source: "api", replyTo: input.replyTo });
+    },
+  },
+  {
+    name: "task-priority", admin: true,
+    help: "Persist scheduling priority without resuming/preempting: <task-id> high|normal|low (current conversation)",
+    run: async (args, input, ctx) => {
+      const [id, priority, ...extra] = args.trim().split(/\s+/);
+      if (!id || !isTaskPriority(priority) || extra.length) return "usage: /task-priority <task-id> high|normal|low";
+      await ctx.harness.setTaskPriority(input.sessionKey, id, priority);
+      return `Task ${id}: priority ${priority} saved; authorization, holds, budgets and active workers unchanged`;
     },
   },
   {
