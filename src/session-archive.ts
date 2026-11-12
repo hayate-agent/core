@@ -86,7 +86,8 @@ export class SessionArchives {
       retrospectiveTruncated: archive.retrospective.length > charOffset + 1500,
       forwardTruncated: archive.forward.length > charOffset + 1500,
     });
-    const entries = options.query ? archive.entries.filter((e: ArchiveEntry) => e.text.toLowerCase().includes(options.query!.toLowerCase())) : archive.entries;
+    const query = options.query?.toLowerCase();
+    const entries = query ? archive.entries.filter((e: ArchiveEntry) => e.text.toLowerCase().includes(query)) : archive.entries;
     return JSON.stringify({ id, sourceSessionId: archive.sourceSessionId, total: entries.length, offset, entries: entries.slice(offset, offset + limit).map((e: ArchiveEntry) => ({ ...e, text: e.text.slice(charOffset, charOffset + 1500), charOffset, totalChars: e.text.length, truncated: e.text.length > charOffset + 1500 })) });
   }
 }
