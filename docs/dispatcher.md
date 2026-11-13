@@ -286,6 +286,38 @@ inspectable. `/stop` on a parent durably cancels its nonterminal dispatcher task
 and revokes delivery of all their results, including results already queued for
 Main. A new submission with a new request ID is separate work.
 
+## Bounded steering and durable decision consolidation
+
+The active parent decision window remains bounded (32 records / 16 KB), but it is
+not a lifetime correction budget. When it fills, the authenticated parent uses
+`plugin_dispatch_decisions status`, then `consolidate` with the exact applied
+`replaces` request IDs and a complete current scoped working context. Preserve
+all original operator restrictions, applicable approvals/CI, remaining work and
+unknown-effect reconciliation. This explicitly amends parent working directions;
+it never grants authority, marks work completed or silently removes constraints.
+Pending decisions cannot be consolidated away. If a prior restriction is unclear,
+read its exact archived receipt instead of inferring permission.
+
+Original records are durably archived before the atomic active-window commit;
+`read` retrieves their exact text and receipts by request ID. Their idempotency
+and conflicting-ID protection survive reload and repeated consolidation. A
+failed save retains the old active window; retry verifies the same archived
+originals. Revisions are monotonic across consolidations, independent of active
+window length, so stale assessments remain fenced even after more than 32
+lifetime decisions. Consolidation cannot steal a running claim, clear an unsafe
+intent, reset budgets, bypass a question/manual pause/stop, or create a second
+writer. The existing strategy still owns safe reassessment admission.
+
+If the parent amendment introduces still-authorized work absent from the remaining
+saved steps (for example fixing compatibility after a source publication milestone),
+`consolidate` may include a typed `followUp` task, role, reason and required evidence.
+The sequential strategy attaches that exact receipt once at the retained assessment
+boundary. It preserves the existing open step and all completed outcomes, and uses
+the same independent readiness admission before moving to the follow-up. New work
+never marks the old hold completed or replays its worker. Stable original intent
+IDs, checkpoint size and the six-step plan bound remain enforced. Unsupported,
+out-of-scope or dependent follow-ups receive no execution admission.
+
 ## Persistence and restart
 
 `executions.json` under Harness home holds tasks, claims, checkpoints, effect
