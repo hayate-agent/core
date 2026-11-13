@@ -15,6 +15,7 @@ import { reloadableToolsPlugin } from "./builtin-plugins/reloadable-tools-plugin
 import { protectedContentPlugin } from "./builtin-plugins/protected-content-plugin.js";
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
+import { completionProviderForProfile } from "./completion-profile.js";
 import { fileURLToPath } from "node:url";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { LocalSessions } from "./local-sessions.js";
@@ -229,7 +230,7 @@ async function main(argv: string[]): Promise<void> {
   await reloadSkills();
 
   const plugins = new PluginHost();
-  plugins.validators.select(config.completionCheck?.provider);
+  plugins.validators.select(completionProviderForProfile(config));
   const initialReloadableTools: PluginHost["tools"] = new Map();
   const reloadableTools = config.reloadableToolPlugins?.length
     ? new ReloadableTools({home:config.home,cwd:config.cwd,agent:config.agent},config.reloadableToolPlugins,log,true, tools => {
