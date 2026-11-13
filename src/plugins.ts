@@ -1,4 +1,5 @@
 import path from "node:path";
+import { missingModule, webModuleEntrypoint } from "./optional-web-module.js";
 import { ValidatorRegistry, type ValidatorProvider } from "./validator.js";
 import { MemoryOrchestrationRegistry, type MemoryOrchestrator } from "./memory-orchestration.js";
 import { PolicyRegistry, type Policy } from "./policies.js";
@@ -6,7 +7,7 @@ import type { DispatcherStrategy } from "./dispatcher.js";
 import type { MemoryProviderFactory } from "./memory.js";
 import type { CompactionStrategy } from "./compaction.js";
 import type { SessionProviderFactory } from "./sessions.js";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import type { Address, Channel, Inbound, SendMeta, TurnEvent } from "./types.js";
 
 export interface PluginTool {
@@ -183,22 +184,27 @@ export class PluginHost {
   private loading?: Promise<void>;
   private stopping?: Promise<void>;
 
-  load(files: string[], context: Pick<PluginAPI, "agent" | "home" | "cwd"> & Pick<Partial<PluginAPI>, "executionContexts" | "foregroundWork">, reserved: Iterable<string>, reservedChannels: Iterable<string> = ["console", "api", "matrix"], bundled: PluginModule[] = []): Promise<void> {
+  load(files: string[], context: Pick<PluginAPI, "agent" | "home" | "cwd"> & Pick<Partial<PluginAPI>, "executionContexts" | "foregroundWork">, reserved: Iterable<string>, reservedChannels: Iterable<string> = ["console", "api", "matrix"], bundled: PluginModule[] = [], optionalModules: Iterable<string> = []): Promise<void> {
     if (this.closed || this.closing) return Promise.reject(new Error("Plugin host is closed"));
     if (this.loading) return Promise.reject(new Error("Plugin activation already in progress"));
-    const loading = this.activate(files, context, reserved, reservedChannels, bundled);
+    const loading = this.activate(files, context, reserved, reservedChannels, bundled, optionalModules);
     this.loading = loading;
     void loading.finally(() => { if (this.loading === loading) this.loading = undefined; }).catch(() => {});
     return loading;
   }
 
-  private async activate(files: string[], context: Pick<PluginAPI, "agent" | "home" | "cwd"> & Pick<Partial<PluginAPI>, "executionContexts" | "foregroundWork">, reserved: Iterable<string>, reservedChannels: Iterable<string> = ["console", "api", "matrix"], bundled: PluginModule[] = []): Promise<void> {
+  private async activate(files: string[], context: Pick<PluginAPI, "agent" | "home" | "cwd"> & Pick<Partial<PluginAPI>, "executionContexts" | "foregroundWork">, reserved: Iterable<string>, reservedChannels: Iterable<string> = ["console", "api", "matrix"], bundled: PluginModule[] = [], optionalModules: Iterable<string> = []): Promise<void> {
     if (this.closed) throw new Error("Plugin host is closed");
     const names = new Set([...reserved, ...this.commands.keys()]);
     const channelNames = new Set([...reservedChannels, ...this.channels.keys()]);
+    const optional = new Set([...optionalModules].map(file => file.startsWith("file:") ? fileURLToPath(file) : path.resolve(context.home, file)));
     try {
       for (const source of [...bundled, ...files]) {
         const location = typeof source === "string" ? path.resolve(context.home, source) : "bundled core plugin";
+        if (typeof source === "string" && (optional.has(location) || webModuleEntrypoint(location)) && await missingModule(location)) {
+          console.error("[plugins] Optional Web plugin is not installed; continuing without it");
+          continue;
+        }
         const module = typeof source === "string" ? (await import(pathToFileURL(location).href)).default as PluginModule : source;
         if (!module || module.apiVersion !== 1 || typeof module.activate !== "function") throw new Error(`Invalid plugin API: ${location}`);
         if (typeof source === "string" && module.updateAdmission !== "foreground-owned") this.unsupportedUpdateOwners.add(`plugin ${this.unsupportedUpdateOwners.size + 1}`);

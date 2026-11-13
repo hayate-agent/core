@@ -1,4 +1,5 @@
 import path from "node:path";
+import { missingModule } from "./optional-web-module.js";
 import { pathToFileURL } from "node:url";
 import { createHash, randomUUID } from "node:crypto";
 import type { Address, InboundAttachment } from "./types.js";
@@ -38,7 +39,7 @@ export class GatewayManager {
   }
   constructor(private readonly harness: Harness, private readonly settings: SettingsService,
     private readonly context: GatewayFactoryContext, private readonly baseline: Record<string, string>) {}
-  private async prepare(name: string): Promise<GatewayInstance | undefined> {
+  private async prepare(name: string, startup = false): Promise<GatewayInstance | undefined> {
     if (["console", "api", "subagents", "dispatch"].includes(name)) throw Error("Reserved gateway ID");
     const override = this.settings.desired().gatewayPlugins?.[name];
     if (override?.disabled) return undefined;
@@ -46,6 +47,11 @@ export class GatewayManager {
     if (!location) return undefined;
     const url = location.startsWith("file:") ? new URL(location) : pathToFileURL(path.resolve(this.context.home, location));
     if (url.protocol !== "file:") throw Error("Only explicitly installed local ESM gateway modules are supported");
+    if (startup && name === "webui" && await missingModule(url)) {
+      this.errors.set(name, "Optional Web gateway entrypoint is not installed; other agent channels remain available");
+      console.error("[gateway] Optional Web gateway is not installed; continuing without it");
+      return undefined;
+    }
     url.searchParams.set("activation", randomUUID());
     const module = (await import(url.href)).default as GatewayModule;
     if (module?.apiVersion !== 1 || typeof module.create !== "function") throw Error("Unsupported gateway module");
@@ -56,7 +62,7 @@ export class GatewayManager {
   }
   async load(): Promise<void> {
     for (const name of new Set([...Object.keys(this.baseline), ...Object.keys(this.settings.desired().gatewayPlugins ?? {})])) {
-      const instance = await this.prepare(name);
+      const instance = await this.prepare(name, true);
       if (instance) { this.harness.addChannel(instance.channel); this.active.set(name, instance); this.reconcileHome(); }
     }
   }
