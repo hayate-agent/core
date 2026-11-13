@@ -12,6 +12,8 @@ Role configuration applies only when `modelRoles.enabled` is true. Missing/dupli
 
 Inputs are bounded independently: up to1600 incoming characters, up to4096 serialized candidate characters (exact IDs and full included bundles), and up to8 recent excerpts of240 characters. A bundle too large to display is omitted rather than silently inherited in full. The cache holds at most128 exact bounded metadata-context/model-chain results; it does not cache plugin results or execution authority.
 
+Model discovery must use the live configured runtime catalog (`/v1/models`), not a historical model-name list. A name present only in an old static budget catalog is not proof of an available small inference backend. If no dedicated local classifier is actually available, retain the explicit Dispatcher/Main fallback rather than inventing a model, endpoint, credential or cloud substitute.
+
 ## Plugin override (existing versioned service API)
 
 A trusted plugin can replace generation without editing Harness or PI:
