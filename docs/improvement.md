@@ -46,11 +46,21 @@ recovery blockers still require attention. Ordinary user/API work is unaffected.
 
 Delivery belongs to the authorized improvement mandate:
 
-1. **Shared product:** Core and plugin changes go to the actual owning upstream
-   source repository, then its normal integration/release path. Never patch only
-   generated bundled adapters or hide a shared product fix in an instance repo.
-2. **Skills/instance:** changes go to the existing owning skill, instance or
-   configuration repository and its established deployment/update path.
+1. **Skills/instance:** configuration, skills and extensions go to their assigned
+   agent/configuration repository and established deployment path.
+2. **Private product variant:** agent-specific Core, WebUI or plugin-source
+   adaptations may remain in an assigned non-upstream repository as immutable
+   bases plus versioned patches/source, tests and a reproducible artifact. They
+   must survive base upgrades through explicit composition, not installed edits.
+3. **Shared product contribution:** generally useful changes may go to upstream
+   deliberately; touching product source does not itself mandate publication.
+
+Product source changes need independent external review of the actual changed
+stand before integration/live activation, including private variants. Self-review,
+CI or a different merge login alone are not that review. The existing external
+review workflow supplies evidence; Forgejo required approvals remain0. Missing
+review is an external blocker, not authorization to self-approve. See
+[agent variants](agent-variants.md) for the reproducible update/review contract.
 
 Resolve owners from installation/repository metadata, SOUL and actual Git remotes;
 never invent repository authority or credentials. Existing operator PR/merge
@@ -60,7 +70,7 @@ left as a local proposal. Check existing commits, branches and PRs before acting
 unknown effects are reconciled, not retried blindly. Reject unsafe candidates.
 
 An optional `delivery` on an experiment receipt records reported `stream`
-(`upstream`/`instance`), `status` (`local`/`pushed`/`integrated`/`deployed`/`blocked`),
+(`upstream`/`variant`/`instance`), `status` (`local`/`pushed`/`integrated`/`deployed`/`blocked`),
 actual repository URL, branch, full commit SHA, optional PR URL, deployment evidence
 or a concrete blocker/next step. Published states require branch and commit;
 deployed also requires deployment evidence; blocked requires a reason. Malformed
