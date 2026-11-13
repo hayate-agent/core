@@ -4,7 +4,7 @@ import type { AgentRuntime } from "./types.js";
 import { assessCompletion, type CompletionDiagnostic } from "./completion-check.js";
 import type { CompletionFailureDetail } from "./validator.js";
 import { runtimeReviewer } from "./runtime/reviewer.js";
-import { ExecutionDeadlineExpired, ExecutionAssessmentHold } from "./execution.js";
+import { validExecutionFollowUp, executionDecisionRevision, ExecutionDeadlineExpired, ExecutionAssessmentHold } from "./execution.js";
 import { derivedPlanBoundary, stepCompletionPrompt, parentDecisionContext, readyStepPrompt } from "./dispatcher-step-prompt.js";
 import type { DispatchContext, DispatcherStrategy } from "./dispatcher.js";
 import type { Execution, ExecutionStore } from "./execution.js";
@@ -25,6 +25,8 @@ export interface SequentialState {
   plan: PlanStep[];
   /** Stable original step identities; reordering never reuses another step's effect intent. */
   stepIds?: number[];
+  /** Exact amendment receipts already attached as independently assessable work. */
+  appliedFollowUps?: string[];
   /** Once-only adoption of independent ready-step assessment for saved plans. */
   readyStepPolicy?: 1;
   /** Fresh ready-step admission is bound to the parent decision snapshot until effects begin. */
@@ -153,7 +155,7 @@ function readState(task: Readonly<Execution>): SequentialState | undefined | "in
     if (a !== undefined && (!a || typeof a !== "object" || a.index !== state.outcomes.length ||
         typeof a.reply !== "string" || a.reply.length > 64000 || !Number.isSafeInteger(a.tools) || a.tools < 0 ||
         !Number.isSafeInteger(a.attempts) || a.attempts < 0 ||
-        (a.decisionRevision !== undefined && (!Number.isSafeInteger(a.decisionRevision) || a.decisionRevision < 0 || a.decisionRevision > 32)) ||
+        (a.decisionRevision !== undefined && (!Number.isSafeInteger(a.decisionRevision) || a.decisionRevision < 0 || a.decisionRevision > Number.MAX_SAFE_INTEGER)) ||
         (a.nextAt !== undefined && (!Number.isSafeInteger(a.nextAt) || a.nextAt < 0)) ||
         !Array.isArray(a.evidence) || a.evidence.length > STEP_EVIDENCE_LIMIT || a.evidence.some(e => !e ||
           typeof e.name !== "string" || e.name.length > 80 || typeof e.error !== "boolean" ||
@@ -162,12 +164,14 @@ function readState(task: Readonly<Execution>): SequentialState | undefined | "in
         (a.diagnostic !== undefined && !["technical", "inconclusive", "invalid_response", "unavailable"].includes(a.diagnostic)))) return "invalid";
     if (a?.route && (Object.keys(a.route).some(k => !["model", "thinking"].includes(k)) || typeof a.route.model !== "string" || a.route.model.length > 200 || (a.route.thinking !== undefined && (typeof a.route.thinking !== "string" || a.route.thinking.length > 40)))) return "invalid";
     if (a?.session !== undefined && (typeof a.session !== "string" || !a.session.startsWith(`dispatch:${task.id}:`) || a.session.length > 300)) return "invalid";
+    if (state.appliedFollowUps !== undefined && (!Array.isArray(state.appliedFollowUps) || state.appliedFollowUps.length > MAX_STEPS ||
+        new Set(state.appliedFollowUps).size !== state.appliedFollowUps.length || state.appliedFollowUps.some(id => typeof id !== "string" || !id || id.length > 128))) return "invalid";
     if (state.readyStepPolicy !== undefined && state.readyStepPolicy !== 1) return "invalid";
     const ids = state.stepIds;
     if (ids !== undefined && (!Array.isArray(ids) || ids.length !== state.plan.length || new Set(ids).size !== ids.length || ids.some(id => !Number.isSafeInteger(id) || id < 0 || id >= state.plan.length))) return "invalid";
     const admission = state.readyAdmission;
     if (admission && (!ids || admission.stepId !== ids[state.outcomes.length] || !Number.isSafeInteger(admission.decisionRevision) ||
-        admission.decisionRevision < 0 || admission.decisionRevision > 32 || !Number.isSafeInteger(admission.from) ||
+        admission.decisionRevision < 0 || admission.decisionRevision > Number.MAX_SAFE_INTEGER || !Number.isSafeInteger(admission.from) ||
         admission.from <= state.outcomes.length || admission.from >= state.plan.length)) return "invalid";
     if (state.deferred !== undefined) {
       if (!ids || !Array.isArray(state.deferred) || state.deferred.length > state.plan.length - state.outcomes.length ||
@@ -299,6 +303,28 @@ export function sequentialStrategy(deps: SequentialDeps): DispatcherStrategy {
       };
       let recovering = !!task.intent && task.claimedRecoveryAction !== "retry";
       while (state.outcomes.length < state.plan.length) {
+        // Explicit new parent work must become schedulable in the SAME execution,
+        // not disappear because an earlier source milestone was already recorded.
+        // Attach only at an exact settled assessment boundary; the existing
+        // independent ready-step check still has to admit it before any effects.
+        if (state.assessment) {
+          const steering = await context.decisions?.() ?? [];
+          const pending = steering.filter(d => d.followUp && !(state as SequentialState).appliedFollowUps?.includes(d.requestId));
+          if (pending.length) {
+            if (state.plan.length + pending.length > MAX_STEPS || pending.some(d => !validExecutionFollowUp(d.followUp)))
+              return block("Scoped follow-up exceeds the bounded retained plan; no worker or effect replay admitted.");
+            const amended: SequentialState = structuredClone(state);
+            amended.stepIds ??= amended.plan.map((_, i) => i);
+            amended.appliedFollowUps ??= [];
+            for (const decision of pending) {
+              amended.stepIds.push(amended.plan.length);
+              amended.plan.push(structuredClone(decision.followUp!)); amended.appliedFollowUps.push(decision.requestId);
+            }
+            if (JSON.stringify(amended).length > 63000) return block("Scoped follow-up checkpoint exceeds safe storage budget; retained evidence preserved.");
+            await authorize(); await context.fenceDecisions?.(executionDecisionRevision(steering));
+            await context.checkpoint(JSON.stringify(amended)); state = amended;
+          }
+        }
         const index = state.outcomes.length;
         const step = state.plan[index]!;
         const stepId = state.stepIds?.[index] ?? index;
@@ -322,7 +348,7 @@ export function sequentialStrategy(deps: SequentialDeps): DispatcherStrategy {
           if (JSON.stringify(fixed).length > 60000) return block("Persistierter Plan/Ergebnisse lassen keinen Platz für den Prüfnachweis; kein weiterer Worker gestartet.");
         }
         let decisions = await context.decisions?.() ?? [];
-        let decisionRevision = decisions.length;
+        let decisionRevision = executionDecisionRevision(decisions);
         const role = state.escalation?.index === index ? state.escalation.to : step.role;
         const intentKey = `step:${task.id}:${stepId}:${role}`;
         const current = deps.store.list(task.parent).find(item => item.id === task.id);
@@ -418,7 +444,7 @@ Correctable vs blocked: a worker "blocked" claim or evidence shortfall that rest
         for (let round = state.correction?.index === index ? state.correction.rounds : 0; status !== "inadequate"; round++) {
           const claimed = status;
           decisions = await context.decisions?.() ?? [];
-          decisionRevision = decisions.length;
+          decisionRevision = executionDecisionRevision(decisions);
           const reviewer = await validatorRole(runtime, deps.roles());
           if (typeof reviewer === "string") return block(reviewer);
           const backend = runtimeReviewer(runtime, "supervisor");
@@ -568,7 +594,7 @@ End your reply with exactly one final line: "STEP-STATUS: complete" only if the 
             const candidates = state.plan.map((candidate, position) => ({ candidate, position }))
               .filter(({ position }) => position > index && !(state as SequentialState).deferred?.some(d => d.stepId === ids[position]));
             if (candidates.length && state.assessment) {
-              decisions = await context.decisions?.() ?? []; decisionRevision = decisions.length;
+              decisions = await context.decisions?.() ?? []; decisionRevision = executionDecisionRevision(decisions);
               const reviewer = await validatorRole(runtime, deps.roles());
               if (typeof reviewer !== "string") {
                 const backend = runtimeReviewer(runtime, "supervisor");
