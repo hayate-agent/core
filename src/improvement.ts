@@ -199,7 +199,8 @@ export class ImprovementController {
           (c.verdict !== undefined && c.verdict.state !== "completed" &&
             !(c.verdict.state === "continue" && typeof c.verdict.next === "string" && c.verdict.next.trim() && c.verdict.next.length <= 4000))))
         throw Error("Invalid nightly closure assessment");
-      if (!s.deliveryHistoryImported) {
+      const importedHistory = !s.deliveryHistoryImported;
+      if (importedHistory) {
         const history: ExperimentReceipt[] = [];
         const issues: string[] = [];
         const directory = path.join(this.home, "improvement", "reports");
@@ -216,8 +217,8 @@ export class ImprovementController {
             for (const receipt of receipts) {
               if (!receipt || !["hypothesis", "baseline", "candidate", "evidence"].every(key => typeof receipt[key] === "string") ||
                   !["improved", "rejected", "inconclusive"].includes(receipt.outcome)) throw Error("Invalid archived receipt");
-              history.push(receipt);
             }
+            history.push(...receipts);
           } catch { issues.push(name); }
         }
         // Latest evidence wins; archive import never executes or authorizes work.
@@ -233,6 +234,7 @@ export class ImprovementController {
         }
       }
       this.state = s;
+      if (importedHistory) await this.save(); // Evidence durable before a turn can consume it.
     } catch (err) { if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err; }
   }
   private async save(beforeCommit?: () => void): Promise<void> {
