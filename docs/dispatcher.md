@@ -402,9 +402,35 @@ startup never independently replays its old Harness inbox or continuation. A
 settled turn retains its result before the final completion commit, so a restart
 in that gap returns the saved result without another worker turn. Unknown
 strategies, changed versions and repeated interruptions also block automatic
-recovery. An unsafe blocked task has no automatic reconciliation command: inspect
-actual external effects before making a separate authorized submission. Do not
-edit ledger files while the Harness is running.
+recovery. For a blocked `resume`, the parent uses `plugin_dispatch_recovery`
+`action: evidence` with the exact execution ID. `field: execution` returns the
+retained ledger record; `field: transcript` pages the exact host-bound worker
+entries (`entry`, `charOffset`, maximum 8000 characters per page). This never
+opens a model session, runs a worker or edits its transcript. Evidence is scoped
+to the original parent and remains untrusted data, not new authority.
+
+After inspecting the transcript and reconciling actual external effects, use
+`action: continue`, the returned `fingerprint`, a stable `requestId`, and bounded
+`evidence` describing the actual-state reconciliation. The same execution retains
+its intent, checkpoint, worker history and counters. Only a matching strategy
+with reconciliation support may continue; the existing runtime imports that
+history before remaining work. There is no arbitrary retry grant, alternate
+publisher, completion override, or recovery-policy bypass. Host policy, manual
+pause, parent stop, expiry, ownership holds, held-legacy enrollment, unanswered
+questions, missing/incomplete/compacted transcript evidence and unmatched tool
+calls remain fenced. A tool response is not proof that its effect did not occur:
+reconcile actual state before continuing. Concurrent state changes invalidate the
+fingerprint; identical request retries return their original receipt without
+starting another worker. An ordinary `continue` never clears a manual pause.
+When the current operator mandate explicitly authorizes resuming that paused
+writer, the parent uses `action: resume-paused` with the same evidence and
+fingerprint gates. This is explicit pause/resume control, NOT an automatic
+recovery permission or effect retry. The receipt audits the resumed pause. Every
+pause/resume/cancel increments the execution control revision: even a repeated
+identical pause invalidates earlier fingerprints. Parent/operator stops, expiry,
+questions, unknown effects and host policy cannot be bypassed this way.
+Do not make a replacement submission to bypass this
+boundary, and never edit live ledger files.
 
 This is not exactly-once execution for arbitrary tools. A process can die after
 an external effect and before its outcome is stored. Strategy plugins must model

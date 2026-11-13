@@ -1,4 +1,4 @@
-import type { ExecutionRecoveryPolicy } from "./execution-recovery.js";
+import { recoveryBlock, type ExecutionRecoveryPolicy } from "./execution-recovery.js";
 import { validateWorkerPin } from "./model-roles.js";
 import { executionDecisionRevision, ExecutionClaimConflict, ExecutionDecisionConflict, ExecutionDeadlineExpired, ExecutionWorkerFailure, ExecutionAssessmentHold, type Execution, type ExecutionEvent, type ExecutionStore } from "./execution.js";
 import { toolGuardDenialReason } from "./tool-guard-error.js";
@@ -333,6 +333,17 @@ export class Dispatcher {
       if (pending) void pending.then(() => this.kick()).catch(this.report);
       else void this.kick().catch(this.report);
     }
+  }
+  async continueReconciled(parent: string, id: string, requestId: string, executionHash: string, evidence: string, fingerprint: string, resumePaused = false): Promise<void> {
+    if (this.active.has(id) || !this.parentEnabled(parent) || this.admissionFenced()) throw Error("Execution owner or host remains active/fenced");
+    await this.store.continueReconciled(parent, id, requestId, executionHash, evidence, fingerprint, task => {
+      if (this.active.has(id) || !this.parentEnabled(parent) || this.admissionFenced() || this.stopped) throw Error("Execution owner or host remains active/fenced");
+      const strategy = this.strategyFor(task as Execution);
+      if (!strategy?.reconcile || task.intent && (!task.recoverySession || !task.recoverySession.startsWith(`dispatch:${task.id}:`))) throw Error("Retained strategy/session cannot reconcile; no retry granted");
+      const reason = recoveryBlock(task as Execution, strategy, this.recoveryPolicy);
+      if (reason) throw Error("Host recovery policy still blocks continuation");
+    }, resumePaused);
+    await this.kick();
   }
   async resolve(parent: string, id: string, actor: string, action: "continue" | "retry", evidence: string): Promise<void> {
     const task = this.store.list(parent).find(task => task.id === id);

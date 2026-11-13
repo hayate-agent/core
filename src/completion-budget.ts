@@ -88,6 +88,7 @@ export function renderCompletionPrompt(strategy: CompletionPrompt, input: Inboun
   const retained = input.completionContext?.retained;
   const kept = retained && { original: "", technical: retained.technical, ...(retained.runtime ? { runtime: retained.runtime } : {}), truncated: [] as string[],
     ...(retained.savedNext !== undefined ? { savedNext: "" } : {}),
+    ...(retained.parentReconciliation !== undefined ? { parentReconciliation: "" } : {}),
     recentMessages: [] as NonNullable<typeof retained.recentMessages>,
     ...(retained.workers ? { workers: { ...retained.workers, items: [] as typeof retained.workers.items } } : {}) };
   if (retained && kept) {
@@ -98,6 +99,10 @@ export function renderCompletionPrompt(strategy: CompletionPrompt, input: Inboun
     if (retained.savedNext !== undefined) {
       if (!fit(retained.savedNext.length, size => { kept.savedNext = prefix(retained.savedNext!, size); })) kept.savedNext = "";
       if (kept.savedNext!.length < retained.savedNext.length) mark("savedNext");
+    }
+    if (retained.parentReconciliation !== undefined) {
+      if (!fit(retained.parentReconciliation.length, size => { kept.parentReconciliation = prefix(retained.parentReconciliation!, size); })) kept.parentReconciliation = "";
+      if (kept.parentReconciliation!.length < retained.parentReconciliation.length) mark("parentReconciliation");
     }
     for (const item of retained.workers?.items ?? []) {
       const { result, ...meta } = item;

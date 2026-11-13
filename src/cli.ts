@@ -73,6 +73,7 @@ import { workflowTools } from "./workflow-tools.js";
 import { continuationPlugin } from "./builtin-plugins/continuation-plugin.js";
 import { executionControlPlugin } from "./execution-control.js";
 import { dispatchPlanHistoryPlugin } from "./dispatch-plan-history-plugin.js";
+import { dispatchRecoveryPlugin } from "./dispatch-recovery-plugin.js";
 import { dispatchDecisionsPlugin } from "./dispatch-decisions-plugin.js";
 import { taskPriorityPlugin } from "./task-priority-plugin.js";
 import { operatorPriorityIntent } from "./priority-intent.js";
@@ -379,7 +380,7 @@ async function main(argv: string[]): Promise<void> {
     tools: (() => {
       const workflow = workflowTools(config.tools, config.memory.enabled, false);
       const tools = workflow?.length ? [...new Set([...workflow, ...(reviewModule?.modelTools ?? [])])] : workflow;
-      return dispatchPolicy.enabled && tools?.length ? [...new Set([...tools, "plugin_dispatch", "plugin_dispatch_decisions", "plugin_dispatch_plan_history", "plugin_worker_tasks"])] : tools;
+      return dispatchPolicy.enabled && tools?.length ? [...new Set([...tools, "plugin_dispatch", "plugin_dispatch_decisions", "plugin_dispatch_plan_history", "plugin_dispatch_recovery", "plugin_worker_tasks"])] : tools;
     })(),
     pluginTools: () => composeToolCatalog(plugins.tools, initialReloadableTools, reloadableTools?.tools ?? new Map()),
     sessionProvider: () => sessionProvider,
@@ -510,7 +511,7 @@ async function main(argv: string[]): Promise<void> {
       selectedTools: (() => {
         const workflow = workflowTools(config.tools, config.memory.enabled, false);
         const tools = workflow?.length ? [...new Set([...workflow, ...(reviewModule?.modelTools ?? [])])] : workflow;
-        return dispatchPolicy.enabled && tools?.length ? [...new Set([...tools, "plugin_dispatch", "plugin_dispatch_decisions", "plugin_dispatch_plan_history", "plugin_worker_tasks"])] : tools;
+        return dispatchPolicy.enabled && tools?.length ? [...new Set([...tools, "plugin_dispatch", "plugin_dispatch_decisions", "plugin_dispatch_plan_history", "plugin_dispatch_recovery", "plugin_worker_tasks"])] : tools;
       })(),
       registeredTools: composeToolCatalog(plugins.tools, initialReloadableTools, reloadableTools?.tools ?? new Map()).map(tool => tool.name),
       dispatcherEnabled: dispatchPolicy.enabled, dispatcherReady: dispatcher?.ready === true,
@@ -765,7 +766,7 @@ async function main(argv: string[]): Promise<void> {
     admit: (id: string, request: import("./context-maintenance.js").MaintenanceRequest, version: number) => maintenance.admit(values["--maintenance-session"]!, id, request, version),
     cancel: (id: string, version: number) => maintenance.cancelAdmission(values["--maintenance-session"]!, id, version),
     maintain: () => harness.maintainIdle(values["--maintenance-session"]!),
-  }), path.resolve(values["--maintenance-directory"]))] : []), ...(values["--observe-directory"] ? [sessionObserverPlugin(Object.freeze({ observeSession: (key: string) => harness.observeSession(key) }), path.resolve(values["--observe-directory"]), values["--observe-session"]!)] : []), validatorPlugin, memoryOrchestrationPlugin(plugins.memoryOrchestration, settings, harness, config.memory.enabled), completionStrategyPlugin(completion, settings, harness), contextStrategyPlugin(strategies, settings, harness, maintenance), compactionStrategyPlugin(selectedCompaction, settings, harness, maintenance), nightlyStrategyPlugin(nightly, settings, improvement), reportPlugin, dispatcherPlugin(() => dispatcher), dispatchDecisionsPlugin(() => dispatcher), dispatchPlanHistoryPlugin(() => dispatcher), ...(dispatchPolicy.enabled ? [executionControlPlugin(() => dispatcher, path.join(config.home, "operator-control"))] : []), workerTasksPlugin(config.home, () => dispatcher, async (parent, requestId, input) => {
+  }), path.resolve(values["--maintenance-directory"]))] : []), ...(values["--observe-directory"] ? [sessionObserverPlugin(Object.freeze({ observeSession: (key: string) => harness.observeSession(key) }), path.resolve(values["--observe-directory"]), values["--observe-session"]!)] : []), validatorPlugin, memoryOrchestrationPlugin(plugins.memoryOrchestration, settings, harness, config.memory.enabled), completionStrategyPlugin(completion, settings, harness), contextStrategyPlugin(strategies, settings, harness, maintenance), compactionStrategyPlugin(selectedCompaction, settings, harness, maintenance), nightlyStrategyPlugin(nightly, settings, improvement), reportPlugin, dispatcherPlugin(() => dispatcher), dispatchDecisionsPlugin(() => dispatcher), dispatchPlanHistoryPlugin(() => dispatcher), dispatchRecoveryPlugin(() => dispatcher, key => runtime.retainedSessionHistory?.(key) ?? Promise.resolve(undefined)), ...(dispatchPolicy.enabled ? [executionControlPlugin(() => dispatcher, path.join(config.home, "operator-control"))] : []), workerTasksPlugin(config.home, () => dispatcher, async (parent, requestId, input) => {
       if (!dispatcher || harness.paused) throw Error("Dispatcher unavailable or Harness paused");
       const existing = await executions.findRequest(parent, requestId);
       if (existing) {

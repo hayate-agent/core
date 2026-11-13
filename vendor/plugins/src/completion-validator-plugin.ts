@@ -14,7 +14,12 @@ export const legacyLLMProvider: ValidatorProvider = {
 };
 
 export const validatorPlugin: PluginModule = { apiVersion: 1,
-  activate(api) { api.registerValidatorProvider(legacyLLMProvider); },
+  activate(api) {
+    api.registerValidatorProvider(legacyLLMProvider);
+    // Additive host hook: older Core hosts keep their existing validator behavior.
+    (api as typeof api & { registerDispatchDecisionProvider?: (provider: ValidatorProvider) => void })
+      .registerDispatchDecisionProvider?.(legacyLLMProvider);
+  },
 };
 
 /** Additive safe projection: older hosts may accept only the category.
