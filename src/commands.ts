@@ -113,21 +113,24 @@ function recurringCommand(kind: "heartbeat" | "loop"): Command["run"] {
         return `${kind} cleared`;
     }
     // heartbeat: "every <interval> <prompt>"; loop: "[interval] <prompt> [--times N]"
-    let words = sub === "every" ? rest : [sub, ...rest];
-    let everyMs = parseInterval(words[0] ?? "");
-    if (everyMs) words = words.slice(1);
+    // Keep the prompt's original whitespace (newlines, indentation); only leading option tokens are consumed.
+    let body = args.trim();
+    if (sub === "every") body = body.slice(sub.length).trimStart();
+    const first = /^\S*/.exec(body)![0];
+    let everyMs = parseInterval(first);
+    if (everyMs) body = body.slice(first.length).trimStart();
     else {
-      if (sub === "every" || /^(\d+[smhd])+$/i.test(words[0] ?? "")) return "invalid interval: use a positive duration within safe integer milliseconds";
+      if (sub === "every" || /^(\d+[smhd])+$/i.test(first)) return "invalid interval: use a positive duration within safe integer milliseconds";
       everyMs = kind === "heartbeat" ? 30 * 60_000 : 10 * 60_000;
     }
     let remaining: number | undefined;
-    const t = words.indexOf("--times");
-    if (t >= 0) {
-      remaining = Number(words[t + 1]);
+    const times = /(^|\s)--times(?:\s+(\S+))?(?=\s|$)/.exec(body);
+    if (times) {
+      remaining = Number(times[2]);
       if (!Number.isInteger(remaining) || remaining < 1) return "--times needs a positive integer";
-      words.splice(t, 2);
+      body = body.slice(0, times.index + times[1].length) + body.slice(times.index + times[0].length);
     }
-    const prompt = words.join(" ").trim();
+    const prompt = body.trim();
     if (!prompt) return `usage: /${kind} ${kind === "heartbeat" ? "every <interval> <prompt>" : "[interval] <prompt> [--times N]"}`;
     if (everyMs < 60_000) return "minimum interval is 1m";
     if (kind === "heartbeat") s.heartbeatDisabled = false;
