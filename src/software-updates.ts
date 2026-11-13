@@ -3,6 +3,8 @@ import { createHash, randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, readFile, realpath, rename, stat, symlink, unlink } from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { restoreVerifiedMatrixAddon } from "./native-addon-cache.js";
 import { writeFileDurable } from "./durable.js";
 
 export const softwareComponents = ["core", "plugins", "webui"] as const;
@@ -244,24 +246,7 @@ export class NativeSoftwareUpdates {
           bundledPlugins = locked;
         }
       } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
-      // Optional assets can be locked at a different Plugins commit than builtins.
-      // Resolve each through the SAME configured source, never a hardcoded forge.
-      const assetSources: Record<string, string> = { [revisions.plugins]: path.join(root, "plugins") };
-      try {
-        const assetLock = JSON.parse(await readFile(path.join(root, "core/plugin-assets.lock.json"), "utf8"));
-        if (!Array.isArray(assetLock.plugins)) throw Error("invalid asset lock");
-        for (const asset of assetLock.plugins) {
-          if (!/^[a-f0-9]{40}$/.test(asset.revision)) throw Error("invalid asset revision");
-          const vendored = path.join(root, "core/vendor/plugin-assets", asset.revision);
-          if (existsSync(vendored)) { assetSources[asset.revision] = vendored; continue; }
-          if (assetSources[asset.revision]) continue;
-          const checkout = path.join(root, `assets-${asset.revision}`);
-          await this.command("git", ["fetch", "--depth=1", "origin", asset.revision], path.join(root, "plugins"));
-          await this.command("git", ["worktree", "add", "--detach", checkout, asset.revision], path.join(root, "plugins"));
-          assetSources[asset.revision] = checkout;
-        }
-      } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
-      const buildEnv = { HAYATE_PLUGIN_SOURCE: bundledPlugins, HAYATE_PLUGIN_ASSET_SOURCES: JSON.stringify(assetSources),
+      const buildEnv = { HAYATE_PLUGIN_SOURCE: bundledPlugins,
         PATH: `${path.dirname(process.execPath)}${path.delimiter}${process.env.PATH ?? ""}` };
       for (component of ["core", "webui"] as const) {
         stage = "dependency installation";
@@ -272,7 +257,11 @@ export class NativeSoftwareUpdates {
           // npm12 may report successful rebuild while silently blocking this
           // install script. Run only this reviewed native downloader explicitly,
           // then require the addon so a missing binary fails before tests/stop.
-          await this.command(process.execPath, [path.join(cwd, "node_modules/@matrix-org/matrix-sdk-crypto-nodejs/download-lib.js")], cwd, buildEnv);
+          stage = "native dependency verification";
+          const cacheSources = [fileURLToPath(new URL("../", import.meta.url)),
+            ...(this.selection ? [path.join(this.directory, "releases", this.selection.release, "core")] : [])];
+          if (!await restoreVerifiedMatrixAddon(cwd, cacheSources))
+            await this.command(process.execPath, [path.join(cwd, "node_modules/@matrix-org/matrix-sdk-crypto-nodejs/download-lib.js")], cwd, buildEnv);
           await this.command(process.execPath, ["--input-type=commonjs", "-e", "require('@matrix-org/matrix-sdk-crypto-nodejs')"], cwd, buildEnv);
         }
         stage = "build"; await this.command("npm", ["run", "build"], cwd, buildEnv);

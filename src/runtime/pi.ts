@@ -1,3 +1,5 @@
+import { retainedSessionFile } from "./retained-session-file.js";
+import { HANDOVER_SEED_BYTES } from "../recovery-evidence.js";
 import { executionMetadata } from "../builtin-plugins/execution-metadata.js";
 /**
  * PI runtime adapter. The only module that imports the PI SDK.
@@ -33,6 +35,7 @@ import {
   ProjectTrustStore,
   ModelRuntime,
   SessionManager,
+  parseSessionEntries,
 } from "@earendil-works/pi-coding-agent";
 import type { AgentRuntime, OpenSessionOptions, PromptOptions, RuntimeSession, RuntimeSessionStatus, TurnEvent, LoginUI } from "../types.js";
 
@@ -207,6 +210,24 @@ export function updatePersonaPrompt(session: AgentSession, appendSystemPrompt: s
   if (owner._runSystemPromptOptions) owner._runSystemPromptOptions.appendSystemPrompt = appendSystemPrompt;
 }
 
+function archiveBranch(manager: SessionManager): import("../session-archive.js").ArchiveEntry[] {
+  return manager.getBranch().map(entry => {
+    const record = entry as unknown as Record<string, unknown>;
+    const message = record.message as { role?: string; content?: unknown } | undefined;
+    const content = message?.content ?? (record.type === "custom_message" && record.customType === "harness-handover" ? record.content : undefined);
+    const text = typeof content === "string" ? content : Array.isArray(content)
+      ? content.some(p => p?.type === "toolCall")
+        ? content.length === 1 && content[0]?.type === "toolCall"
+          ? JSON.stringify({ type: "toolCall", id: content[0].id, name: content[0].name, arguments: content[0].arguments })
+          : JSON.stringify({ type: "assistantBlocks", blocks: content.filter(p => p?.type === "text" || p?.type === "toolCall") })
+        : content.map(p => p?.type === "text" && typeof p.text === "string" ? p.text : "").filter(Boolean).join("\n")
+      : typeof record.summary === "string" ? record.summary : "";
+    const result = message?.role === "toolResult" ? message as unknown as { toolCallId?: string; toolName?: string; isError?: boolean } : undefined;
+    const evidence = result ? JSON.stringify({ type: "toolResult", toolCallId: result.toolCallId, toolName: result.toolName, isError: result.isError, text }) : text;
+    return { id: entry.id, role: message?.role ?? entry.type, text: evidence };
+  }).filter(entry => entry.text.length > 0);
+}
+
 export class PiSession implements RuntimeSession {
   readonly executionObservation = true;
   /** The prompt in progress; abort() during its setup (before generation) cancels it. */
@@ -363,24 +384,14 @@ export class PiSession implements RuntimeSession {
   }
 
   archiveEntries(): import("../session-archive.js").ArchiveEntry[] {
-    return this.session.sessionManager.getBranch().map((entry) => {
-      const record = entry as unknown as Record<string, unknown>;
-      const message = record.message as { role?: string; content?: unknown } | undefined;
-      const content = message?.content ?? (record.type === "custom_message" && record.customType === "harness-handover" ? record.content : undefined);
-      const text = typeof content === "string" ? content : Array.isArray(content)
-        ? content.some(p => p?.type === "toolCall")
-          ? content.length === 1 && content[0]?.type === "toolCall"
-            ? JSON.stringify({ type: "toolCall", id: content[0].id, name: content[0].name, arguments: content[0].arguments })
-            : JSON.stringify({ type: "assistantBlocks", blocks: content.filter(p => p?.type === "text" || p?.type === "toolCall") })
-          : content.map(p => p?.type === "text" && typeof p.text === "string" ? p.text : "").filter(Boolean).join("\n")
-        : typeof record.summary === "string" ? record.summary : "";
-      const result = message?.role === "toolResult" ? message as unknown as { toolCallId?: string; toolName?: string; isError?: boolean } : undefined;
-      const evidence = result ? JSON.stringify({ type: "toolResult", toolCallId: result.toolCallId, toolName: result.toolName, isError: result.isError, text }) : text;
-      return { id: entry.id, role: message?.role ?? entry.type, text: evidence };
-    }).filter((entry) => entry.text.length > 0);
+    return archiveBranch(this.session.sessionManager);
   }
 
   async seedHandover(text: string): Promise<void> {
+    // Reject before mutating PI's branch or opening its first exclusive file.
+    // A first-write serialization failure otherwise leaves a partial file and
+    // an unflushed in-memory manager that retries forever with EEXIST.
+    if (Buffer.byteLength(text, "utf8") > HANDOVER_SEED_BYTES) throw Error("Handover seed exceeds safe context budget; project retained evidence before seeding");
     const content = `Previous-session handover (context, not new authorization):\n${text}\nVerify referenced files and Git state before acting. Never repeat completed side effects blindly.`;
     // A seed may already be in PI's branch when its provider checkpoint or the
     // host's archive-link/state save failed. Recovery must retry persistence,
@@ -569,6 +580,36 @@ export class PiRuntime implements AgentRuntime {
   async models(): Promise<string[]> {
     const runtime = await this.modelRuntime();
     return (await runtime.getAvailable()).map((m) => `${m.provider}/${m.id}`);
+  }
+
+  async retainedSessionHistory(key: string): Promise<{ sessionId: string; entries: import("../session-archive.js").ArchiveEntry[]; incomplete?: boolean } | undefined> {
+    const cwd = (await this.opts.executionContext?.(key))?.cwd ?? this.opts.cwd;
+    let provider = this.opts.sessionProvider?.();
+    if (!provider && await this.opts.legacySessionProvider?.active(key)) provider = this.opts.legacySessionProvider;
+    const lease = provider?.retain?.();
+    if (lease) provider = lease.provider;
+    try {
+      const id = await provider?.active(key);
+      if (id && provider) {
+        const record = await provider.load(id);
+        if (record.id !== id || record.key !== key || record.format !== "pi-session-v1") throw Error("Session conversation or format mismatch");
+        const manager = SessionManager.inMemory(cwd, undefined, structuredClone(record.entries) as Parameters<typeof SessionManager.inMemory>[2]);
+        return { sessionId: record.id, entries: archiveBranch(manager) };
+      }
+      // Match open()'s legacy import/resume choice, but NEVER create, import,
+      // bind or activate a model session just to obtain recovery evidence.
+      const dir = path.join(this.opts.sessionsDir, safeKey(key));
+      const info = await retainedSessionFile(dir, cwd);
+      if (!info) return;
+      // SessionManager.open may migrate old formats or repair a missing final
+      // newline on disk. Parse into an in-memory manager instead: assessment
+      // discovery must not write, import or rebind the retained conversation.
+      const raw = await readFile(info.file, "utf8");
+      const entries = parseSessionEntries(raw);
+      if (!entries.length || entries[0].type !== "session" || entries[0].id !== info.id) throw Error("Retained session identity changed");
+      const manager = SessionManager.inMemory(cwd, undefined, entries);
+      return { sessionId: info.id, entries: archiveBranch(manager), incomplete: entries.length !== raw.split("\n").filter(line => line.trim()).length };
+    } finally { lease?.release(); }
   }
 
   async sessionHistory(key: string, id: string): Promise<import("../session-archive.js").ArchiveEntry[]> {
