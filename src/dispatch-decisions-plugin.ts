@@ -18,8 +18,20 @@ export function dispatchDecisionsPlugin(get: () => Dispatcher | undefined): Plug
         const dispatcher = get(); if (!dispatcher) throw Error("Dispatcher mode is not active");
         const task = dispatcher.store.list(context.sessionKey).find(task => task.id === input.id);
         if (!task) throw Error("Execution not in this conversation");
-        if (input.action === "status") return JSON.stringify({ id: task.id, status: task.status, revision: executionDecisionRevision(task.decisions),
-          active: task.decisions, archive: "Exact archived originals remain accessible by requestId using read; replacements never change original mandate or effect ownership." });
+        if (input.action === "status") {
+          let plan: { plan?: unknown[]; outcomes?: unknown[]; planHistory?: { head: string; completed: number }; lastFollowUpRevision?: number; appliedFollowUps?: string[] } | undefined;
+          try { if (task.strategy === "sequential" && task.checkpoint) plan = JSON.parse(task.checkpoint); } catch { /* status is not a validation/authority grant */ }
+          const planned = Array.isArray(plan?.plan) ? plan!.plan!.length : undefined;
+          const completed = Array.isArray(plan?.outcomes) ? plan!.outcomes!.length : undefined;
+          const followUps = task.decisions?.filter(d => d.followUp).map(d => ({ requestId: d.requestId, revision: d.revision,
+            admission: (d.revision !== undefined && d.revision <= (plan?.lastFollowUpRevision ?? 0)) || plan?.appliedFollowUps?.includes(d.requestId)
+              ? "retained-in-plan-or-completed-history" : "awaiting-plan-admission",
+            queuedReason: !plan?.appliedFollowUps?.includes(d.requestId) && !(d.revision !== undefined && d.revision <= (plan?.lastFollowUpRevision ?? 0))
+              ? planned !== undefined && planned >= 6 ? completed ? "completed-slots-await-archival" : "active-window-full" : "awaiting-strategy-boundary" : undefined }));
+          return JSON.stringify({ id: task.id, status: task.status, revision: executionDecisionRevision(task.decisions), active: task.decisions, followUps,
+            activeWindow: planned !== undefined ? { planned, completed, independentlyCompletedHistory: plan?.planHistory?.completed ?? 0, historyHead: plan?.planHistory?.head } : undefined,
+            archive: "Exact archived originals remain accessible by requestId using read; replacements never change original mandate or effect ownership." });
+        }
         if (typeof input.requestId !== "string") throw Error("Exact requestId required");
         if (input.action === "read") return JSON.stringify(await dispatcher.store.readDecision(context.sessionKey, task.id, input.requestId) ?? { error: "Decision receipt not found" });
         if (input.action !== "consolidate" || typeof input.decision !== "string" || !Array.isArray(input.replaces) || input.replaces.some(id => typeof id !== "string")) throw Error("Consolidate requires replacement scoped context and exact applied replaces IDs");

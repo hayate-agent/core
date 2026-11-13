@@ -20,7 +20,8 @@ export const readyStepPrompt = (data: Record<string, unknown>): CompletionPrompt
   const outcomes = context?.retained?.workers?.items ?? [];
   const originalTools = blocked?.evidence?.length ?? 0;
   const originalResults = Array.isArray(originalOutcomes) ? originalOutcomes.length : 0;
-  const projection = { incomplete: evidence.length < originalTools || outcomes.length < originalResults || outcomes.some(item => item.truncated),
+  const projection = { incomplete: !!data.completedHistory || evidence.length < originalTools || outcomes.length < originalResults || outcomes.some(item => item.truncated),
+    completedHistoryReferenced: !!data.completedHistory,
     omittedTools: Math.max(0, originalTools - evidence.length), omittedOutcomes: Math.max(0, originalResults - outcomes.length),
     instruction: "Evidence may be projected or omitted for prompt budget. This never establishes absence of prior effects, completion or permission to replay; choose a bounded read-only reconciliation first if needed." };
   return `Select at most ONE independently ready later step of the SAME delegated operator task. No tools, new authority, effect replay, invented completion or waiver of a required dependency.

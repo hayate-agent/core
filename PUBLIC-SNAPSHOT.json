@@ -1,5 +1,5 @@
 {
-  "contentDigest": "9fdf4774516198e6f058864ac69edf8d1089fdd785258021b25a347c9a52e259",
+  "contentDigest": "b809ce5f029ef37484ec7f51e8b89ec3ad7afa18bd6f5d8314f81d049dded9a4",
   "files": [
     {
       "mode": "100644",
@@ -124,7 +124,7 @@
     {
       "mode": "100644",
       "path": "docs/dispatcher.md",
-      "sha256": "ca9b10e7569c6b2ddf585432b2c1e0421eb0229b6654b0dce10cee416b8906c8"
+      "sha256": "8a5f9202684cdd674ed53621bb197f902a49455d106182e6e9f80c8d5f1a4fdf"
     },
     {
       "mode": "100644",
@@ -619,7 +619,7 @@
     {
       "mode": "100644",
       "path": "src/cli.ts",
-      "sha256": "aa6937572cbc3056ade748d892e1361aa5b43d9e8b913524b8ca850fa1568979"
+      "sha256": "1c39d363723b9921102d367fbdff83cc602ffa0c71fc64fe171c9bc22eb97966"
     },
     {
       "mode": "100644",
@@ -714,7 +714,12 @@
     {
       "mode": "100644",
       "path": "src/dispatch-decisions-plugin.ts",
-      "sha256": "a122868343c845a9c93eaac601f9f14acab0442464776315bbb218e191de4631"
+      "sha256": "b022e28cf61b17cead707ec8158bf219b37127738ae0ccfa7c35c8c5d17d30ad"
+    },
+    {
+      "mode": "100644",
+      "path": "src/dispatch-plan-history-plugin.ts",
+      "sha256": "2b838c350f876d1933d40cb55b57151cf801f2688ee8711d6ad30c889fe2df64"
     },
     {
       "mode": "100644",
@@ -734,17 +739,17 @@
     {
       "mode": "100644",
       "path": "src/dispatcher-sequential.ts",
-      "sha256": "b88fd9d27795c8bfb62010e0051a1b41c473cc2096a426b7c612521a71d6bb6e"
+      "sha256": "4046012eb6d40f5fcd36871acb6749af0089c70ef983894872a2687794dc0b37"
     },
     {
       "mode": "100644",
       "path": "src/dispatcher-step-prompt.ts",
-      "sha256": "67e8055ec46222a1713fa31357a38ed6d0f2cd3312d31832fbb19928d2204401"
+      "sha256": "3a170d14868ef2c9dc3c637e50a2618b1f80441b26b5d1685bf6cd96106a77de"
     },
     {
       "mode": "100644",
       "path": "src/dispatcher.ts",
-      "sha256": "8a1f0eba1fad8e11ec13a369104c9126c85ba7eb120df7f9c5c4295b24538d1d"
+      "sha256": "a2f9260a3113fd6ce8c75b8b8abeebcea9415892b36c8f249668d77407e7beaf"
     },
     {
       "mode": "100644",
@@ -764,7 +769,7 @@
     {
       "mode": "100644",
       "path": "src/execution.ts",
-      "sha256": "3d522b95a5eae1acea9c687873e2c7b4538c74920c7ed811a55d466706704de3"
+      "sha256": "d12c2de66564846755a91191635bd2948bc1e7e409c6eb0eef5e8aa9068e5941"
     },
     {
       "mode": "100644",
@@ -1035,6 +1040,11 @@
       "mode": "100644",
       "path": "src/reviewer-http.ts",
       "sha256": "60a631d9bc7084534118cc902df6180dc840a594b1ff1934afc333cd0f7764f1"
+    },
+    {
+      "mode": "100644",
+      "path": "src/rolling-plan.ts",
+      "sha256": "d290ffeade0dd82b67b2f2a18b24b82be2a653b6d7a839017a3f9bfc6a1ef606"
     },
     {
       "mode": "100644",
@@ -1738,6 +1748,11 @@
     },
     {
       "mode": "100644",
+      "path": "test/dispatch-plan-history-plugin.test.ts",
+      "sha256": "d436a6e2370b494a1d044366e42df0be70888e9086e68488c5866ceae8956b54"
+    },
+    {
+      "mode": "100644",
       "path": "test/dispatcher-activity-anchor.test.ts",
       "sha256": "acc7c1ecc712a962d3c7077d286c77ce89a6a9954f65b10ec85909b4d1a79091"
     },
@@ -1804,7 +1819,7 @@
     {
       "mode": "100644",
       "path": "test/dispatcher-sequential.test.ts",
-      "sha256": "79054992785c0ebde7c78f4ce353bdca5f0f768bedca7141dd7a6763bfa18cfa"
+      "sha256": "99abeda0f15d958953f6fdc76deba1abacbc39fb5165fd3886fc65a8583953c7"
     },
     {
       "mode": "100644",
@@ -2748,6 +2763,11 @@
     },
     {
       "mode": "100644",
+      "path": "test/rolling-plan.test.ts",
+      "sha256": "6ae055e0d5c2ac8054ae440a934c676fe3a8d5fd3fca466fea765007f2b471f3"
+    },
+    {
+      "mode": "100644",
       "path": "test/runs.test.ts",
       "sha256": "872224a04890b2325ca1e5e2154c55c3eee7ac2e05300823901fa37794c43d4a"
     },
@@ -3465,5 +3485,5 @@
   "historyPolicy": "fresh-root; no source commits, tags, refs or deleted blobs",
   "pluginSHA": "794136ff0b87ecb32121b17b101e8e361d3ee199",
   "schema": 1,
-  "sourceSHA": "ef740f5e345c8b751d5d1951e49e5ff6cf0c678d"
+  "sourceSHA": "ed100821deb7baae70807339381daec78654e2f2"
 }
