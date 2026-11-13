@@ -20,10 +20,11 @@ const activityAnchor = (task: Execution) => task.dependency?.anchor && { id: tas
  * Interrupted turns reconcile retained public transcript evidence; they are never
  * declared replay-safe. Optional trusted policy may require operator resolution. */
 export class DispatcherRuntime {
+  private reportOnly = new Set<string>();
   private pending = new Map<string, { resolve(value: string): void; reject(error: Error): void }>();
   /** Host-observed selection/tool count of the current worker turn, keyed by task:token. */
   private turns = new Map<string, { observed?: ModelPair; tools: number; evidence: Array<{ name: string; error: boolean; call?: string; result?: string; callId?: string }> }>();
-  constructor(private readonly harness: Harness, private readonly store: ExecutionStore, private readonly rules?: DispatchModelRule[] | (() => Promise<DispatchModelRule[] | undefined>), private readonly roleSettings?: () => { config?: ModelRoles; defaults: ModelPair; review?: ModelPair }, private readonly validators?: ValidatorRegistry) {}
+  constructor(private readonly harness: Harness, private readonly store: ExecutionStore, private readonly rules?: DispatchModelRule[] | (() => Promise<DispatchModelRule[] | undefined>), private readonly roleSettings?: () => { config?: ModelRoles; defaults: ModelPair; review?: ModelPair }, private readonly validators?: ValidatorRegistry, private readonly runtimeProvenance?: () => import("./dispatcher-sequential.js").WorkerRuntimeProvenance) {}
   eventText(event: ExecutionEvent): string {
     const task = this.store.list(event.parent).find(item => item.id === event.executionId);
     const question = event.type === "question" ? /^Question ([a-f0-9-]{36}): ([\s\S]*)$/.exec(event.text) : null;
@@ -71,6 +72,7 @@ export class DispatcherRuntime {
   }
   guardTool(key: string, tool: string): void {
     this.beforeTurn(key);
+    if (this.reportOnly.has(key)) throw new ToolGuardError("report_only", "Completion consistency check is tool-free; reconcile existing facts, never repeat effects or manufacture success");
     if (this.isWorker(key) && childDeniedTools(key).includes(tool)) {
       throw new ToolGuardError("worker_orchestration_denied", "Dispatcher worker orchestration is disabled; return a result or blocker");
     }
@@ -177,14 +179,15 @@ export class DispatcherRuntime {
   };
   private sequentialStrategy?: DispatcherStrategy;
   get sequential(): DispatcherStrategy { return this.sequentialStrategy ??= sequentialStrategy({
-    harness: this.harness, store: this.store, validators: this.validators, roles: () => this.roleSettings?.(),
-    runTurn: (context, key, id, text, rule) => this.runTurn(context, key, id, text, rule),
+    harness: this.harness, store: this.store, validators: this.validators, runtimeProvenance: this.runtimeProvenance, roles: () => this.roleSettings?.(),
+    runTurn: (context, key, id, text, rule, options) => this.runTurn(context, key, id, text, rule, options),
     turn: key => { const turn = this.turns.get(key) ?? { tools: 0, evidence: [] }; this.turns.delete(key); return { ...turn, evidence: turn.evidence.map(({ callId: _id, ...rest }) => rest) }; },
     resetTurn: key => { this.turns.set(key, { tools: 0, evidence: [] }); },
   }); }
   /** One worker turn in the exact task-bound session. Cancellation waits for the pump. */
-  async runTurn(context: DispatchContext, key: string, id: string, text: string, rule: ModelPair): Promise<string> {
+  async runTurn(context: DispatchContext, key: string, id: string, text: string, rule: ModelPair, options?: { reportOnly?: boolean }): Promise<string> {
     const sessionKey = `dispatch:${key}`;
+    if (options?.reportOnly) this.reportOnly.add(sessionKey);
     let resolve!: (value: string) => void;
     let reject!: (error: Error) => void;
     const result = new Promise<string>((yes, no) => { resolve = yes; reject = no; });
@@ -218,6 +221,7 @@ export class DispatcherRuntime {
       if (context.signal.aborted) await this.harness.waitForSessionIdle(sessionKey);
       context.signal.removeEventListener("abort", abort);
       this.pending.delete(key);
+      this.reportOnly.delete(sessionKey);
     }
   }
   readonly channel: Channel = {
