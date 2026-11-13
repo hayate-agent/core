@@ -341,12 +341,12 @@ export class Dispatcher {
     await this.store.resolve(parent, id, actor, action, evidence);
     await this.kick();
   }
-  async consolidateDecisions(parent: string, id: string, requestId: string, text: string, replaces: readonly string[], followUp?: import("./execution.js").ExecutionFollowUp): Promise<import("./execution.js").ExecutionDecision> {
+  async consolidateDecisions(parent: string, id: string, requestId: string, text: string, replaces: readonly string[], followUp?: import("./execution.js").ExecutionFollowUp, expectedRevision?: number): Promise<import("./execution.js").ExecutionDecision> {
     const task = this.store.list(parent).find(item => item.id === id);
     if (!task) throw Error("Execution not in this conversation");
     const strategy = this.strategyFor(task);
     if (!strategy?.decisionBoundary) throw Error("Strategy has no retained assessment decision boundary");
-    const receipt = await this.store.consolidateDecisions(parent, id, requestId, text, replaces, current => strategy.decisionBoundary!(current), followUp);
+    const receipt = await this.store.consolidateDecisions(parent, id, requestId, text, replaces, current => strategy.decisionBoundary!(current), followUp, expectedRevision);
     await this.kick(); return receipt;
   }
   async decide(parent: string, id: string, requestId: string, text: string, expectedRevision?: number): Promise<import("./execution.js").ExecutionDecision> {
@@ -358,6 +358,10 @@ export class Dispatcher {
     const receipt = await this.store.recordDecision(parent, id, requestId, text, current => strategy.decisionBoundary!(current), expectedRevision);
     await this.kick();
     return receipt;
+  }
+  async reopenContradictoryCompletion(parent: string, id: string, requestId: string, text: string, checkpointHash: string, expectedRevision: number): Promise<Execution> {
+    const task = await this.store.reopenContradictoryCompletion(parent, id, requestId, text, checkpointHash, expectedRevision);
+    await this.kick(); return task;
   }
   async answer(parent: string, id: string, questionId: string, text: string): Promise<void> {
     await this.store.answer(parent, id, questionId, text);

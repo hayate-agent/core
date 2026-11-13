@@ -76,8 +76,14 @@ test("plugin panels are bounded plain text and rendering failures do not break e
   });
   try {
     await ui.start(async () => {});
-    await new Promise((r) => setTimeout(r, 30));
-    const screen = (ui as any).tui.getScreenLines().join("\n");
+    // Rendering is scheduled; a 30ms sleep races a loaded CI event loop.
+    // Await the actual screen condition, retaining all output/safety assertions.
+    const deadline = performance.now() + 2000;
+    let screen = (ui as any).tui.getScreenLines().join("\n");
+    while (!screen.includes("panel unavailable") && performance.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 10));
+      screen = (ui as any).tui.getScreenLines().join("\n");
+    }
     assert.match(screen, /panel unavailable/);
     assert.match(screen, /Plugin status: ready/);
     assert.ok(!screen.includes("private failure"));

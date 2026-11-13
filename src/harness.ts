@@ -78,7 +78,7 @@ export interface DurableTask {
     /** Host reason for a non-decision, not a semantic denial or execution permit. */
     deferred?: "queued-input" | "interrupted" | "paused" | "stopping" | "unavailable" | "no-verdict";
     /** One-shot assessment receipt. Only recoveryAdmission grants execution. */
-    dependencyHold?: { evidence: string; reason: "assessment-claimed" | "global-hold" | "independent-next-proposed";
+    dependencyHold?: { evidence: string; parentDepth?: number; reason: "assessment-claimed" | "global-hold" | "independent-next-proposed";
       next?: string } };
   /** Bounded untrusted task evidence, persisted independently of recent chat. */
   completionObservations?: import("./session-archive.js").ArchiveEntry[];
@@ -925,7 +925,16 @@ export class Harness {
     // parent repair/admission while that same child is waiting for its due time.
     const scheduledRetry = e.workerRetry && !e.recoveryReason &&
       ["runtime-failure", "worker-failed"].includes(e.diagnosticCode ?? "");
-    return !scheduledRetry && (e.status === "blocked" ||
+    // A settled independent blocked/waiting verdict is not a running writer.
+    // Its read-only retry remains owned by Dispatcher, but must not suppress
+    // every independent parent step for hundreds of assessment retries. Child
+    // effects/holds are neither released nor retried by parent supervision.
+    const settledAssessment = e.recoveryEnrollment === "current" && !e.ownershipHold &&
+      !!e.assessmentHold && !!e.settledEffect &&
+      ["ready", "paused", "blocked"].includes(e.status) &&
+      !e.intent && !e.question && !e.parentStopped && !e.recoveryReason &&
+      e.diagnosticCode === "runtime-failure" && !!e.workerRetry;
+    return settledAssessment || !scheduledRetry && (e.status === "blocked" ||
       (e.status === "paused" && e.diagnosticCode === "runtime-failure" && !e.intent && !e.question && !e.parentStopped));
   }
 
@@ -2045,11 +2054,12 @@ export class Harness {
 
   /** Foreground priority by deterministic topic ownership, bounded in time. A scheduler
    * permit (`independent`, minted only from a model plan in reconcileBlockedDependency) of an
-   * older, tagged mandate yields the foreground only while the operator has a NEWER, STILL
-   * OPEN task with disjoint host-captured topic tags in this session. Operator context is
+   * older, tagged mandate yields the foreground for at most 30 seconds after a NEWER,
+   * STILL OPEN task with disjoint host-captured topic tags entered this session. Operator context is
    * authenticated by ingress: only channel input creates tasks with outputTags (untagged
    * explicit/scheduled mandates never qualify). Nothing is cancelled or rewritten; the
-   * continuation runs as soon as the newer topic is no longer active. Explicit operator
+   * continuation runs when that short preference expires or the newer topic closes.
+   * Actual queued/running operator input retains its separate hard foreground fence. Explicit operator
    * resume (admission without `independent`) and untagged tasks are never deferred. */
   private supersededByNewerTopic(s: SessionState, task: DurableTask): boolean {
     const at = task.anchor?.receivedAt, tags = task.anchor?.outputTags;
@@ -2057,6 +2067,9 @@ export class Harness {
     return this.tasks(s).some(o => o.id !== task.id && (o.state === "active" ||
       (o.state === "blocked" && o.recoveryAssessment === "decided" && o.explicitBlocked === false)) && o.anchor?.task === o.original &&
       Number.isFinite(o.anchor.receivedAt) && o.anchor.receivedAt > at! &&
+      // Presentation/foreground preference is not a permanent stop on another
+      // accepted mandate. Old unresolved status turns can remain open for days.
+      this.now() >= o.anchor.receivedAt && this.now() - o.anchor.receivedAt < 30_000 &&
       !!o.anchor.outputTags?.length && !o.anchor.outputTags.some(tag => tags.includes(tag)));
   }
 
@@ -2102,7 +2115,14 @@ export class Harness {
       return;
     }
     if (!this.opts.completionCheck) return;
-    if (previous?.dependencyHold && !technicalRetry) return;
+    const spentIndependentStep = previous?.dependencyHold?.reason === "independent-next-proposed" &&
+      !task.recoveryAdmission && task.state === "active" && !task.explicitBlocked &&
+      (previous.dependencyHold.parentDepth !== undefined ? task.depth > previous.dependencyHold.parentDepth :
+        task.depth > 0 && previous.verdict === "unresolved");
+    // The old proposal is not a fresh permit. Once its one-shot admission was
+    // consumed (or lost), re-assess the current owned-child evidence rather than
+    // leaving the parent permanently without an owner. Never replay that proposal.
+    if (previous?.dependencyHold && !technicalRetry && !spentIndependentStep) return;
     // Retry only read-only inference, never a worker's uncertain effects.
     if (task.recoveryRetry && (!Number.isSafeInteger(task.recoveryRetry.attempts) ||
         task.recoveryRetry.attempts < 1 ||
@@ -2113,7 +2133,7 @@ export class Harness {
     try {
       const executions = snapshot();
       const evidence = createHash("sha256").update(executions).digest("hex");
-      task.supervisorDecision = { verdict: "unresolved", dependencyHold: { evidence, reason: "assessment-claimed" } };
+      task.supervisorDecision = { verdict: "unresolved", dependencyHold: { evidence, parentDepth: task.depth, reason: "assessment-claimed" } };
       const attempts = Math.min(Number.MAX_SAFE_INTEGER, (task.recoveryRetry?.attempts ?? 0) + 1);
       task.recoveryRetry = { attempts, nextAt: this.now() + assessmentRetryDelay(attempts) };
       const authority = JSON.stringify(task);
@@ -2141,7 +2161,7 @@ export class Harness {
         (plan.expiresAt === undefined || (Number.isSafeInteger(plan.expiresAt) && plan.expiresAt > this.now() &&
           (task.expiresAt === undefined || plan.expiresAt <= task.expiresAt))) ? plan.next.trim() : undefined;
       task.supervisorDecision = { verdict: next ? "continue" : "blocked", diagnostic,
-        dependencyHold: { evidence, reason: next ? "independent-next-proposed" : "global-hold", ...(next ? { next } : {}) } };
+        dependencyHold: { evidence, parentDepth: task.depth, reason: next ? "independent-next-proposed" : "global-hold", ...(next ? { next } : {}) } };
       if (!plan && !diagnostic) diagnostic = "invalid_response";
       if (diagnostic) {
         task.supervisorDecision.diagnostic = diagnostic;
@@ -2168,7 +2188,7 @@ export class Harness {
         // Keep the durable assessment claim, but never release an unsaved permit.
         task.recoveryAdmission = undefined;
         task.state = "blocked";
-        task.supervisorDecision = { verdict: "unresolved", dependencyHold: { evidence, reason: "assessment-claimed" } };
+        task.supervisorDecision = { verdict: "unresolved", dependencyHold: { evidence, parentDepth: task.depth, reason: "assessment-claimed" } };
         throw error;
       }
     } finally { this.recoveringTasks.delete(task); }
