@@ -1,3 +1,4 @@
+import { startupQualificationProgram } from "./startup-qualification.js";
 import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
@@ -268,7 +269,11 @@ export class NativeSoftwareUpdates {
         // Development test suites belong to release CI, never to agent startup
         // or update admission. Only qualify the installed runtime entrypoints.
         stage = "runtime entrypoint check";
-        if (component === "core") await this.command(process.execPath, ["--check", path.join(cwd, "dist/cli.js")], cwd, buildEnv);
+        if (component === "core") {
+          await this.command(process.execPath, ["--check", path.join(cwd, "dist/cli.js")], cwd, buildEnv);
+          stage = "startup configuration compatibility";
+          await this.command(process.execPath, ["--input-type=module", "--eval", startupQualificationProgram(cwd, this.home)], cwd, buildEnv);
+        }
       }
       component = "core"; stage = "source identity metadata";
       const corePackage = JSON.parse(await readFile(path.join(root, "core/package.json"), "utf8"));

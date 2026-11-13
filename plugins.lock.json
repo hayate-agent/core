@@ -32,8 +32,8 @@
     "native-activity.ts": "b9878941092065a395c9333f0533080a258dbb8a0c28e2c901a60fb8ac20a6cc",
     "nightly-default.ts": "d76da5b8016785bc0fae04ac7129f0841a82c5b7e9839510419f15a6b13eda13",
     "nightly-strategy-plugin.ts": "f2307c66003387167318055b7e49ce84e115ffd5d8e7d1a21ae8106318dbc0a8",
-    "policy-manager-plugin.ts": "ef61d6f32c3fadd75f16bec3732763f15e0fa131a12a7af30240a0599a44ef44",
     "output-language.ts": "7ddc3dbeb169dfdb168b0b63fe5129c998b368cb51d2621613a2cf5f00ff652a",
+    "policy-manager-plugin.ts": "ef61d6f32c3fadd75f16bec3732763f15e0fa131a12a7af30240a0599a44ef44",
     "protected-content-plugin.ts": "1340a07212f5b30001478d1b761ef4e8c3c8e367fbfc36c02ccb80894b4fe9d0",
     "reloadable-tools-plugin.ts": "ae2680f7dd5f2bc1e95896599c349ec4fe61b5dc4f871f1896e6606f11b8e961",
     "review-engine.ts": "6f6ca5766b1c1c0a2e61f94483fd55db5e4be6241efe68ea9bd60f11f5c68f90",
@@ -52,6 +52,6 @@
     "wasm-tools-plugin.ts": "438c6ac8899e283e4268f51ef451275bf16a37b584db84ee8302a26200cc70de"
   },
   "repository": "https://git.vanillacore.net/harness/plugins",
-  "revision": "fb38b7d7fbd7236549c723035bbaf006fd5d5eff",
+  "revision": "dae8436ba74d73ff58e1e8812ee89fff1f7efad9",
   "schema": 1
 }
