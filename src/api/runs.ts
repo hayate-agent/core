@@ -185,6 +185,14 @@ export class RunRegistry {
     this.emit(r, "run.running", { status: "running" });
   }
 
+  /** Dispatcher/status output is not the working turn's final answer. */
+  progress(runId: string, text: string): void {
+    const run = this.runs.get(runId);
+    if (!run || TERMINAL.has(run.status) || this.finals.has(runId)) return;
+    this.started(runId);
+    this.emit(run, "status.updated", { text: text.slice(0, 8000) });
+  }
+
   /** Live progress of the turn → run events (usage is accumulated per assistant message). */
   turnEvent(runId: string, event: TurnEvent): void {
     const r = this.runs.get(runId);

@@ -111,6 +111,9 @@ export class ApiChannel implements Channel {
   /** Result of a run's turn (through the harness outbox: resolves once recorded durably). */
   async send(to: Address, text: string, meta?: SendMeta): Promise<void> {
     if (meta?.maintenance && meta.maintenance.state !== "blocked") return;
+    if (meta?.presentation === "progress" && !meta.maintenance && !meta.outcome) {
+      this.opts.runs.progress(to.target, text); return;
+    }
     await this.opts.runs.finish(to.target, text, meta?.maintenance?.state === "blocked" ? "failed" : meta?.outcome);
   }
 
