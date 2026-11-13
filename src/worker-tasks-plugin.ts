@@ -22,25 +22,33 @@ export function workerTasksPlugin(home: string, getDispatcher: () => Dispatcher 
     await writeFileDurable(file(parent), JSON.stringify(board));
   };
   return { apiVersion: 1, activate(api) {
-    const command: PluginCommand & { run(args: string, context: { sessionKey: string }, model?: boolean): Promise<string> } = { name: "worker-tasks", help: "Worker profiles and durable tasks: profile <name> <instructions> | submit <request-id> <profile> <task> | status",
+    // Model tool calls pass fields structurally so whitespace in instructions/tasks is kept;
+    // the slash command keeps its word-based parsing.
+    type Operation = { action?: string; id?: string; profile?: string; text?: string };
+    const parse = (args: string): Operation => {
+      const [action = "status", id, profile, ...rest] = args.trim().split(/\s+/);
+      return action === "profile" ? { action, id, text: [profile, ...rest].filter(Boolean).join(" ") || undefined }
+        : { action, id, profile, text: rest.join(" ") || undefined };
+    };
+    const command: PluginCommand & { run(args: string | Operation, context: { sessionKey: string }, model?: boolean): Promise<string> } = { name: "worker-tasks", help: "Worker profiles and durable tasks: profile <name> <instructions> | submit <request-id> <profile> <task> | status",
       async run(args, context, model = false) {
         if (/^(dispatch|subagent):/.test(context.sessionKey)) throw Error("Nested delegation is disabled");
         const dispatcher = getDispatcher();
         if (!dispatcher) throw Error("Dispatcher is not active");
         const run = async () => {
           const board = await load(context.sessionKey);
-          const [action = "status", id, profile, ...rest] = args.trim().split(/\s+/);
+          const { action, id, profile, text } = typeof args === "string" ? parse(args) : args;
           const valid = (value: string | undefined): value is string => !!value && /^[a-zA-Z0-9_-]{1,80}$/.test(value) && !["__proto__", "constructor", "prototype"].includes(value);
-          if (action === "profile" && valid(id) && profile) {
-            const instructions = [profile, ...rest].join(" ");
+          if (action === "profile" && valid(id) && text?.trim()) {
+            const instructions = text;
             if (instructions.length > 16000) throw Error("Profile too large");
             board.profiles[id] = instructions;
             await save(context.sessionKey, board);
             return `Worker profile ${id} saved`;
           }
-          if (action === "submit" && valid(id) && valid(profile) && rest.length) {
+          if (action === "submit" && valid(id) && valid(profile) && text?.trim()) {
             const old = board.tasks[id];
-            const task = rest.join(" ");
+            const task = text;
             const instructions = board.profiles[profile];
             if (!instructions) throw Error("Unknown worker profile");
             if (old && (old.profile !== profile || old.task !== task)) throw Error("Conflicting task request ID");
@@ -87,9 +95,9 @@ export function workerTasksPlugin(home: string, getDispatcher: () => Dispatcher 
         const identifier = (value: unknown): value is string => typeof value === "string" && /^[a-zA-Z0-9_-]{1,80}$/.test(value);
         if (input.action === "status") return command.run("status", context, true);
         if (input.action === "profile" && identifier(input.name) && typeof input.instructions === "string" && input.instructions.trim())
-          return command.run(`profile ${input.name} ${input.instructions}`, context, true);
+          return command.run({ action: "profile", id: input.name, text: input.instructions }, context, true);
         if (input.action === "submit" && identifier(input.requestId) && identifier(input.profile) && typeof input.task === "string" && input.task.trim())
-          return command.run(`submit ${input.requestId} ${input.profile} ${input.task}`, context, true);
+          return command.run({ action: "submit", id: input.requestId, profile: input.profile, text: input.task }, context, true);
         throw Error("Invalid worker task operation");
       },
     });

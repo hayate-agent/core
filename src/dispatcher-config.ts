@@ -60,7 +60,7 @@ export function dispatcherConfig(value?: Partial<DispatcherConfig>): DispatcherC
         try { new RegExp(match.regex); } catch { throw Error("Invalid dispatcher configuration"); }
       }
       // Match present but no effective condition counts as a fallback rule.
-      if (!match.minChars && !match.maxChars && !(match.keywords?.length) && match.regex === undefined && i !== config.rules.length - 1) {
+      if (!match.minChars && match.maxChars === undefined && !(match.keywords?.length) && match.regex === undefined && i !== config.rules.length - 1) {
         throw Error("Invalid dispatcher configuration");
       }
     }

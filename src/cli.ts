@@ -70,6 +70,7 @@ import { loadPersona, personaSections } from "./persona.js";
 import { ProtectedContent } from "./protected-content.js";
 import { workflowTools } from "./workflow-tools.js";
 import { continuationPlugin } from "./builtin-plugins/continuation-plugin.js";
+import { executionControlPlugin } from "./execution-control.js";
 import { dispatchPlanHistoryPlugin } from "./dispatch-plan-history-plugin.js";
 import { dispatchDecisionsPlugin } from "./dispatch-decisions-plugin.js";
 import { taskPriorityPlugin } from "./task-priority-plugin.js";
@@ -559,7 +560,10 @@ async function main(argv: string[]): Promise<void> {
     const task = "Prüfe den Abschluss der GESAMTEN autorisierten Nachtarbeit, nicht nur eines Experiments. " +
       "Ein verworfener Versuch oder fehlende Skill-Ideen belegen keine Erschöpfung. Berücksichtige Core, Plugins, " +
       "Integrationen, bestehende und fehlende Features sowie erlaubte öffentliche Ansätze anderer Agenten. " +
-      "Bestätige completed nur bei fachlich begründetem Ende; sonst continue mit einem konkreten sicheren nächsten Schritt. " +
+      "Prüfe auch die Auslieferung: Core/Plugins ins zuständige tatsächliche Upstream-Quellrepo, Skills/Instanzänderungen ins zuständige Instanz-/Konfigurationsrepo. " +
+      "Lokale Tests sind keine Remote-Übergabe; Push ist kein Merge und Merge kein Deployment. Prüfe konkrete Repo-/Commit-/PR-/Aktivierungsbelege gegen das Arbeitsergebnis, " +
+      "nicht nur status-Behauptungen. Offene Reviews/Releases und echte Zugangsblocker getrennt ausweisen; keinen erfolgreichen Gesamtrollout behaupten. " +
+      "Bestätige completed nur bei fachlich begründetem Ende und erledigter autorisierter Übergabe oder konkret belegter externer Blockade; sonst continue mit einem konkreten sicheren nächsten Schritt. " +
       JSON.stringify({ night: request.night, turns: request.turn, maxTurns: request.maxTurns,
         expiresAt: request.expiresAt, experiments: request.experiments });
     return assessCompletion(supervisorReviewer(), request.input, request.reply,
@@ -750,7 +754,7 @@ async function main(argv: string[]): Promise<void> {
     admit: (id: string, request: import("./context-maintenance.js").MaintenanceRequest, version: number) => maintenance.admit(values["--maintenance-session"]!, id, request, version),
     cancel: (id: string, version: number) => maintenance.cancelAdmission(values["--maintenance-session"]!, id, version),
     maintain: () => harness.maintainIdle(values["--maintenance-session"]!),
-  }), path.resolve(values["--maintenance-directory"]))] : []), ...(values["--observe-directory"] ? [sessionObserverPlugin(Object.freeze({ observeSession: (key: string) => harness.observeSession(key) }), path.resolve(values["--observe-directory"]), values["--observe-session"]!)] : []), validatorPlugin, memoryOrchestrationPlugin(plugins.memoryOrchestration, settings, harness, config.memory.enabled), completionStrategyPlugin(completion, settings, harness), contextStrategyPlugin(strategies, settings, harness, maintenance), compactionStrategyPlugin(selectedCompaction, settings, harness, maintenance), nightlyStrategyPlugin(nightly, settings, improvement), reportPlugin, dispatcherPlugin(() => dispatcher), dispatchDecisionsPlugin(() => dispatcher), dispatchPlanHistoryPlugin(() => dispatcher), workerTasksPlugin(config.home, () => dispatcher, async (parent, requestId, input) => {
+  }), path.resolve(values["--maintenance-directory"]))] : []), ...(values["--observe-directory"] ? [sessionObserverPlugin(Object.freeze({ observeSession: (key: string) => harness.observeSession(key) }), path.resolve(values["--observe-directory"]), values["--observe-session"]!)] : []), validatorPlugin, memoryOrchestrationPlugin(plugins.memoryOrchestration, settings, harness, config.memory.enabled), completionStrategyPlugin(completion, settings, harness), contextStrategyPlugin(strategies, settings, harness, maintenance), compactionStrategyPlugin(selectedCompaction, settings, harness, maintenance), nightlyStrategyPlugin(nightly, settings, improvement), reportPlugin, dispatcherPlugin(() => dispatcher), dispatchDecisionsPlugin(() => dispatcher), dispatchPlanHistoryPlugin(() => dispatcher), ...(dispatchPolicy.enabled ? [executionControlPlugin(() => dispatcher, path.join(config.home, "operator-control"))] : []), workerTasksPlugin(config.home, () => dispatcher, async (parent, requestId, input) => {
       if (!dispatcher || harness.paused) throw Error("Dispatcher unavailable or Harness paused");
       const existing = await executions.findRequest(parent, requestId);
       if (existing) {

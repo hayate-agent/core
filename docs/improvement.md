@@ -42,6 +42,56 @@ completed evidence is supplied to the next normally authorized nightly turn.
 Routine background dispatcher lifecycle rows stay silent, while questions and
 recovery blockers still require attention. Ordinary user/API work is unaffected.
 
+### Two delivery streams, not local-only success
+
+Delivery belongs to the authorized improvement mandate:
+
+1. **Shared product:** Core and plugin changes go to the actual owning upstream
+   source repository, then its normal integration/release path. Never patch only
+   generated bundled adapters or hide a shared product fix in an instance repo.
+2. **Skills/instance:** changes go to the existing owning skill, instance or
+   configuration repository and its established deployment/update path.
+
+Resolve owners from installation/repository metadata, SOUL and actual Git remotes;
+never invent repository authority or credentials. Existing operator PR/merge
+settings and repository protection still apply. Proven good changes should be
+committed, pushed and handed into that existing integration process, rather than
+left as a local proposal. Check existing commits, branches and PRs before acting;
+unknown effects are reconciled, not retried blindly. Reject unsafe candidates.
+
+An optional `delivery` on an experiment receipt records reported `stream`
+(`upstream`/`instance`), `status` (`local`/`pushed`/`integrated`/`deployed`/`blocked`),
+actual repository URL, branch, full commit SHA, optional PR URL, deployment evidence
+or a concrete blocker/next step. Published states require branch and commit;
+deployed also requires deployment evidence; blocked requires a reason. Malformed
+or credential-bearing remote claims are discarded as delivery evidence, while the
+underlying experiment remains readable. These are **reported facts**, not a
+host-side Git/API verification or authorization grant. The working agent must
+verify remote state, and closure review must distinguish actual evidence from
+status assertions. Pushed is not merged; merged is not deployed.
+
+The host refuses successful closure for improved work with missing/local-only
+handoff evidence, without consuming another reviewer attempt. Genuine external
+review/release/access blockers may end active work, but remain explicitly pending,
+not deployed. Morning reports separate these states. Night-window/turn/pause
+limits are unchanged, even if delivery remains unfinished.
+
+Unactivated improvements survive rollover in `deliveryBacklog`, separate from
+new experiments and recent-hypothesis counting. On the first compatible load,
+validated prior `improvement/reports/YYYY-MM-DD.json` receipt arrays are also
+imported as historical candidates; matching current experiment identities are not
+duplicated. No effects or old budgets are replayed. Non-readable, malformed or
+oversized (>8MiB) archives remain untouched and are surfaced by archive name in
+`deliveryImportIssues` and the report rather than silently declared delivered. At the next normally authorized
+night turn they are supplied before new experimentation; concretely blocked items
+are not prioritized ahead of actionable work. A delivery receipt for the same
+hypothesis/baseline/candidate updates existing evidence without another experiment.
+Forward delivery updates from completed workers can also be adopted after the
+window closes, without running another model turn or reopening the night. Later
+safety review can reject a retained candidate. Full backlog remains in state and
+report archives; prompt/report excerpts are bounded. Legacy evidence without a
+remote receipt is **unverified**, not proof that no publication ever happened.
+
 ### Between-night local selection
 
 The administrative `/nightly-strategy` plugin supports `status`, `use <module>`,
@@ -71,9 +121,11 @@ change behavior and requires operator discipline. No immutable-code or exactly-o
 crash guarantee is implied. An adopted night cannot resume if the clock returns to
 its old window. Host calendar, turn budget, authorization and evaluator are unchanged.
 
-Each night must select and try new bounded experiments, not recheck yesterday's
-proposals as its output. Missing independent evaluator configuration prevents
-automatic adoption, not isolated local experiments. The controller requests a
+After actionable delivery backlog is handled or concretely externally blocked,
+select and try new bounded experiments. Delivering existing good work is productive
+but is not counted as a new experiment. Missing independent evaluator configuration
+prevents evaluator-based automatic adoption, not authorized commits, publication
+through the existing repository workflow, or isolated local experiments. The controller requests a
 structured `improvement-experiment` JSON block with hypothesis, baseline,
 candidate, evidence and outcome (`improved`, `rejected`, `inconclusive`). These are
 reported experiment receipts, not independently verified measurements or merge

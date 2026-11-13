@@ -3,7 +3,7 @@ export interface TranscriptEntry { kind: MessageKind; text: string; }
 
 /** Keep terminal control sequences from tool/model text out of the renderer. */
 export function plainText(text: string): string {
-  return text.replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, "")
+  return text.replace(/\x1b\][^\x07]*?(?:\x07|\x1b\\)/g, "")
     .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
     .replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, "");
 }

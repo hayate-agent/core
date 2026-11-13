@@ -60,9 +60,9 @@ export class TurnActivity {
   }
   snapshot(): ActivitySnapshot {
     const now = this.now();
-    return { ...this.input, sequence: this.sequence, id: `turn-${identity(this.input.id)}`, parent: this.input.parent ? `context-${identity(this.input.parent)}` : undefined,
+    return { ...this.input, outputTags: this.input.outputTags ? [...this.input.outputTags] : undefined, sequence: this.sequence, id: `turn-${identity(this.input.id)}`, parent: this.input.parent ? `context-${identity(this.input.parent)}` : undefined,
       execution: this.execution ? { ...this.execution } : undefined, executionState: this.executionState,
-      phase: this.phase, activity: this.activity, tools: [...this.tools.values()], elapsedMs: Math.max(0, now - this.started), inactiveMs: Math.max(0, now - this.last) };
+      phase: this.phase, activity: this.activity, tools: [...this.tools.values()].map(tool => ({ ...tool })), elapsedMs: Math.max(0, now - this.started), inactiveMs: Math.max(0, now - this.last) };
   }
   private publish(kind: ActivityEvent["kind"], tool?: ActivityEvent["tool"]): void {
     if (!this.enabled) return;

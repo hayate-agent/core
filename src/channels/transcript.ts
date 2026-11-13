@@ -27,7 +27,7 @@ export class ConversationTranscript implements Component {
       const component = entry.kind === "assistant"
         ? new Markdown(plainText(entry.text), 0, 0, theme)
         : new Text(renderEntry(entry, color), 0, 0);
-      return { entry, component };
+      return { entry: { ...entry }, component };
     });
     this.color = color;
   }
