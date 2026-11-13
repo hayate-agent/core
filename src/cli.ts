@@ -485,7 +485,9 @@ async function main(argv: string[]): Promise<void> {
       if (dispatcher) await dispatcher.cancelTask(key, taskId, preexistingUnscoped);
       await subagents.cancelTaskChildren(key, taskId);
     },
-    hostEventAllowed: input => !!input.hostEvent && !!dispatchRuntime?.resultAllowed(input.sessionKey, input.hostEvent.executionId),
+    // Nightly owns dispatcher evidence directly, including retained pre-upgrade inbox events.
+    // It must never become a new LLM turn through the generic host-result lane.
+    hostEventAllowed: input => input.sessionKey !== "improvement:nightly" && !!input.hostEvent && !!dispatchRuntime?.resultAllowed(input.sessionKey, input.hostEvent.executionId),
     // Reserve this namespace even with dispatch disabled: stale opaque turns
     // must be reconciled through the ledger, not replayed by Harness startup.
     externallyRecoveredSession: key => key.startsWith("dispatch:"),
@@ -560,7 +562,7 @@ async function main(argv: string[]): Promise<void> {
     return assessCompletion(supervisorReviewer(), request.input, request.reply,
       { task, purpose: "nightly-closure", expiresAt: request.expiresAt }, request.signal, effectiveModels().reviewModel,
       Date.now, completion.current, undefined, config.completionCheck?.timeoutMs ?? 30000, plugins.validators);
-  });
+  }, () => executions.list("improvement:nightly"));
   await improvement.initializeStrategy(nightly, settings.snapshot().nightlyStrategy);
   let nextLedgerCompact = 0;
   let ledgerRecoveryReady = false;
@@ -780,12 +782,13 @@ async function main(argv: string[]): Promise<void> {
           // belongs to one update row, never a succession of final answers.
           if (attentionRequired(event, task.status)) {
             await harness.deliver(to, text, { deliveryId: `dispatch-event:${event.id}` });
-          } else {
+          } else if (event.parent !== "improvement:nightly") {
             await harness.deliver(to, text, { deliveryId: `dispatch-event:${event.id}`, statusKey: `dispatch:${event.executionId}` });
           }
         }
         return;
       }
+      if (event.parent === "improvement:nightly" && await improvement?.delegatedResult(event.executionId)) return;
       if (!dispatchRuntime?.resultAllowed(event.parent, event.executionId)) return;
       await harness.accept({ id: `dispatch-event:${event.id}`, source: "host", sessionKey: event.parent,
         hostEvent: { executionId: event.executionId },
