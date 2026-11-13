@@ -411,6 +411,19 @@ test("forty parent follow-ups roll completed evidence instead of exhausting six 
   assert.equal(count, final.planHistory!.completed, "all exact independently completed steps remain retrievable");
 });
 
+test("same-worker correction receives fresh exact original mandate and current step, not just stale session and parent prose", async t => {
+  const original = "Inspect the designated remote-service manifests read-only; source-repair phase restrictions are not a permanent prohibition. Never transmit private data without actual permission.";
+  const env = await setup(t, { plan: steps(["discover current service configuration", "simple"]),
+    worker: text => text.startsWith("CONTINUE STEP") ? "Designated manifest inspected without changing configuration\nSTEP-STATUS: complete" : "No local process; documented manifest not inspected\nSTEP-STATUS: blocked: assumed absence",
+    verdict: text => JSON.parse(text.slice(text.lastIndexOf("DATA: ") + 6)).reply.includes("manifest inspected") ? '{"state":"completed"}' : '{"state":"continue","next":"Read the already-authorized designated manifest; absence of a local process is insufficient."}',
+  });
+  const result = await env.run(original); assert.equal(result.status, "completed"); assert.equal(env.calls.worker.length, 2);
+  const correction = env.calls.worker[1]!.prompt;
+  assert.ok(correction.includes(original)); assert.match(correction, /CURRENT STEP \(stable identity 0/);
+  assert.ok(correction.includes("discover current service configuration"));
+  assert.match(correction, /Read the already-authorized designated manifest/);
+});
+
 test("delegated step uses selected dedicated provider, not legacy LLM", async t => {
   const validators = new ValidatorRegistry(); let assessments = 0;
   validators.register({ apiVersion: 1, name: "dedicated", version: 1,
@@ -1401,6 +1414,26 @@ test("uncompactable checkpoint budget is still checked before any unsafe effect 
   const current = env.store.list()[0]!;
   assert.equal(current.status, "paused"); assert.equal(current.intent, undefined); assert.equal(env.calls.worker.length, 0);
   assert.equal(state(current.checkpoint).planHistory, undefined, "unfinished or opaque state is not silently archived/discarded");
+});
+
+for (const completed of [false, true]) test(`projected report ${completed ? "completes" : "holds"} without reinflating the settled checkpoint`, async t => {
+  const home = await mkdtemp(path.join(os.tmpdir(), "seq-settlement-budget-")), file = path.join(home, "executions.json");
+  const store = new ExecutionStore(file); await store.load();
+  const task = await store.submit("parent", "settled-budget", "Preserve original authority and all uncertain effects", "sequential"), claim = await store.claim(task.id);
+  await store.checkpoint(task.id, claim.token!, JSON.stringify({ v: 1, planner: { requested: {} }, plan: JSON.parse(steps(["existing source verification", "simple"])).steps,
+    outcomes: [], retainedFutureMetadata: "x".repeat(54000) }));
+  await store.yieldStep(task.id, claim.token!);
+  const raw = `${'"'.repeat(7900)}\nSTEP-STATUS: ${completed ? "complete" : "blocked: existing CI pending"}`;
+  const env = await setup(t, { worker: () => raw, verdict: completed ? '{"state":"completed"}' : '{"state":"blocked"}' }, { home, file });
+  await env.dispatcher.start();
+  for (let i = 0; i < 300 && ["ready", "running"].includes(env.store.list()[0]!.status); i++) await new Promise(resolve => setTimeout(resolve, 10));
+  await env.dispatcher.waitForExecution(task.id);
+  const final = env.store.list()[0]!, checkpoint = state(final.checkpoint);
+  assert.equal(final.status, completed ? "completed" : "paused"); assert.equal(final.intent, undefined);
+  assert.equal(env.calls.worker.length, 1); assert.ok(final.checkpoint!.length <= 64000);
+  assert.equal((checkpoint as unknown as { retainedFutureMetadata: string }).retainedFutureMetadata.length, 54000);
+  if (completed) assert.match(checkpoint.outcomes[0]!.result, /truncated for checkpoint budget/);
+  else { assert.ok(checkpoint.assessment); assert.equal(final.assessmentHold?.state, "blocked"); assert.match(checkpoint.prior!.result, /retained in assessment/); }
 });
 
 test("retained assessment bounds reports and tool entries to the reloadable checkpoint schema", async t => {
