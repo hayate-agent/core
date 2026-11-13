@@ -5,6 +5,11 @@ import path from "node:path";
 import { writeFileDurable } from "./durable.js";
 import { recoveryBlock, type RecoveryStrategy, type ExecutionRecoveryPolicy } from "./execution-recovery.js";
 
+/** Exact host state fence for evidence-backed parent continuation. */
+export function executionRecoveryHash(task: Readonly<Execution>): string {
+  return createHash("sha256").update(JSON.stringify(task)).digest("hex");
+}
+
 /** Expected contention with a control or another claimant, not a storage failure. */
 export class ExecutionClaimConflict extends Error {}
 /** New parent data invalidated a verdict, not the retained worker evidence. */
@@ -115,6 +120,7 @@ export interface Execution {
   recoveryGrant?: { action: "continue" | "retry"; restarts: number };
   /** Returned by claim only, never persisted as permission for another attempt. */
   claimedRecoveryAction?: "continue" | "retry";
+  parentContinuation?: { requestId: string; executionHash: string; evidence: string; fingerprint: string; at: number };
   terminalAt?: number;
   question?: { id: string; text: string; answer?: string };
   /** Parent stop permanently revokes result delivery as well as execution. */
@@ -1035,6 +1041,32 @@ export class ExecutionStore {
     });
   }
   /** Explicit acknowledgement retains ambiguous intent and audit history. No budget reset. */
+  continueReconciled(parent: string, id: string, requestId: string, executionHash: string, evidence: string, fingerprint: string,
+    eligible: (task: Readonly<Execution>) => void): Promise<void> {
+    return this.mutate(draft => {
+      const task = this.find(draft, id);
+      if (task.parent !== parent || /^(dispatch|subagent):/.test(parent)) throw Error("Parent execution ownership required");
+      if (!/^[a-zA-Z0-9_.:-]{1,160}$/.test(requestId) || !/^[a-f0-9]{64}$/.test(executionHash) || !/^[a-f0-9]{64}$/.test(fingerprint) || !evidence.trim() || evidence.length > 8000) throw Error("Bounded reconciliation identity and evidence required");
+      const prior = task.parentContinuation;
+      if (prior?.requestId === requestId) {
+        if (prior.executionHash !== executionHash || prior.evidence !== evidence || prior.fingerprint !== fingerprint) throw Error("Continuation identity conflict");
+        return;
+      }
+      if (executionRecoveryHash(task) !== executionHash) throw Error("Execution changed; inspect fresh evidence");
+      if (!["blocked", "paused"].includes(task.status) || task.token || task.parentStopped || task.ownershipHold ||
+          task.recoveryEnrollment === "held-legacy" || task.diagnosticCode === "manual-pause" || task.recoveryGrant ||
+          task.question && task.question.answer === undefined || task.dependency?.expiresAt !== undefined && task.dependency.expiresAt <= this.now()) throw Error("Execution authority remains held");
+      eligible(structuredClone(task));
+      // Preserve intent, worker session, checkpoint, counters and all policy gates.
+      // In particular do NOT use resolve()'s policy-bypassing recoveryGrant.
+      task.parentContinuation = { requestId, executionHash, evidence, fingerprint, at: this.now() };
+      (task.resolutions ??= []).push({ actor: parent, action: "continue", evidence, at: this.now() });
+      task.status = "ready";
+      delete task.recoveryReason;
+      this.event(draft, task, "status", "Parent reconciled retained evidence; continue same execution without replay grant or budget reset");
+    });
+  }
+
   resolve(parent: string, id: string, actor: string, action: "continue" | "retry", evidence: string): Promise<void> {
     if (!actor.trim() || !evidence.trim() || evidence.length > 8000) return Promise.reject(Error("Actor and bounded evidence required"));
     return this.mutate(draft => {
