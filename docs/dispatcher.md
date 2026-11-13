@@ -44,7 +44,7 @@ ID** with durable exponential backoff (15 seconds up to 5 minutes), retaining it
 intent, original mandate and worker transcript. The matching strategy must support
 reconciliation; no opaque effect is blindly replayed. Manual pauses, cancellation,
 unanswered questions, authentic mandate expiry and trusted recovery-policy holds
-remain binding. Technical retries have no total-attempt cutoff. Generic strategy exceptions are classified as `runtime-failure`, without
+remain binding. Technical retries are bounded by `workerRetryMax` (default 12): once the budget is exhausted, the task is held as `retry-exhausted` (`blocked` with an unresolved intent, otherwise `paused`) without retry metadata, and manual intervention (explicit resume or cancel) is required. Generic strategy exceptions are classified as `runtime-failure`, without
 inferring permission or diagnosis from exception text. With a reconciliation-capable
 strategy, they receive the same durable backoff. A retained sequential assessment
 is rechecked independently before any new worker effects; a genuine blocked verdict
@@ -108,10 +108,12 @@ dispatcher:
   concurrentRequests: true
   capacity: 2
   retentionDays: 7
+  workerRetryMax: 12
 ```
 
 Defaults are `enabled: false`, `strategy: direct`, `concurrentRequests: false`,
-`capacity: 4`, `retentionDays: 7` (integer, 1–3650). Enabling requires the operator's explicit declaration that the
+`capacity: 4`, `retentionDays: 7` (integer, 1–3650), `workerRetryMax: 12`
+(safe integer, >= 1). Enabling requires the operator's explicit declaration that the
 configured runtime/backend supports concurrent requests. This declaration does
 not probe or configure the backend. Capacity limits active strategy executions,
 not the number of retained tasks or configured persistent workers. The runtime
@@ -394,7 +396,11 @@ Inbox deduplication handles redelivery. Host results are data, not slash command
 operator requests or continuation grants. They queue behind a busy turn instead
 of steering or interrupting it. Their authority is checked again before execution,
 after asynchronous setup, at runtime execution and at tool boundaries. They do
-not overwrite the parent's task checkpoint or conversation destination.
+not overwrite the parent's task checkpoint or conversation destination. A worker
+that completes without any result text still settles as `completed`; the empty
+result is marked with the `empty-result` diagnostic and a status event instead
+of failing or throwing, because empty output can be a legitimate terminal
+result and callers must keep working with the stored empty string.
 
 Before a built-in worker's first opaque intent is recorded, metadata-only
 preparation durably creates a native/provider history containing its exact

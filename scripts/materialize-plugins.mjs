@@ -8,7 +8,10 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 // Production builds continue to use the checked-in immutable revision/hash lock.
 const vendored = path.join(root, 'vendor/plugins');
 const localSource = process.argv[2] || process.env.HAYATE_PLUGIN_SOURCE || (existsSync(vendored) ? vendored : undefined);
-const localLock = process.argv[3];
+// A local source tree may carry its own lock next to the sources; it is only
+// honored for local sources, never for the checked-in production lock path.
+const coLocatedLock = localSource ? path.join(path.resolve(localSource), 'plugins.lock.json') : undefined;
+const localLock = process.argv[3] || (coLocatedLock && existsSync(coLocatedLock) ? coLocatedLock : undefined);
 if (localLock && !localSource) throw Error('Local plugin lock requires local sources');
 const lock = JSON.parse(await readFile(localLock ? path.resolve(localLock) : path.join(root, 'plugins.lock.json'), 'utf8'));
 if (lock.schema !== 1 || !/^[a-f0-9]{40}$/.test(lock.revision) || !['https://git.vanillacore.net/harness/plugins', 'https://github.com/hayate-agent/plugins'].includes(lock.repository)) throw Error('Invalid plugin lock');
