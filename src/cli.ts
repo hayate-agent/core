@@ -114,6 +114,8 @@ import { conversationPolicyPlugin } from "./conversation-policy-plugin.js";
 import { roleAwareReviewer, resolveModelRole } from "./model-roles.js";
 import { runtimeReviewer } from "./runtime/reviewer.js";
 import { validatorRole } from "./dispatcher-sequential.js";
+import { createTypeSafeAPIPlugin } from "./builtin-plugins/typesafe-api-plugin.js";
+import { typeSafeDecisionPlugin } from "./builtin-plugins/typesafe-decision-plugin.js";
 import { boundaryAssessor } from "./builtin-plugins/boundary-assessor.js";
 import { pruneToolResults } from "./builtin-plugins/tool-result-projector.js";
 import { contextStrategyHolder, disabledContextStrategies, diagnosedBoundaryAssessor } from "./context-strategies.js";
@@ -304,6 +306,7 @@ async function main(argv: string[]): Promise<void> {
   const completion = await completionStrategyHolder(config.home, config.completionStrategy,
     { apiVersion: 1, prompt: completionPrompt }, settings.snapshot().completionStrategy);
   const dispatchPolicy = dispatcherConfig(settings.effective().dispatcher);
+  plugins.dispatchDecisions.select(dispatchPolicy.decisionProvider ?? (completionProviderForProfile(config) === "legacy-llm" ? "legacy-llm" : false));
   const parallelAdmission = dispatchPolicy.countAuxiliaryRuns ? new ParallelAdmission(dispatchPolicy.capacity) : undefined;
   config.memory = memoryConfig(settings.effective().memory);
   memory = new MemoryService(config.memory, log, config.home);
@@ -750,7 +753,7 @@ async function main(argv: string[]): Promise<void> {
     },
   });
   let requestRestart: () => Promise<void> = async () => { throw Error("Lifecycle startup not complete; retry restart"); };
-  await plugins.load(config.plugins ?? [], { agent: config.agent, home: config.home, cwd: config.cwd, executionContexts: executionContextCapability, foregroundWork: work => harness.withForegroundWork(work) }, [...builtinCommandNames, "sessions", "resume", ...skills.map((s) => s.name)], ["console", "api", "dispatch", ...Object.keys(bundledGatewayModules()), ...harness.channels.keys()], [languageService(() => settings.effective().language ?? {}), taskPriorityPlugin(harness, async (key, taskId, priority, signal) => {
+  await plugins.load(config.plugins ?? [], { agent: config.agent, home: config.home, cwd: config.cwd, executionContexts: executionContextCapability, foregroundWork: work => harness.withForegroundWork(work) }, [...builtinCommandNames, "sessions", "resume", ...skills.map((s) => s.name)], ["console", "api", "dispatch", ...Object.keys(bundledGatewayModules()), ...harness.channels.keys()], [...(config.typeSafeDecisions ? [typeSafeDecisionPlugin, createTypeSafeAPIPlugin(config.typeSafeDecisions)] : []), languageService(() => settings.effective().language ?? {}), taskPriorityPlugin(harness, async (key, taskId, priority, signal) => {
     const session = harness.sessions.get(key), input = session?.current;
     const task = (session?.tasks ?? (session?.task ? [session.task] : [])).find(task => task.id === taskId);
     if (!task || input?.source !== "channel" || !(input.replyTo?.channel === "console" || !!input.sender && admins.includes(input.sender))) return false;
@@ -779,13 +782,14 @@ async function main(argv: string[]): Promise<void> {
     }), subagentPlugin(subagents,async()=>{await persist();}), ...(reloadableTools ? [reloadableToolsPlugin(reloadableTools)] : []), wasmToolsPlugin(config.home, config.wasmTools ?? []), continuationPlugin(harness), loopPlugin(harness), improvementPlugin(improvement!), protectedContentPlugin(protectedContent), gatewayManagerPlugin(gatewayManager, settings), messagePlugin(config.home, gatewayManager), conversationPolicyPlugin(settings, harness), policyManagerPlugin(policyManager, settings), extensionManagerPlugin(extensionManager, settings), gatewayPlugin(settings, harness), contextPlugin(maintenance, settings), ...(config.memory.enabled ? [memoryPlugin(memory), ...(config.memory.consolidation ? [memoryConsolidationHost(config.memory.consolidation, runtime, memory, log)] : [])] : []), skillSearchPlugin(skillCatalog), ...(adaptiveSkills ? [adaptiveSkills.plugin()] : []), ...reviewEngine.plugins], [settings.desired().gatewayPlugins?.webui?.module].filter((value): value is string => typeof value === "string"));
   // Registration may happen during plugin activation; reject an unresolved name before admitting work.
   void plugins.validators.current;
+  void plugins.dispatchDecisions.current;
   if (dispatchPolicy.enabled) {
     dispatchRuntime = new DispatcherRuntime(harness, executions, async () => {
       await reloadRuntimeSettings();
       return settings.effective().dispatcher?.rules;
     }, () => ({ config: settings.effective().modelRoles,
       defaults: { model: effectiveModels().model, thinking: effectiveModels().thinking },
-      review: settings.effective().review?.model ? { model: settings.effective().review!.model, thinking: settings.effective().review?.thinking ?? "medium" } : undefined }), plugins.validators, () => ({
+      review: settings.effective().review?.model ? { model: settings.effective().review!.model, thinking: settings.effective().review?.thinking ?? "medium" } : undefined }), plugins.dispatchDecisions, () => ({
       coreRevision: readSoftwareVersions(BUILD_INFO).revision,
       moduleDirectory: fileURLToPath(new URL("./", import.meta.url)),
       documentationDirectory: fileURLToPath(new URL("../docs/", import.meta.url)),

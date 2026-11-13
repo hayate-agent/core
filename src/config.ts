@@ -58,6 +58,8 @@ export interface HarnessConfig {
   wasmTools?: import("./wasm-tools.js").WasmToolConfig[];
   protectedContent?: import("./protected-content.js").ProtectedContentConfig;
   skillUpdateSource?: import("./skill-updates.js").SkillUpdateSource;
+  /** Trusted plugin binding; reference only, never inline credentials. */
+  typeSafeDecisions?: import("./builtin-plugins/typesafe-api-plugin.js").TypeSafeAPIConfig;
   /** Infrastructure-owned semantic continuation grants, keyed by exact conversation. */
   completionCheck?: { provider?: string | false; authorizations?: Record<string, import("./completion-check.js").CompletionAuthorization>; timeoutMs?: number };
   /** Explicit installation review selections, before normalization adds defaults. */
@@ -198,6 +200,7 @@ export function defaultConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
     protectedContent: overrides.protectedContent,
     skillUpdateSource: overrides.skillUpdateSource,
     completionCheck: overrides.completionCheck,
+    typeSafeDecisions: overrides.typeSafeDecisions,
     modelRoles: overrides.modelRoles,
     dispatcher: dispatcherConfig(overrides.dispatcher),
     sessions: overrides.sessions ?? { provider: "native" },

@@ -489,7 +489,7 @@ export function sequentialStrategy(deps: SequentialDeps): DispatcherStrategy {
             .filter(({ position }) => position > index && !retained.deferred?.some(d => d.stepId === ids[position]));
           if (!candidates.length || !retained.assessment) return false;
           decisions = await context.decisions?.() ?? []; decisionRevision = executionDecisionRevision(decisions);
-          const reviewer = await validatorRole(runtime, deps.roles());
+          const reviewer = deps.validators?.current?.requiresModel === false ? { model: undefined } : await validatorRole(runtime, deps.roles());
           if (typeof reviewer === "string") return false;
           const backend = runtimeReviewer(runtime, "supervisor");
           const schedulingPrompt = readyStepPrompt({ task: task.input, completedHistory: retained.planHistory, expiresAt: task.dependency?.expiresAt, decisions,
@@ -534,7 +534,7 @@ Correctable vs blocked: a worker "blocked" claim or evidence shortfall that rest
           const claimed = status;
           decisions = await context.decisions?.() ?? [];
           decisionRevision = executionDecisionRevision(decisions);
-          const reviewer = await validatorRole(runtime, deps.roles());
+          const reviewer = deps.validators?.current?.requiresModel === false ? { model: undefined } : await validatorRole(runtime, deps.roles());
           if (typeof reviewer === "string") return block(reviewer);
           const backend = runtimeReviewer(runtime, "supervisor");
           let verdict: Awaited<ReturnType<typeof assessCompletion>> = undefined;
