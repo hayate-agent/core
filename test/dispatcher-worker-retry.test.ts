@@ -172,6 +172,8 @@ test("raising workerRetryMax live after exhaustion does not wake the hold (regre
   await until(() => store.list()[0].diagnosticCode === "retry-exhausted");
   assert.equal(store.list()[0].status, "paused");
   assert.equal(calls, 1, "cap 1: the single attempt is the initial run");
+  // M1 guard: exhaustion must fully clear the retry state, not leave an {attempts: 0} remnant.
+  assert.equal(store.list()[0].workerRetry, undefined);
   // Operator raises the live cap far above the exhausted budget.
   cap = 10;
   for (let round = 0; round < 3; round++) {
