@@ -41,7 +41,7 @@ function retainFixture(t: import("node:test").TestContext, fixture: { home: stri
 }
 /** Real Harness, store and dispatcher; fake model runtime emitting observed selection and tool events. */
 async function setup(t: import("node:test").TestContext, script: Script, opts: { roles?: ModelRoles; unavailable?: string[]; home?: string; file?: string;
-  manualProgress?: boolean; retainedTranscript?: string; validators?: ValidatorRegistry; http?: (request: PlannerHttpRequest) => Promise<PlannerHttpOutcome> } = {}) {
+  manualProgress?: boolean; retainedTranscript?: string; validators?: ValidatorRegistry; runtimeProvenance?: () => import("../src/dispatcher-sequential.js").WorkerRuntimeProvenance; http?: (request: PlannerHttpRequest) => Promise<PlannerHttpOutcome> } = {}) {
   let now = Date.now();
   t.mock.method(Date, "now", () => now);
   const home = opts.home ?? await mkdtemp(path.join(os.tmpdir(), "seq-dispatch-"));
@@ -90,7 +90,7 @@ async function setup(t: import("node:test").TestContext, script: Script, opts: {
   let bridge!: DispatcherRuntime;
   const harness = new Harness({ runtime, tickMs: 60000, busyMode: "queue", beforeExecution: input => bridge.beforeTurn(input.sessionKey) });
   harness.onStateChange = async () => {};
-  bridge = new DispatcherRuntime(harness, store, undefined, () => ({ config: opts.roles ?? roles, defaults }), opts.validators);
+  bridge = new DispatcherRuntime(harness, store, undefined, () => ({ config: opts.roles ?? roles, defaults }), opts.validators, opts.runtimeProvenance);
   harness.addChannel(bridge.channel);
   const events: ExecutionEvent[] = [];
   let settle!: () => void; let settled = new Promise<void>(r => { settle = r; });
@@ -422,6 +422,45 @@ test("same-worker correction receives fresh exact original mandate and current s
   assert.ok(correction.includes(original)); assert.match(correction, /CURRENT STEP \(stable identity 0/);
   assert.ok(correction.includes("discover current service configuration"));
   assert.match(correction, /Read the already-authorized designated manifest/);
+  assert.match(correction, /LAST SETTLED REPORT \(untrusted historical evidence/);
+  assert.match(correction, /No local process; documented manifest not inspected/);
+});
+
+for (const restricted of [false, true]) test(`verification exposes an owned integration bug: ${restricted ? "explicit operator read-only gate preserved" : "same owner performs authorized repair"}`, async t => {
+  const original = restricted ? "Verify our integration READ ONLY. Operator explicitly forbids source changes without separate approval."
+    : "Implement, repair and verify our owned integration. Preserve original protocol/safety checks, required tests and normal protected delivery; do not change the separately owned server.";
+  const env = await setup(t, { plan: steps(["verify the owned integration", "simple"]),
+    worker: text => text.startsWith("CONTINUE STEP") ? "Authoritative contract confirmed; owned source assumption corrected with regression and required validation receipts\nSTEP-STATUS: complete"
+      : "A documented valid example fails an unsupported invariant in our owned integration; another owner must decide because this step is verification\nSTEP-STATUS: blocked: invented owner boundary",
+    verdict: text => {
+      const data = JSON.parse(text.slice(text.lastIndexOf("DATA: ") + 6));
+      return restricted ? '{"state":"blocked","next":"Operator explicitly forbids source changes"}' : data.reply.includes("assumption corrected") ? '{"state":"completed"}'
+        : '{"state":"continue","next":"Confirm the actual contract read-only, then correct only the unsupported assumption in our owned integration and run the regression/normal required checks within the original mandate."}';
+    },
+  });
+  const result = await env.run(original);
+  assert.equal(result.status, restricted ? "paused" : "completed"); assert.equal(env.calls.worker.length, restricted ? 1 : 2);
+  if (!restricted) {
+    assert.ok(env.calls.worker.every(call => call.prompt.includes(original)));
+    assert.match(env.calls.worker[0]!.prompt, /derived verification label\/read-only role rationale does not override/);
+    assert.match(env.calls.worker[1]!.prompt, /same owned deliverable/);
+    assert.equal(env.store.list().length, 1, "never spawn a replacement owner for the repair");
+  }
+});
+
+test("fresh host runtime provenance reaches original worker, correction and independent review without granting provider activation", async t => {
+  const facts = { coreRevision: "c".repeat(40), moduleDirectory: "/synthetic/current/core/dist/", documentationDirectory: "/synthetic/current/core/docs/",
+    selectedValidator: "legacy-llm", registeredValidators: [{ name: "legacy-llm", version: 1, apiVersion: 1 as const }] };
+  const env = await setup(t, { plan: steps(["verify current installed provider artifact", "simple"]),
+    worker: text => text.startsWith("CONTINUE STEP") ? "Actual current artifact located; selection remains legacy-llm, no activation inferred\nSTEP-STATUS: complete"
+      : "Historical installation path is missing; Main must locate artifact\nSTEP-STATUS: blocked: missing artifact",
+    verdict: text => { const data = JSON.parse(text.slice(text.lastIndexOf("DATA: ") + 6));
+      assert.deepEqual(data.context.retained.technical.runtimeProvenance, facts);
+      return data.reply.includes("Actual current artifact") ? '{"state":"completed"}' : '{"state":"continue","next":"Inspect the actual host-provided current module/documentation directories read-only, not the historical release path. Do not infer provider activation."}'; },
+  }, { runtimeProvenance: () => facts });
+  const result = await env.run("Verify installed artifact using current host state; historical release /synthetic/old-release was an earlier observation, not a required immutable input. Never activate or infer provider selection from source presence.");
+  assert.equal(result.status, "completed"); assert.equal(env.calls.worker.length, 2);
+  for (const call of env.calls.worker) { assert.ok(call.prompt.includes(JSON.stringify(facts))); assert.match(call.prompt, /not permission or proof of service\/provider success/); }
 });
 
 test("delegated step uses selected dedicated provider, not legacy LLM", async t => {
@@ -487,13 +526,33 @@ test("selected completion provider never promotes an actual failed worker", asyn
   assert.notEqual(task.status, "completed"); assert.equal(calls, 0);
 });
 
-test("independent completion overrides a worker-authored block without a parent decision", async t => {
-  const env = await setup(t, { worker: () => "Existing publication verified; no effect remains.\nSTEP-STATUS: blocked: parent must decide",
+test("independent completion reconciles a false worker block through a tool-free report, without a parent nudge or effect replay", async t => {
+  const env = await setup(t, { worker: text => text.startsWith("CONTINUE STEP") ? "Existing publication verified from retained facts; no effects repeated\nSTEP-STATUS: complete" : "Existing publication verified; no effect remains.\nSTEP-STATUS: blocked: parent must decide",
     verdict: '{"state":"completed"}' });
   const task = await env.run("Reconcile existing publication without publishing again");
   assert.equal(task.status, "completed");
-  assert.equal(env.calls.worker.length, 1);
-  assert.equal(env.calls.review.length, 1);
+  assert.equal(env.calls.worker.length, 2);
+  assert.equal(env.calls.review.length, 2);
+});
+
+test("reviewer completion cannot silently turn a reported failed positive case into success", async t => {
+  let env!: Awaited<ReturnType<typeof setup>>;
+  env = await setup(t, { plan: steps(["deliver accepted positive integration and required source merge", "simple"]),
+    worker: text => {
+      if (text.startsWith("CONTINUE STEP")) {
+        const current = env.store.list()[0]!;
+        assert.throws(() => env.bridge.guardTool(`dispatch:${current.id}:${current.token}`, "bash"), /tool-free/);
+        assert.throws(() => env.bridge.guardTool(`dispatch:${current.id}:${current.token}`, "read"), /tool-free/);
+      }
+      return "Required positive case FAILED, required source PR is OPEN, no accepted provider result exists.\nSTEP-STATUS: blocked: acceptance unmet";
+    },
+    verdict: '{"state":"completed"}' });
+  const task = await env.run("Deliver passing positive integration and normally merged source; a report of a failed test is not acceptance");
+  assert.equal(task.status, "paused"); assert.equal(state(task.checkpoint).outcomes.length, 0);
+  assert.equal(env.calls.worker.length, 2, "only one additional tool-free consistency report");
+  assert.match(env.calls.worker[1]!.prompt, /proposal is NOT proof of success/);
+  assert.match(state(task.checkpoint).assessment!.reply, /positive case FAILED/);
+  assert.equal(env.calls.review.length, 2);
 });
 
 test("semantic hold is automatically re-assessed after reload without rerunning settled worker effects", async t => {
@@ -507,7 +566,7 @@ test("semantic hold is automatically re-assessed after reload without rerunning 
   assert.equal(first.events.filter(e => e.requiresAttention).length, 1, "real blocker remains actionable despite automatic rechecks");
   assert.ok(state(held.checkpoint).assessment);
   await first.dispatcher.stop(); await first.harness.stop(0);
-  const second = await setup(t, { worker: () => { throw Error("settled worker must not repeat"); }, verdict: '{"state":"completed"}' },
+  const second = await setup(t, { worker: text => { assert.match(text, /Using EXISTING facts ONLY, no tools/); return "Existing publication evidence now verified; no effects repeated\nSTEP-STATUS: complete"; }, verdict: '{"state":"completed"}' },
     { home: first.home, file: first.file });
   await second.dispatcher.start();
   assert.equal(second.calls.review.length, 0);
@@ -515,8 +574,8 @@ test("semantic hold is automatically re-assessed after reload without rerunning 
   await second.dispatcher.waitForExecution(held.id);
   assert.equal(second.store.list()[0].status, "completed");
   assert.equal(second.store.list()[0].id, held.id);
-  assert.equal(second.calls.worker.length, 0);
-  assert.equal(second.calls.review.length, 1);
+  assert.equal(second.calls.worker.length, 1, "tool-free report only, never replay settled publication");
+  assert.equal(second.calls.review.length, 2);
 });
 
 test("validator model selection: explicit validator, then review, then default; no availability fallback", async t => {
@@ -1078,7 +1137,7 @@ test("correction is persisted before the corrected worker turn (restart-safe) an
       return "no\nSTEP-STATUS: blocked: x";
     } });
   await env.run("one");
-  assert.deepEqual(persisted?.correction, { index: 0, rounds: 1, note: "use --source internal" });
+  assert.deepEqual(persisted?.correction, { index: 0, rounds: 1, note: "use --source internal", previousReport: "no\nSTEP-STATUS: blocked: x" });
 
   // Fresh process: persisted correction, nothing else; exact step resumes, earlier steps are not replayed.
   const home = await mkdtemp(path.join(os.tmpdir(), "seq-corr-"));
@@ -1175,7 +1234,7 @@ test("reviewer completed cannot silently complete an empty worker report; report
   const task = await env.run("report");
   assert.equal(task.status, "completed");
   assert.equal(env.calls.worker.length, 2);
-  assert.match(env.calls.worker[1]!.prompt, /Report the existing verified result.*Do not repeat tools/);
+  assert.match(env.calls.worker[1]!.prompt, /Using EXISTING facts ONLY, no tools/);
 });
 
 test("uncertain or invalid assessment retries only inference, never the worker effects", async t => {
@@ -1519,6 +1578,7 @@ for (const initial of ["semantic-block", "technical-backoff"] as const) {
     await first.dispatcher.stop();
     let sawDecision = false;
     const second = await setup(t, { plan: "DO NOT REPLAN", worker: prompt => {
+      if (prompt.startsWith("CONTINUE STEP 1/2")) { assert.match(prompt, /Using EXISTING facts ONLY, no tools/); return "Existing build receipt remains verified; no effect repeated\nSTEP-STATUS: complete"; }
       assert.match(prompt, /STEP 2\/2/);
       assert.match(prompt, /accept documented temporary-file deviation/);
       assert.match(prompt, /no activation; required CI remains binding/);
@@ -1546,8 +1606,8 @@ for (const initial of ["semantic-block", "technical-backoff"] as const) {
     assert.equal(done.status, "completed");
     assert.equal(sawDecision, true);
     assert.equal(second.calls.plan.length, 0);
-    assert.equal(second.calls.worker.length, 1, "only original step 2 runs; step 1 is never replayed");
-    assert.equal(second.calls.review.length, 2, "both original steps still need independent evidence checks");
+    assert.equal(second.calls.worker.length, 2, "tool-free consistency report then original step 2; step 1 effects never replay");
+    assert.equal(second.calls.review.length, 3, "consistency report and both original steps remain independently checked");
     assert.equal(state(done.checkpoint).outcomes.length, 2);
     const reload = new ExecutionStore(file); await reload.load();
     assert.equal(reload.list()[0]!.decisions![0]!.state, "applied");
@@ -1561,7 +1621,7 @@ test("decision arriving DURING assessment fences the stale verdict without worke
   let release!: () => void; const held = new Promise<void>(r => release = r);
   let reviews = 0;
   const env = await setup(t, { plan: steps(["verify", "simple"], ["publish", "simple"]),
-    worker: prompt => prompt.includes("STEP 2/2") ? "published\nSTEP-STATUS: complete" : "verified\nSTEP-STATUS: blocked: artificial precondition",
+    worker: prompt => prompt.includes("STEP 2/2") ? "published\nSTEP-STATUS: complete" : prompt.startsWith("CONTINUE STEP") ? "verified from retained facts\nSTEP-STATUS: complete" : "verified\nSTEP-STATUS: blocked: artificial precondition",
     verdict: async prompt => {
       if (++reviews === 1) { enter(); await held; return '{"state":"completed"}'; }
       assert.match(prompt, /parent accepts documented deviation/);
@@ -1582,8 +1642,8 @@ test("decision arriving DURING assessment fences the stale verdict without worke
   release();
   for (let i = 0; i < 500 && env.store.list()[0]!.status !== "completed"; i++) await new Promise(r => setTimeout(r, 10));
   assert.equal(env.store.list()[0]!.status, "completed");
-  assert.equal(env.calls.worker.length, 2, "one turn for each original step only");
-  assert.equal(reviews, 3, "stale assessment discarded; step 1 re-assessed then step 2 verified");
+  assert.equal(env.calls.worker.length, 3, "two original working turns plus tool-free consistency report");
+  assert.equal(reviews, 4, "stale assessment discarded; retained report consistency and step 2 verified");
   assert.equal(env.store.list()[0]!.decisions![0]!.state, "applied");
 });
 
@@ -1593,6 +1653,7 @@ test("decision arriving during an active worker waits for its settled assessment
   const env = await setup(t, { plan: steps(["verify", "simple"], ["publish", "simple"]),
     worker: async prompt => {
       if (prompt.includes("STEP 2/2")) return "published\nSTEP-STATUS: complete";
+      if (prompt.startsWith("CONTINUE STEP")) return "verified from existing facts; no effect repeated\nSTEP-STATUS: complete";
       enter(); await held;
       return "verified\nSTEP-STATUS: blocked: documented temporary-file deviation";
     }, verdict: prompt => {
@@ -1611,7 +1672,7 @@ test("decision arriving during an active worker waits for its settled assessment
   release();
   await env.dispatcher.waitForExecution(task.id);
   assert.equal(env.store.list()[0]!.status, "completed");
-  assert.equal(env.calls.worker.length, 2);
+  assert.equal(env.calls.worker.length, 3, "one additional tool-free consistency report, no competing worker");
 });
 
 test("applied parent data cannot force-accept failed CI or add authority", async t => {

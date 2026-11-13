@@ -75,7 +75,7 @@ test("in-window admission keeps the original mandate and queue id (authorization
 
 // --- Foreground priority: active newer operator topic vs. stored continuation of an older mandate ---
 async function priorityFixture(t: { after(fn: () => Promise<void>): void }, o: {
-  independent: boolean; oldTags: string[]; newTags: string[]; newer?: boolean; newState?: DurableTask["state"]; oldUntagged?: boolean }) {
+  independent: boolean; oldTags: string[]; newTags: string[]; newer?: boolean; newState?: DurableTask["state"]; oldUntagged?: boolean; newerAgeMs?: number }) {
   const now = 10 * DAY;
   const runtime = new FakeRuntime();
   const h = new Harness({ runtime, now: () => now, tickMs: 60000 });
@@ -86,13 +86,21 @@ async function priorityFixture(t: { after(fn: () => Promise<void>): void }, o: {
     recoveryAdmission: { id: "task:old:3", depth: 3, next, original: ORIGINAL,
       ...(o.independent ? { independent: { evidence: "e", taskId: "old", sessionKey: "mem:room1" } } : {}) } };
   const current: DurableTask = { id: "example", original: "Migrate example", state: o.newState ?? "active", depth: 0, // no runnable step
-    anchor: { id: "a-new", task: "Migrate example", receivedAt: o.newer === false ? now - 6 * DAY : now - 1000, outputTags: o.newTags } };
+    anchor: { id: "a-new", task: "Migrate example", receivedAt: o.newer === false ? now - 6 * DAY : now - (o.newerAgeMs ?? 1000), outputTags: o.newTags } };
   h.restoreSessions([{ key: "mem:room1", tasks: [old, current], replyTo: { channel: "mem", target: "room1" } }]);
   t.after(() => h.stop(0));
   return { h, runtime, queued: () => h.pendingInputs().filter(i => i.taskId === "old").length,
     old: () => h.snapshotSessions()[0]!.tasks!.find(x => x.id === "old")! };
 }
 const REVIEW = ["delivery-focus", "execution-stall"], example = ["example", "migration"];
+
+for (const mode of ["restart", "update"]) test(`${mode}: old unresolved disjoint topic cannot veto an admitted independent mandate forever`, async t => {
+  const f = await priorityFixture(t, { independent: true, oldTags: REVIEW, newTags: example, newerAgeMs: 60_000 });
+  await f.h.recoverTasks();
+  assert.equal(f.queued(), 1, "foreground preference expires; task authority does not");
+  assert.equal(f.old().recoveryAdmission?.original, ORIGINAL);
+  assert.equal(f.old().recoveryAdmission?.depth, 3);
+});
 
 test("stored independent continuation of an old review topic is not foreground while a newer disjoint topic is active", async t => {
   const f = await priorityFixture(t, { independent: true, oldTags: REVIEW, newTags: example });

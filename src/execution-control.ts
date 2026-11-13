@@ -1,9 +1,9 @@
 import { createServer, type Socket } from "node:net";
 import { mkdir, lstat, chmod, unlink } from "node:fs/promises";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
+import { randomUUID, createHash } from "node:crypto";
 import { writeFileDurable } from "./durable.js";
-import { executionDecisionRevision } from "./execution.js";
+import { validExecutionFollowUp, executionDecisionRevision } from "./execution.js";
 import type { Dispatcher } from "./dispatcher.js";
 import type { PluginModule } from "./plugins.js";
 
@@ -56,7 +56,8 @@ export function executionControlPlugin(get: () => Dispatcher | undefined, direct
 }
 
 /** Bounded exact request; idempotent receipt retries precede the revision fence.
- * No resume/cancel, deadline extension, scope replacement or follow-up creation. */
+ * Explicit consolidation reuses existing audited same-owner follow-up admission.
+ * No resume/cancel, deadline extension, original-scope replacement or new job. */
 export async function executionControlRequest(dispatcher: Dispatcher | undefined, input: unknown): Promise<unknown> {
   if (!dispatcher || !input || typeof input !== "object") throw Error("Dispatcher control unavailable");
   const frame = input as Record<string, unknown>;
@@ -65,21 +66,35 @@ export async function executionControlRequest(dispatcher: Dispatcher | undefined
   if (!task) throw Error("Execution not in exact parent scope");
   if (frame.op === "status" && Object.keys(frame).length === 3) return {
     id: task.id, parent: task.parent, status: task.status, revision: executionDecisionRevision(task.decisions), diagnostic: task.diagnosticCode,
+    checkpointHash: task.checkpoint ? createHash("sha256").update(task.checkpoint).digest("hex") : undefined,
     expiresAt: task.dependency?.expiresAt, parentStopped: !!task.parentStopped, ownershipHold: !!task.ownershipHold,
   };
-  if (frame.op !== "decide" || Object.keys(frame).some(k => !["op", "id", "parent", "expectedRevision", "requestId", "text"].includes(k)) ||
+  if (frame.op === "reopen-contradiction") {
+    if (Object.keys(frame).some(k => !["op", "id", "parent", "expectedRevision", "requestId", "text", "checkpointHash"].includes(k)) ||
+        !Number.isSafeInteger(frame.expectedRevision) || Number(frame.expectedRevision) < 0 || typeof frame.requestId !== "string" || typeof frame.text !== "string" || typeof frame.checkpointHash !== "string") throw Error("Invalid exact contradictory-completion reconciliation");
+    const restored = await dispatcher.reopenContradictoryCompletion(task.parent, task.id, frame.requestId, frame.text, frame.checkpointHash, Number(frame.expectedRevision));
+    return { id: restored.id, status: restored.status, executionStarted: false, reviewOnly: true, note: "Original terminal receipt archived; no effect replay or permission reset. Verify actual same-owner admission separately." };
+  }
+  const consolidating = frame.op === "consolidate";
+  if (frame.op !== "decide" && !consolidating || Object.keys(frame).some(k => !["op", "id", "parent", "expectedRevision", "requestId", "text", ...(consolidating ? ["replaces", "followUp"] : [])].includes(k)) ||
       !Number.isSafeInteger(frame.expectedRevision) || Number(frame.expectedRevision) < 0 || typeof frame.requestId !== "string" ||
       !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(frame.requestId) || typeof frame.text !== "string" || !frame.text.trim() || Buffer.byteLength(frame.text) > 4000) throw Error("Invalid owner decision");
+  if (consolidating && (!Array.isArray(frame.replaces) || !frame.replaces.length || frame.replaces.length > 32 ||
+      new Set(frame.replaces).size !== frame.replaces.length || frame.replaces.some(id => typeof id !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(id)) ||
+      frame.followUp !== undefined && !validExecutionFollowUp(frame.followUp))) throw Error("Invalid explicit consolidation");
   const prior = await dispatcher.store.readDecision(task.parent, task.id, frame.requestId);
   if (prior) {
-    if (prior.text !== frame.text || prior.followUp) throw Error("Decision identity conflict");
+    if (prior.text !== frame.text || JSON.stringify(prior.followUp) !== JSON.stringify(frame.followUp) ||
+        JSON.stringify(prior.supersedes) !== JSON.stringify(consolidating ? frame.replaces : undefined)) throw Error("Decision identity conflict");
     return { id: task.id, decision: prior, replayed: true, executionStarted: false };
   }
   if (executionDecisionRevision(task.decisions) !== frame.expectedRevision) throw Error("Decision revision changed; reconcile first");
   if (task.parentStopped || task.ownershipHold || task.recoveryEnrollment === "held-legacy" || task.diagnosticCode === "manual-pause" ||
       ["completed", "cancelled"].includes(task.status) || task.question && task.question.answer === undefined ||
       task.dependency?.expiresAt !== undefined && task.dependency.expiresAt <= Date.now()) throw Error("Original execution authority held or expired");
-  const decision = await dispatcher.decide(task.parent, task.id, frame.requestId, frame.text, Number(frame.expectedRevision));
+  const decision = consolidating
+    ? await dispatcher.consolidateDecisions(task.parent, task.id, frame.requestId, frame.text, frame.replaces as string[], frame.followUp as import("./execution.js").ExecutionFollowUp | undefined, Number(frame.expectedRevision))
+    : await dispatcher.decide(task.parent, task.id, frame.requestId, frame.text, Number(frame.expectedRevision));
   return { id: task.id, decision, replayed: false, executionStarted: false,
     note: "Recorded only; same-owner independent admission still required. No completion or effect approval." };
 }
