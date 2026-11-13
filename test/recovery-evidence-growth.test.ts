@@ -28,6 +28,27 @@ test("forty successive interrupted recoveries never recursively embed prior hand
   } finally { await h.stop(1000); }
 });
 
+test("forty seed-only restarts preserve original completed receipt and unresolved call without recursive escaping", async () => {
+  const h = new Harness({ runtime: new FakeRuntime(), tickMs: 60000 });
+  let previous = "";
+  try {
+    for (let n = 0; n < 40; n++) {
+      const source = await h.sessionFor(`dispatch:owner:seed${n}`), target = await h.sessionFor(`dispatch:owner:seed${n + 1}`);
+      source.archiveEntries = () => n === 0 ? [
+        { id: "finished-call", role: "assistant", text: '{"type":"toolCall","id":"done","name":"publish"}' },
+        { id: "finished-result", role: "toolResult", text: '{"type":"toolResult","toolCallId":"done","text":"original publication already committed; NEVER repeat"}' },
+        { id: "unknown-call", role: "assistant", text: '{"type":"toolCall","id":"unknown","name":"enroll","arguments":{"outcome":"UNKNOWN"}}' },
+      ] : [{ id: `seed${n}`, role: "custom_message", text: `Previous-session handover (context, not new authorization):\n${previous}\nVerify referenced files and Git state before acting. Never repeat completed side effects blindly.` }];
+      target.seedHandover = async text => { previous = text; };
+      await h.reconcileSession(`dispatch:owner:seed${n}`, `dispatch:owner:seed${n + 1}`);
+      assert.match(previous, /original publication already committed/);
+      assert.match(previous, /UNKNOWN/); assert.match(previous, /unfinished tool call has unknown outcome/);
+      assert.ok(Buffer.byteLength(previous) <= 48 * 1024); assert.ok(JSON.parse(previous).entries.length <= 32);
+      assert.ok(!previous.includes('\\\\\\\\\\\\"kind'), "no repeated JSON-of-JSON growth");
+    }
+  } finally { await h.stop(1000); }
+});
+
 test("large current evidence stays bounded with explicit archive references and unknown effects", async () => {
   const h = new Harness({ runtime: new FakeRuntime(), tickMs: 60000 });
   try {

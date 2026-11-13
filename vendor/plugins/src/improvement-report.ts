@@ -1,7 +1,7 @@
 import type { ExperimentReceipt as CoreExperimentReceipt } from "./improvement-receipt.js";
 /** Optional extension remains readable with older Core contracts. */
 export type ExperimentReceipt = CoreExperimentReceipt & { delivery?: {
-  stream: "upstream" | "instance";
+  stream: "upstream" | "variant" | "instance";
   status: "local" | "pushed" | "integrated" | "deployed" | "blocked";
   repository?: string; branch?: string; commit?: string; pullRequest?: string;
   deployment?: string; blocker?: string;
@@ -10,7 +10,7 @@ export type ExperimentReceipt = CoreExperimentReceipt & { delivery?: {
 function deliveryReceipt(value: unknown): ExperimentReceipt["delivery"] {
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
   const d = value as Record<string, unknown>;
-  if (!['upstream', 'instance'].includes(String(d.stream)) ||
+  if (!['upstream', 'variant', 'instance'].includes(String(d.stream)) ||
       !['local', 'pushed', 'integrated', 'deployed', 'blocked'].includes(String(d.status)) ||
       (d.repository === undefined ? d.status !== 'blocked' : typeof d.repository !== 'string' || !d.repository.trim() || d.repository.length > 2000) ||
       Object.keys(d).some(key => !['stream', 'status', 'repository', 'branch', 'commit', 'pullRequest', 'deployment', 'blocker'].includes(key))) return undefined;

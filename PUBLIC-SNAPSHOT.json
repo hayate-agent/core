@@ -1,5 +1,5 @@
 {
-  "contentDigest": "5fcdaa73c4d0cebbcc07b3fe74535ac8b5fdf3c3107d1bc2e01370b767fd197a",
+  "contentDigest": "5f5bce6236dd9c963e7e67923fcfaf7b29effc7d0435b12160a10b2c6b42ef2c",
   "files": [
     {
       "mode": "100644",
@@ -45,6 +45,11 @@
       "mode": "100644",
       "path": "docs/adaptive-skills.md",
       "sha256": "abf2b3e09859443b69bb72c4e62a730bbb248643aa4cc947a0bf3a2709369d41"
+    },
+    {
+      "mode": "100644",
+      "path": "docs/agent-variants.md",
+      "sha256": "7cf857eb5afd803d684eb46d2ef3c4bc950bc8049e043a38dd58babe2b5ad508"
     },
     {
       "mode": "100644",
@@ -124,7 +129,7 @@
     {
       "mode": "100644",
       "path": "docs/dispatcher.md",
-      "sha256": "c341a3073702416313a0a3439f6dcec4ecce27d2c09d327f6b5b695e8e5c9cbe"
+      "sha256": "ba68c4b7b54811382d3dd7ca69601348b1e8ad5f86ced64af8db93920ef53241"
     },
     {
       "mode": "100644",
@@ -189,7 +194,7 @@
     {
       "mode": "100644",
       "path": "docs/improvement.md",
-      "sha256": "050445c8e31d89216b742ae1f12c482ac4ba93c6c35bb67ca17ab060be074423"
+      "sha256": "336d9a42e66b203f6f04767649f4f14bf0ff0b69d04984f07d203967e2b91d3b"
     },
     {
       "mode": "100644",
@@ -459,7 +464,7 @@
     {
       "mode": "100644",
       "path": "plugins.lock.json",
-      "sha256": "8000ecad006fbe1b156fe72a56f0e0a5bb01682770a4c4173b3b94ae2cdae777"
+      "sha256": "60a9824a6124841181a834dd13bbfead57aab3bf7f9ae4f10a92ce5b03c910c1"
     },
     {
       "mode": "100644",
@@ -579,7 +584,7 @@
     {
       "mode": "100644",
       "path": "src/build-info.ts",
-      "sha256": "d7e6f1793b9d584c493268f244a04428aaf6aca0c4fa78617571d52ab97e83a3"
+      "sha256": "2693fcd6f3a53b3aae4fa905b193375bfd6e3385487fa0688c6ea451c13cdbde"
     },
     {
       "mode": "100644",
@@ -629,7 +634,7 @@
     {
       "mode": "100644",
       "path": "src/cli.ts",
-      "sha256": "3234f765ea91f7d0cb3ff66164a0d95007d41e017aaba59e676668da310d8973"
+      "sha256": "5c49169c081615b10b55b28052a7e91725171ca10017b6e849f0d221ae09ac18"
     },
     {
       "mode": "100644",
@@ -670,6 +675,11 @@
       "mode": "100644",
       "path": "src/component-versions.ts",
       "sha256": "068b553dc7df372fb4a6ae2b1c5026aba9761d7303d60ff62b42a2324d3e4c39"
+    },
+    {
+      "mode": "100644",
+      "path": "src/compose-agent-variant.ts",
+      "sha256": "4b346397c7f17b9d1655ba444b17f9d043857e0f9f573c2365b3a0d76f25f761"
     },
     {
       "mode": "100644",
@@ -754,7 +764,7 @@
     {
       "mode": "100644",
       "path": "src/dispatcher-runtime.ts",
-      "sha256": "692e908f19278c4305b626f79a1b4eeb6a1a73ab44d6071963b890b1cc17c71e"
+      "sha256": "b501499a9465d5ad8dd56c3400976c9a56861333b614f3894e0788a086f508f0"
     },
     {
       "mode": "100644",
@@ -769,12 +779,12 @@
     {
       "mode": "100644",
       "path": "src/dispatcher.ts",
-      "sha256": "509c53ec5b1b547a0698c6d811742c6cc803abb8c263385b803b13af35d8d597"
+      "sha256": "58915e86b0a335fb67cbd512e89d2cd9a56d4e6d2125efa0a049f9fc6ade282f"
     },
     {
       "mode": "100644",
       "path": "src/durable.ts",
-      "sha256": "aa951cd34b938726b1ed805b3824cc62fbaa2088c72605c6122c59984760429c"
+      "sha256": "5a911cd27a770d7b99317fdfd820cb689403f9b619e212585e264912392a1f2e"
     },
     {
       "mode": "100644",
@@ -824,7 +834,7 @@
     {
       "mode": "100644",
       "path": "src/harness.ts",
-      "sha256": "f0f2b2ccb01b3c1dfc003419f2c9194cc667ba692298bc285b433a66e2a25509"
+      "sha256": "89e379af4cab88a33f8dfb2ff2f751573dfbc9a873b9993be329dcbebc441f4b"
     },
     {
       "mode": "100644",
@@ -839,7 +849,7 @@
     {
       "mode": "100644",
       "path": "src/improvement-receipt.ts",
-      "sha256": "ee08f7e3b6584e74d77ef2fa50cf673b204bdf8188431c482ea51507adec1ae4"
+      "sha256": "a09dc5f0d9b926f7335a632596749af8307869b59692af9fbf540edbdda6fbbb"
     },
     {
       "mode": "100644",
@@ -1054,7 +1064,7 @@
     {
       "mode": "100644",
       "path": "src/recovery-evidence.ts",
-      "sha256": "dc361dfccc35cbe2695c1f4d2e9d6ec53d90d3a2203644231926aa1e7ce69ec3"
+      "sha256": "08d2b332e043b6a18bfe3fc6b0fdc5dd966fbfa62f9e194aff27fc022a2ae2cb"
     },
     {
       "mode": "100644",
@@ -1108,13 +1118,18 @@
     },
     {
       "mode": "100644",
+      "path": "src/runtime/native-session-checkpoint.ts",
+      "sha256": "3055850a59e28a03e44a9d0c26999f1e769b42c37342ebb6f450d06bd74f37cc"
+    },
+    {
+      "mode": "100644",
       "path": "src/runtime/pi-mcp-management.ts",
       "sha256": "155be9e2ecaa83c8eb08e13f79c91d41632466f8444ef37e4794f0325d832064"
     },
     {
       "mode": "100644",
       "path": "src/runtime/pi.ts",
-      "sha256": "0d6603928e7e7f690fefe1b418b20335c692f46dc59a569e9b3494371f7cb40a"
+      "sha256": "3d13b014475687ade0b9d00be71c475e77412cceb667491f1670efea0181ab05"
     },
     {
       "mode": "100644",
@@ -1199,7 +1214,17 @@
     {
       "mode": "100644",
       "path": "src/software-updates.ts",
-      "sha256": "facbd386b9935caef46afc134ccf906e1b6b5c84c0295f93790ed06b615fbbbd"
+      "sha256": "6b63468d4a0d639bdcc6642401d79f966d0912975cffcdb2a53e5f682497ac86"
+    },
+    {
+      "mode": "100644",
+      "path": "src/software-variant-integrity.ts",
+      "sha256": "752d9e7e45e44853931f0b451c33e58e77656e1b3006678e11efd263916d80a1"
+    },
+    {
+      "mode": "100644",
+      "path": "src/software-variants.ts",
+      "sha256": "91d6cf9532dce2e7cb121d81cfad234e2122ed1ef456c8952716af5e79a33dd5"
     },
     {
       "mode": "100644",
@@ -1244,7 +1269,7 @@
     {
       "mode": "100644",
       "path": "src/tool-guard-error.ts",
-      "sha256": "d47d1e9b70aef4ebae9a6810b4f7683b844edfa096cf8f714308b54c40e99ff0"
+      "sha256": "61af60b5e50b808f0704abc4bdbe7da35f553b6ed2ec20f6abb8dd0630b49a24"
     },
     {
       "mode": "100644",
@@ -1259,7 +1284,7 @@
     {
       "mode": "100644",
       "path": "src/types.ts",
-      "sha256": "685ef1ce3ccb629658b0ab89af568f47a36e4bea65450708732662c91c5ec754"
+      "sha256": "85156580e459c26a6f2f5ae2d320f35a2e926509200b8d254a55338cb23c1b96"
     },
     {
       "mode": "100644",
@@ -2053,6 +2078,11 @@
     },
     {
       "mode": "100644",
+      "path": "test/fixtures/dispatcher-restart-process.ts",
+      "sha256": "8360d70e5d40e19edb83e3e3d74aacb4aec25633f010ad7e5d5e5a3fc648a217"
+    },
+    {
+      "mode": "100644",
       "path": "test/fixtures/night-report-2026-10-28.json",
       "sha256": "72000a6bdb38fdec17b3014a4f083bb52b0b827c0dbb365d1dd8e438f375ead8"
     },
@@ -2215,6 +2245,11 @@
       "mode": "100644",
       "path": "test/independent-parent-restart.test.ts",
       "sha256": "d880729cad87c1e833534dc0e9eeee712fa8a0d4a261f1262df7a67e79bbbf83"
+    },
+    {
+      "mode": "100644",
+      "path": "test/independent-parent-status-read.test.ts",
+      "sha256": "569c7c0435a5519f7727b69d2ede712ec27eaec4cc8aad1a264173dd609f9d6c"
     },
     {
       "mode": "100644",
@@ -2480,6 +2515,11 @@
       "mode": "100644",
       "path": "test/native-addon-cache.test.ts",
       "sha256": "a0c654dd8c98926e53b2e285939d462ccc8ac74efb352f5ce54d3b1b8ee4693b"
+    },
+    {
+      "mode": "100644",
+      "path": "test/native-handover-checkpoint.test.ts",
+      "sha256": "4cf0165fae2cd806972a3e2cd7f29ec613204615451aa7b4ff39dbf028d91f2b"
     },
     {
       "mode": "100644",
@@ -2784,7 +2824,7 @@
     {
       "mode": "100644",
       "path": "test/recovery-evidence-growth.test.ts",
-      "sha256": "7d28ae19f9398e363f15e5195328a2655f0f676da012a6f64b34c44cd35f3cc7"
+      "sha256": "506cb55f0ea0b1a1c5e82179dbe337122854a9485b1f0ced7619f4c01d5dae06"
     },
     {
       "mode": "100644",
@@ -3029,7 +3069,7 @@
     {
       "mode": "100644",
       "path": "test/session-reconciliation.test.ts",
-      "sha256": "d7765f40a44a1bbe2f1e77317ffe1cf7a729ef704112004e33b36122b76d2a27"
+      "sha256": "4dfab4e0c4a2295377ea2bcc4aa2514497bc4cb0768e67d2e23e064be6aad0b0"
     },
     {
       "mode": "100644",
@@ -3118,6 +3158,11 @@
     },
     {
       "mode": "100644",
+      "path": "test/software-variants.test.ts",
+      "sha256": "0338a71ad6f264da6153c795be486f09b40261676a3d1024c4b260d467fcee02"
+    },
+    {
+      "mode": "100644",
       "path": "test/source-version-build.test.ts",
       "sha256": "9620cb75cfad037a41d0e0a82a097b6a07a8e9ce2b2d4e958259fadcff872582"
     },
@@ -3129,7 +3174,7 @@
     {
       "mode": "100644",
       "path": "test/stale-wait-foreground.test.ts",
-      "sha256": "c88fc78f473561dae27fe7a4bf34e212e82bd4b27a8876b93a1871d0de55686c"
+      "sha256": "2a151f536ad34214272f5dfbb93649a1c94fb7c5ab7321299513a21af0043433"
     },
     {
       "mode": "100644",
@@ -3204,7 +3249,7 @@
     {
       "mode": "100644",
       "path": "test/task-priority.test.ts",
-      "sha256": "fdc65b711dfaece736f38925a2b01d4323e2d99e264094e80336f0b89c316bf1"
+      "sha256": "38ce8c5a93289748e37f2016d59aa16285705b83dc4f5fb1acf2342ef29d9dab"
     },
     {
       "mode": "100644",
@@ -3244,7 +3289,7 @@
     {
       "mode": "100644",
       "path": "test/tool-guard-error.test.ts",
-      "sha256": "dde09bf29b461a8a8fddd9c521eeabec3bdd94f842a32e6b44f3580193dabd26"
+      "sha256": "2e36092639b8820712f969d1859b33d58786e2bed3ccd615dce1857b6d2be1e6"
     },
     {
       "mode": "100644",
@@ -3393,6 +3438,11 @@
     },
     {
       "mode": "100644",
+      "path": "test/worker-preparation.test.ts",
+      "sha256": "10e0b85fca80c6e2df23c0d864ed42c11e55746bd147b9d642cdb500a00949df"
+    },
+    {
+      "mode": "100644",
       "path": "test/worker-recovery-enrollment.test.ts",
       "sha256": "4bd8d5b884e6f8b5cff65e51c3cfe1a668999cd4aa3df72bb03ddf0d69f8df37"
     },
@@ -3524,7 +3574,7 @@
     {
       "mode": "100644",
       "path": "vendor/plugins/src/improvement-report.ts",
-      "sha256": "a69bdb628b1fd659b42e556ee6d45468b424ee9ec9701c926c407ebc7a417257"
+      "sha256": "a346b0ebd3a28dbf0cd177d1a0f78dbe87aa7d58d75ae86e822602cc71361486"
     },
     {
       "mode": "100644",
@@ -3584,7 +3634,7 @@
     {
       "mode": "100644",
       "path": "vendor/plugins/src/nightly-default.ts",
-      "sha256": "d76da5b8016785bc0fae04ac7129f0841a82c5b7e9839510419f15a6b13eda13"
+      "sha256": "e2669a2947bc9060d68f1dd8d4f903c4646b37ea91ca96ff492ecfb0c012b79f"
     },
     {
       "mode": "100644",
@@ -3703,7 +3753,7 @@
     }
   ],
   "historyPolicy": "fresh-root; no source commits, tags, refs or deleted blobs",
-  "pluginSHA": "927acfb42ef6f7a4cfebb40cabb2741c99e5f2af",
+  "pluginSHA": "e2bb89f3e2a9b2cfd2714dbbe776ec3ffbbe1b0e",
   "schema": 1,
-  "sourceSHA": "7dc4ff665dff94d0662642ef65d97dfadca56bb7"
+  "sourceSHA": "38bf87db1b52222c1ff713bb4f473ee3d50d1262"
 }

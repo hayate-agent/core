@@ -29,6 +29,8 @@ export interface DispatcherStrategy {
   version: number;
   replaySafe: boolean;
   reconcile?: boolean;
+  /** Trusted strategy preparation, persisted before an opaque worker intent. */
+  prepareWorker?(task: Readonly<Execution>): Promise<void>;
   refreshAssessment?: import("./execution-recovery.js").RecoveryStrategy["refreshAssessment"];
   /** Trusted strategy opt-in; true only at a retained assessment boundary safe to wake. */
   decisionBoundary?(task: Readonly<Execution>): boolean;
@@ -298,7 +300,12 @@ export class Dispatcher {
           return rows;
         },
         fenceDecisions: revision => this.store.fenceDecisions(task.id, token, revision),
-        intent: (key, replay, route, revision) => { check(); return this.store.intent(task.id, token, key, replay, route, revision); },
+        intent: async (key, replay, route, revision) => {
+          check();
+          await strategy.prepareWorker?.(task);
+          check();
+          return this.store.intent(task.id, token, key, replay, route, revision);
+        },
         // Settlement alone is not a scheduling boundary: the strategy must first
         // apply its completion/blocked verdict. yieldStep then parks safe work.
         settleIntent: (key, result, checkpoint, revision) => { check(); return this.store.settleIntent(task.id, token, key, result, checkpoint, revision); },

@@ -2,11 +2,14 @@ import { startupQualificationProgram } from "./startup-qualification.js";
 import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, readFile, realpath, rename, stat, symlink, unlink } from "node:fs/promises";
+import { mkdir, readFile, realpath, rename, stat, symlink, unlink, rm } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { restoreVerifiedMatrixAddon } from "./native-addon-cache.js";
 import { writeFileDurable } from "./durable.js";
+import { variantPolicy, resolveVariant, verifyVariantReview, applyVariant, variantPluginLock,
+  type VariantPolicy, type VariantIdentity, type ResolvedVariant } from "./software-variants.js";
+import { retainedVariant, variantPayloadDigest } from "./software-variant-integrity.js";
 
 export const softwareComponents = ["core", "plugins", "webui"] as const;
 export type SoftwareComponent = typeof softwareComponents[number];
@@ -16,13 +19,15 @@ export interface SoftwareUpdateConfig {
   autoInstall?: boolean;
   checkEverySeconds?: number;
   sources?: Partial<Record<SoftwareComponent, SoftwareUpdateSource>>;
+  variant?: VariantPolicy | null;
 }
 export interface SoftwareUpdatePolicy {
   enabled: boolean; autoInstall: boolean; checkEverySeconds: number;
   sources: Record<SoftwareComponent, Required<SoftwareUpdateSource>>;
+  variant?: VariantPolicy | null;
 }
 export function softwareUpdatePolicy(value: SoftwareUpdateConfig = {}): SoftwareUpdatePolicy {
-  if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).some(k => !["enabled", "autoInstall", "checkEverySeconds", "sources"].includes(k))) throw Error("Invalid softwareUpdates");
+  if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).some(k => !["enabled", "autoInstall", "checkEverySeconds", "sources", "variant"].includes(k))) throw Error("Invalid softwareUpdates");
   for (const key of ["enabled", "autoInstall"] as const) if (value[key] !== undefined && typeof value[key] !== "boolean") throw Error(`softwareUpdates.${key} must be boolean`);
   const checkEverySeconds = value.checkEverySeconds ?? 3600;
   if (!Number.isSafeInteger(checkEverySeconds) || checkEverySeconds < 60 || checkEverySeconds > 604800) throw Error("softwareUpdates.checkEverySeconds must be 60..604800");
@@ -37,18 +42,29 @@ export function softwareUpdatePolicy(value: SoftwareUpdateConfig = {}): Software
     if (!valid || source.repository.length > 2000 || !/^[a-zA-Z0-9][a-zA-Z0-9._/-]{0,199}$/.test(branch) || branch.includes("..") || branch.includes("//")) throw Error(`Invalid ${component} repository/branch`);
     sources[component] = { repository: source.repository, branch };
   }
-  return { enabled: value.enabled ?? true, autoInstall: value.autoInstall ?? true, checkEverySeconds, sources };
+  return { enabled: value.enabled ?? true, autoInstall: value.autoInstall ?? true, checkEverySeconds, sources,
+    ...(value.variant !== undefined ? { variant: value.variant === null ? null : variantPolicy(value.variant) } : {}) };
 }
 
 export function containerRuntime(): boolean {
   return process.env.HAYATE_RUNTIME_KIND === "container" || !!process.env.KUBERNETES_SERVICE_HOST || existsSync("/.dockerenv") || existsSync("/run/.containerenv");
 }
 export type SoftwareUpdateAction = "status" | "check" | "install";
-interface Plan { id: string; revisions: Record<SoftwareComponent, string>; sources: SoftwareUpdatePolicy["sources"] }
+interface Plan { id: string; revisions: Record<SoftwareComponent, string>; sources: SoftwareUpdatePolicy["sources"]; variant?: VariantIdentity;
+  variantSelector?: Pick<VariantPolicy, "repository" | "branch" | "manifest"> }
+function variantSelector(policy: VariantPolicy): Plan["variantSelector"] {
+  return { repository: policy.repository, branch: policy.branch, manifest: policy.manifest };
+}
+function planId(plan: Omit<Plan, "id">): string {
+  return createHash("sha256").update(JSON.stringify({ revisions: plan.revisions, sources: plan.sources,
+    ...(plan.variant ? { variant: { binding: plan.variant.binding, profile: plan.variant.profile,
+      repository: plan.variant.repository, manifest: plan.variant.manifest, selector: plan.variantSelector } } : {}) })).digest("hex");
+}
 interface Selection { schema: 1; release: string; plan: Plan; baseline?: string; installation?: "automatic" | "operator" }
 export interface SoftwareUpdateStatus {
   phase: "idle" | "checking" | "available" | "preparing" | "prepared" | "activated" | "failed" | "external-owner" | "disabled";
-  detail: string; requestId?: string; plan?: Plan; selection?: Selection; pendingSelection?: Selection; updatedAt: number;
+  detail: string; requestId?: string; plan?: Plan; selection?: Selection; pendingSelection?: Selection;
+  variantBaseCandidates?: Partial<Record<SoftwareComponent, string>>; updatedAt: number;
 }
 export type UpdateCommand = (command: string, args: string[], cwd: string, env?: NodeJS.ProcessEnv, signal?: AbortSignal) => Promise<string>;
 
@@ -103,20 +119,29 @@ export class NativeSoftwareUpdates {
   async open(): Promise<void> {
     if (this.external) return; // A mounted native profile cannot replace container code.
     await mkdir(this.directory, { recursive: true, mode: 0o700 });
-    try {
-      const selected = JSON.parse(await readFile(path.join(this.directory, "selected.json"), "utf8")) as Selection;
+    let selectedBytes: string | undefined;
+    try { selectedBytes = await readFile(path.join(this.directory, "selected.json"), "utf8"); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw Error("Native selector unreadable; reconcile before starting"); }
+    if (selectedBytes !== undefined) try {
+      const selected = JSON.parse(selectedBytes) as Selection;
       await this.verifySelection(selected);
+      if (selected.plan.variant && selected.baseline !== this.baseline && this.policy.variant !== null)
+        throw Error("External bootstrap replacement requires explicit variant migration");
       if (selected.baseline === this.baseline) {
         await this.publishCurrent(selected);
         this.selection = selected;
         this.status = { phase: "activated", detail: "Selected native source installation", selection: selected, updatedAt: Date.now() };
       } // An externally replaced base supersedes its old self-update selector.
-    } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw Error("Invalid native update selection; reconcile before starting"); }
+    } catch { throw Error("Invalid native update selection; reconcile before starting"); }
     try {
       const retained = JSON.parse(await readFile(path.join(this.directory, "status.json"), "utf8")) as SoftwareUpdateStatus;
       if (retained.phase === "prepared" && retained.pendingSelection && retained.pendingSelection.plan.id !== this.selection?.plan.id && retained.pendingSelection.baseline === this.baseline &&
-          this.policy.enabled && !this.external && JSON.stringify(retained.pendingSelection.plan.sources) === JSON.stringify(this.policy.sources)) {
+          this.policy.enabled && !this.external && !!retained.pendingSelection.plan.variant === !!this.policy.variant &&
+          JSON.stringify(retained.pendingSelection.plan.variantSelector) === JSON.stringify(this.policy.variant ? variantSelector(this.policy.variant) : undefined) &&
+          JSON.stringify(retained.pendingSelection.plan.sources) === JSON.stringify(this.policy.sources)) {
         await this.verifySelection(retained.pendingSelection); this.prepared = retained.pendingSelection; this.status = retained;
+      } else if (retained.phase === "prepared" && retained.pendingSelection?.plan.variant) {
+        this.status = { ...this.status, phase: "failed", detail: "Prepared private variant policy changed; candidate not resumed, last-good selection retained", updatedAt: Date.now() };
       } else if (["checking", "preparing"].includes(retained.phase)) {
         this.status = { ...this.status, phase: "failed", detail: "Previous preparation interrupted; active selection unchanged; next check can prepare afresh", updatedAt: Date.now() };
       }
@@ -207,16 +232,45 @@ export class NativeSoftwareUpdates {
     try {
       await this.save({});
       const revisions = {} as Plan["revisions"];
+      const variantBaseCandidates: Partial<Record<SoftwareComponent, string>> = {};
+      let variant: ResolvedVariant | undefined;
+      if (this.policy.variant) {
+        stage = "private variant resolution";
+        const checkout = path.join(this.directory, `variant-${randomUUID()}`); await mkdir(checkout, { mode: 0o700 });
+        try { variant = await resolveVariant(this.policy.variant, checkout, (cmd, args, cwd, env) => this.command(cmd, args, cwd, env)); }
+        finally { await rm(checkout, { recursive: true, force: true }); }
+        if (variant.patches.some(p => p.component === "webui")) {
+          stage = "WebUI variant requires its explicit frontend deployment owner";
+          throw Error("WebUI variant is not activated by the native Core owner");
+        }
+      }
       for (component of softwareComponents) {
         const source = this.policy.sources[component];
+        if (variant) {
+          if (source.repository !== variant.recipe.bases[component].repository) throw Error("Variant base repository differs from configured owner");
+          revisions[component] = variant.recipe.bases[component].revision;
+          const head = (await this.command("git", ["ls-remote", "--exit-code", source.repository, `refs/heads/${source.branch}`], this.directory)).trim().split(/\s+/)[0];
+          if (!head || !/^[a-f0-9]{40}$/.test(head)) throw Error("Invalid variant base candidate");
+          if (head !== revisions[component]) variantBaseCandidates[component] = head;
+          continue; // New bases are proposals, never silently retarget approved code.
+        }
         const result = await this.command("git", ["ls-remote", "--exit-code", source.repository, `refs/heads/${source.branch}`], this.directory);
         const lines = result.trim().split("\n");
         if (lines.length !== 1 || !/^[a-f0-9]{40}\s/.test(lines[0]!)) throw Error("invalid source identity");
         revisions[component] = lines[0]!.split(/\s/)[0]!;
       }
-      const id = createHash("sha256").update(JSON.stringify({ revisions, sources: this.policy.sources })).digest("hex");
-      const plan: Plan = { id, revisions, sources: this.policy.sources };
-      if (id === this.selection?.plan.id) { await this.save({ phase: "activated", detail: "All three configured sources are current", plan }); return; }
+      const identity = { revisions, sources: this.policy.sources,
+        ...(variant ? { variant: variant.identity, variantSelector: variantSelector(this.policy.variant!) } : {}) };
+      const id = planId(identity);
+      const plan: Plan = { id, ...identity };
+      if (id === this.selection?.plan.id) {
+        if (variant && Object.keys(variantBaseCandidates).length) {
+          const changed = JSON.stringify(this.status.variantBaseCandidates) !== JSON.stringify(variantBaseCandidates);
+          await this.save({ phase: "available", detail: "Private variant retained; new base commits require a revised recipe, tests and external review", plan, variantBaseCandidates });
+          if (changed) this.notify("available", "Private variant base update requires a revised, externally reviewed recipe; current variant retained");
+        } else await this.save({ phase: "activated", detail: "All configured sources and private variant are current", plan, variantBaseCandidates: undefined });
+        return;
+      }
       await this.save({ phase: "available", detail: "New source versions available; /update install downloads, validates and restarts", plan });
       this.notify("available", softwareComponents.map(c => `${c} ${revisions[c].slice(0, 12)}`).join(", "));
       if ((!install && !this.installRequested) || this.stopped) return;
@@ -232,21 +286,33 @@ export class NativeSoftwareUpdates {
         await this.command("git", ["checkout", "--detach", "FETCH_HEAD"], destination);
         if ((await this.command("git", ["rev-parse", "HEAD"], destination)).trim() !== plan.revisions[component]) throw Error("source checkout mismatch");
       }
+      if (variant && this.policy.variant) {
+        stage = "independent exact-source review";
+        const review = await verifyVariantReview(this.policy.variant, variant, this.abort.signal);
+        stage = "private variant composition";
+        await applyVariant(variant, Object.fromEntries(softwareComponents.map(c => [c, path.join(root, c)])) as Record<SoftwareComponent, string>,
+          root, (cmd, args, cwd, env) => this.command(cmd, args, cwd, env));
+        await variantPluginLock(path.join(root, "core"), path.join(root, "plugins"), variant);
+        await writeFileDurable(path.join(root, "variant-recipe.json"), JSON.stringify(variant));
+        await writeFileDurable(path.join(root, "variant-review.json"), JSON.stringify(review));
+      }
       // Core's hash lock remains authoritative for bundled plugins, even if a
       // newer independent Plugins HEAD exists. Never silently rewrite that lock.
       component = "plugins"; stage = "locked plugin preparation";
-      let bundledPlugins = existsSync(path.join(root, "core/vendor/plugins")) ? path.join(root, "core/vendor/plugins") : path.join(root, "plugins");
+      let bundledPlugins = variant?.patches.some(p => p.component === "plugins") ? path.join(root, "plugins") :
+        existsSync(path.join(root, "core/vendor/plugins")) ? path.join(root, "core/vendor/plugins") : path.join(root, "plugins");
       const lockFile = path.join(root, "core", "plugins.lock.json");
       try {
         const lock = JSON.parse(await readFile(lockFile, "utf8"));
         if (!/^[a-f0-9]{40}$/.test(lock.revision)) throw Error("invalid plugin lock");
+        if (variant && lock.revision !== revisions.plugins) throw Error("Variant Plugins base must exactly match Core lock");
         if (lock.revision !== revisions.plugins && bundledPlugins === path.join(root, "plugins")) {
           await this.command("git", ["fetch", "--depth=1", "origin", lock.revision], bundledPlugins);
           const locked = path.join(root, "bundled-plugins");
           await this.command("git", ["worktree", "add", "--detach", locked, lock.revision], bundledPlugins);
           bundledPlugins = locked;
         }
-      } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+      } catch (error) { if (variant || (error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
       const buildEnv = { HAYATE_PLUGIN_SOURCE: bundledPlugins,
         PATH: `${path.dirname(process.execPath)}${path.delimiter}${process.env.PATH ?? ""}` };
       for (component of ["core", "webui"] as const) {
@@ -268,6 +334,10 @@ export class NativeSoftwareUpdates {
         stage = "build"; await this.command("npm", ["run", "build"], cwd, buildEnv);
         // Development test suites belong to release CI, never to agent startup
         // or update admission. Only qualify the installed runtime entrypoints.
+        if (variant) {
+          stage = "private variant regressions";
+          await this.command("npm", ["test"], cwd, buildEnv);
+        }
         stage = "runtime entrypoint check";
         if (component === "core") {
           await this.command(process.execPath, ["--check", path.join(cwd, "dist/cli.js")], cwd, buildEnv);
@@ -287,10 +357,11 @@ export class NativeSoftwareUpdates {
         history = await this.runCommand("git", ["rev-list", "--first-parent", "--max-count=64", revisions.core], path.join(root, "core"), undefined, signal);
       } catch { /* Version lookup is informational, never an installation gate. */ }
       const version = sourceVersion(revisions.core, tags, history, corePackage.version);
-      await writeFileDurable(path.join(root, "core/build-info.json"), JSON.stringify({ version, revision: revisions.core }) + "\n");
+      await writeFileDurable(path.join(root, "core/build-info.json"), JSON.stringify({ version, revision: revisions.core, ...(variant ? { variant: variant.identity } : {}) }) + "\n");
       const selection: Selection = { schema: 1, release, plan, installation: this.operatorInstall ? "operator" : "automatic", ...(this.baseline ? { baseline: this.baseline } : {}) };
+      if (variant) await writeFileDurable(path.join(root, "variant-payload.json"), JSON.stringify({ binding: variant.identity.binding, sha256: await variantPayloadDigest(root) }));
       await writeFileDurable(path.join(root, "prepared.json"), JSON.stringify(selection) + "\n");
-      await this.verifySelection(selection);
+      await this.verifySelection(selection, true);
       if (this.stopped) { await this.save({ phase: "available", detail: "Prepared source retained; process owner is stopping" }); return; }
       this.prepared = selection;
       await this.save({ phase: "prepared", pendingSelection: selection, detail: "Validated installation prepared; requesting bounded durable restart" });
@@ -299,15 +370,37 @@ export class NativeSoftwareUpdates {
       await this.save({ phase: "failed", detail: `${component}: ${stage} failed; previous installation untouched; next scheduled check retries preparation` }).catch(() => {});
     }
   }
-  private async verifySelection(selection: Selection): Promise<void> {
+  private async verifySelection(selection: Selection, freshReview = false): Promise<void> {
     if (selection?.schema !== 1 || !/^[0-9a-f-]{36}$/.test(selection.release) || !/^[0-9a-f]{64}$/.test(selection.plan?.id ?? "")) throw Error("Invalid source selection");
     if (softwareComponents.some(c => !/^[a-f0-9]{40}$/.test(selection.plan.revisions?.[c] ?? "")) ||
-        createHash("sha256").update(JSON.stringify({ revisions: selection.plan.revisions, sources: selection.plan.sources })).digest("hex") !== selection.plan.id) throw Error("Source plan identity mismatch");
+        planId(selection.plan) !== selection.plan.id) throw Error("Source plan identity mismatch");
     softwareUpdatePolicy({ sources: selection.plan.sources });
     const root = path.join(this.directory, "releases", selection.release);
     const canonical = path.join(await realpath(this.directory), "releases", selection.release);
     if ((await realpath(root)) !== canonical || (await realpath(path.join(root, "core/dist/cli.js"))) !== path.join(canonical, "core/dist/cli.js")) throw Error("Source selection escapes installation");
     if (!(await stat(path.join(root, "core/dist/launcher.js"))).isFile()) throw Error("Missing native lifecycle owner");
+    if (selection.plan.variant && this.policy.variant === undefined) throw Error("Variant cannot be silently dropped");
+    if (selection.plan.variant) {
+      const v = selection.plan.variant;
+      if (this.policy.variant && (v.repository !== this.policy.variant.repository || v.manifest !== this.policy.variant.manifest)) throw Error("Variant owner changed");
+      const resolved = JSON.parse(await readFile(path.join(root, "variant-recipe.json"), "utf8")) as ResolvedVariant;
+      if (JSON.stringify(resolved.identity) !== JSON.stringify(v)) throw Error("Variant selection mismatch");
+      const review = JSON.parse(await readFile(path.join(root, "variant-review.json"), "utf8"));
+      retainedVariant(resolved, review);
+      const payload = JSON.parse(await readFile(path.join(root, "variant-payload.json"), "utf8"));
+      if (payload.binding !== v.binding || payload.sha256 !== await variantPayloadDigest(root)) throw Error("Prepared variant payload changed");
+      if (freshReview && this.policy.variant) {
+        if (JSON.stringify(selection.plan.variantSelector) !== JSON.stringify(variantSelector(this.policy.variant))) throw Error("Prepared variant selector changed");
+        const signal = AbortSignal.any([this.abort.signal, AbortSignal.timeout(30000)]);
+        const checkout = path.join(this.directory, `verify-variant-${randomUUID()}`); await mkdir(checkout, { mode: 0o700 });
+        try {
+          const current = await resolveVariant(this.policy.variant, checkout,
+            (cmd, args, cwd, env) => this.runCommand(cmd, args, cwd, env, signal));
+          if (current.identity.binding !== resolved.identity.binding) throw Error("Prepared variant source changed");
+          await verifyVariantReview(this.policy.variant, current, signal);
+        } finally { await rm(checkout, { recursive: true, force: true }); }
+      }
+    }
     const prepared = JSON.parse(await readFile(path.join(root, "prepared.json"), "utf8"));
     if (JSON.stringify(prepared) !== JSON.stringify(selection) || !(await stat(path.join(root, "core/dist/cli.js"))).isFile()) throw Error("Unprepared source selection");
   }
@@ -325,7 +418,17 @@ export class NativeSoftwareUpdates {
   async afterExit(): Promise<void> {
     if (!this.prepared || !this.policy.enabled || this.external || this.stopped ||
         (this.prepared.installation !== "operator" && !this.policy.autoInstall)) return;
-    await this.verifySelection(this.prepared);
+    try { await this.verifySelection(this.prepared, true); }
+    catch (error) {
+      if (!this.prepared.plan.variant && !this.selection?.plan.variant) throw error;
+      // Old child exited at a durable checkpoint, not an authorization to drop
+      // its variant. Resume the last-good selection when approval was revoked,
+      // the verifier is unavailable or prepared bytes changed.
+      if (this.selection) await this.verifySelection(this.selection);
+      this.prepared = undefined;
+      await this.save({ phase: "failed", pendingSelection: undefined, detail: "Activation verification failed; last-good installation retained" });
+      return;
+    }
     if (this.stopped) return;
     await writeFileDurable(path.join(this.directory, "selected.json"), JSON.stringify(this.prepared) + "\n", 0o600, () => {
       if (this.stopped) throw Error("Owner is stopping");
