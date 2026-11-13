@@ -124,3 +124,13 @@ This is a foundation, not a claim that all output is localized:
    handoff and external MCP natural-language content. Only then activate broadly.
 
 No installed agent settings or task ledgers are changed by this branch.
+
+### MCP management slice
+
+`/mcp` status, CRUD, immediate login/cancel responses, interactive manager,
+help, known safe errors, and asynchronous OAuth notifications use the system
+language captured at command start. Server-specific MCP language settings remain
+for model tool content, not operator control messages. The global `/help` command
+entry for MCP remains English. Protocol states, scope and exposure values, tool
+names, command syntax, URLs and login IDs are not translated. Unexpected failures
+remain redacted at the command boundary.

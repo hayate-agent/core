@@ -660,15 +660,17 @@ export const COMMANDS: Command[] = [
     admin: true,
     help: "Manage MCP servers, connections, tools and OAuth: /mcp help",
     run: async (args, input, ctx) => {
-      if (!ctx.mcp) return "MCP management is unavailable in this runtime";
+      const locale = resolveLanguage(ctx.language?.get(), { kind: "system" });
+      if (!ctx.mcp) return message(locale, "mcp.unavailable");
       const op = {
+        language: locale,
         owner: JSON.stringify([input.replyTo?.channel ?? "console", input.replyTo?.target ?? "local", input.replyTo?.thread ?? null, input.sender ?? "console:local", input.sessionKey]),
         cwd: ctx.cwdFor?.(input.sessionKey) ?? process.cwd(),
         notify: (text: string) => ctx.harness.post(input, text),
         ui: input.replyTo?.channel === "console" && input.sessionKey === (ctx.localSessionKey?.() ?? "console:local") ? ctx.pluginUI?.() : undefined,
       };
       try { return args.trim() ? await ctx.mcp.execute(args, op) : await ctx.mcp.menu(op); }
-      catch (error) { return error instanceof McpUserError ? error.message : "MCP operation failed. Check the server name/configuration and /mcp status. Credential and callback details are withheld. /mcp help lists commands."; }
+      catch (error) { return error instanceof McpUserError ? error.message : message(locale, "mcp.failure"); }
     },
   },
   {

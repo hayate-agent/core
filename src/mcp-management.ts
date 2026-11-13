@@ -2,16 +2,21 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { ProjectTrustStore, type McpServerConfig, type McpServerEntry } from "@earendil-works/pi-coding-agent";
+import { message, type MessageKey } from "./language.js";
 import { writeFileDurable } from "./durable.js";
 import type { PluginUI } from "./plugins.js";
 import { piMcpManagementAdapter, type McpConnection, type McpCredentials, type McpManagementAdapter } from "./runtime/pi-mcp-management.js";
 
-export class McpUserError extends Error {}
+export class McpUserError extends Error {
+  constructor(public readonly key: MessageKey, locale = "en") { super(message(locale, key)); }
+}
 
 export interface McpOperator {
   /** Authenticated channel/sender/conversation tuple, never supplied by the model. */
   owner: string;
   cwd: string;
+  /** Resolved by the command caller and captured for the operation. */
+  language?: string;
   notify(text: string): void;
   ui?: PluginUI;
 }
@@ -23,20 +28,10 @@ interface Login {
   finished: Promise<void>;
   fingerprint: string;
 }
-const HELP = `MCP management (no model turn):
-/mcp — status, or interactive manager in the local TUI
-/mcp add <name> <http-url> | -- <executable> [quoted args] | <JSON server configuration>
-/mcp edit <name> <JSON server configuration>
-/mcp remove <name>
-/mcp connect|reconnect|disconnect <name>
-/mcp enable|disable [name] — all MCP or one server
-/mcp tools <name>
-/mcp exposure <name> direct|codemode|deferred|hidden
-/mcp login|logout <name>
-/mcp auth <server-name|login-id> <browser-redirect-url>
-/mcp cancel <server-name|login-id>
-/mcp help
-HTTP and stdio are supported. Use environment references for credentials, not chat messages.`;
+function localizeError(error: unknown, locale: string): never {
+  if (error instanceof McpUserError) throw new McpUserError(error.key, locale);
+  throw error;
+}
 
 /** Quote-aware argument parsing, not shell evaluation or environment expansion. */
 export function mcpArguments(text: string): string[] {
@@ -49,7 +44,7 @@ export function mcpArguments(text: string): string[] {
     else if (/\s/.test(char)) { if (started) { words.push(word); word = ""; started = false; } }
     else { word += char; started = true; }
   }
-  if (quote || escaped) throw new McpUserError("Unclosed quote or escape in MCP arguments");
+  if (quote || escaped) throw new McpUserError("mcp.unclosedQuote");
   if (started) words.push(word);
   return words;
 }
@@ -80,23 +75,23 @@ export class McpManagement {
     const sdk = await this.sdk();
     const trusted = new ProjectTrustStore(this.opts.agentDir).get(cwd) === true;
     const loaded = sdk.load(this.opts.agentDir, cwd, trusted);
-    if (loaded.errors.length) throw new McpUserError("MCP configuration is invalid; repair mcp.json (values withheld)");
+    if (loaded.errors.length) throw new McpUserError("mcp.configInvalid");
     return loaded.servers;
   }
   private async entry(name: string, cwd: string) {
     const entry = (await this.entries(cwd)).find(e => e.name === name);
-    if (!entry) throw new McpUserError("MCP server not found");
+    if (!entry) throw new McpUserError("mcp.notFound");
     return entry;
   }
   private async mutate(name: string, cwd: string, change: (old: unknown, sdk: McpManagementAdapter) => unknown, add = false) {
     const next = this.writes.catch(() => {}).then(async () => {
       const sdk = await this.sdk();
-      if (typeof sdk.validate(name, { url: "https://example.invalid/mcp" }) === "string") throw new McpUserError("Invalid MCP server name");
+      if (typeof sdk.validate(name, { url: "https://example.invalid/mcp" }) === "string") throw new McpUserError("mcp.invalidName");
       const configured = await this.entries(cwd);
       const existing = configured.find(e => e.name === name);
-      if (add && !existing && configured.some(e => e.name.replaceAll("-", "_") === name.replaceAll("-", "_"))) throw new McpUserError("MCP server name collides with an existing server");
-      if (!existing && !add) throw new McpUserError("MCP server not found");
-      if (existing?.scope === "extension") throw new McpUserError("This server is registered by an extension; change that extension's configuration");
+      if (add && !existing && configured.some(e => e.name.replaceAll("-", "_") === name.replaceAll("-", "_"))) throw new McpUserError("mcp.collision");
+      if (!existing && !add) throw new McpUserError("mcp.notFound");
+      if (existing?.scope === "extension") throw new McpUserError("mcp.extension");
       const file = existing?.override ?? existing?.source ?? path.join(this.opts.agentDir, "mcp.json");
       let before: string | undefined;
       try { before = await readFile(file, "utf8"); } catch (e) { if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw Error("Cannot read MCP configuration"); }
@@ -113,7 +108,7 @@ export class McpManagement {
       await mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
       let current: string | undefined;
       try { current = await readFile(file, "utf8"); } catch (e) { if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw Error("Cannot recheck MCP configuration"); }
-      if (current !== before) throw new McpUserError("MCP configuration changed concurrently; retry");
+      if (current !== before) throw new McpUserError("mcp.concurrent");
       await writeFileDurable(file, JSON.stringify(document, null, 2) + "\n", 0o600);
       for (const flow of this.logins.values()) if (flow.name === name && ["starting", "waiting"].includes(flow.state)) this.abortLogin(flow);
       await this.opts.changed();
@@ -127,19 +122,20 @@ export class McpManagement {
   }
   private async status(name: string | undefined, op: McpOperator, tools = false): Promise<string> {
     const entries = name ? [await this.entry(name, op.cwd)] : await this.entries(op.cwd);
-    const rows: string[] = [`MCP: ${this.opts.enabled() ? "enabled" : "disabled"}`];
+    const locale = op.language ?? "en";
+    const rows: string[] = [message(locale, "mcp.statusHeader", { state: message(locale, this.opts.enabled() ? "mcp.enabled" : "mcp.disabled") })];
     for (const entry of entries) {
-      if (!this.opts.enabled() || entry.config.enabled === false) { rows.push(`${entry.name}: disabled (${entry.config.exposure ?? "codemode"})`); continue; }
+      if (!this.opts.enabled() || entry.config.enabled === false) { rows.push(message(locale, "mcp.statusDisabled", { name: entry.name, exposure: entry.config.exposure ?? "codemode" })); continue; }
       const c = await this.connection(entry, op.cwd);
       try {
         try { await c.getClient(); } catch { /* State, never raw provider errors/credentials. */ }
-        rows.push(`${entry.name}: ${c.state}; ${c.tools.length} tools; ${entry.config.exposure ?? "codemode"}; ${entry.scope ?? "configured"}`);
+        rows.push(message(locale, "mcp.statusRow", { name: entry.name, state: c.state, count: c.tools.length, exposure: entry.config.exposure ?? "codemode", scope: entry.scope ?? "configured" }));
         if (tools) rows.push(...c.tools.map(t => `  ${t.name}`));
       } finally { await c.close(); }
     }
-    if (!entries.length) rows.push("No MCP servers configured. /mcp add <name> <url>");
+    if (!entries.length) rows.push(message(locale, "mcp.noServers"));
     const flows = [...this.logins.values()].filter(f => f.owner === op.owner);
-    rows.push(...flows.map(f => `Login ${f.id} (${f.name}): ${f.state}`));
+    rows.push(...flows.map(f => message(locale, "mcp.loginRow", { id: f.id, name: f.name, state: f.state })));
     return rows.join("\n");
   }
   private abortLogin(flow: Login): void {
@@ -147,13 +143,14 @@ export class McpManagement {
     void flow.connection?.close().catch(() => {});
   }
   private async beginLogin(name: string, op: McpOperator): Promise<string> {
+    const locale = op.language ?? "en"; // Immutable for the lifetime of this login.
     const entry = await this.entry(name, op.cwd);
-    if (!this.opts.enabled() || entry.config.enabled === false) throw new McpUserError("Enable this MCP server before signing in");
+    if (!this.opts.enabled() || entry.config.enabled === false) throw new McpUserError("mcp.enableFirst");
     const active = [...this.logins.values()].find(f => f.name === name && ["starting", "waiting"].includes(f.state));
-    if (active) return active.owner === op.owner ? `Login ${active.id}: ${active.state}` : "A sign-in for this server is already in progress";
+    if (active) return active.owner === op.owner ? message(locale, "mcp.activeLogin", { id: active.id, state: active.state }) : message(locale, "mcp.loginInProgress");
     // Bounded metadata retention; never evict an active authorization.
     for (const [id, flow] of this.logins) if (!["starting", "waiting"].includes(flow.state)) this.logins.delete(id);
-    if (this.logins.size >= 16) throw new McpUserError("Too many active MCP sign-ins");
+    if (this.logins.size >= 16) throw new McpUserError("mcp.tooMany");
     const flow: Login = { id: randomUUID(), name, owner: op.owner, controller: new AbortController(),
       state: "starting", finished: Promise.resolve(), fingerprint: JSON.stringify(entry) };
     this.logins.set(flow.id, flow);
@@ -174,7 +171,7 @@ export class McpManagement {
             prompt: {
               showAuthorizationUrl: url => {
                 flow.state = "waiting";
-                notify(`MCP sign-in: ${name}\n${url.href}\nLogin: ${flow.id}\nApprove in your browser. If its callback cannot reach this agent, send /mcp auth ${name} <redirect-url>. /mcp cancel ${name} cancels. The login ID is also accepted.`);
+                notify(message(locale, "mcp.authUrl", { name, url: url.href, id: flow.id }));
               },
               promptForRedirectUrl: signal => new Promise(resolve => {
                 if (signal.aborted) { resolve(undefined); return; }
@@ -189,19 +186,23 @@ export class McpManagement {
         if (flow.controller.signal.aborted || this.stopping) throw Error("Cancelled");
         flow.state = "complete";
         await this.opts.changed();
-        notify(`MCP ${name}: signed in; ${c.tools.length} tools. Login ${flow.id}: complete.`);
+        notify(message(locale, "mcp.authComplete", { name, count: c.tools.length, id: flow.id }));
       } catch {
         flow.state = flow.controller.signal.aborted ? "cancelled" : "failed";
-        notify(`MCP ${name}: sign-in ${flow.state}. Login ${flow.id}. No credential or callback details are echoed.`);
+        notify(message(locale, "mcp.authFailed", { name, state: message(locale, flow.state === "cancelled" ? "mcp.cancelled" : "mcp.failed"), id: flow.id }));
       } finally { clearTimeout(timeout); flow.finishRedirect?.(undefined); await c.close(); }
-    })().catch(() => { clearTimeout(timeout); flow.state = flow.controller.signal.aborted ? "cancelled" : "failed"; notify(`MCP ${name}: sign-in ${flow.state}.`); });
-    return `MCP ${name}: sign-in started. Login ${flow.id}. Authorization link and result will appear here.`;
+    })().catch(() => { clearTimeout(timeout); flow.state = flow.controller.signal.aborted ? "cancelled" : "failed"; notify(message(locale, "mcp.authFailedShort", { name, state: message(locale, flow.state === "cancelled" ? "mcp.cancelled" : "mcp.failed") })); });
+    return message(locale, "mcp.loginStarted", { name, id: flow.id });
   }
   async execute(args: string, op: McpOperator): Promise<string> {
-    if (this.stopping) throw new McpUserError("MCP management is shutting down");
+    try { return await this.executeInner(args, op); } catch (error) { return localizeError(error, op.language ?? "en"); }
+  }
+  private async executeInner(args: string, op: McpOperator): Promise<string> {
+    if (this.stopping) throw new McpUserError("mcp.shuttingDown");
+    const locale = op.language ?? "en";
     const match = /^(\S+)(?:\s+(\S+))?(?:\s+([\s\S]*))?$/.exec(args.trim());
     const action = match?.[1] ?? "status", name = match?.[2], rest = match?.[3];
-    if (action === "help") return HELP;
+    if (action === "help") return message(op.language ?? "en", "mcp.help");
     if (action === "status" || action === "list" || action === "tools") {
       if (rest || (action === "tools" && !name)) throw Error("Use /mcp status [name] or /mcp tools <name>");
       return this.status(name, op, action === "tools");
@@ -212,25 +213,25 @@ export class McpManagement {
       const own = [...this.logins.values()].filter(f => f.owner === op.owner);
       const byId = own.find(f => f.id === name);
       const named = own.filter(f => f.name === name && ["starting", "waiting"].includes(f.state));
-      if (!byId && named.length > 1) throw new McpUserError("Multiple MCP sign-ins match; use the login ID");
+      if (!byId && named.length > 1) throw new McpUserError("mcp.multiple");
       const flow = byId ?? named[0] ?? own.find(f => f.name === name);
-      if (!name || !flow) throw new McpUserError("MCP login not found for this operator and conversation");
-      if (!["starting", "waiting"].includes(flow.state)) throw new McpUserError("MCP login is no longer pending");
-      if (action === "cancel") { if (rest) throw Error("Use /mcp cancel <server-name|login-id>"); this.abortLogin(flow); return "MCP sign-in cancellation requested"; }
-      if (!rest || rest.length > 8192 || !flow.finishRedirect) throw new McpUserError("MCP login is not waiting for a browser redirect");
-      let url: URL; try { url = new URL(rest); } catch { throw new McpUserError("Invalid redirect URL"); }
-      if (!/^(https?:)$/.test(url.protocol) || !["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)) throw new McpUserError("Expected the browser's loopback redirect URL");
-      if (JSON.stringify(await this.entry(flow.name, op.cwd)) !== flow.fingerprint) { flow.controller.abort(); throw new McpUserError("Server configuration changed; start sign-in again"); }
+      if (!name || !flow) throw new McpUserError("mcp.loginNotFound");
+      if (!["starting", "waiting"].includes(flow.state)) throw new McpUserError("mcp.notPending");
+      if (action === "cancel") { if (rest) throw Error("Use /mcp cancel <server-name|login-id>"); this.abortLogin(flow); return message(locale, "mcp.cancelRequested"); }
+      if (!rest || rest.length > 8192 || !flow.finishRedirect) throw new McpUserError("mcp.notWaiting");
+      let url: URL; try { url = new URL(rest); } catch { throw new McpUserError("mcp.invalidRedirect"); }
+      if (!/^(https?:)$/.test(url.protocol) || !["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)) throw new McpUserError("mcp.loopback");
+      if (JSON.stringify(await this.entry(flow.name, op.cwd)) !== flow.fingerprint) { flow.controller.abort(); throw new McpUserError("mcp.changed"); }
       flow.finishRedirect(rest);
-      return "MCP browser redirect received; sign-in result will appear here";
+      return message(locale, "mcp.redirectReceived");
     }
     if ((action === "enable" || action === "disable") && !name) {
       if (rest) throw Error("Use /mcp enable|disable [name]");
       if (action === "disable") for (const flow of this.logins.values()) this.abortLogin(flow);
       await this.opts.setEnabled(action === "enable"); await this.opts.changed();
-      return `MCP ${action === "enable" ? "enabled" : "disabled"}; session connections update at the next turn boundary`;
+      return message(locale, "mcp.globalChanged", { state: message(locale, action === "enable" ? "mcp.enabled" : "mcp.disabled") });
     }
-    if (!name) throw new McpUserError(HELP);
+    if (!name) throw new McpUserError("mcp.help");
     if (action === "add" || action === "edit") {
       if (!rest) throw Error("Use /mcp add|edit <name> <url or JSON configuration>");
       let raw: unknown;
@@ -238,25 +239,25 @@ export class McpManagement {
         if (rest.startsWith("-- ")) { const [command, ...args] = mcpArguments(rest.slice(3)); raw = { command, args }; }
         else if (rest.startsWith("--url ")) raw = { url: rest.slice(6).trim() };
         else raw = /^https?:\/\//.test(rest) ? { url: rest } : JSON.parse(rest);
-      } catch { throw new McpUserError("Invalid MCP server configuration (values withheld)"); }
+      } catch { throw new McpUserError("mcp.invalidConfig"); }
       const sdk = await this.sdk(), value = sdk.validate(name, raw);
       if (typeof value === "string") throw Error("Invalid MCP server configuration (values withheld)");
-      await this.mutate(name, op.cwd, old => { if (action === "add" && old !== undefined) throw new McpUserError("Server already exists; use /mcp edit"); return value; }, action === "add");
+      await this.mutate(name, op.cwd, old => { if (action === "add" && old !== undefined) throw new McpUserError("mcp.exists"); return value; }, action === "add");
       if (value.enabled !== false) await this.opts.setEnabled(true);
       await this.opts.changed();
-      return `MCP ${name}: configuration saved; ${value.enabled === false ? "disabled" : "enabled"}. /mcp status ${name}; /mcp login ${name} for OAuth.`;
+      return message(locale, "mcp.saved", { name, state: message(locale, value.enabled === false ? "mcp.disabled" : "mcp.enabled") });
     }
-    if (action === "remove") { if (rest) throw Error("Use /mcp remove <name>"); await this.mutate(name, op.cwd, () => undefined); return `MCP ${name}: removed`; }
+    if (action === "remove") { if (rest) throw Error("Use /mcp remove <name>"); await this.mutate(name, op.cwd, () => undefined); return message(locale, "mcp.removed", { name }); }
     if (["enable", "disable", "connect", "reconnect", "disconnect"].includes(action)) {
       if (rest) throw Error("Unexpected MCP arguments");
       const enabled = !["disable", "disconnect"].includes(action);
       await this.mutate(name, op.cwd, old => ({ ...(old as object), enabled }));
       if (enabled) { await this.opts.setEnabled(true); await this.opts.changed(); return this.status(name, op); }
-      return `MCP ${name}: disabled; existing session connections close at their next turn boundary`;
+      return message(locale, "mcp.serverDisabled", { name });
     }
     if (action === "exposure") {
       if (!["direct", "codemode", "deferred", "hidden"].includes(rest ?? "")) throw Error("Use /mcp exposure <name> direct|codemode|deferred|hidden");
-      await this.mutate(name, op.cwd, old => ({ ...(old as object), exposure: rest })); return `MCP ${name}: exposure ${rest}`;
+      await this.mutate(name, op.cwd, old => ({ ...(old as object), exposure: rest })); return message(locale, "mcp.exposureChanged", { name, exposure: rest! });
     }
     if (action === "login") { if (rest) throw Error("Use /mcp login <name>"); return this.beginLogin(name, op); }
     if (action === "logout") {
@@ -268,41 +269,45 @@ export class McpManagement {
         await Promise.all([...this.logins.values()].filter(f => f.name === name).map(f => f.finished));
         this.credentials!.remove(name, c.oauthUrl); await this.opts.changed();
       } finally { await c.close(); }
-      return `MCP ${name}: signed out`;
+      return message(locale, "mcp.signedOut", { name });
     }
-    throw new McpUserError(HELP);
+    throw new McpUserError("mcp.help");
   }
   async menu(op: McpOperator): Promise<string> {
+    try { return await this.menuInner(op); } catch (error) { return localizeError(error, op.language ?? "en"); }
+  }
+  private async menuInner(op: McpOperator): Promise<string> {
+    const locale = op.language ?? "en";
     const ui = op.ui;
-    if (!ui) return (await this.status(undefined, op)) + "\n\n" + HELP;
+    if (!ui) return (await this.status(undefined, op)) + "\n\n" + message(op.language ?? "en", "mcp.help");
     const entries = await this.entries(op.cwd);
-    const name = await ui.select("MCP servers", [...entries.map(e => ({ id: e.name, label: `${e.name} (${e.config.enabled === false ? "disabled" : "enabled"})` })), { id: "+add", label: "Add server" }, { id: "+help", label: "Help" }]);
-    if (!name) return "MCP management cancelled";
-    if (name === "+help") return HELP;
+    const name = await ui.select(message(locale, "mcp.menuServers"), [...entries.map(e => ({ id: e.name, label: message(locale, "mcp.menuServer", { name: e.name, state: message(locale, e.config.enabled === false ? "mcp.disabled" : "mcp.enabled") }) })), { id: "+add", label: message(locale, "mcp.addServer") }, { id: "+help", label: message(locale, "mcp.menuHelp") }]);
+    if (!name) return message(locale, "mcp.menuCancelled");
+    if (name === "+help") return message(op.language ?? "en", "mcp.help");
     if (name === "+add") {
-      const server = await ui.prompt("Server name");
-      if (!server) return "MCP management cancelled";
-      const transport = await ui.select("MCP transport", [{ id: "http", label: "HTTP / OAuth" }, { id: "stdio", label: "Local executable (stdio)" }]);
-      if (!transport) return "MCP management cancelled";
+      const server = await ui.prompt(message(locale, "mcp.serverName"));
+      if (!server) return message(locale, "mcp.menuCancelled");
+      const transport = await ui.select(message(locale, "mcp.transport"), [{ id: "http", label: message(locale, "mcp.http") }, { id: "stdio", label: message(locale, "mcp.stdio") }]);
+      if (!transport) return message(locale, "mcp.menuCancelled");
       let config: Record<string, unknown>;
       if (transport === "stdio") {
-        const command = await ui.prompt("Executable (not a shell command)"), args = await ui.prompt("Arguments (quote arguments containing spaces; may be empty)");
-        if (!command) return "MCP management cancelled";
+        const command = await ui.prompt(message(locale, "mcp.executable")), args = await ui.prompt(message(locale, "mcp.arguments"));
+        if (!command) return message(locale, "mcp.menuCancelled");
         config = { command, args: mcpArguments(args) };
       } else {
-        const url = await ui.prompt("MCP HTTP endpoint URL");
-        if (!url) return "MCP management cancelled";
+        const url = await ui.prompt(message(locale, "mcp.endpoint"));
+        if (!url) return message(locale, "mcp.menuCancelled");
         config = { url };
       }
       return this.execute(`add ${server} ${JSON.stringify(config)}`, op);
     }
-    const action = await ui.select(name, ["status", "tools", "connect", "disconnect", "login", "logout", "edit", "remove", "exposure"].map(id => ({ id, label: id })));
-    if (!action) return "MCP management cancelled";
-    if (action === "remove" && !(await ui.confirm(`Remove MCP ${name}?`))) return "MCP management cancelled";
+    const action = await ui.select(name, ["status", "tools", "connect", "disconnect", "login", "logout", "edit", "remove", "exposure"].map(id => ({ id, label: message(locale, `mcp.action.${id}` as MessageKey) })));
+    if (!action) return message(locale, "mcp.menuCancelled");
+    if (action === "remove" && !(await ui.confirm(message(locale, "mcp.confirmRemove", { name })))) return message(locale, "mcp.menuCancelled");
     let value = "";
-    if (action === "edit") value = await ui.prompt("Replacement server JSON (credentials: environment references)");
-    if (action === "exposure") value = await ui.select("Tool exposure", ["direct", "codemode", "deferred", "hidden"].map(id => ({ id, label: id })));
-    if (["edit", "exposure"].includes(action) && !value) return "MCP management cancelled";
+    if (action === "edit") value = await ui.prompt(message(locale, "mcp.replacement"));
+    if (action === "exposure") value = await ui.select(message(locale, "mcp.toolExposure"), ["direct", "codemode", "deferred", "hidden"].map(id => ({ id, label: id })));
+    if (["edit", "exposure"].includes(action) && !value) return message(locale, "mcp.menuCancelled");
     return this.execute(`${action} ${name}${value ? " " + value : ""}`, op);
   }
   async close(): Promise<void> {
