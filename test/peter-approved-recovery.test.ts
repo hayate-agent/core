@@ -131,5 +131,5 @@ for (const boundary of ["approval", "expiry", "stop"] as const) test(`${boundary
   await f.h.recoverTasks(); await f.h.tick(); await f.h.drained();
   assert.equal(f.calls(), boundary === "approval" ? 2 : 1);
   assert.equal(f.runtime.opened.length, 0);
-  assert.equal(f.store.list("mem:room1")[0].status, "blocked");
+  assert.equal(f.store.list("mem:room1")[0].status, boundary === "stop" ? "cancelled" : "blocked");
 });

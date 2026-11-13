@@ -221,6 +221,8 @@ export interface HarnessOptions {
   /** Persist child authority revocation; must not signal runtimes. */
   conversationStopping?: (sessionKey: string) => Promise<void>;
   conversationStopped?: (sessionKey: string) => Promise<void>;
+  /** Interrupt only descendants with this exact durable parent task binding. */
+  taskStopped?: (sessionKey: string, taskId: string, preexistingUnscoped: readonly string[]) => Promise<void>;
   /** Revalidate queued host data immediately before execution, including after restart. */
   hostEventAllowed?: (input: Inbound) => boolean;
   /** Externally owned workers must recover through their own durable ledger, never inbox replay. */
@@ -1717,14 +1719,112 @@ export class Harness {
     return dropped;
   }
 
+  private readonly stoppedChildrenReconciled = new WeakSet<DurableTask>();
+  private async revokeTaskChildren(key: string, task: DurableTask): Promise<void> {
+    if (this.stoppedChildrenReconciled.has(task)) return;
+    await this.opts.executionStore?.cancelTask(key, task.id, task.preexistingUnscoped);
+    await this.opts.taskStopped?.(key, task.id, task.preexistingUnscoped ?? []);
+    this.stoppedChildrenReconciled.add(task);
+  }
+  /** Complete a crash between the persisted stop marker and child revocation,
+   * before restored worker owners are allowed to start. */
+  /** Upgrade repair uses exact host API receipts, never assistant text or old
+   * blocked states. Keep all completed/uncertain effect evidence untouched. */
+  async reconcileCancelledApiTasks(cancelled: (sessionKey: string, inputId: string) => boolean): Promise<void> {
+    let changed = false;
+    for (const session of this.sessions.values()) {
+      if (/^(dispatch|subagent):/.test(session.key)) continue;
+      for (const task of this.tasks(session)) {
+        if (!task.id.startsWith("api:run_") || task.anchor?.id !== task.id || !cancelled(session.key, task.id)) continue;
+        if (task.state !== "stopped" || task.recoveryAdmission || task.recoveryRetry) {
+          task.state = "stopped"; task.recoveryAdmission = undefined; task.recoveryRetry = undefined; changed = true;
+        }
+      }
+    }
+    if (changed) await this.onStateChange?.();
+  }
+  async reconcileStoppedTasks(): Promise<void> {
+    for (const session of this.sessions.values())
+      for (const task of this.tasks(session))
+        if (task.state === "stopped") await this.revokeTaskChildren(session.key, task);
+  }
+  private readonly inputCancellations = new WeakMap<Inbound, Promise<void>>();
+  private readonly cancellationFences = new WeakSet<Inbound>();
+  private async revokeCancelledTask(s: SessionState, input: Inbound): Promise<void> {
+    const pending = this.inputCancellations.get(input);
+    if (pending) return pending;
+    const revoke = async () => {
+      const taskId = input.taskId ?? input.id;
+      let task = this.tasks(s).find(task => task.id === taskId);
+      // A queued API occurrence may not yet have a task. Preserve its accepted
+      // identity as stopped rather than allowing a restart to create it active.
+      if (!task && taskId && input.source === "api") {
+        input.taskId = taskId;
+        task = { id: taskId, original: input.text, state: "stopped", depth: input.continuationDepth ?? 0,
+          recoveryEnrollment: "current", anchor: input.completionAnchor };
+        s.tasks = this.tasks(s); s.tasks.push(task); s.task ??= task;
+      }
+      if (task) {
+        task.state = "stopped";
+        task.recoveryAdmission = undefined;
+        task.recoveryRetry = undefined;
+      }
+      input.continuation = undefined;
+      // Fence automatic inbox continuations of this mandate, not other runs
+      // sharing the API conversation. Completed effects remain in the ledger.
+      const followups = taskId ? s.queue.filter(item => item !== input && item.taskId === taskId) : [];
+      // Keep these identities queued until their durable turn/child revocation
+      // succeeds. A failed first save must not lose the retry's stopTurn targets.
+      for (const item of [input, ...followups]) this.cancellationFences.add(item);
+      await this.onStateChange?.();
+      for (const item of [input, ...followups])
+        if (item.executionTurnId) await this.opts.executionStore?.stopTurn(item.executionTurnId, s.key);
+      if (task) await this.revokeTaskChildren(s.key, task);
+      const removed = [input, ...followups].map(item => ({ item, index: s.queue.indexOf(item), unsaved: this.inbox.unsaved.has(item) }))
+        .filter(row => row.index >= 0).sort((a, b) => a.index - b.index);
+      const queued = removed.some(row => row.item === input);
+      for (const row of [...removed].reverse()) { s.queue.splice(row.index, 1); this.inbox.unsaved.delete(row.item); }
+      let cancellationNotice: OutboxEntry | undefined;
+      if (queued && input.replyTo) {
+        const id = `cancelled-input:${createHash("sha256").update(`${s.key}\0${input.id}`).digest("hex")}`;
+        let entry = s.outbox.find(entry => entry.id === id);
+        if (!entry) { entry = { ...this.outbox.create(s.key, input.replyTo, "", "cancelled"), id,
+          ...(input.progressId ? { progressId: input.progressId } : {}) }; s.outbox.push(entry); }
+        cancellationNotice = entry;
+        this.outbox.block(entry); s.unsaved = true;
+      }
+      try { await this.outbox.barrier(); }
+      catch (error) {
+        // Retain normal endpoint retryability even if the final inbox/outbox
+        // checkpoint fails after child revocation. Keep every local fence.
+        if (cancellationNotice) {
+          const index = s.outbox.indexOf(cancellationNotice);
+          if (index >= 0) s.outbox.splice(index, 1);
+        }
+        for (const row of removed) {
+          s.queue.splice(Math.min(row.index, s.queue.length), 0, row.item);
+          if (row.unsaved) this.inbox.unsaved.add(row.item);
+        }
+        throw error;
+      }
+      for (const item of [input, ...followups]) this.cancellationFences.delete(item);
+    };
+    const operation = revoke();
+    this.inputCancellations.set(input, operation);
+    try { await operation; }
+    finally { this.inputCancellations.delete(input); }
+  }
+
   async cancel(sessionKey: string, id: string): Promise<"queued" | "running" | false> {
     if (this.budgetChanging) throw Error("Host control in progress; retry cancel");
     const s = this.sessions.get(sessionKey);
     if (!s) return false;
     if (s.current?.id === id && s.running) {
-      if (s.cancelling === s.current) return "running";
-      if (s.prompted === s.current) return false; // prompt already returned: completes normally
-      s.cancelling = s.current;
+      const input = s.current;
+      if (s.prompted === input && s.cancelling !== input) return false; // prompt already returned
+      s.cancelling = input;
+      await this.revokeCancelledTask(s, input);
+      if (s.current !== input) return "running";
       this.turnAbort.get(sessionKey)?.abort();
       // Before the prompt (session still opening) runTurn sees `cancelling` and never starts it.
       if (s.prompting && s.session) await s.session.abort();
@@ -1732,13 +1832,8 @@ export class Harness {
     }
     const i = s.queue.findIndex((q) => q.id === id);
     if (i < 0) return false;
-    const [input] = s.queue.splice(i, 1);
-    this.inbox.unsaved.delete(input!);
-    if (input!.replyTo) {
-      s.outbox.push({ ...this.outbox.create(s.key, input!.replyTo, "", "cancelled"), ...(input!.progressId ? { progressId: input!.progressId } : {}) });
-      s.unsaved = true;
-    }
-    this.saveSoon();
+    const input = s.queue[i]!;
+    await this.revokeCancelledTask(s, input);
     void this.pump(s);
     return "queued";
   }
@@ -1864,6 +1959,7 @@ export class Harness {
    * No productive work without persisted admission, no status-polling inference. */
   async recoverTasks(): Promise<void> {
     if (this.gatewayChanging) return;
+    await this.reconcileStoppedTasks();
     for (const s of this.sessions.values()) {
       if (this.opts.sessionEnabled?.(s.key) === false) continue;
       if (this.opts.externallyRecoveredSession?.(s.key)) continue;
@@ -2295,11 +2391,12 @@ export class Harness {
         if (!s.queue.length || this.paused) break;
         // Stable foreground priority also applies to restored inboxes and saved
         // wait/continuation turns. The durability gate below still applies.
-        const ready = (input: Inbound) => !input.topicPending || input.topicPending.nextAt <= this.now();
+        const ready = (input: Inbound) => !this.cancellationFences.has(input) && (!input.topicPending || input.topicPending.nextAt <= this.now());
         let foregroundIndex = s.queue.findIndex(input => ready(input) && (input.source === "channel" || input.source === "api"));
         if (foregroundIndex < 0) foregroundIndex = s.queue.findIndex(ready);
         if (foregroundIndex > 0) s.queue.unshift(s.queue.splice(foregroundIndex, 1)[0]!);
         const input = s.queue[0]!;
+        if (this.cancellationFences.has(input)) break;
         // Not yet durable (acceptance/inbox save pending) or restored before channels are ready.
         if (this.inbox.held(input)) break;
         if (input.topicPending) {
@@ -2694,6 +2791,10 @@ export class Harness {
       if (task?.recoveryEnrollment === "held-legacy") {
         s.cancelling = input;
         throw Error("Historical task is not enrolled for automatic execution");
+      }
+      if (task?.state === "stopped") {
+        s.cancelling = input;
+        throw Error("Task mandate explicitly stopped");
       }
       if (input.taskId && input.id && input.id === (task ? this.taskQueueId(task, input.continuationDepth ?? 0) : `task:${input.taskId}:${input.continuationDepth}`) &&
           (!task || task.state !== "active" || task.depth + 1 !== input.continuationDepth)) {

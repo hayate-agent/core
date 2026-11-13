@@ -481,6 +481,10 @@ async function main(argv: string[]): Promise<void> {
       await stopDispatcherParent(executions, key, dispatcher);
       await subagents.cancelChildren(key);
     },
+    taskStopped: async (key, taskId, preexistingUnscoped) => {
+      if (dispatcher) await dispatcher.cancelTask(key, taskId, preexistingUnscoped);
+      await subagents.cancelTaskChildren(key, taskId);
+    },
     // Nightly owns dispatcher evidence directly, including retained pre-upgrade inbox events.
     // It must never become a new LLM turn through the generic host-result lane.
     hostEventAllowed: input => input.sessionKey !== "improvement:nightly" && !!input.hostEvent && !!dispatchRuntime?.resultAllowed(input.sessionKey, input.hostEvent.executionId),
@@ -1050,6 +1054,11 @@ async function main(argv: string[]): Promise<void> {
   for (const session of harness.snapshotSessions()) {
     if (session.stopPending) await harness.stopConversation(session.key);
   }
+  if (apiKey) await harness.reconcileCancelledApiTasks((key, inputId) => {
+    const receipt = runs.get(inputId.slice("api:".length));
+    return receipt?.status === "cancelled" && receipt.session_key === key && receipt.input_id === inputId;
+  });
+  await harness.reconcileStoppedTasks();
   await subagents.reconcile(sessionEnabled);
   await dispatcher?.start();
   await harness.recoverTasks();
