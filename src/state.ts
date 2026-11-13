@@ -25,6 +25,8 @@ export interface PersistedSession {
   heartbeatDisabled?: boolean;
   stopPending?: boolean;
   resetPending?: boolean;
+  resetSources?: string[];
+  sourceOwner?: string;
   loop?: Recurring;
   goal?: Goal;
 }
@@ -72,7 +74,18 @@ export class StateStore {
   /** Write atomically if content changed. Writes are serialized; a failed write does not block later ones. */
   save(state: PersistedState): Promise<void> {
     const raw = `${JSON.stringify(state, null, 2)}\n`;
+    return this.write(() => raw);
+  }
+
+  /** Capture live host state only inside the serialized write barrier. Queued
+   * callers retain a factory, not another full snapshot/string of every task. */
+  capture(snapshot: () => PersistedState): Promise<void> {
+    return this.write(() => `${JSON.stringify(snapshot(), null, 2)}\n`);
+  }
+
+  private write(snapshot: () => string): Promise<void> {
     const run = this.writing.catch(() => undefined).then(async () => {
+      const raw = snapshot();
       if (raw === this.last) return;
       await mkdir(path.dirname(this.file), { recursive: true });
       await writeFileDurable(this.file, raw);

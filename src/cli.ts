@@ -486,6 +486,7 @@ async function main(argv: string[]): Promise<void> {
     contextMaintenance: maintenance,
     memory: plugins.memoryOrchestration,
     approvalTarget: key => dispatchRuntime?.isWorker(key) ? dispatchRuntime.approvalTarget(key) : subagents.approvalTarget(key),
+    conversationSourcesReset: async (key, reset) => { await scheduler.resetConversation(key, reset); },
     conversationStopping: async key => {
       await executions.cancelParent(key);
       await subagents.revokeChildren(key);
@@ -703,8 +704,10 @@ async function main(argv: string[]): Promise<void> {
   // streams. Legacy histories inherit their pre-upgrade host/worker context.
   for (const session of saved?.sessions ?? []) await executionContexts.capture(session.key);
   harness.addChannel(subagents.channel);
-  const persist = (pending: Inbound[] = harness.pendingInputs()) =>
-    store.save({
+  const persist = (pending?: Inbound[]) =>
+    store.capture(() => {
+      const inputs = pending ?? harness.pendingInputs();
+      return {
       version: 1,
       paused: harness.paused,
       busyMode: harness.busyMode,
@@ -715,9 +718,10 @@ async function main(argv: string[]): Promise<void> {
       sessions: harness.snapshotSessions(),
       subagents: subagents.snapshot(),
       subagentOverrides: subagents.overrides(),
-      pending: pending.length ? pending : undefined,
+      pending: inputs.length ? inputs : undefined,
       outbox: harness.outboxEntries().length ? harness.outboxEntries() : undefined,
       seen: harness.seenIds(),
+      };
     });
   // Restore before scheduler execution, persistence callbacks, or channel startup can write state.
   // Historical permits/timers are not evidence of ongoing execution. Establish

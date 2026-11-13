@@ -44,6 +44,7 @@ export function executionControlPlugin(get: () => Dispatcher | undefined, direct
           try {
             if (buffer.slice(end + 1).length) throw Error("One request per connection");
             const frame = JSON.parse(buffer.slice(0, end));
+            if (frame?.op === "reset-conversation") socket.setTimeout(0); // owned script drain may take its full deadline
             const result = await executionControlRequest(get(), frame, resetConversation);
             if (!closed && !socket.destroyed) socket.end(JSON.stringify({ ok: true, result }) + "\n");
           } catch { if (!socket.destroyed) socket.end('{"ok":false,"error":"request rejected; inspect exact execution and ownership before retry"}\n'); }
