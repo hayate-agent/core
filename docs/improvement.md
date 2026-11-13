@@ -24,6 +24,24 @@ scope. The controller requires explicit strategy injection when embedded; CLI
 injects the bundled default. The evaluator remains infrastructure-pinned, not replaceable by
 this strategy selection. Merge/build is not running activation.
 
+### Delegated results are evidence, not new work admissions
+
+Nightly dispatcher results are adopted directly from the canonical execution
+ledger, idempotently per execution ID. They never enter the generic parent LLM
+result lane. Late results can therefore be retained after the window ends or the
+night closes without raising a spurious window/budget error, spending another
+turn, reopening a closed night, or replaying a completed worker. Startup also
+reconciles already-completed ledger results, including pre-upgrade deliveries.
+The existing window, turn budget, pauses and independent closure authority remain
+unchanged; child markers cannot close the parent night. Only receipts bound to
+that night's already-reserved turns are adopted.
+
+A parent turn waiting for delegated work is not an empty experiment attempt.
+Pending workers defer the next nightly turn while the work window is active;
+completed evidence is supplied to the next normally authorized nightly turn.
+Routine background dispatcher lifecycle rows stay silent, while questions and
+recovery blockers still require attention. Ordinary user/API work is unaffected.
+
 ### Between-night local selection
 
 The administrative `/nightly-strategy` plugin supports `status`, `use <module>`,

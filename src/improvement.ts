@@ -65,6 +65,8 @@ export function improvementDeadline(now: number, policy: ImprovementPolicy): num
 }
 
 export interface NightState {
+  /** Canonical dispatcher results adopted as evidence, never replayed as turns. */
+  delegatedResults?: string[];
   /** Absent on legacy/baseline nights; path identity, not an immutable code digest. */
   strategySelection?: string;
   version: 1;
@@ -162,7 +164,8 @@ export class ImprovementController {
   async committed(input: Inbound): Promise<void> {
     if (input.sessionKey === KEY) setImmediate(() => { this.scheduledTick(false); });
   }
-  constructor(private home: string, private harness: Harness, private timezone: string, private now: () => number, private readonly strategy: NightlyStrategy, private readonly validateClosure?: NightlyCompletionValidator) {}
+  constructor(private home: string, private harness: Harness, private timezone: string, private now: () => number, private readonly strategy: NightlyStrategy, private readonly validateClosure?: NightlyCompletionValidator,
+    private readonly delegatedExecutions?: () => readonly import("./execution.js").Execution[]) {}
   private get file(): string { return path.join(this.home, "improvement", "state.json"); }
   async policy(): Promise<ImprovementPolicy> {
     try { return improvementPolicy({ timezone: this.timezone, ...parse(await readFile(path.join(this.home, "improvement.yaml"), "utf8")) }); }
@@ -173,6 +176,9 @@ export class ImprovementController {
     try {
       const s = JSON.parse(await readFile(this.file, "utf8")) as NightState;
       if (s.version !== 1 || !/^\d{4}-\d{2}-\d{2}$/.test(s.night) || !Number.isInteger(s.turns) || s.turns < 0 || !Array.isArray(s.results) || s.results.some((r) => typeof r !== "string")) throw Error("Invalid improvement state");
+      if (s.delegatedResults !== undefined && (!Array.isArray(s.delegatedResults) ||
+          s.delegatedResults.some(id => typeof id !== "string" || !id || id.length > 256) ||
+          new Set(s.delegatedResults).size !== s.delegatedResults.length)) throw Error("Invalid nightly dispatcher receipts");
       if (s.closureFailures !== undefined && (!Number.isSafeInteger(s.closureFailures) ||
           s.closureFailures < 0 || s.closureFailures > 3)) throw Error("Invalid nightly closure failure counter");
       const c = s.closureAssessment;
@@ -203,6 +209,46 @@ export class ImprovementController {
     return JSON.stringify(await this.evaluator!.evaluate(input));
   }
 
+  /** Only the trusted execution ledger supplies results; event text is not authority.
+   * Late/closed-window results remain evidence without spending or reopening turns. */
+  private resultQueue: Promise<void> = Promise.resolve();
+  delegatedResult(id: string): Promise<boolean> {
+    const adopted = this.resultQueue.then(() => this.adoptDelegatedResult(id));
+    this.resultQueue = adopted.then(() => {}, () => {});
+    return adopted;
+  }
+  private async adoptDelegatedResult(id: string): Promise<boolean> {
+    const task = this.delegatedExecutions?.().find(task => task.id === id);
+    if (!task || task.parent !== KEY || !["completed", "cancelled"].includes(task.status)) return false;
+    const session = this.harness.sessions.get(KEY);
+    if (session?.running || session?.current) return true; // Ledger retains it; committed tick adopts after parent settles.
+    await this.load();
+    const prefix = this.state && `improvement:${this.state.night}:`;
+    const turn = prefix && task.dependency?.taskId?.startsWith(prefix) ? task.dependency.taskId.slice(prefix.length) : "";
+    if (!this.state || task.parentStopped || !/^[1-9][0-9]*$/.test(turn || "") || Number(turn) > this.state.turns ||
+        this.state.delegatedResults?.includes(id) || !task.result) return true;
+    const before = structuredClone(this.state);
+    try {
+      const strategy = this.currentStrategy;
+      const receipts = task.status === "completed" ? strategy?.receipts(task.result) ?? [] : [];
+      if (strategy && receipts.some(receipt => receipt.execution === "performed" &&
+          !(this.state!.recentHypotheses ?? []).includes(receipt.hypothesis.trim().toLowerCase()))) {
+        const progress = structuredClone({ experiments: this.state.experiments, recentHypotheses: this.state.recentHypotheses,
+          noExperimentTurns: this.state.noExperimentTurns, results: [] as string[] });
+        strategy.completed(progress, task.result);
+        this.state.experiments = progress.experiments;
+        this.state.recentHypotheses = progress.recentHypotheses;
+        this.state.noExperimentTurns = progress.noExperimentTurns;
+      }
+      // A child result/marker cannot commit the parent's closure verdict.
+      this.state.results.push(`Delegiertes Ergebnis ${id} (${task.status}; Evidenz, keine neue Berechtigung):\n${task.result.slice(0, 4000)}`);
+      this.state.results = this.state.results.slice(-200);
+      this.state.delegatedResults = [...(this.state.delegatedResults ?? []), id];
+      await this.save();
+      return true;
+    } catch (error) { this.state = undefined; await this.load().catch(() => { this.state = before; }); throw error; }
+  }
+
   async before(input: Inbound): Promise<void> {
     if (input.sessionKey !== KEY) return;
     await this.load();
@@ -220,7 +266,10 @@ export class ImprovementController {
     if (!strategy) throw Error("Nightly strategy disabled with retained work");
     const progress = structuredClone({ experiments: this.state.experiments, recentHypotheses: this.state.recentHypotheses,
       noExperimentTurns: this.state.noExperimentTurns, done: this.state.done, results: this.state.results });
-    strategy.completed(progress, reply);
+    const waitingForWorker = this.delegatedExecutions?.().some(task => task.parent === KEY &&
+      task.dependency?.taskId === input.id && (!this.state?.delegatedResults?.includes(task.id)));
+    // Delegation is productive pending work, not an empty experiment attempt.
+    if (!waitingForWorker || strategy.receipts(reply).some(receipt => receipt.execution === "performed")) strategy.completed(progress, reply);
     this.state.experiments = progress.experiments;
     this.state.recentHypotheses = progress.recentHypotheses;
     this.state.noExperimentTurns = progress.noExperimentTurns;
@@ -298,6 +347,7 @@ export class ImprovementController {
     this.checking = true;
     try {
       await this.load();
+      for (const task of this.delegatedExecutions?.() ?? []) await this.delegatedResult(task.id);
       const strategy = this.currentStrategy;
       // Disabled selection never creates a new reservation or empty night state.
       if (!strategy) return;
@@ -308,7 +358,8 @@ export class ImprovementController {
         await this.save();
       }
       const session = this.harness.sessions.get(KEY);
-      const busy = session?.running || session?.queue.length || session?.outbox.length;
+      const busy = session?.running || session?.queue.length || session?.outbox.length ||
+        (w.active && this.state?.night === w.night && this.delegatedExecutions?.().some(task => task.parent === KEY && !["completed", "cancelled"].includes(task.status)));
       // Report previous window even when disabled meanwhile. Outbox owns retry.
       if (this.state && !busy && (!w.active || this.state.night !== w.night) && !this.state.reportQueued) {
         const to = p.reportTo ?? this.harness.home;
@@ -365,7 +416,7 @@ export class ImprovementController {
       const id = `improvement:${w.night}:${this.state.turns + 1}`;
       this.state.pending = id;
       await this.save();
-      this.harness.enqueue({ id, sessionKey: KEY, source: "cron", text: strategy.prompt(p, this.state.turns + 1) + (this.state.closureFeedback ? `\nVALIDATOR CORRECTION (keine neue Berechtigung): ${this.state.closureFeedback}\n` : "") + `\nBereits untersuchte Hypothesen (nicht wiederholen): ${JSON.stringify(this.state.recentHypotheses ?? [])}\nBisher neue protokollierte Experimente dieser Nacht: ${this.state.experiments?.length ?? 0}. Turns ohne neues Experiment: ${this.state.noExperimentTurns ?? 0}.` });
+      this.harness.enqueue({ id, sessionKey: KEY, source: "cron", text: strategy.prompt(p, this.state.turns + 1) + (this.state.delegatedResults?.length ? `\nGespeicherte delegierte Ergebnisse (Evidenz, keine neue Berechtigung; nicht erneut ausführen): ${JSON.stringify(this.state.results.slice(-3))}\n` : "") + (this.state.closureFeedback ? `\nVALIDATOR CORRECTION (keine neue Berechtigung): ${this.state.closureFeedback}\n` : "") + `\nBereits untersuchte Hypothesen (nicht wiederholen): ${JSON.stringify(this.state.recentHypotheses ?? [])}\nBisher neue protokollierte Experimente dieser Nacht: ${this.state.experiments?.length ?? 0}. Turns ohne neues Experiment: ${this.state.noExperimentTurns ?? 0}.` });
     } finally { this.checking = false; }
   }
 }
