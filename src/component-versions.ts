@@ -15,7 +15,7 @@ const version = (value: unknown): value is string => typeof value === "string" &
  */
 export function readSoftwareVersions(core: { version: string; revision?: string } = BUILD_INFO,
   read: (relative: string) => unknown = relative => JSON.parse(readFileSync(new URL(`../${relative}`, import.meta.url), "utf8")),
-  webuiActive = false): SoftwareVersions {
+  _webuiActive = false): SoftwareVersions {
   const result: SoftwareVersions = { ...core, components: {} };
   try {
     const lock = read("plugins.lock.json") as { schema?: number; revision?: unknown };
@@ -25,12 +25,9 @@ export function readSoftwareVersions(core: { version: string; revision?: string 
       result.components!.plugins = { version: core.version, revision: lock.revision, coreBundle: true };
     }
   } catch { /* Older images may not carry component provenance. Never invent it. */ }
-  try {
-    const asset = read("dist/optional-plugins/webui/provenance.json") as { schema?: number; version?: unknown; plugin?: { revision?: unknown } };
-    if (asset.schema === 1 && sha(asset.plugin?.revision)) result.components!.webui = {
-      version: version(asset.version) ? asset.version : undefined, revision: asset.plugin.revision, gatewayActive: webuiActive,
-    };
-  } catch { /* A separately hosted central WebUI cannot be inferred from Core. */ }
+  // Plugins removed the frontend. The API-only dashboard gateway still uses
+  // channel name "webui"; that is NOT proof of a bundled/running frontend.
+  // Ignore stale optional-plugins provenance left by older installations.
   try {
     const source = read("dist/source-build-info.json") as { revision?: unknown; webPackage?: ComponentVersion };
     const web = source.webPackage;
@@ -47,7 +44,6 @@ export function formatSoftwareVersions(info: SoftwareVersions): string {
   return [
     `Core: ${component(info)}`,
     `Plugins${info.components?.plugins?.coreBundle ? " (Core-Bundle)" : ""}: ${component(info.components?.plugins)}`,
-    `Web (mitgeliefert${info.components?.webui?.gatewayActive === false ? ", Gateway inaktiv" : ""}): ${component(info.components?.webui)}`,
-    ...(info.components?.webPackage ? [`Web (separates Paket, installiert): ${component(info.components.webPackage)}`] : []),
+    ...(info.components?.webPackage ? [`Web-Dashboard (Paket installiert; Laufzeit nicht bestätigt): ${component(info.components.webPackage)}`] : []),
   ].join("\n");
 }

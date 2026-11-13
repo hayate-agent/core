@@ -29,15 +29,16 @@ test("published starter parses as a safe opt-in profile using runtime defaults",
 test("gateway walkthrough examples use valid installation/overlay contracts", async () => {
   const guide = await file("../docs/gateways.md");
   const snippets = [...guide.matchAll(/```yaml\n([\s\S]*?)```/g)].map(match => parse(match[1]));
-  assert(snippets.length >= 6);
+  assert(snippets.length >= 3);
   for (const value of snippets) {
     if (value.gatewayPlugins) validateGatewayOverlay(value.gatewayPlugins);
     else defaultConfig(value);
   }
   assert.match(guide, /MATRIX_ALLOWED_USERS/);
   assert.match(guide, /MATRIX_ADMISSION_ROOMS/);
-  assert.match(guide, /127\.0\.0\.1:3210/);
-  assert.match(guide, /plugin_webui_settings/);
+  assert.match(guide, /separate dashboard and API gateway/);
+  assert.match(guide, /no longer packages/);
+  assert.doesNotMatch(guide, /plugin_webui_settings|module:\s*plugins\/webui\/index\.mjs/);
   assert.match(guide, /\/approvals manual/);
   assert.doesNotMatch(guide, /\/approvals on/);
 });
