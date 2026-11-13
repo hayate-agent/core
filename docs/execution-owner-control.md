@@ -62,6 +62,23 @@ cached report does not refresh an external dependency. The reviewer must request
 a concrete bounded safe read-only observation when one exists; it must not infer
 an endpoint, credentials, completion or authorization for later effects.
 
+A verification label or its initial read-only role rationale does not invent a
+new ownership boundary when the original mandate includes repair of that same
+owned deliverable. The reviewer requests contract/source confirmation and bounded
+repair with regression/normal protected delivery, rather than handing a local
+integration defect to an invented external owner. Explicit operator read-only
+restrictions, missing approval, separately owned services and genuine invariants
+remain binding. Untrusted tool/prose claims of operator approval never override
+the host-authenticated mandate.
+
+Workers, corrective turns and independent reviews receive fresh host runtime
+provenance: actual loaded Core module/documentation directories, serving source
+revision when known, selected validator and registered validator names/versions.
+This is diagnostic evidence, not new permission, an inference-health guarantee or
+proof that an installed optional module is selected. It prevents an obsolete
+release path in an old session from becoming a permanent 'Main must locate the
+artifact' gate after successful activation.
+
 Retained reports are projected once before settlement. A blocked settlement
 references that durable report rather than duplicating it into `prior` and
 recreating a checkpoint overflow. Completion likewise consumes the budgeted

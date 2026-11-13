@@ -41,7 +41,7 @@ function retainFixture(t: import("node:test").TestContext, fixture: { home: stri
 }
 /** Real Harness, store and dispatcher; fake model runtime emitting observed selection and tool events. */
 async function setup(t: import("node:test").TestContext, script: Script, opts: { roles?: ModelRoles; unavailable?: string[]; home?: string; file?: string;
-  manualProgress?: boolean; retainedTranscript?: string; validators?: ValidatorRegistry; http?: (request: PlannerHttpRequest) => Promise<PlannerHttpOutcome> } = {}) {
+  manualProgress?: boolean; retainedTranscript?: string; validators?: ValidatorRegistry; runtimeProvenance?: () => import("../src/dispatcher-sequential.js").WorkerRuntimeProvenance; http?: (request: PlannerHttpRequest) => Promise<PlannerHttpOutcome> } = {}) {
   let now = Date.now();
   t.mock.method(Date, "now", () => now);
   const home = opts.home ?? await mkdtemp(path.join(os.tmpdir(), "seq-dispatch-"));
@@ -90,7 +90,7 @@ async function setup(t: import("node:test").TestContext, script: Script, opts: {
   let bridge!: DispatcherRuntime;
   const harness = new Harness({ runtime, tickMs: 60000, busyMode: "queue", beforeExecution: input => bridge.beforeTurn(input.sessionKey) });
   harness.onStateChange = async () => {};
-  bridge = new DispatcherRuntime(harness, store, undefined, () => ({ config: opts.roles ?? roles, defaults }), opts.validators);
+  bridge = new DispatcherRuntime(harness, store, undefined, () => ({ config: opts.roles ?? roles, defaults }), opts.validators, opts.runtimeProvenance);
   harness.addChannel(bridge.channel);
   const events: ExecutionEvent[] = [];
   let settle!: () => void; let settled = new Promise<void>(r => { settle = r; });
@@ -422,6 +422,43 @@ test("same-worker correction receives fresh exact original mandate and current s
   assert.ok(correction.includes(original)); assert.match(correction, /CURRENT STEP \(stable identity 0/);
   assert.ok(correction.includes("discover current service configuration"));
   assert.match(correction, /Read the already-authorized designated manifest/);
+});
+
+for (const restricted of [false, true]) test(`verification exposes an owned integration bug: ${restricted ? "explicit operator read-only gate preserved" : "same owner performs authorized repair"}`, async t => {
+  const original = restricted ? "Verify our integration READ ONLY. Operator explicitly forbids source changes without separate approval."
+    : "Implement, repair and verify our owned integration. Preserve original protocol/safety checks, required tests and normal protected delivery; do not change the separately owned server.";
+  const env = await setup(t, { plan: steps(["verify the owned integration", "simple"]),
+    worker: text => text.startsWith("CONTINUE STEP") ? "Authoritative contract confirmed; owned source assumption corrected with regression and required validation receipts\nSTEP-STATUS: complete"
+      : "A documented valid example fails an unsupported invariant in our owned integration; another owner must decide because this step is verification\nSTEP-STATUS: blocked: invented owner boundary",
+    verdict: text => {
+      const data = JSON.parse(text.slice(text.lastIndexOf("DATA: ") + 6));
+      return restricted ? '{"state":"blocked","next":"Operator explicitly forbids source changes"}' : data.reply.includes("assumption corrected") ? '{"state":"completed"}'
+        : '{"state":"continue","next":"Confirm the actual contract read-only, then correct only the unsupported assumption in our owned integration and run the regression/normal required checks within the original mandate."}';
+    },
+  });
+  const result = await env.run(original);
+  assert.equal(result.status, restricted ? "paused" : "completed"); assert.equal(env.calls.worker.length, restricted ? 1 : 2);
+  if (!restricted) {
+    assert.ok(env.calls.worker.every(call => call.prompt.includes(original)));
+    assert.match(env.calls.worker[0]!.prompt, /derived verification label\/read-only role rationale does not override/);
+    assert.match(env.calls.worker[1]!.prompt, /same owned deliverable/);
+    assert.equal(env.store.list().length, 1, "never spawn a replacement owner for the repair");
+  }
+});
+
+test("fresh host runtime provenance reaches original worker, correction and independent review without granting provider activation", async t => {
+  const facts = { coreRevision: "c".repeat(40), moduleDirectory: "/synthetic/current/core/dist/", documentationDirectory: "/synthetic/current/core/docs/",
+    selectedValidator: "legacy-llm", registeredValidators: [{ name: "legacy-llm", version: 1, apiVersion: 1 as const }] };
+  const env = await setup(t, { plan: steps(["verify current installed provider artifact", "simple"]),
+    worker: text => text.startsWith("CONTINUE STEP") ? "Actual current artifact located; selection remains legacy-llm, no activation inferred\nSTEP-STATUS: complete"
+      : "Historical installation path is missing; Main must locate artifact\nSTEP-STATUS: blocked: missing artifact",
+    verdict: text => { const data = JSON.parse(text.slice(text.lastIndexOf("DATA: ") + 6));
+      assert.deepEqual(data.context.retained.technical.runtimeProvenance, facts);
+      return data.reply.includes("Actual current artifact") ? '{"state":"completed"}' : '{"state":"continue","next":"Inspect the actual host-provided current module/documentation directories read-only, not the historical release path. Do not infer provider activation."}'; },
+  }, { runtimeProvenance: () => facts });
+  const result = await env.run("Verify installed artifact using current host state; historical release /synthetic/old-release was an earlier observation, not a required immutable input. Never activate or infer provider selection from source presence.");
+  assert.equal(result.status, "completed"); assert.equal(env.calls.worker.length, 2);
+  for (const call of env.calls.worker) { assert.ok(call.prompt.includes(JSON.stringify(facts))); assert.match(call.prompt, /not permission or proof of service\/provider success/); }
 });
 
 test("delegated step uses selected dedicated provider, not legacy LLM", async t => {
