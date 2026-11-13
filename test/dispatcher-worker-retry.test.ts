@@ -224,8 +224,9 @@ test("empty result text is marked empty-result and stays completed", async t => 
   const store = new ExecutionStore(path.join(dir, "ledger.json")); await store.load();
   await store.submit("parent", "empty", "fixture", "direct");
   await store.submit("parent", "full", "fixture", "direct");
+  const delivered: import("../src/execution.js").ExecutionEvent[] = [];
   const dispatcher = new Dispatcher(store, { name: "direct", version: 1, replaySafe: false, reconcile: true,
-    execute: async (task) => task.requestId === "empty" ? "" : "ok" }, 1, async () => {}, () => {});
+    execute: async (task) => task.requestId === "empty" ? "" : "ok" }, 1, async event => { delivered.push(event); }, () => {});
   t.after(async () => { await dispatcher.stop(); await rm(dir, { recursive: true, force: true }); });
   await dispatcher.start();
   await until(() => store.list().every(task => task.status === "completed"));
@@ -235,7 +236,9 @@ test("empty result text is marked empty-result and stays completed", async t => 
   assert.equal(empty.diagnosticCode, "empty-result");
   assert.equal(full.diagnosticCode, undefined);
   assert.equal(full.result, "ok");
-  assert.ok(store.events().some(event => event.type === "status" && /empty-result/.test(event.text)));
+  await dispatcher.flushEvents();
+  assert.ok(delivered.some(event => event.type === "status" && /empty-result/.test(event.text)),
+    "observe actual delivered evidence, not the pending queue from which ack removes events");
 });
 
 test("fail-then-succeed never reaches retry-exhausted and completes unchanged", async t => {
