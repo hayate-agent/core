@@ -453,11 +453,17 @@ export function sequentialStrategy(deps: SequentialDeps): DispatcherStrategy {
             outcomes: retained.outcomes, blocked: { step, reply, evidence },
             candidates: candidates.map(({ candidate, position }) => ({ number: position + 1, ...candidate })) });
           await authorize();
+          let readyDiagnostic: CompletionDiagnostic | undefined;
           const choice = await assessCompletion({ review: (text, _model, _thinking, signal) => backend.review(text, reviewer.model!, reviewer.thinking ?? "off", signal) },
-            { id: `schedule:${task.id}:${stepId}`, sessionKey, source: "host", text: task.input }, reply,
+            { id: `schedule:${task.id}:${stepId}`, sessionKey, source: "host", text: task.input,
+              completionContext: { recent: [], tasks: [], tools: evidence, retained: { original: task.input, technical: { assessment: "ready-step" },
+                workers: { provenance: "host-execution-store", omitted: 0, unassociated: 0,
+                  items: retained.outcomes.map((outcome, position) => ({ id: `step:${task.id}:${ids[position]}`, requestId: `step:${ids[position]}`,
+                    status: "completed", restarts: task.restarts, result: outcome.result, resultChars: outcome.result.length })) } } } }, reply,
             { task: task.input, ...(task.dependency?.expiresAt !== undefined ? { expiresAt: task.dependency.expiresAt } : {}) },
-            context.signal, reviewer.model, Date.now, schedulingPrompt, undefined, STEP_VALIDATION_TIMEOUT_MS, deps.validators);
+            context.signal, reviewer.model, Date.now, schedulingPrompt, value => { readyDiagnostic = value; }, STEP_VALIDATION_TIMEOUT_MS, deps.validators);
           await authorize(); await context.fenceDecisions?.(decisionRevision);
+          if (!choice) await context.status?.(`Bereitschaftsprüfung für separat mögliche Arbeit ohne verwertbares Urteil (${readyDiagnostic ?? "technical"}); kein Beleg einer sachlichen Blockade und keine Freigabe. Erhaltene Effekte werden nicht wiederholt.`).catch(() => {});
           const selected = choice?.state === "continue" && /^[1-6]$/.test(choice.next ?? "") ? Number(choice.next) - 1 : -1;
           if (!candidates.some(candidate => candidate.position === selected)) return false;
           const reordered = structuredClone(retained);
