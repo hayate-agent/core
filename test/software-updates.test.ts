@@ -11,6 +11,7 @@ async function fixture(options: { vendored?: boolean; tags?: string; history?: s
   const home = await mkdtemp(path.join(os.tmpdir(), "hy-update-"));
   const events: string[] = [], commands: Array<{ command: string; args: string[]; cwd: string; env?: NodeJS.ProcessEnv }> = [];
   let fail = "";
+  const heads = { ...revisions };
   const command: UpdateCommand = async (command, args, cwd, env) => {
     commands.push({ command, args, cwd, env });
     if (fail && args.includes(fail)) throw Error("PRIVATE_NETWORK_TOKEN never returned");
@@ -22,7 +23,7 @@ async function fixture(options: { vendored?: boolean; tags?: string; history?: s
     if (args[0] === "rev-list") return options.history ?? "";
     if (args[0] === "ls-remote") {
       const source = String(args[2]).split("/").at(-1)!.replace(/\.git$/, "") as keyof typeof revisions;
-      return revisions[source] + "\trefs/heads/main\n";
+      return heads[source] + "\trefs/heads/main\n";
     }
     if (args[0] === "checkout") {
       if (component === "core" || component === "webui") await writeFile(path.join(cwd, "package.json"), '{"scripts":{"build":"test"}}');
@@ -34,7 +35,7 @@ async function fixture(options: { vendored?: boolean; tags?: string; history?: s
       }
       return "";
     }
-    if (args[0] === "rev-parse") return revisions[component] + "\n";
+    if (args[0] === "rev-parse") return heads[component] + "\n";
     if (command === "npm" && args[0] === "run" && component === "core") {
       await mkdir(path.join(cwd, "dist")); await writeFile(path.join(cwd, "dist/cli.js"), "// validated fixture");
       await writeFile(path.join(cwd, "dist/launcher.js"), "export function runForeground() {};");
@@ -52,7 +53,7 @@ async function fixture(options: { vendored?: boolean; tags?: string; history?: s
     }
     throw Error("preparation did not settle");
   };
-  return { home, owner, events, commands, command, settled, fail: (value: string) => { fail = value; }, cleanup: async () => { await owner.close(); await rm(home, { recursive: true, force: true }); } };
+  return { home, owner, events, commands, command, settled, fail: (value: string) => { fail = value; }, advanceCore: () => { heads.core = "d".repeat(40); }, cleanup: async () => { await owner.close(); await rm(home, { recursive: true, force: true }); } };
 }
 
 test("startup defaults: hourly automatic checks, GitHub sources, one 60s restart budget", () => {
@@ -91,6 +92,19 @@ test("install is durably scheduled outside command turn; three sources built, no
     await second.request("check");
     for (let n = 0; n < 200 && second.snapshot().phase === "checking"; n++) await new Promise(r => setTimeout(r, 5));
     assert.equal(second.snapshot().phase, "activated"); second.stop();
+  } finally { await f.cleanup(); }
+});
+
+test("candidate startup configuration failure retains active runtime and never announces prepared restart", async () => {
+  const f = await fixture();
+  try {
+    await f.owner.request("install"); assert.equal((await f.settled()).phase, "prepared"); await f.owner.afterExit();
+    const before = await readFile(path.join(f.home, "software-updates/selected.json"), "utf8"), entry = f.owner.entrypoint("original");
+    f.events.length = 0; f.advanceCore(); f.fail("--eval"); await f.owner.request("install"); const result = await f.settled("failed");
+    assert.equal(result.phase, "failed"); assert.match(result.detail!, /startup configuration compatibility failed/);
+    assert.equal(await readFile(path.join(f.home, "software-updates/selected.json"), "utf8"), before);
+    assert.equal(f.owner.entrypoint("original"), entry); assert.ok(!f.events.some(event => event.startsWith("prepared:")));
+    assert.doesNotMatch(result.detail!, /PRIVATE_NETWORK_TOKEN/);
   } finally { await f.cleanup(); }
 });
 
