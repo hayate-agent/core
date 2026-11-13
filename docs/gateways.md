@@ -47,98 +47,25 @@ Use one running owner per home. If you run a terminal profile and a daemon
 simultaneously, use separate homes and do not configure both to listen on the
 same WebUI port or use the same Matrix device/crypto store.
 
-## 2. Browser: install and activate the WebUI plugin
+## 2. Browser: separate dashboard and API gateway
 
-WebUI remains an **optional local plugin**, not a Core web server. Current Core
-packages/images include its verified runtime files at
-`dist/optional-plugins/webui/index.mjs`; see [packaged plugin assets](plugin-assets.md).
-For the image, use the absolute path
-`/opt/hayate-agent/dist/optional-plugins/webui/index.mjs` in the activation examples
-below. This packaged presence does not activate it automatically.
+The [WebUI project](https://github.com/hayate-agent/webui) owns the browser
+frontend and its deployment. Plugins supplies the API-only `dashboard-api`
+gateway. Core no longer packages the removed `Plugins/webui` frontend.
 
-For an independent plugin installation, or older Core packages without these
-assets, install a reviewed version of [hayate-agent/plugins](https://github.com/hayate-agent/plugins)
-that contains `webui/`; if the selected release lacks it, use a release with these files. Runtime startup
-does not download or enable optional code automatically. Pin the checkout to a reviewed commit for a
-service deployment. In that checkout:
+Install the reviewed backend plugins and separate dashboard according to their
+current documentation. Preserve trusted backend URLs, authentication/TLS,
+conversation storage and operator policies. A channel named `webui` can still
+represent the API gateway; it does not prove a frontend is bundled or active.
 
-```sh
-cd /path/to/hayate-plugins/webui
-npm ci
-npm run build
-npm test
-```
+Do not configure `gatewayPlugins.webui.module` to the retired
+`dist/optional-plugins/webui/index.mjs` or reinstall an obsolete Plugins release
+to obtain it. Existing configurations using that module require explicit
+migration; see [retired browser assets](plugin-assets.md). Core does not rewrite
+operator configuration or replace executable modules silently.
 
-Copy `index.mjs`, `ui.mjs` and the built `public/` directory into a private,
-versioned local plugin directory, for example `<home>/plugins/webui/`. Or use an
-absolute path to a trusted checkout that you keep installed. Generated browser
-assets must be present. Core does not fetch executable modules from chat.
-
-Add to `<home>/settings.local.yaml`:
-
-```yaml
-gatewayPlugins:
-  webui:
-    module: plugins/webui/index.mjs
-```
-
-Restart the instance, then open **http://127.0.0.1:3210**. For a background process:
-
-```sh
-hayate-agent run --home "$HOME/.hayate-agent"
-```
-
-Optional startup environment: `HAYATE_WEBUI_PORT=3211`. The host is deliberately
-fixed to `127.0.0.1`, and exact Host checks require that address, not `localhost`.
-There is no remote login or network-user isolation in this first version. **Do
-not publish the listener through port forwarding or a reverse proxy.** API keys
-for the separate run API are neither needed nor a login mechanism for WebUI.
-
-Existing operator channels can also request idle-boundary activation:
-
-```text
-/gateway-plugin use webui /absolute/path/to/webui/index.mjs
-/gateway-plugin status
-```
-
-Unlike editing a file in an already-running process, this command queues a managed
-activation. Settings saved manually take effect on restart. To disable, use
-`/gateway-plugin disable webui` or set `disabled: true` and restart.
-
-### Let the agent adapt its presentation
-
-Optionally register the **same entry file** as a general startup plugin in
-`hayate-agent.yaml`:
-
-```yaml
-plugins:
-  - plugins/webui/index.mjs
-```
-
-If `tools` is an explicit nonempty allowlist, **add** `plugin_webui_settings` to
-that list, retaining ordinary tools. Restart after these startup changes. This
-allows the agent to adjust presentation (panels, actions, title, theme and work
-area) according to operator instructions, not model limits or authority. UI
-actions prepare visible editor input rather than silently executing commands.
-Trusted UI modules require explicit local installation and the update/shutdown
-ownership contract. Full API, examples and limits are in the
-[WebUI plugin guide](https://github.com/hayate-agent/plugins/blob/main/webui/README.md).
-
-### Browser operator rights are explicit
-
-WebUI fixes its sender to `webui:local`; requests cannot impersonate console or
-Matrix users. To grant privileged commands **deliberately**, merge into
-`hayate-agent.yaml` and restart:
-
-```yaml
-admins: ["webui:local"]
-approvers: ["webui:local"]
-```
-
-Only do this when everyone with local loopback access may hold those rights.
-These lists do not authenticate OS/browser users, enable tool approval prompts,
-or override filesystem/tool permissions. For mixed WebUI+Matrix use, include both
-identities explicitly rather than overwriting the other interface's operators.
+A self-update notice may report the independently installed dashboard package.
+That is not a claim about the running version of a separate dashboard service.
 
 ## 3. Matrix: activate the bundled plugin
 
