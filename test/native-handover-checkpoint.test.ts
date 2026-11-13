@@ -67,6 +67,18 @@ test("three separate OS processes automatically reconstruct the same Dispatcher 
   assert.equal(await readFile(path.join(dir, "remaining"), "utf8"), "remaining-work-complete\n");
 });
 
+test("real Dispatcher restart after first intent but before first model prompt automatically continues the same prepared worker", { timeout: 30000 }, async t => {
+  const dir = await home(t), receipts = [];
+  for (const phase of ["admission-crash", "admission-finish"]) {
+    const child = spawnSync(process.execPath, ["--import", "tsx", fileURLToPath(new URL("./fixtures/dispatcher-restart-process.ts", import.meta.url)), dir, phase], { encoding: "utf8", timeout: 12000 });
+    assert.equal(child.status, 0, `${phase}: ${child.stderr}\n${child.stdout}`); receipts.push(JSON.parse(child.stdout.trim()));
+  }
+  assert.equal(receipts[0].executionId, receipts[1].executionId); assert.notEqual(receipts[0].pid, receipts[1].pid);
+  const store = new ExecutionStore(path.join(dir, "executions.json")); await store.load();
+  assert.equal(store.list()[0]!.status, "completed"); assert.equal(store.list()[0]!.resolutions, undefined);
+  assert.equal(await readFile(path.join(dir, "counter"), "utf8"), "original-effect\n");
+});
+
 test("same-process working append after seed persistence does not enter SDK first-write EEXIST loop", async t => {
   const dir = await home(t), manager = SessionManager.create(dir, dir), session = wrap(manager);
   await session.seedHandover("already completed effect A"); const before = await readFile(manager.getSessionFile()!, "utf8");
