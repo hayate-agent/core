@@ -11,7 +11,6 @@ import type { ArchiveEntry } from "../src/session-archive.js";
 
 async function fixture(t: { after(fn: () => unknown): void }, policy?: { name: string; evaluate(): string }, stoppedFixture?: (task: Record<string, unknown>) => void) {
   const dir = await mkdtemp(path.join(os.tmpdir(), "parent-recovery-"));
-  t.after(() => rm(dir, { recursive: true, force: true }));
   const file = path.join(dir, "executions.json"); let store = new ExecutionStore(file); await store.load();
   const initial = await store.submit("parent", "original", "Continue original authorized task without repeating completed effect", "direct");
   const claimed = await store.claim(initial.id);
@@ -34,7 +33,7 @@ async function fixture(t: { after(fn: () => unknown): void }, policy?: { name: s
     return "done";
   } };
   const dispatcher = new Dispatcher(store, strategy, 1, async () => {}, () => {}, undefined, policy);
-  t.after(() => dispatcher.stop());
+  t.after(async () => { await dispatcher.stop(); await rm(dir, { recursive: true, force: true }); });
   let entries: ArchiveEntry[] = [
     { id: "call", role: "assistant", text: JSON.stringify({ type: "toolCall", id: "tool1", name: "write", arguments: { path: "original-effect" } }) },
     { id: "result", role: "toolResult", text: JSON.stringify({ type: "toolResult", toolCallId: "tool1", toolName: "write", text: "committed" }) },
