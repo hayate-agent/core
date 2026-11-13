@@ -1,5 +1,6 @@
 import { createServer, type Socket } from "node:net";
-import { mkdir, lstat, chmod, unlink } from "node:fs/promises";
+import { mkdir, lstat, chmod, unlink, open } from "node:fs/promises";
+import { constants } from "node:fs";
 import path from "node:path";
 import { randomUUID, createHash } from "node:crypto";
 import { writeFileDurable } from "./durable.js";
@@ -13,16 +14,19 @@ import type { PluginModule } from "./plugins.js";
 export function executionControlPlugin(get: () => Dispatcher | undefined, directory: string): PluginModule {
   return { apiVersion: 1, async activate(api) {
     if (!process.getuid) return;
-    const disabled = () => console.warn("[execution-control] Optional native owner control disabled: private directory unavailable or unsafe. Agent work remains enabled; permissions were not changed.");
-    try { await mkdir(directory, { mode: 0o700 }); } catch (e) {
-      if ((e as NodeJS.ErrnoException).code !== "EEXIST") { disabled(); return; }
-    }
-    let dir: Awaited<ReturnType<typeof lstat>>;
-    try { dir = await lstat(directory); } catch { disabled(); return; }
-    // fsGroup/PVC remounts may add group bits. Fail CLOSED for this privileged
-    // optional endpoint, not for every unrelated channel/worker in the agent.
-    // Never chmod an operator/PVC directory or unlink an unknown endpoint.
-    if (!dir.isDirectory() || dir.uid !== process.getuid() || (dir.mode & 0o777) !== 0o700) { disabled(); return; }
+    try { await mkdir(directory, { mode: 0o700 }); } catch (e) { if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e; }
+    // Kubernetes fsGroup can re-add group permissions on every PVC remount.
+    // Tighten only our actual owned directory, through a no-follow descriptor;
+    // never bless a symlink, foreign owner or replaced path as a control root.
+    const handle = await open(directory, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    try {
+      const dir = await handle.stat();
+      if (!dir.isDirectory() || dir.uid !== process.getuid()) throw Error("Unsafe execution control directory");
+      if ((dir.mode & 0o7777) !== 0o700) await handle.chmod(0o700);
+      const sealed = await handle.stat(), named = await lstat(directory);
+      if ((sealed.mode & 0o7777) !== 0o700 || !named.isDirectory() ||
+          named.dev !== sealed.dev || named.ino !== sealed.ino || named.uid !== process.getuid()) throw Error("Unsafe execution control directory");
+    } finally { await handle.close(); }
     const endpoint = path.join(directory, `o-${randomUUID().slice(0, 12)}.sock`), clients = new Set<Socket>(), requests = new Set<Promise<void>>();
     let closed = false, ready = false, identity: Awaited<ReturnType<typeof lstat>> | undefined;
     const server = createServer(socket => {

@@ -1,3 +1,4 @@
+import { validateLanguagePolicy } from "./language.js";
 import { readFile } from "node:fs/promises";
 import { agentHome, configurationFile } from "./product-paths.js";
 import path from "node:path";
@@ -71,6 +72,7 @@ export interface HarnessConfig {
   memory: MemoryConfig;
   /** Enable configured MCP servers; credentials and server definitions stay outside product code. */
   mcp?: { enabled: boolean };
+  language?: import("./language.js").LanguagePolicy;
   persona: {
     /** Identity file (Hermes-compatible). */
     soul: string;
@@ -117,6 +119,7 @@ export interface HarnessConfig {
 }
 
 export function defaultConfig(overrides: Partial<HarnessConfig> = {}): HarnessConfig {
+  if (overrides.language !== undefined) validateLanguagePolicy(overrides.language);
   if (overrides.tools !== undefined && (!Array.isArray(overrides.tools) ||
       overrides.tools.some((name) => typeof name !== "string" || !/^[a-zA-Z0-9_][a-zA-Z0-9_.:-]*$/.test(name)))) {
     throw new Error("tools must be an array of literal tool names (or [] for no tools)");
@@ -217,6 +220,7 @@ export function defaultConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
       }),
     },
     skills: { paths: [path.join(home, "skills")], context: "auto", ...overrides.skills },
+    language: { default: "en", ...overrides.language },
     cron: { jobsFile: path.join(home, "cron", "jobs.yaml"), ...overrides.cron },
     loop,
     lifecycle,

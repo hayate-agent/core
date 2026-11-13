@@ -16,6 +16,8 @@ export interface InboundAttachment { sessionKey: string; sha256: string; size: n
 export interface PromptImage { type: "image"; data: string; mimeType: string }
 
 export interface Inbound {
+  /** Host/job output-language preference, not executable instructions or authority. */
+  language?: string;
   /** Content-addressed blobs under the configured attachment root; never inline binary state. */
   attachments?: InboundAttachment[];
   /** Channel-level id (e.g. Matrix event id) to drop duplicates on redelivery. */
@@ -59,7 +61,7 @@ export interface Inbound {
   /** Trusted numeric authorization boundary inherited by generated work. */
   continuationExpiresAt?: number;
   /** Core-captured original chat input; inherited by generated follow-ups, never reply text. */
-  completionAnchor?: { id: string; task: string; receivedAt: number; replyTo?: Address; outputTags?: string[]; hashtagSelection?: import("./hashtags.js").HashtagSelection };
+  completionAnchor?: { id: string; task: string; receivedAt: number; language?: string; languageContext?: "conversation" | "background"; replyTo?: Address; outputTags?: string[]; hashtagSelection?: import("./hashtags.js").HashtagSelection };
   /** Host-captured assignment labels, persisted with the inbox; never model authority. */
   outputTags?: string[];
   /** Durable semantic metadata retry; the existing inbox tick resumes it after restart. */
@@ -132,6 +134,8 @@ export type TurnEvent =
     };
 
 export interface PromptOptions extends TurnOptions {
+  /** Host-owned per-turn presentation snapshot; not part of transport TurnOptions. */
+  languagePolicy?: import("./language.js").LanguagePolicy;
   images?: PromptImage[];
   onEvent?: (event: TurnEvent) => void;
   /** Host-only authorization guard, invoked after asynchronous runtime setup. */

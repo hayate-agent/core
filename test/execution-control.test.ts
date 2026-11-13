@@ -64,13 +64,15 @@ test("expected decision revision is checked inside the serialized store commit",
   assert.equal(f.store.list()[0]!.decisions!.length, 1);
 });
 
-test("unsafe PVC/fsGroup owner directory disables only optional privileged control, never repairs permissions or aborts agent activation", async t => {
+test("owned PVC/fsGroup directory is resealed by integrated Core410 without disabling agent work or exposing model tools", async t => {
   const f = await fixture(t), directory = path.join(f.dir, "group-shared"); await mkdir(directory); await chmod(directory, 0o770);
-  let tools = 0, stops = 0;
-  await executionControlPlugin(() => f.dispatcher, directory).activate({ onStop: () => { stops++; }, registerTool: () => { tools++; } } as unknown as PluginAPI);
-  assert.equal((await lstat(directory)).mode & 0o777, 0o770); assert.equal(tools, 0); assert.equal(stops, 0);
-  await assert.rejects(readFile(path.join(directory, "owner.json")), /ENOENT/);
+  let tools = 0, stop!: () => Promise<void>;
+  await executionControlPlugin(() => f.dispatcher, directory).activate({ onStop: fn => { stop = fn as () => Promise<void>; }, registerTool: () => { tools++; } } as unknown as PluginAPI);
+  assert.equal((await lstat(directory)).mode & 0o777, 0o700); assert.equal(tools, 0);
+  const pointer = JSON.parse(await readFile(path.join(directory, "owner.json"), "utf8"));
+  assert.equal((await lstat(path.join(directory, pointer.socket))).mode & 0o777, 0o600);
   assert.equal(f.store.list()[0]!.status, "ready", "unrelated execution remains schedulable");
+  await stop();
 });
 
 test("native control socket is owner-private, tool-free and drains/unlinks on shutdown", async t => {

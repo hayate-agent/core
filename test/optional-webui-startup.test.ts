@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { mkdtemp, mkdir, writeFile, rm, readFile, chmod } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, rm, readFile, chmod, lstat } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 import { spawn } from "node:child_process";
@@ -58,13 +58,13 @@ for (const mode of ["explicit", "unchanged", "unsafe-owner-dir"] as const) test(
   const ended = new Promise<number | null>(resolve => child.once("exit", resolve));
   try {
     const deadline = Date.now() + 15000;
-    while (!/Gestartet und bereit/.test(output)) {
+    while (!/Started and ready/.test(output)) {
       if (child.exitCode !== null || Date.now() > deadline) assert.fail(`CLI failed to become ready: ${output.slice(-2500)}`);
       await new Promise(resolve => setTimeout(resolve, 30));
     }
     assert.match(output, /Optional Web gateway is not installed/); assert.match(output, /Optional Web plugin is not installed/);
     assert.doesNotMatch(output, /ERR_MODULE_NOT_FOUND/);
-    if (mode === "unsafe-owner-dir") assert.match(output, /Optional native owner control disabled/);
+    if (mode === "unsafe-owner-dir") assert.equal((await lstat(path.join(home, "operator-control"))).mode & 0o777, 0o700, "integrated fsGroup restart fix keeps the endpoint private");
     assert.equal(await readFile(path.join(home, "hayate-agent.yaml"), "utf8"), originalProfile, "profile compatibility never rewrites operator configuration");
   } finally { child.kill("SIGTERM"); await ended; }
 });
