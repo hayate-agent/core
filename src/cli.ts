@@ -35,7 +35,7 @@ import { compactionStrategyPlugin } from "./builtin-plugins/compaction-strategy-
 import { FilesystemSessionProvider, type SessionProvider } from "./sessions.js";
 import { SessionProviderLifecycle } from "./session-provider-lifecycle.js";
 import { memoryConfig } from "./memory.js";
-import { ParallelAdmission, bindParallelAdmission } from "./parallel-admission.js";
+import { ParallelAdmission, bindParallelAdmission, auxiliaryAdmission } from "./parallel-admission.js";
 import { memoryConsolidationHost } from "./memory-consolidation-host.js";
 import { LocalMemory } from "./memory-local.js";
 import { MemoryService } from "./builtin-plugins/memory-service.js";
@@ -121,7 +121,7 @@ import { pruneToolResults } from "./builtin-plugins/tool-result-projector.js";
 import { contextStrategyHolder, disabledContextStrategies, diagnosedBoundaryAssessor } from "./context-strategies.js";
 import { contextStrategyPlugin } from "./builtin-plugins/context-strategy-plugin.js";
 import { guardResultOrchestration } from "./result-orchestration.js";
-import { assessCompletion } from "./completion-check.js";
+import { assessCompletion, assessmentPolicyStamp, completionTimeout } from "./completion-check.js";
 import { validatorPlugin } from "./builtin-plugins/completion-validator-plugin.js";
 import { semanticTopicLabeler } from "./topic-labels.js";
 import { completionPrompt } from "./builtin-plugins/completion-prompt.js";
@@ -345,7 +345,7 @@ async function main(argv: string[]): Promise<void> {
   const validatorSettings = () => ({ config: settings.effective().modelRoles,
     defaults: { model: effectiveModels().model, thinking: "low" },
     review: settings.effective().review?.model ? { model: settings.effective().review!.model, thinking: settings.effective().review?.thinking ?? "low" } : undefined });
-  const supervisorReviewer = () => ({ review: async (prompt: string, _model: string | undefined, _thinking: string, signal: AbortSignal) => {
+  const supervisorReviewer = () => ({ admit: <T>(work: () => Promise<T>, signal: AbortSignal) => auxiliaryAdmission(runtime, work, signal), review: async (prompt: string, _model: string | undefined, _thinking: string, signal: AbortSignal) => {
     const pair = await validatorRole(runtime, validatorSettings());
     if (typeof pair === "string") throw Error(pair);
     return runtimeReviewer(runtime, "supervisor").review(prompt, pair.model, pair.thinking ?? "low", signal);
@@ -538,10 +538,11 @@ async function main(argv: string[]): Promise<void> {
     turnCommitted: async (input) => { await improvement?.committed(input); },
     continuationDeadline: input => config.completionCheck?.authorizations?.[input.sessionKey]?.expiresAt,
     topicLabeler: semanticTopicLabeler(runtimeReviewer(runtime), () => effectiveModels().reviewModel),
+    assessmentPolicy: () => assessmentPolicyStamp(plugins.validators, validatorSettings(), completionTimeout(config.completionCheck?.timeoutMs)),
     completionCheck: async (input, reply, signal, diagnostic) => {
       const grant = config.completionCheck?.authorizations?.[input.sessionKey] ??
         (input.completionAnchor ? { task: input.completionAnchor.task } : undefined);
-      return assessCompletion(supervisorReviewer(), input, reply, grant, signal, effectiveModels().reviewModel, Date.now, completion.current, diagnostic, config.completionCheck?.timeoutMs ?? 30000, plugins.validators);
+      return assessCompletion(supervisorReviewer(), input, reply, grant, signal, effectiveModels().reviewModel, Date.now, completion.current, diagnostic, completionTimeout(config.completionCheck?.timeoutMs), plugins.validators);
     },
     afterTurn: async (input, reply, session, options, signal) => {
       await reloadRuntimeSettings();
@@ -582,7 +583,7 @@ async function main(argv: string[]): Promise<void> {
         expiresAt: request.expiresAt, experiments: request.experiments });
     return assessCompletion(supervisorReviewer(), request.input, request.reply,
       { task, purpose: "nightly-closure", expiresAt: request.expiresAt }, request.signal, effectiveModels().reviewModel,
-      Date.now, completion.current, undefined, config.completionCheck?.timeoutMs ?? 30000, plugins.validators);
+      Date.now, completion.current, undefined, completionTimeout(config.completionCheck?.timeoutMs), plugins.validators);
   }, () => executions.list("improvement:nightly"));
   await improvement.initializeStrategy(nightly, settings.snapshot().nightlyStrategy);
   let nextLedgerCompact = 0;
@@ -1106,7 +1107,7 @@ async function main(argv: string[]): Promise<void> {
   await harness.reconcileStoppedTasks();
   await subagents.reconcile(sessionEnabled);
   await dispatcher?.start();
-  await harness.recoverTasks();
+  await harness.recoverTasks(true);
   if (saved?.pending?.length || saved?.outbox?.length || harness.pendingInputs().length) {
     const pending = (saved?.pending ?? []).filter(input => sessionEnabled(input.sessionKey)).length;
     const replies = (saved?.outbox ?? []).filter(entry => sessionEnabled(entry.sessionKey)).length;
