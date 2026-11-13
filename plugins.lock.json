@@ -4,7 +4,7 @@
     "compaction-strategy-plugin.ts": "8dadb434b15443524827b302af9c98c22ce40e892e0c0c2bc60e558dae33c932",
     "completion-prompt.ts": "004a7ac8b8b7c737c4b23fc52320fca3f9c005b62681c64368ad748bcee0b96e",
     "completion-strategy-plugin.ts": "5f69464b4648d9b360020eac5b967e924549236eaff92f3c5e68f79826503b6f",
-    "completion-validator-plugin.ts": "1c64766ed46bf6d6532366a31f250db541da0c746e550f78831dda1816cc4032",
+    "completion-validator-plugin.ts": "9d3e74ae8ba859d40dae988f1650856588b30c9b17687c8ddb146744b876771d",
     "context-plugin.ts": "1da424038b5f5dd8e88999d86c4b26fecca5d21ca4170b83fdba9958eef787f0",
     "context-strategy-plugin.ts": "104c0e4a9b9619d361a8089b43724986366bc3665993c2146268e5f847698643",
     "continuation-plugin.ts": "e5485881f09b871912fa5574af6fe9c7b323abe01b03b8876cd235b436595a7d",
@@ -48,10 +48,13 @@
     "session-observer-plugin.ts": "53de3d2a70d69f6a37ed8abfedd44ec234486a31ddfd36ee63757bb69d2d8a38",
     "subagent-plugin.ts": "5b7ae55c28e50c48ce0a3671c400245ee0fd725ce7c5ad6866a8e63f0b65cd5e",
     "tool-result-projector.ts": "69658e2adef5d5327797762886199b87fd3bff94f20beab8a199280e0d517746",
+    "typesafe-api-plugin.ts": "214034f786b51f38fda685f48f8c860a3e4620c4decee1916717532a9b5120f4",
+    "typesafe-decision-plugin.ts": "d284c5607b543452b519459690872c4aef66fc829a3465a70a4a18e6bbe47312",
+    "typesafe-question-banks.ts": "40bfe4fa9d58c19eb80b92bd1fa15b00d58edd5b81ecfe9691f384fcc12324e6",
     "typesafe-validator-provider.ts": "08316fb1da8ac351a5fc6602204cac3aa3fd8c4c1ff5c3ced5acd26c9693dddd",
     "wasm-tools-plugin.ts": "438c6ac8899e283e4268f51ef451275bf16a37b584db84ee8302a26200cc70de"
   },
   "repository": "https://git.vanillacore.net/harness/plugins",
-  "revision": "dae8436ba74d73ff58e1e8812ee89fff1f7efad9",
+  "revision": "927acfb42ef6f7a4cfebb40cabb2741c99e5f2af",
   "schema": 1
 }

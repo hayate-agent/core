@@ -5,6 +5,11 @@ import path from "node:path";
 import { writeFileDurable } from "./durable.js";
 import { recoveryBlock, type RecoveryStrategy, type ExecutionRecoveryPolicy } from "./execution-recovery.js";
 
+/** Exact host state fence for evidence-backed parent continuation. */
+export function executionRecoveryHash(task: Readonly<Execution>): string {
+  return createHash("sha256").update(JSON.stringify(task)).digest("hex");
+}
+
 /** Expected contention with a control or another claimant, not a storage failure. */
 export class ExecutionClaimConflict extends Error {}
 /** New parent data invalidated a verdict, not the retained worker evidence. */
@@ -115,6 +120,8 @@ export interface Execution {
   recoveryGrant?: { action: "continue" | "retry"; restarts: number };
   /** Returned by claim only, never persisted as permission for another attempt. */
   claimedRecoveryAction?: "continue" | "retry";
+  controlRevision?: number;
+  parentContinuation?: { requestId: string; executionHash: string; evidence: string; fingerprint: string; resumedManualPause?: boolean; at: number };
   terminalAt?: number;
   question?: { id: string; text: string; answer?: string };
   /** Parent stop permanently revokes result delivery as well as execution. */
@@ -248,6 +255,16 @@ export class ExecutionStore {
               typeof receipt.actual.model !== "string" || typeof receipt.actual.thinking !== "string" ||
               (receipt.complexity !== undefined && (receipt.phase !== "observed" ||
                 !["simple", "medium", "high"].includes(receipt.complexity)))) throw Error("Invalid classifier receipt");
+        }
+        if (item.controlRevision !== undefined && (!Number.isSafeInteger(item.controlRevision) || item.controlRevision < 0)) throw Error("Invalid execution control revision");
+        if (item.parentContinuation !== undefined) {
+          const receipt = item.parentContinuation;
+          if (!receipt || typeof receipt.requestId !== "string" || !/^[a-zA-Z0-9_.:-]{1,160}$/.test(receipt.requestId) ||
+              typeof receipt.executionHash !== "string" || !/^[a-f0-9]{64}$/.test(receipt.executionHash) ||
+              typeof receipt.fingerprint !== "string" || !/^[a-f0-9]{64}$/.test(receipt.fingerprint) ||
+              receipt.resumedManualPause !== undefined && typeof receipt.resumedManualPause !== "boolean" ||
+              typeof receipt.evidence !== "string" || !receipt.evidence.trim() || receipt.evidence.length > 8000 ||
+              !Number.isSafeInteger(receipt.at) || receipt.at < 0) throw Error("Invalid parent continuation receipt");
         }
         if (item.claimedRecoveryAction !== undefined) throw Error("Invalid persisted claim-only recovery action");
         if (item.recoveryGrant !== undefined && (!item.recoveryGrant ||
@@ -946,6 +963,8 @@ export class ExecutionStore {
     return this.mutate(draft => {
       const task = this.find(draft, id);
       if (["completed", "cancelled"].includes(task.status)) return;
+      task.controlRevision = (task.controlRevision ?? 0) + 1;
+      if (!Number.isSafeInteger(task.controlRevision)) throw Error("Execution control revision exhausted");
       if (action === "resume") {
         if (task.dependency?.expiresAt !== undefined && task.dependency.expiresAt <= this.now()) throw new ExecutionDeadlineExpired();
         if (task.status !== "paused" || task.intent || (task.question && task.question.answer === undefined)) throw Error("Execution cannot resume without resolving its blocker");
@@ -1035,6 +1054,34 @@ export class ExecutionStore {
     });
   }
   /** Explicit acknowledgement retains ambiguous intent and audit history. No budget reset. */
+  continueReconciled(parent: string, id: string, requestId: string, executionHash: string, evidence: string, fingerprint: string,
+    eligible: (task: Readonly<Execution>) => void, resumePaused = false): Promise<void> {
+    return this.mutate(draft => {
+      const task = this.find(draft, id);
+      if (task.parent !== parent || /^(dispatch|subagent):/.test(parent)) throw Error("Parent execution ownership required");
+      if (!/^[a-zA-Z0-9_.:-]{1,160}$/.test(requestId) || !/^[a-f0-9]{64}$/.test(executionHash) || !/^[a-f0-9]{64}$/.test(fingerprint) || !evidence.trim() || evidence.length > 8000) throw Error("Bounded reconciliation identity and evidence required");
+      const prior = task.parentContinuation;
+      if (prior?.requestId === requestId) {
+        if (prior.executionHash !== executionHash || prior.evidence !== evidence || prior.fingerprint !== fingerprint || !!prior.resumedManualPause !== resumePaused) throw Error("Continuation identity conflict");
+        return;
+      }
+      if (executionRecoveryHash(task) !== executionHash) throw Error("Execution changed; inspect fresh evidence");
+      if (!["blocked", "paused"].includes(task.status) || task.token || task.parentStopped || task.ownershipHold ||
+          task.recoveryEnrollment === "held-legacy" || task.diagnosticCode === "manual-pause" && !resumePaused || task.recoveryGrant ||
+          task.question && task.question.answer === undefined || task.dependency?.expiresAt !== undefined && task.dependency.expiresAt <= this.now()) throw Error("Execution authority remains held");
+      if (resumePaused && task.diagnosticCode !== "manual-pause") throw Error("No exact manual pause to resume");
+      eligible(structuredClone(task));
+      // Preserve intent, worker session, checkpoint, counters and all policy gates.
+      // In particular do NOT use resolve()'s policy-bypassing recoveryGrant.
+      task.parentContinuation = { requestId, executionHash, evidence, fingerprint, ...(resumePaused ? { resumedManualPause: true } : {}), at: this.now() };
+      if (resumePaused) delete task.diagnosticCode;
+      (task.resolutions ??= []).push({ actor: parent, action: "continue", evidence, at: this.now() });
+      task.status = "ready";
+      delete task.recoveryReason;
+      this.event(draft, task, "status", "Parent reconciled retained evidence; continue same execution without replay grant or budget reset");
+    });
+  }
+
   resolve(parent: string, id: string, actor: string, action: "continue" | "retry", evidence: string): Promise<void> {
     if (!actor.trim() || !evidence.trim() || evidence.length > 8000) return Promise.reject(Error("Actor and bounded evidence required"));
     return this.mutate(draft => {
