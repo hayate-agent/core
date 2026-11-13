@@ -6,3 +6,7 @@ dist/
 src/builtin-plugins/
 optional-plugins/
 optional-plugins.*.stage/
+
+# Locally vendored plugin source trees (never committed)
+vendor/
+.vendor-local*
