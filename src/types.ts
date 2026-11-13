@@ -69,6 +69,8 @@ export interface Inbound {
     resolved?: import("./completion-context.js").ResolvedCompletionContext;
     /** Bounded task-local evidence. Saved plans and replies remain untrusted. */
     retained?: { original: string; savedNext?: string; priorReply?: string;
+      /** Host's actual loaded Core, not an available release or proof of task completion. */
+      runtime?: { phase: "process-started"; version: string; revision?: string; startedAt: number };
       technical: { verdict?: string; diagnostic?: import("./completion-check.js").CompletionDiagnostic;
         assessment?: string; attempts?: number; nextAt?: number;
         retryDiagnostic?: import("./completion-check.js").CompletionDiagnostic; termination?: string };
@@ -211,6 +213,8 @@ export interface AgentRuntime {
   /** Model refs ("provider/model") usable for per-turn overrides. */
   models?(): Promise<string[]>;
   sessions?(key: string, offset?: number): Promise<import("./sessions.js").SessionSummary[]>;
+  /** Read the exact resume binding without creating/activating a model session. */
+  retainedSessionHistory?(key: string): Promise<{ sessionId: string; entries: import("./session-archive.js").ArchiveEntry[]; incomplete?: boolean } | undefined>;
   /** Read retained history without opening, binding or activating a session. */
   sessionHistory?(key: string, id: string): Promise<import("./session-archive.js").ArchiveEntry[]>;
   login?(ui: LoginUI): Promise<void>;

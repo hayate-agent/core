@@ -468,6 +468,7 @@ async function main(argv: string[]): Promise<void> {
       journal: maintenanceJournal,
     },
     runtime,
+    currentRuntime: { ...BUILD_INFO, startedAt: Date.now() },
     sessionEnabled,
     progressEvidence: input => workingTreeEvidence(cwdFor(input.sessionKey)),
     executionStore: executions,

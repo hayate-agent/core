@@ -86,7 +86,7 @@ export function renderCompletionPrompt(strategy: CompletionPrompt, input: Inboun
   // original mandate, saved next/technical state, worker outcomes, then recent
   // messages (newest first). Shortened sections are named in `truncated`.
   const retained = input.completionContext?.retained;
-  const kept = retained && { original: "", technical: retained.technical, truncated: [] as string[],
+  const kept = retained && { original: "", technical: retained.technical, ...(retained.runtime ? { runtime: retained.runtime } : {}), truncated: [] as string[],
     ...(retained.savedNext !== undefined ? { savedNext: "" } : {}),
     recentMessages: [] as NonNullable<typeof retained.recentMessages>,
     ...(retained.workers ? { workers: { ...retained.workers, items: [] as typeof retained.workers.items } } : {}) };
