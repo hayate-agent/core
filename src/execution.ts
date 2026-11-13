@@ -10,6 +10,10 @@ export class ExecutionClaimConflict extends Error {}
 /** New parent data invalidated a verdict, not the retained worker evidence. */
 export class ExecutionDecisionConflict extends Error {}
 export interface ExecutionDecision {
+  /** Monotonic boundary revision, independent of bounded active-window length. */
+  revision?: number;
+  /** Explicit parent-authored replacement; originals remain in durable audit files. */
+  supersedes?: string[];
   requestId: string;
   text: string;
   recordedAt: number;
@@ -18,6 +22,16 @@ export interface ExecutionDecision {
   appliedAt?: number;
   /** Non-secret claim correlation, never an ownership credential. */
   appliedClaim?: string;
+}
+
+/** Legacy receipts used their append position as revision. */
+export function executionDecisionRevision(receipts: readonly ExecutionDecision[] = []): number {
+  return receipts.reduce((revision, receipt, index) => Math.max(revision, receipt.revision ?? index + 1), 0);
+}
+function nextDecisionRevision(receipts: readonly ExecutionDecision[]): number {
+  const next = executionDecisionRevision(receipts) + 1;
+  if (!Number.isSafeInteger(next)) throw Error("Execution decision revision exhausted");
+  return next;
 }
 
 /** Closed host-owned causes; exception/worker text is never persisted here. */
@@ -45,7 +59,7 @@ export interface Execution {
   /** Host-captured address of the submitting turn (room/thread); never from model tool arguments. */
   origin?: import("./types.js").Address;
   requestId: string;
-  /** Append-only bounded audit; retries never replace a decision. */
+  /** Bounded active steering window; explicit consolidation archives originals durably. */
   decisions?: ExecutionDecision[];
   parent: string;
   input: string;
@@ -178,6 +192,8 @@ export class ExecutionStore {
             new Set(item.decisions.map(d => d?.requestId)).size !== item.decisions.length ||
             Buffer.byteLength(JSON.stringify(item.decisions.map(d => ({ requestId: d?.requestId, text: d?.text }))), "utf8") > 16000 ||
             item.decisions.some(d => !d || !validDecisionInput(d.requestId, d.text) || !Number.isFinite(d.recordedAt) ||
+              (d.revision !== undefined && (!Number.isSafeInteger(d.revision) || d.revision < 1)) ||
+              (d.supersedes !== undefined && (!Array.isArray(d.supersedes) || d.supersedes.length > 32 || d.supersedes.some(id => typeof id !== "string" || !validDecisionInput(id, "audit")))) ||
               !["pending", "applied"].includes(d.state) || (d.state === "applied"
                 ? !Number.isFinite(d.appliedAt) || typeof d.appliedClaim !== "string" || !/^[a-f0-9]{64}$/.test(d.appliedClaim)
                 : d.appliedAt !== undefined || d.appliedClaim !== undefined)))) throw Error("Invalid execution decisions");
@@ -594,22 +610,22 @@ export class ExecutionStore {
    * Recording never changes a token, clears intent, or grants replay authority. */
   recordDecision(parent: string, id: string, requestId: string, text: string,
       wake?: (task: Readonly<Execution>) => boolean): Promise<ExecutionDecision> {
-    return this.mutate(draft => {
+    return this.mutate(async draft => {
       if (/^(dispatch|subagent):/.test(parent)) throw Error("Nested worker decisions are disabled");
       if (!validDecisionInput(requestId, text)) throw Error("Invalid decision requestId or text");
       const task = this.find(draft, id);
       if (task.parent !== parent || task.parentStopped || ["completed", "cancelled"].includes(task.status))
         throw Error("Execution cannot accept a decision in this conversation");
       const receipts = task.decisions ??= [];
-      const prior = receipts.find(d => d.requestId === requestId);
+      const prior = receipts.find(d => d.requestId === requestId) ?? await this.archivedDecision(task, requestId);
       if (prior) {
         if (prior.text !== text) throw Error("Conflicting decision requestId reuse");
         return prior;
       }
-      if (receipts.length >= 32) throw Error("Execution decision limit reached");
-      const receipt: ExecutionDecision = { requestId, text, recordedAt: this.now(), state: "pending" };
+      if (receipts.length >= 32) throw Error("Execution decision limit reached; use plugin_dispatch_decisions consolidate for explicitly superseded applied steering, originals remain archived");
+      const receipt: ExecutionDecision = { requestId, text, recordedAt: this.now(), state: "pending", revision: nextDecisionRevision(receipts) };
       if (Buffer.byteLength(JSON.stringify([...receipts, receipt].map(({ requestId, text }) => ({ requestId, text }))), "utf8") > 16000)
-        throw Error("Execution decision data limit reached");
+        throw Error("Execution decision data limit reached; use plugin_dispatch_decisions consolidate for explicitly superseded applied steering, originals remain archived");
       receipts.push(receipt);
       if (!task.token && !task.recoveryReason && !(task.question && task.question.answer === undefined) && wake?.(structuredClone(task))) {
         if (["blocked", "paused"].includes(task.status) && task.diagnosticCode !== "manual-pause") task.status = "ready";
@@ -619,6 +635,64 @@ export class ExecutionStore {
         }
       }
       this.event(draft, task, "status", `Decision recorded: ${requestId}; pending strategy consumption`);
+      return receipt;
+    });
+  }
+  private decisionFile(task: Pick<Execution, "id" | "parent">, requestId: string): string {
+    const scope = createHash("sha256").update(JSON.stringify([task.parent, task.id])).digest("hex");
+    return path.join(path.dirname(this.file), "execution-decision-audit", scope, createHash("sha256").update(requestId).digest("hex") + ".json");
+  }
+  private async archivedDecision(task: Pick<Execution, "id" | "parent">, requestId: string): Promise<ExecutionDecision | undefined> {
+    try {
+      const record = JSON.parse(await readFile(this.decisionFile(task, requestId), "utf8"));
+      if (record.executionId !== task.id || record.parent !== task.parent || record.decision?.requestId !== requestId ||
+          !validDecisionInput(requestId, record.decision.text) || record.decision.state !== "applied") throw Error("Invalid archived decision binding");
+      return record.decision;
+    } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return; throw error; }
+  }
+  /** Exact original text for authenticated parent inspection; never a replay or scope grant. */
+  async readDecision(parent: string, id: string, requestId: string): Promise<ExecutionDecision | undefined> {
+    if (/^(dispatch|subagent):/.test(parent) || !validDecisionInput(requestId, "audit")) throw Error("Invalid parent decision lookup");
+    const task = this.list(parent).find(task => task.id === id);
+    if (!task) throw Error("Execution not in this conversation");
+    return task.decisions?.find(d => d.requestId === requestId) ?? this.archivedDecision(task, requestId);
+  }
+  /** Deliberate parent amendment, not automatic lossy compaction or silent eviction.
+   * Originals are archived BEFORE the atomic active-window commit. Failed saves
+   * leave the old window executable, and retries verify the same immutable audit. */
+  consolidateDecisions(parent: string, id: string, requestId: string, text: string, replaces: readonly string[],
+      wake?: (task: Readonly<Execution>) => boolean): Promise<ExecutionDecision> {
+    return this.mutate(async draft => {
+      if (/^(dispatch|subagent):/.test(parent)) throw Error("Nested worker decisions are disabled");
+      if (!validDecisionInput(requestId, text) || !Array.isArray(replaces) || !replaces.length || replaces.length > 32 ||
+          new Set(replaces).size !== replaces.length || replaces.some(old => !validDecisionInput(old, "audit") || old === requestId)) throw Error("Invalid decision consolidation");
+      const task = this.find(draft, id);
+      if (task.parent !== parent || task.parentStopped || ["completed", "cancelled"].includes(task.status)) throw Error("Execution cannot accept a decision in this conversation");
+      const receipts = task.decisions ?? [];
+      const prior = receipts.find(d => d.requestId === requestId) ?? await this.archivedDecision(task, requestId);
+      if (prior) {
+        if (prior.text !== text || JSON.stringify(prior.supersedes) !== JSON.stringify(replaces)) throw Error("Conflicting decision requestId reuse");
+        return prior;
+      }
+      const old = replaces.map(key => receipts.find(d => d.requestId === key));
+      if (old.some(receipt => !receipt || receipt.state !== "applied")) throw Error("Only exact applied active decisions may be consolidated; pending steering must first be consumed");
+      const receipt: ExecutionDecision = { requestId, text, recordedAt: this.now(), state: "pending", revision: nextDecisionRevision(receipts), supersedes: [...replaces] };
+      const active = [...receipts.filter(d => !replaces.includes(d.requestId)), receipt];
+      if (active.length > 32 || Buffer.byteLength(JSON.stringify(active.map(({ requestId, text }) => ({ requestId, text }))), "utf8") > 16000) throw Error("Consolidated active decision window still exceeds its bounded budget");
+      for (const original of old as ExecutionDecision[]) {
+        const archived = await this.archivedDecision(task, original.requestId);
+        if (archived && JSON.stringify(archived) !== JSON.stringify(original)) throw Error("Archived decision conflict");
+        if (!archived) {
+          const file = this.decisionFile(task, original.requestId); await mkdir(path.dirname(file), { recursive: true });
+          await writeFileDurable(file, JSON.stringify({ executionId: task.id, parent: task.parent, decision: original }) + "\n");
+        }
+      }
+      task.decisions = active;
+      if (!task.token && !task.recoveryReason && !(task.question && task.question.answer === undefined) && wake?.(structuredClone(task))) {
+        if (["blocked", "paused"].includes(task.status) && task.diagnosticCode !== "manual-pause") task.status = "ready";
+        if (task.status === "ready") { delete task.assessmentRetryAt; if (task.workerRetry) task.workerRetry.nextAt = this.now(); }
+      }
+      this.event(draft, task, "status", `Decision consolidated: ${requestId}; ${old.length} originals archived, pending strategy consumption`);
       return receipt;
     });
   }
@@ -633,7 +707,7 @@ export class ExecutionStore {
     });
   }
   private checkDecisionRevision(task: Execution, revision?: number): void {
-    if (revision !== undefined && revision !== (task.decisions?.length ?? 0))
+    if (revision !== undefined && revision !== executionDecisionRevision(task.decisions))
       throw new ExecutionDecisionConflict("Parent decision arrived at execution boundary");
   }
   fenceDecisions(id: string, token: string, revision: number): Promise<void> {
