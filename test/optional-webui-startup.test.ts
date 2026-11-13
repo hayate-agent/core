@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { mkdtemp, mkdir, writeFile, rm, readFile } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, rm, readFile, chmod, lstat } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 import { spawn } from "node:child_process";
@@ -43,12 +43,14 @@ test("missing unrelated plugin/gateway is still an error, not silently treated a
   await assert.rejects(() => plugins.load(["missing.mjs"], { home, cwd: home, agent: "test" }, []), /Cannot find module/);
 });
 
-test("real CLI reaches readiness with a missing configured optional Web module in BOTH loading paths", { timeout: 25000 }, async t => {
+for (const mode of ["explicit", "unchanged", "unsafe-owner-dir"] as const) test(`real CLI reaches readiness with optional boundaries: ${mode}`,  { timeout: 25000 }, async t => {
   const home = await mkdtemp(path.join(os.tmpdir(), "optional-web-cli-")); t.after(() => rm(home, { recursive: true, force: true }));
   const module = path.join(home, "dist/optional-plugins/webui/index.mjs");
-  await writeFile(path.join(home, "hayate-agent.yaml"), JSON.stringify({ agent: "optional-web-cli", softwareUpdates: { enabled: false }, memory: { enabled: false }, dispatcher: { enabled: false }, mcp: { enabled: false },
-    completionCheck: { provider: "legacy-llm" }, home_address: { channel: "console", target: "local" }, plugins: [module] }));
+  if (mode === "unsafe-owner-dir") { await mkdir(path.join(home, "operator-control")); await chmod(path.join(home, "operator-control"), 0o770); }
+  await writeFile(path.join(home, "hayate-agent.yaml"), JSON.stringify({ agent: "optional-web-cli", softwareUpdates: { enabled: false }, memory: { enabled: false }, dispatcher: { enabled: mode === "unsafe-owner-dir", strategy: "direct", concurrentRequests: true }, mcp: { enabled: false },
+    ...(mode === "explicit" ? { completionCheck: { provider: "legacy-llm" } } : {}), home_address: { channel: "console", target: "local" }, plugins: [module] }));
   await writeFile(path.join(home, "settings.local.yaml"), JSON.stringify({ gatewayPlugins: { webui: { module } } }));
+  const originalProfile = await readFile(path.join(home, "hayate-agent.yaml"), "utf8");
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(API_SERVER_|MATRIX_|SLACK_|HAYATE_AGENT_|HERMES_)/.test(key)));
   Object.assign(env, { HOME: home, HAYATE_AGENT_HOME: home });
   const child = spawn(process.execPath, ["dist/cli.js", "run", "--home", home, "--console"], { env, stdio: ["pipe", "pipe", "pipe"] });
@@ -62,6 +64,8 @@ test("real CLI reaches readiness with a missing configured optional Web module i
     }
     assert.match(output, /Optional Web gateway is not installed/); assert.match(output, /Optional Web plugin is not installed/);
     assert.doesNotMatch(output, /ERR_MODULE_NOT_FOUND/);
+    if (mode === "unsafe-owner-dir") assert.equal((await lstat(path.join(home, "operator-control"))).mode & 0o777, 0o700, "integrated fsGroup restart fix keeps the endpoint private");
+    assert.equal(await readFile(path.join(home, "hayate-agent.yaml"), "utf8"), originalProfile, "profile compatibility never rewrites operator configuration");
   } finally { child.kill("SIGTERM"); await ended; }
 });
 

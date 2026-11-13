@@ -2,12 +2,21 @@
 
 ## Completion provider compatibility change
 
-Completion checks no longer select `legacy-llm` implicitly. Set
-`completionCheck.provider` to a registered provider name, or explicitly set it to
-`false` to disable completion checks. An absent provider setting is a configuration
-error; an unregistered name fails after plugin activation, before work admission.
-Registration alone does not select a provider. To retain the former LLM judge,
-explicitly select `"legacy-llm"`; no replacement cloud endpoint or model is inferred.
+An explicit `completionCheck` block must set `provider` to a registered provider
+name, or to `false` to deliberately disable completion checks. An explicit block
+without a provider is a configuration error; an unregistered selected name fails
+after plugin activation, before work admission. Registration alone does not select
+a provider, and selecting TypeSafe with missing/invalid registration/configuration
+never falls back to the LLM judge.
+
+CLI compatibility: existing profiles that omit the **entire optional block** retain
+their documented `legacy-llm` baseline. This is profile compatibility, not fallback
+after a selected provider fails, and it changes no credential, model, endpoint or
+permissions. It prevents an automatic software update from silently removing the
+validator from currently working agents before an explicit configuration migration.
+New explicit profiles should name their intended provider, for example
+`completionCheck: { provider: legacy-llm }`. The strict registry/embedding API has
+no implicit selection.
 
 Embedders calling `assessCompletion` must supply a registry with an explicit
 selection. Missing or unknown providers reject rather than becoming an
@@ -70,6 +79,7 @@ CLI Main validation has a 30-second default request budget. Configure 1–120 se
 
 ```yaml
 completionCheck:
+  provider: legacy-llm
   timeoutMs: 30000
 ```
 
