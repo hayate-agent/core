@@ -30,14 +30,15 @@ export function dispatchRecoveryPlugin(get: () => Dispatcher | undefined, read: 
         const current = dispatcher.store.list(parent).find(row => row.id === task.id);
         if (!current || executionRecoveryHash(current) !== executionHash || context.signal?.aborted) throw Error("Execution changed while reading evidence");
         const hash = createHash("sha256").update(executionHash).update(JSON.stringify([session, history?.sessionId, history?.incomplete]));
-        const pending = new Set<string>(); let complete = !!history?.entries.length && !history.incomplete;
+        const pending = new Set<string>(), seen = new Set<string>(); let complete = !!history?.entries.length && !history.incomplete;
         for (const entry of history?.entries ?? []) {
           hash.update(JSON.stringify(entry)); if (entry.truncated || ["compaction", "branch_summary"].includes(entry.role)) complete = false;
           let value: Record<string, unknown>;
           try { value = JSON.parse(entry.text); } catch { if (entry.role === "toolResult") complete = false; continue; }
+          if (!value || typeof value !== "object") { if (entry.role === "toolResult") complete = false; continue; }
           if (entry.role === "assistant") {
             const calls = value.type === "toolCall" ? [value] : value.type === "assistantBlocks" && Array.isArray(value.blocks) ? value.blocks.filter(block => block?.type === "toolCall") : [];
-            for (const call of calls) { if (typeof call.id !== "string" || pending.has(call.id)) complete = false; else pending.add(call.id); }
+            for (const call of calls) { if (typeof call.id !== "string" || seen.has(call.id)) complete = false; else { seen.add(call.id); pending.add(call.id); } }
           } else if (entry.role === "toolResult") {
             if (value.type !== "toolResult" || typeof value.toolCallId !== "string" || !pending.delete(value.toolCallId)) complete = false;
           }

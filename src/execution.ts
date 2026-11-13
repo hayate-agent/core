@@ -255,6 +255,14 @@ export class ExecutionStore {
               (receipt.complexity !== undefined && (receipt.phase !== "observed" ||
                 !["simple", "medium", "high"].includes(receipt.complexity)))) throw Error("Invalid classifier receipt");
         }
+        if (item.parentContinuation !== undefined) {
+          const receipt = item.parentContinuation;
+          if (!receipt || typeof receipt.requestId !== "string" || !/^[a-zA-Z0-9_.:-]{1,160}$/.test(receipt.requestId) ||
+              typeof receipt.executionHash !== "string" || !/^[a-f0-9]{64}$/.test(receipt.executionHash) ||
+              typeof receipt.fingerprint !== "string" || !/^[a-f0-9]{64}$/.test(receipt.fingerprint) ||
+              typeof receipt.evidence !== "string" || !receipt.evidence.trim() || receipt.evidence.length > 8000 ||
+              !Number.isSafeInteger(receipt.at) || receipt.at < 0) throw Error("Invalid parent continuation receipt");
+        }
         if (item.claimedRecoveryAction !== undefined) throw Error("Invalid persisted claim-only recovery action");
         if (item.recoveryGrant !== undefined && (!item.recoveryGrant ||
             !["continue", "retry"].includes(item.recoveryGrant.action) ||
