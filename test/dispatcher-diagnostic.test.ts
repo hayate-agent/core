@@ -82,9 +82,14 @@ test('bridge uses typed host cause and never forwards worker prose', async () =>
   }
 });
 
-test('retry-exhausted and empty-result diagnostics name a user action; live retry still promises automatic recovery', async t => {
+test('retry-exhausted and empty-result core events name a user action; live retry still promises automatic recovery', async t => {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'dispatch-hints-'));
   t.after(() => rm(dir, { recursive: true, force: true }));
+  // The intervention hint lives in the core status events written by execution.ts,
+  // not in plugin prose: a fresh checkout materialized from the production lock
+  // must pass this test without any local or vendored plugin source.
+  const statusEvents = (store: ExecutionStore, id: string) =>
+    store.events().filter(event => event.executionId === id && event.type === 'status').map(event => event.text);
   // Cap 1: the single failed attempt exhausts the automatic budget immediately.
   const store = new ExecutionStore(path.join(dir, 'exhausted.json'), { workerRetryMax: 1 }); await store.load();
   const task = await store.submit('parent', 'exhaust', 'fixture', 'direct');
@@ -94,11 +99,10 @@ test('retry-exhausted and empty-result diagnostics name a user action; live retr
   assert.equal(exhausted.diagnosticCode, 'retry-exhausted');
   assert.equal(exhausted.workerRetry, undefined);
   assert.equal(exhausted.status, 'paused');
-  const exhaustedText = await surfaces(store)(task.id);
-  assert.match(exhaustedText, /retry-exhausted/);
-  assert.match(exhaustedText, /resume or cancel the task explicitly/);
-  assert.doesNotMatch(exhaustedText, /No user resume is required/);
-  assert.doesNotMatch(exhaustedText, /automatic dispatcher recovery is scheduled/);
+  const exhaustedEvent = statusEvents(store, task.id).find(text => text.includes('retry-exhausted'));
+  assert.ok(exhaustedEvent, 'core status event marks retry exhaustion');
+  assert.match(exhaustedEvent, /Manuelle Intervention erforderlich: Aufgabe explizit fortsetzen oder abbrechen/);
+  assert.doesNotMatch(exhaustedEvent, /keine Nutzeraktion erforderlich/);
 
   const done = await store.submit('parent', 'empty', 'fixture', 'direct');
   const claim = await store.claim(done.id);
@@ -106,10 +110,10 @@ test('retry-exhausted and empty-result diagnostics name a user action; live retr
   const marked = store.list().find(row => row.id === done.id)!;
   assert.equal(marked.status, 'completed');
   assert.equal(marked.diagnosticCode, 'empty-result');
-  const emptyText = await surfaces(store)(done.id);
-  assert.match(emptyText, /empty-result/);
-  assert.match(emptyText, /re-submit or resolve explicitly/);
-  assert.doesNotMatch(emptyText, /No user resume is required/);
+  const emptyEvent = statusEvents(store, done.id).find(text => text.includes('empty-result'));
+  assert.ok(emptyEvent, 'core status event marks the empty result');
+  assert.match(emptyEvent, /neu einreichen oder explizit auflösen/);
+  assert.doesNotMatch(emptyEvent, /keine Nutzeraktion erforderlich/);
 
   // Contrast: a live automatic retry still promises recovery without user action.
   const liveStore = new ExecutionStore(path.join(dir, 'live.json')); await liveStore.load();
@@ -117,7 +121,7 @@ test('retry-exhausted and empty-result diagnostics name a user action; live retr
   const liveClaim = await liveStore.claim(live.id);
   await liveStore.fail(live.id, liveClaim.token!, 'worker-failed', { strategy: { version: 1, replaySafe: false, reconcile: true } });
   assert.ok(liveStore.list()[0].workerRetry, 'default budget keeps an automatic retry slot');
-  const liveText = await surfaces(liveStore)(live.id);
-  assert.match(liveText, /automatic dispatcher recovery is scheduled/);
-  assert.match(liveText, /No user resume is required/);
+  const liveEvent = statusEvents(liveStore, live.id).find(text => text.includes('automatischer Wiederanlauf'));
+  assert.ok(liveEvent, 'core status event promises automatic recovery');
+  assert.match(liveEvent, /keine Nutzeraktion erforderlich/);
 });
