@@ -1,5 +1,5 @@
 export interface ImprovementDelivery {
-  stream: "upstream" | "instance";
+  stream: "upstream" | "variant" | "instance";
   status: "local" | "pushed" | "integrated" | "deployed" | "blocked";
   repository?: string;
   branch?: string;
