@@ -287,10 +287,10 @@ export const COMMANDS: Command[] = [
   {
     name: "new",
     aliases: ["reset"],
-    help: "Fresh context; abort parent turn/drop parent queue, not durable tasks or recurring sources",
+    help: "Stop this conversation's old work, children and local recurring sources; start fresh",
     run: async (_a, input, ctx) => {
       await ctx.harness.resetSession(input.sessionKey);
-      return `🆕 Fresh context in the same conversation; parent turn aborted if running and parent queue discarded.\n${ctx.harness.remainingWorkNotice(input.sessionKey)}`;
+      return message(resolveLanguage(ctx.language?.get(), { kind: "system" }), "conversation.reset");
     },
   },
   {

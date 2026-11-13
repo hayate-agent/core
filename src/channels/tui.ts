@@ -13,6 +13,7 @@ export interface TuiOptions {
   canSwitchSession?: () => boolean;
   /** Snapshot the old owner before creating a different conversation. */
   remainingWorkNotice?: () => string;
+  resetConversation?: () => Promise<void>;
   panels?: () => Iterable<PluginPanel>;
   status: () => string;
   workState?: () => { running: boolean; queued: number };
@@ -152,7 +153,8 @@ export class HarnessTuiChannel implements Channel {
       this.note(`Sessions in ${store.workspace}:\n${rows.map((s) => `${s.id === store.current?.id ? "*" : " "} ${s.title} · ${s.updatedAt ?? s.createdAt} · ${s.id}`).join("\n")}\n/resume <id> to continue explicitly; /new [title] for a fresh conversation.`);
       return;
     }
-    if (this.opts.canSwitchSession && !this.opts.canSwitchSession()) throw new Error("Cannot switch sessions while work is running or queued. Finish it or use /stop first.");
+    if ((command === "/new" || command === "/reset") && this.opts.resetConversation) await this.opts.resetConversation();
+    else if (this.opts.canSwitchSession && !this.opts.canSwitchSession()) throw new Error("Cannot switch sessions while work is running or queued. Finish it or use /stop first.");
     if (command === "/title") {
       await store.rename(argument);
       this.note(`Session title: ${store.current!.title}`);
@@ -169,8 +171,8 @@ export class HarnessTuiChannel implements Channel {
       this.resetActivity();
       this.note(`Resumed session: ${row.title} · ${row.id.slice(0, 8)}\nWorkspace: ${store.workspace}${history.length > 80 ? "\nShowing the last 80 conversation messages; older context may remain in the model history." : ""}`);
     } else {
-      const remaining = this.opts.remainingWorkNotice?.() ?? "Remaining-work inventory unavailable; old conversation work may continue.";
-      const previous = store.current?.id;
+      const remaining = this.opts.resetConversation ? "Previous conversation work was stopped before starting fresh." : this.opts.remainingWorkNotice?.() ?? "Remaining-work inventory unavailable; old conversation work may continue.";
+      const previous = this.opts.resetConversation ? undefined : store.current?.id;
       const row = await store.create(argument || "Untitled");
       this.lines = [];
       this.resetActivity();
