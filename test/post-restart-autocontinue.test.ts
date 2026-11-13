@@ -68,6 +68,42 @@ test("legacy unresolved diagnostic is re-enrolled only for independent assessmen
   assert.equal(work, 1); assert.equal(h.state(key).task!.id, "original");
 });
 
+test("recorded non-decision block is reassessed from exact newly readable history without treating prose as a resume grant", async t => {
+  let reads = 0, checks = 0, work = 0;
+  const runtime = Object.assign(new FakeRuntime(() => { work++; return "Remaining authorized check verified"; }), {
+    retainedSessionHistory: async () => { reads++; return { sessionId: "retained", entries: [{ id: "operator", role: "user", text: "authorized original" }, { id: "facts", role: "assistant", text: "retained scoped evidence" }] }; },
+  });
+  const h = new Harness({ runtime, now: () => 2000, currentRuntime: { version: "0.1.270", revision: "a".repeat(40), startedAt: 2000 }, completionCheck: async input => {
+    checks++; return work ? { state: "completed" } : { state: "continue", next: "read-only verification under original scope" };
+  } });
+  t.after(() => h.stop(0)); restore(h, [task("original", { state: "blocked", explicitBlocked: false, depth: 3, expiresAt: 500000,
+    next: "old proposal is NOT a grant", recoveryAssessment: "decided", supervisorDecision: { verdict: "unresolved", diagnostic: "inconclusive" } })]);
+  await h.recoverTasks(); assert.ok(reads > 0); assert.equal(checks, 1); assert.equal(work, 0); assert.equal(h.pendingInputs().length, 1);
+  h.releaseRestored(); await idle(h); assert.equal(work, 1); assert.equal(h.state(key).task!.id, "original"); assert.equal(h.state(key).task!.expiresAt, 500000);
+});
+
+test("non-decision repair cannot revive semantic blockers, explicit stops, old history or absent evidence", async t => {
+  let checks = 0;
+  const h = new Harness({ runtime: new FakeRuntime(), now: () => 2000, completionCheck: async () => { checks++; throw Error("must not infer a grant"); } });
+  t.after(() => h.stop(0));
+  const base = { state: "blocked" as const, explicitBlocked: false, next: "saved proposal", recoveryAssessment: "decided" as const,
+    supervisorDecision: { verdict: "unresolved" as const, diagnostic: "inconclusive" as const } };
+  restore(h, [task("no-history", base), task("semantic", { ...base, supervisorDecision: { verdict: "blocked" } }),
+    task("explicit", { ...base, explicitBlocked: true }), task("historical", { ...base, recoveryEnrollment: "held-legacy" }),
+    task("expired", { ...base, expiresAt: 1000 }), task("stopped", { ...base, state: "stopped" })]);
+  await h.recoverTasks(); assert.equal(checks, 0); assert.equal(h.pendingInputs().length, 0);
+  assert.equal(h.state(key).tasks!.find(task => task.id === "no-history")!.state, "blocked");
+});
+
+test("a mandate expiring during read-only non-decision reconciliation stays held", async t => {
+  let now = 2000, checks = 0;
+  const runtime = Object.assign(new FakeRuntime(), { retainedSessionHistory: async () => { now = 3000; return { sessionId: "retained", entries: [{ id: "facts", role: "assistant", text: "retained" }] }; } });
+  const h = new Harness({ runtime, now: () => now, completionCheck: async () => { checks++; return { state: "continue", next: "must not admit" }; } });
+  t.after(() => h.stop(0)); restore(h, [task("expired-during-read", { state: "blocked", explicitBlocked: false, expiresAt: 2500,
+    next: "saved", recoveryAssessment: "decided", supervisorDecision: { verdict: "unresolved", diagnostic: "inconclusive" } })]);
+  await h.recoverTasks(); assert.equal(checks, 0); assert.equal(h.state(key).task!.state, "blocked"); assert.equal(h.pendingInputs().length, 0);
+});
+
 test("startup wait assessment deferred by another restored task remains scheduled at the next boundary", async t => {
   const order: string[] = [];
   const h = new Harness({ runtime: new FakeRuntime(() => { order.push(h.state(key).current!.taskId!); return "verified"; }),
