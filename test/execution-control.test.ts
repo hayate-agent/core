@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { mkdtemp, rm, lstat, readFile } from "node:fs/promises";
+import { mkdtemp, rm, lstat, readFile, mkdir, chmod } from "node:fs/promises";
 import { createConnection } from "node:net";
 import path from "node:path";
 import os from "node:os";
@@ -62,6 +62,17 @@ test("expected decision revision is checked inside the serialized store commit",
   await f.store.recordDecision(f.task.parent, f.task.id, "intervening", "Original restriction remains");
   await assert.rejects(f.store.recordDecision(f.task.parent, f.task.id, "stale", "stale update", undefined, 0), ExecutionDecisionConflict);
   assert.equal(f.store.list()[0]!.decisions!.length, 1);
+});
+
+test("owned PVC/fsGroup directory is resealed by integrated Core410 without disabling agent work or exposing model tools", async t => {
+  const f = await fixture(t), directory = path.join(f.dir, "group-shared"); await mkdir(directory); await chmod(directory, 0o770);
+  let tools = 0, stop!: () => Promise<void>;
+  await executionControlPlugin(() => f.dispatcher, directory).activate({ onStop: fn => { stop = fn as () => Promise<void>; }, registerTool: () => { tools++; } } as unknown as PluginAPI);
+  assert.equal((await lstat(directory)).mode & 0o777, 0o700); assert.equal(tools, 0);
+  const pointer = JSON.parse(await readFile(path.join(directory, "owner.json"), "utf8"));
+  assert.equal((await lstat(path.join(directory, pointer.socket))).mode & 0o777, 0o600);
+  assert.equal(f.store.list()[0]!.status, "ready", "unrelated execution remains schedulable");
+  await stop();
 });
 
 test("native control socket is owner-private, tool-free and drains/unlinks on shutdown", async t => {

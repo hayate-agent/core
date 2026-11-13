@@ -536,6 +536,20 @@ test("independent completion reconciles a false worker block through a tool-free
   assert.equal(env.calls.review.length, 2);
 });
 
+test("tool-free restored verification report receives newly completed sibling acceptance evidence", async t => {
+  const env = await setup(t, { plan: steps(["produce fresh acceptance receipt", "simple"], ["report final acceptance", "simple"]),
+    worker: text => text.includes("STEP 1/2:") ? "Fresh changed-artifact acceptance: positive/negative/failure PASS, exact source merged\nSTEP-STATUS: complete"
+      : text.startsWith("CONTINUE STEP") ? "Existing fresh sibling acceptance verifies all required outcomes, no effects repeated\nSTEP-STATUS: complete"
+      : "Historical positive failure report; fresh sibling evidence not reflected in this label\nSTEP-STATUS: blocked: stale report",
+    verdict: '{"state":"completed"}' });
+  const task = await env.run("Deliver and report actual passing acceptance; do not replay tests to format a result");
+  assert.equal(task.status, "completed"); assert.equal(env.calls.worker.length, 3);
+  const clarification = env.calls.worker[2]!.prompt;
+  assert.match(clarification, /CURRENT COMPLETED SIBLING OUTCOMES/);
+  assert.match(clarification, /Fresh changed-artifact acceptance: positive\/negative\/failure PASS/);
+  assert.match(clarification, /Using EXISTING facts ONLY, no tools/);
+});
+
 test("reviewer completion cannot silently turn a reported failed positive case into success", async t => {
   let env!: Awaited<ReturnType<typeof setup>>;
   env = await setup(t, { plan: steps(["deliver accepted positive integration and required source merge", "simple"]),
