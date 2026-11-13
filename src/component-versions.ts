@@ -1,3 +1,4 @@
+import { message } from "./language.js";
 import { readFileSync } from "node:fs";
 import { BUILD_INFO } from "./build-info.js";
 
@@ -37,13 +38,13 @@ export function readSoftwareVersions(core: { version: string; revision?: string 
   return result;
 }
 
-export function formatSoftwareVersions(info: SoftwareVersions): string {
+export function formatSoftwareVersions(info: SoftwareVersions, language = "en"): string {
   const component = (value?: ComponentVersion) => value
-    ? `${value.version ?? "Version nicht ausgewiesen"}${value.revision ? ` · ${value.revision.slice(0, 12)}` : ""}`
-    : "Versionsdaten nicht vorhanden";
+    ? `${value.version ?? message(language, "software.unknownVersion")}${value.revision ? ` · ${value.revision.slice(0, 12)}` : ""}`
+    : message(language, "software.noData");
   return [
     `Core: ${component(info)}`,
-    `Plugins${info.components?.plugins?.coreBundle ? " (Core-Bundle)" : ""}: ${component(info.components?.plugins)}`,
-    ...(info.components?.webPackage ? [`Web-Dashboard (Paket installiert; Laufzeit nicht bestätigt): ${component(info.components.webPackage)}`] : []),
+    `Plugins${info.components?.plugins?.coreBundle ? ` (${message(language, "software.bundle")})` : ""}: ${component(info.components?.plugins)}`,
+    ...(info.components?.webPackage ? [`${message(language, "software.dashboard")}: ${component(info.components.webPackage)}`] : []),
   ].join("\n");
 }

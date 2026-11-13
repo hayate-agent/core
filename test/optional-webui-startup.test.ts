@@ -56,7 +56,7 @@ test("real CLI reaches readiness with a missing configured optional Web module i
   const ended = new Promise<number | null>(resolve => child.once("exit", resolve));
   try {
     const deadline = Date.now() + 15000;
-    while (!/Gestartet und bereit/.test(output)) {
+    while (!/Started and ready/.test(output)) {
       if (child.exitCode !== null || Date.now() > deadline) assert.fail(`CLI failed to become ready: ${output.slice(-2500)}`);
       await new Promise(resolve => setTimeout(resolve, 30));
     }

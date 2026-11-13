@@ -1,3 +1,4 @@
+import { message } from "./language.js";
 import type { Address, Inbound } from "./types.js";
 import { formatSoftwareVersions, type SoftwareVersions } from "./component-versions.js";
 
@@ -28,6 +29,7 @@ export class StartupNotice {
     agent: string;
     build: SoftwareVersions;
     restarted: boolean;
+    language?: string;
     post: (input: Inbound, text: string) => void;
     log: (message: string) => void;
   }) {}
@@ -37,7 +39,8 @@ export class StartupNotice {
     if (this.announced) return;
     this.announced = true;
     const { agent, build, restarted, post, log } = this.options;
-    const text = `✅ ${agent}: ${restarted ? "Neustart abgeschlossen – wieder bereit." : "Gestartet und bereit."}\nSoftwarestand:\n${formatSoftwareVersions(build)}`;
+    const language = this.options.language ?? "en";
+    const text = `${message(language, restarted ? "lifecycle.restarted" : "lifecycle.ready", { agent })}\n${message(language, "software.heading")}\n${formatSoftwareVersions(build, language)}`;
     log(`[lifecycle] ${text}`);
     if (!target) return; // Never invent a recipient when no user channel is configured.
     post({ source: "host", sessionKey: "lifecycle:startup", text: "Runtime readiness notice", replyTo: target }, text);

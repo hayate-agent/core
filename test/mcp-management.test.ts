@@ -173,3 +173,41 @@ test("native TUI MCP menu adds and manages stdio, with shutdown of probe childre
   assert.deepEqual(mcpArguments(`--flag 'one two' "" '$HOME' '$(touch marker)'`), ["--flag", "one two", "", "$HOME", "$(touch marker)"]);
   assert.throws(() => mcpArguments('"unclosed'), /Unclosed/);
 });
+
+test("MCP command uses configured system language for help and safe errors", async t => {
+  const f = await fixture(t); const channel = new MemoryChannel();
+  const h = new Harness({ runtime: new FakeRuntime(), tickMs: 60000 });
+  h.onStateChange = async () => {}; h.addChannel(channel); t.after(() => h.stop(0));
+  installCommands({ harness: h, mcp: f.manager, language: { get: () => ({ system: "de", mcp: { missing: "es" } }), update: async () => {} },
+    approvals: { mode: "off", tools: [] }, skills: () => [], reloadSkills: async () => {},
+    personality: { available: async () => [], set: async () => {} }, admins: ["owner"], agent: "test", restart: async () => {}, cwdFor: () => f.home });
+  await h.submit(msg("/mcp help", "owner")); await h.drained();
+  assert.match(channel.texts().at(-1)!, /MCP-Verwaltung/);
+  assert.match(channel.texts().at(-1)!, /\/mcp auth <server-name\|login-id> <browser-redirect-url>/);
+  await h.submit(msg("/mcp status missing", "owner")); await h.drained();
+  assert.match(channel.texts().at(-1)!, /MCP-Server nicht gefunden/);
+});
+
+test("MCP asynchronous login failure retains the initiating operator language", async t => {
+  const f = await fixture(t);
+  const server = path.join(f.home, "stdio-language.mjs");
+  await writeFile(server, `import{createInterface}from'node:readline';createInterface({input:process.stdin}).on('line',line=>{const m=JSON.parse(line);if(m.id===undefined)return;const result=m.method==='initialize'?{protocolVersion:'2025-03-26',capabilities:{tools:{}},serverInfo:{name:'fixture',version:'1'}}:{tools:[]};console.log(JSON.stringify({jsonrpc:'2.0',id:m.id,result}));});`);
+  await f.manager.execute(`add fixture ${JSON.stringify({ command: process.execPath, args: [server] })}`, f.op);
+  const op = { ...f.op, language: "de" };
+  assert.match(await f.manager.execute("login fixture", op), /Anmeldung gestartet\. Anmeldung [\w-]+\./);
+  op.language = "es";
+  await t.waitFor(() => assert.ok(f.notifications.some(text => /Anmeldung fehlgeschlagen/.test(text))), { timeout: 10000 });
+  assert.doesNotMatch(f.notifications.join("\n"), /inicio de sesión/);
+});
+
+test("German MCP status and immediate actions retain identifiers and redact configuration", async t => {
+  const f = await fixture(t);
+  const op = { ...f.op, language: "de" };
+  assert.match(await f.manager.execute("status", op), /MCP: deaktiviert/);
+  assert.match(await f.manager.execute('add local {"command":"node","enabled":false,"env":{"KEY":"${PRIVATE_KEY}"}}', op), /Konfiguration gespeichert; deaktiviert/);
+  const status = await f.manager.execute("status", op);
+  assert.match(status, /local: deaktiviert \(codemode\)/);
+  assert.doesNotMatch(status, /PRIVATE_KEY|node/);
+  assert.match(await f.manager.execute("remove local", op), /MCP local: entfernt/);
+  await assert.rejects(f.manager.execute("status local", op), /MCP-Server/);
+});

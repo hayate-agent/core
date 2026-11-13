@@ -3,6 +3,8 @@ import { test } from "node:test";
 import { AgentSession } from "@earendil-works/pi-coding-agent";
 import { PiSession, toTurnEvent, boundedMaintenance } from "../src/runtime/pi.js";
 
+import type { LanguagePolicy } from "../src/language.js";
+
 const A = { provider: "p", id: "a" };
 const B = { provider: "p", id: "b" };
 
@@ -47,6 +49,25 @@ function fakeAgentSession() {
   return s;
 }
 const models = { getModel: (_p: string, id: string) => (id === "a" ? A : id === "b" ? B : undefined) };
+
+test("MCP language policy is captured once per main/worker turn, cleared and refreshed at the next boundary", async () => {
+  for (const role of ["main", "worker"]) {
+    const agent = fakeAgentSession(), slot: { instructions?: string; mcpInstructions?: string } = {};
+    let policy: LanguagePolicy = { mcp: { tickets: "de" } };
+    const original = agent.prompt.bind(agent);
+    const captured: string[] = [];
+    agent.prompt = async (text, options) => {
+      captured.push(slot.mcpInstructions!);
+      policy = { mcp: { tickets: "ru" } };
+      assert.equal(slot.mcpInstructions, captured.at(-1), `${role} must not observe mid-turn policy changes`);
+      await original(text, options);
+    };
+    const session = new PiSession(agent as never, models as never, slot, undefined, undefined, undefined, undefined, undefined, undefined, undefined, () => policy);
+    await session.prompt("first"); assert.match(captured[0], /"tickets":"de"/); assert.equal(slot.mcpInstructions, undefined);
+    await session.prompt("second"); assert.match(captured[1], /"tickets":"ru"/);
+    await session.prompt("host snapshot", { languagePolicy: { mcp: { tickets: "es" } } }); assert.match(captured[2], /"tickets":"es"/);
+  }
+});
 
 function make() {
   const agent = fakeAgentSession();
