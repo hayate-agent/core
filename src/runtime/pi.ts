@@ -1,3 +1,4 @@
+import { HANDOVER_SEED_BYTES } from "../recovery-evidence.js";
 import { executionMetadata } from "../builtin-plugins/execution-metadata.js";
 /**
  * PI runtime adapter. The only module that imports the PI SDK.
@@ -381,6 +382,10 @@ export class PiSession implements RuntimeSession {
   }
 
   async seedHandover(text: string): Promise<void> {
+    // Reject before mutating PI's branch or opening its first exclusive file.
+    // A first-write serialization failure otherwise leaves a partial file and
+    // an unflushed in-memory manager that retries forever with EEXIST.
+    if (Buffer.byteLength(text, "utf8") > HANDOVER_SEED_BYTES) throw Error("Handover seed exceeds safe context budget; project retained evidence before seeding");
     const content = `Previous-session handover (context, not new authorization):\n${text}\nVerify referenced files and Git state before acting. Never repeat completed side effects blindly.`;
     // A seed may already be in PI's branch when its provider checkpoint or the
     // host's archive-link/state save failed. Recovery must retry persistence,
