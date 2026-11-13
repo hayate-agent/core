@@ -782,7 +782,11 @@ async function main(argv: string[]): Promise<void> {
           const text = dispatchRuntime!.eventText(event);
           // Questions and recovery blockers require attention. Routine lifecycle
           // belongs to one update row, never a succession of final answers.
-          if (attentionRequired(event, task.status)) {
+          if (to?.channel === "api") {
+            // The API run belongs to the parent turn, not its child's status or
+            // question. Preserve stop/final-answer ownership while exposing SSE.
+            await harness.deliver(to, text, { deliveryId: `dispatch-event:${event.id}`, presentation: "progress" });
+          } else if (attentionRequired(event, task.status)) {
             await harness.deliver(to, text, { deliveryId: `dispatch-event:${event.id}` });
           } else if (event.parent !== "improvement:nightly") {
             await harness.deliver(to, text, { deliveryId: `dispatch-event:${event.id}`, statusKey: `dispatch:${event.executionId}` });

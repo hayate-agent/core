@@ -1,5 +1,5 @@
 {
-  "contentDigest": "0c181c5f53ce3f9dfa7eeed85eb0e829a76641a8d8d992df0f4c626d61917ccb",
+  "contentDigest": "9fdf4774516198e6f058864ac69edf8d1089fdd785258021b25a347c9a52e259",
   "files": [
     {
       "mode": "100644",
@@ -449,7 +449,7 @@
     {
       "mode": "100644",
       "path": "plugins.lock.json",
-      "sha256": "d2e9a697688ad6395d5bb665f01711a1bb3cd26489690924ad59001476a28330"
+      "sha256": "e8b8057e232b46a4ed941662cae84562bb81a2d279350baf5a5e8e1b5c1ad014"
     },
     {
       "mode": "100644",
@@ -499,12 +499,12 @@
     {
       "mode": "100644",
       "path": "src/api/runs.ts",
-      "sha256": "e89a1c6b219aaf40557f7361b64153ae4b8cee8b1ca20bbee0c01b3b0efbce2a"
+      "sha256": "860f7dd1ad34238139489df8b905263a2bed6bb1efffbe74817f6d4a2271bf45"
     },
     {
       "mode": "100644",
       "path": "src/api/server.ts",
-      "sha256": "0d86b6afba07949ec015b9a3f65d125afa90435c545dd502743ab07f144660f1"
+      "sha256": "2462db461c78359e0350539ef0f4c27dd0c2eb179ef7c181f3c24e5a7ab3fc46"
     },
     {
       "mode": "100644",
@@ -619,7 +619,7 @@
     {
       "mode": "100644",
       "path": "src/cli.ts",
-      "sha256": "038ed7bf2020e9d29d39a7020ed0ac7388435291c74fa6e842b200dba76373df"
+      "sha256": "aa6937572cbc3056ade748d892e1361aa5b43d9e8b913524b8ca850fa1568979"
     },
     {
       "mode": "100644",
@@ -1289,7 +1289,7 @@
     {
       "mode": "100644",
       "path": "test/api.test.ts",
-      "sha256": "8a32967817670adf9804b51c25791122bf3db6504f196a5b535a385323051f0e"
+      "sha256": "34c33b24f991438eab8e9dcfc317e6b9d93b38e187d9a596bf63c9ed4dd8c349"
     },
     {
       "mode": "100644",
@@ -3448,6 +3448,11 @@
     },
     {
       "mode": "100644",
+      "path": "vendor/plugins/src/typesafe-validator-provider.ts",
+      "sha256": "1351371e83e6895553ec5828e32b8e1cbe83e15f1a714cdf1d8f33c7e4cf1aeb"
+    },
+    {
+      "mode": "100644",
       "path": "vendor/plugins/src/wasm-tools-plugin.ts",
       "sha256": "438c6ac8899e283e4268f51ef451275bf16a37b584db84ee8302a26200cc70de"
     },
@@ -3458,7 +3463,7 @@
     }
   ],
   "historyPolicy": "fresh-root; no source commits, tags, refs or deleted blobs",
-  "pluginSHA": "a1099748632944293f47e46abbddd6f47ab8e232",
+  "pluginSHA": "794136ff0b87ecb32121b17b101e8e361d3ee199",
   "schema": 1,
-  "sourceSHA": "2deb8d90892e0e026a62cefbb6e5f3c436d29c83"
+  "sourceSHA": "ef740f5e345c8b751d5d1951e49e5ff6cf0c678d"
 }

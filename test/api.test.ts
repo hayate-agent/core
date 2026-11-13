@@ -86,6 +86,32 @@ async function setup(answer?: (t: string, k: string) => string, extra: { maxSseB
   return { runtime, harness, runs, api, base, call, close };
 }
 
+test("dispatcher progress is SSE status, not API completion; actual final answer still owns the run", async () => {
+  const { api, runs, close } = await setup();
+  try {
+    const record = runs.create({ session_key: "api:progress" }); runs.started(record.run_id);
+    await api.send({ channel: "api", target: record.run_id }, "Worker started", { presentation: "progress" });
+    assert.equal(runs.get(record.run_id)!.status, "running"); assert.equal(runs.get(record.run_id)!.output, undefined);
+    const events = runs.subscribe(record.run_id, -1); assert.ok(events.replay.some(event => event.data.event === "status.updated")); events.unsubscribe();
+    await api.send({ channel: "api", target: record.run_id }, "Actual parent answer");
+    assert.equal(runs.get(record.run_id)!.status, "completed"); assert.equal(runs.get(record.run_id)!.output, "Actual parent answer");
+    await api.send({ channel: "api", target: record.run_id }, "Late worker notice", { presentation: "progress" });
+    assert.equal(runs.get(record.run_id)!.output, "Actual parent answer");
+  } finally { await close(); }
+});
+
+test("API stop remains available after a dispatcher status notification", async () => {
+  const { api, runtime, harness, call, runs, close } = await setup();
+  try {
+    await harness.sessionFor("api:progress-stop"); runtime.sessions.get("api:progress-stop")!.hold();
+    const response = await call("POST", "/v1/runs", { input: "Wait for authorized work", session_id: "progress-stop" });
+    const { run_id } = await response.json() as { run_id: string }; await new Promise(resolve => setImmediate(resolve));
+    await api.send({ channel: "api", target: run_id }, "Dispatcher execution started", { presentation: "progress" });
+    assert.equal(runs.get(run_id)!.status, "running"); assert.equal((await call("POST", `/v1/runs/${run_id}/stop`)).status, 200);
+    await harness.drained(); assert.equal(runs.get(run_id)!.status, "cancelled");
+  } finally { await close(); }
+});
+
 /** Read SSE frames until the stream ends; returns parsed data payloads (comments skipped). */
 async function readEvents(res: Response): Promise<Array<Record<string, unknown>>> {
   const text = await res.text();
