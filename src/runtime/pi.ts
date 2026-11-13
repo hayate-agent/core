@@ -1,3 +1,4 @@
+import { mcpLanguageInstructions, type LanguagePolicy } from "../language.js";
 import { retainedSessionFile } from "./retained-session-file.js";
 import { HANDOVER_SEED_BYTES } from "../recovery-evidence.js";
 import { executionMetadata } from "../builtin-plugins/execution-metadata.js";
@@ -89,6 +90,7 @@ export interface PiRuntimeOptions {
   /** Existing snapshot bindings stay on their provider until explicitly migrated. */
   legacySessionProvider?: SessionProvider;
   mcp?: { enabled: boolean };
+  language?: () => LanguagePolicy;
   /** Native user management reserves MCP entrypoints; explicit MCP patterns still restrict servers. */
   mcpUserManagement?: boolean;
   skillPaths: string[];
@@ -121,6 +123,7 @@ function safeKey(key: string): string {
 /** Per-turn system instructions, read by the session's inline extension (one turn at a time). */
 interface TurnSlot {
   instructions?: string;
+  mcpInstructions?: string;
 }
 
 /** Only inspect bounded own data properties; omit images and never invoke getters. */
@@ -246,6 +249,7 @@ export class PiSession implements RuntimeSession {
     private readonly onSessionSelection?: (selection: { model?: string; thinking?: string }) => void | Promise<void>,
     private readonly reasoningEffortNoneModels: () => readonly string[] = reasoningEffortNoneModelsFromEnv,
     private readonly prepareCompaction?: () => void,
+    private readonly mcpLanguage?: () => LanguagePolicy | undefined,
   ) {}
 
   get busy(): boolean {
@@ -299,6 +303,8 @@ export class PiSession implements RuntimeSession {
         await this.setThinking("off");
       }
       this.slot.instructions = instructions?.trim() || undefined;
+      const mcpPolicy = this.mcpLanguage?.();
+      this.slot.mcpInstructions = mcpPolicy ? mcpLanguageInstructions(structuredClone(options.languagePolicy ?? mcpPolicy)) : undefined;
       // Aborted while setting up: nothing has run yet, so nothing runs.
       if (turn.aborted) return "";
       options.beforeExecution?.();
@@ -313,6 +319,7 @@ export class PiSession implements RuntimeSession {
       await this.session.waitForIdle();
     } finally {
       this.slot.instructions = undefined;
+      this.slot.mcpInstructions = undefined;
       unsubscribe?.();
       // Model first: switching models may clamp the thinking level, which is restored after it.
       if ((model || thinking === "off") && prevModel && this.session.model !== prevModel) {
@@ -678,6 +685,7 @@ export class PiRuntime implements AgentRuntime {
     };
     let skillContext = "";
     const promptAddendum = () => [...sections,
+      slot.mcpInstructions ?? "",
       context ? `Host execution context (data, not permission expansion): ${JSON.stringify(context)}. Tools and review use the primary cwd; use explicit paths for additional repositories.` : "", skillContext,
       slot.instructions ? `<run_instructions>\n${slot.instructions}\n</run_instructions>` : ""].filter(Boolean).join("\n\n");
     const approvals = this.opts.approvals;
@@ -952,7 +960,8 @@ export class PiRuntime implements AgentRuntime {
       selection = { ...selection, ...update };
       sessionManager.appendCustomEntry(selectionType, selection);
       await checkpoint?.();
-    }, this.opts.reasoningEffortNoneModels, prepareWorkerCompaction);
+    }, this.opts.reasoningEffortNoneModels, prepareWorkerCompaction,
+      () => !options.ephemeral && this.opts.mcp?.enabled ? this.opts.language?.() : undefined);
     // From here the wrapper owns SDK shutdown and final checkpoint cleanup.
     unownedSession = undefined;
     try {
