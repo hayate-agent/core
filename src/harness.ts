@@ -925,7 +925,16 @@ export class Harness {
     // parent repair/admission while that same child is waiting for its due time.
     const scheduledRetry = e.workerRetry && !e.recoveryReason &&
       ["runtime-failure", "worker-failed"].includes(e.diagnosticCode ?? "");
-    return !scheduledRetry && (e.status === "blocked" ||
+    // A settled independent blocked/waiting verdict is not a running writer.
+    // Its read-only retry remains owned by Dispatcher, but must not suppress
+    // every independent parent step for hundreds of assessment retries. Child
+    // effects/holds are neither released nor retried by parent supervision.
+    const settledAssessment = e.recoveryEnrollment === "current" && !e.ownershipHold &&
+      !!e.assessmentHold && !!e.settledEffect &&
+      ["ready", "paused", "blocked"].includes(e.status) &&
+      !e.intent && !e.question && !e.parentStopped && !e.recoveryReason &&
+      e.diagnosticCode === "runtime-failure" && !!e.workerRetry;
+    return settledAssessment || !scheduledRetry && (e.status === "blocked" ||
       (e.status === "paused" && e.diagnosticCode === "runtime-failure" && !e.intent && !e.question && !e.parentStopped));
   }
 
