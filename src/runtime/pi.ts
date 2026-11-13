@@ -1,5 +1,6 @@
 import { mcpLanguageInstructions, type LanguagePolicy } from "../language.js";
 import { retainedSessionFile } from "./retained-session-file.js";
+import { checkpointNativeSession } from "./native-session-checkpoint.js";
 import { HANDOVER_SEED_BYTES } from "../recovery-evidence.js";
 import { executionMetadata } from "../builtin-plugins/execution-metadata.js";
 /**
@@ -405,7 +406,11 @@ export class PiSession implements RuntimeSession {
     // not append the same model-visible handover on every attempt/restart.
     const seeded = this.session.sessionManager.getBranch().some(entry =>
       entry.type === "custom_message" && entry.customType === "harness-handover" && entry.content === content);
+    if (this.busy || this.prompting) throw Error("Cannot checkpoint a recovery handover into an active session");
     if (!seeded) await this.session.sendCustomMessage({ customType: "harness-handover", content, display: false }, { triggerTurn: false });
+    // The caller may durably replace recoverySession immediately after return.
+    // Native PI otherwise does not publish custom-message-only session files.
+    await checkpointNativeSession(this.session.sessionManager);
     await this.checkpoint?.();
   }
 
@@ -589,7 +594,7 @@ export class PiRuntime implements AgentRuntime {
     return (await runtime.getAvailable()).map((m) => `${m.provider}/${m.id}`);
   }
 
-  async retainedSessionHistory(key: string): Promise<{ sessionId: string; entries: import("../session-archive.js").ArchiveEntry[]; incomplete?: boolean } | undefined> {
+  async retainedSessionHistory(key: string): Promise<{ sessionId: string; sessionFile?: string; entries: import("../session-archive.js").ArchiveEntry[]; incomplete?: boolean } | undefined> {
     const cwd = (await this.opts.executionContext?.(key))?.cwd ?? this.opts.cwd;
     let provider = this.opts.sessionProvider?.();
     if (!provider && await this.opts.legacySessionProvider?.active(key)) provider = this.opts.legacySessionProvider;
@@ -615,7 +620,7 @@ export class PiRuntime implements AgentRuntime {
       const entries = parseSessionEntries(raw);
       if (!entries.length || entries[0].type !== "session" || entries[0].id !== info.id) throw Error("Retained session identity changed");
       const manager = SessionManager.inMemory(cwd, undefined, entries);
-      return { sessionId: info.id, entries: archiveBranch(manager), incomplete: entries.length !== raw.split("\n").filter(line => line.trim()).length };
+      return { sessionId: info.id, sessionFile: info.file, entries: archiveBranch(manager), incomplete: entries.length !== raw.split("\n").filter(line => line.trim()).length };
     } finally { lease?.release(); }
   }
 

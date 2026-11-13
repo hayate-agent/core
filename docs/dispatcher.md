@@ -396,6 +396,28 @@ of steering or interrupting it. Their authority is checked again before executio
 after asynchronous setup, at runtime execution and at tool boundaries. They do
 not overwrite the parent's task checkpoint or conversation destination.
 
+On restart, old worker evidence is read through the runtime's read-only
+`retainedSessionHistory` interface when no source session is already open. Reading
+history must not reopen the old model, MCP processes, extensions or tools. A
+missing persisted source is an explicit hold, never a newly created empty source;
+incomplete history remains unknown evidence. Only the replacement working
+session is opened after the retained evidence has been read.
+
+Recovery handover durability is a prerequisite for publishing a replacement
+worker session: native PI custom-message-only histories must be crash-durably
+published even before their first user/assistant prompt. The host writes the
+exact public SDK snapshot with exclusive publication, fsyncs it, and synchronizes
+PI through its public `setSessionFile` API. It never fakes conversation messages,
+mutates SDK-private flags, or overwrites a conflicting/partial file. External
+providers retain their awaited checkpoint barrier. A second restart during
+recovery must find that exact history, not silently start an empty session.
+
+Successive seed-only recoveries flatten bounded prior receipt text and preserve
+source references instead of dropping every prior result or recursively quoting
+old JSON. Original session files remain authoritative; omitted evidence and
+unanswered tool outcomes stay explicitly uncertain. This does not grant effect
+replay, alter the original task/expiry or unblock real operator holds.
+
 The built-in direct strategy saves an **unsafe intent before an opaque runtime
 turn**. An interrupted turn with unknown external effects becomes `blocked`;
 startup never independently replays its old Harness inbox or continuation. A
