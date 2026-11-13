@@ -20,7 +20,7 @@ import type { SessionProvider, SessionRecord, SessionSummary } from "../sessions
 import type { PluginTool } from "../plugins.js";
 import { prepareStructuredToolArgs } from "../tool-args.js";
 import { mkdir, readFile, readdir } from "node:fs/promises";
-import { writeFileDurable } from "../durable.js";
+import { writeFileDurable, writeFileDurableExclusive } from "../durable.js";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import {
@@ -708,6 +708,24 @@ export class PiRuntime implements AgentRuntime {
       if (!info) throw new Error("Session not found in this conversation");
       sessionManager = SessionManager.open(info.path, dir, cwd);
     } else sessionManager = options.fresh ? SessionManager.create(cwd, dir) : SessionManager.continueRecent(cwd, dir);
+
+    if (options.fresh && !options.ephemeral && !provider) {
+      // SDK deliberately discards empty sessions. An explicit Harness /new is a
+      // durable boundary, not an unstarted CLI visit: persist public SDK entries
+      // without inventing a user/assistant message or patching SDK internals.
+      const file = sessionManager.getSessionFile(), id = sessionManager.getSessionId();
+      if (!file) throw Error("Fresh native context has no durable destination");
+      const native = [sessionManager.getHeader(), ...sessionManager.getEntries()]
+        .filter(Boolean).map(entry => JSON.stringify(entry)).join("\n") + "\n";
+      try { await writeFileDurableExclusive(file, native); }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST" || await readFile(file, "utf8") !== native) throw error;
+      }
+      // Re-open through the public API, so the SDK owns all subsequent appends
+      // and knows the header is already on disk. Never overwrite an old file.
+      sessionManager = SessionManager.open(file, dir, cwd);
+      if (sessionManager.getSessionId() !== id) throw Error("Fresh native context identity changed");
+    }
 
     let sections = options.ephemeral ? [] : await this.opts.personaSections(cwd);
     // A complete startup snapshot is mandatory. Later invalid edits must not
