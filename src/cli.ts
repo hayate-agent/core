@@ -717,7 +717,7 @@ async function main(argv: string[]): Promise<void> {
       approvals: { ...approvals },
       personality,
       cronOverrides: Object.fromEntries(scheduler.overrides),
-      sessions: harness.snapshotSessions(),
+      sessions: harness.snapshotSessions(false),
       subagents: subagents.snapshot(),
       subagentOverrides: subagents.overrides(),
       pending: inputs.length ? inputs : undefined,

@@ -13,7 +13,7 @@ test('queued host captures do not materialize snapshots until their serialized w
  const writes = Array.from({ length: 100 }, (_, i) => store.capture(() => { captured.push(i); return state(i); }));
  assert.deepEqual(captured, [], 'queued captures retain factories, not N serialized state graphs');
  await Promise.all(writes); assert.deepEqual(captured, Array.from({ length: 100 }, (_, i) => i));
- assert.deepEqual(JSON.parse(await readFile(store.file, 'utf8')).seen, ['99']);
+ assert.deepEqual((await new StateStore(store.file).load())?.seen, ['99']);
 });
 
 test('capture failures do not hide failed barriers or poison later writes; ordinary save still snapshots immediately', async t => {
@@ -21,6 +21,6 @@ test('capture failures do not hide failed barriers or poison later writes; ordin
  const store = new StateStore(path.join(dir, 'state.json'));
  await assert.rejects(store.capture(() => { throw Error('snapshot failed'); }), /snapshot failed/);
  const original = state(1); const saved = store.save(original); original.seen = ['mutated']; await saved;
- assert.deepEqual(JSON.parse(await readFile(store.file, 'utf8')).seen, ['1']);
+ assert.deepEqual((await new StateStore(store.file).load())?.seen, ['1']);
  await store.capture(() => state(2)); assert.deepEqual((await store.load())?.seen, ['2']);
 });
