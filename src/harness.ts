@@ -56,6 +56,8 @@ export interface DurableTask {
   recoveryEnrollment?: "current" | "held-legacy";
   /** Original checkpoint retained when automatic execution is held. */
   recoveryHeldState?: DurableTask["state"];
+  /** Host read-only evidence epoch; not an execution grant or budget reset. */
+  recoveryTranscriptFingerprint?: string;
   id: string;
   original: string;
   /** Explicit operator preference, retained independently of model context. */
@@ -176,6 +178,8 @@ export interface HarnessOptions {
   attachmentRoot?: string;
   activity?: import("./activity.js").ActivityPolicy;
   runtime: AgentRuntime;
+  /** Actual loaded host build; never from a model tool or updater candidate. */
+  currentRuntime?: { version: string; revision?: string; startedAt: number };
   /** Trusted host snapshot; absent/failed evidence consumes repetition allowance. */
   progressEvidence?: (input: Inbound) => Promise<string | undefined>;
   executionStore?: import("./execution.js").ExecutionStore;
@@ -1102,6 +1106,7 @@ export class Harness {
     s.completionRecent = [...(s.completionRecent ?? []), { role, text: text.slice(0, 2000) }].slice(-8);
   }
 
+  private readonly transcriptFingerprints = new WeakMap<SessionState, string>();
   private async completionEvidence(s: SessionState, input?: Inbound): Promise<NonNullable<Inbound["completionContext"]>> {
     const taskId = input?.continuation?.taskId ?? input?.taskId;
     const task = this.tasks(s).find(t => t.id === taskId);
@@ -1110,23 +1115,36 @@ export class Harness {
       provenance: t.anchor?.task === t.original ? "host-task-anchor" as const : "legacy-task-original" as const }));
     let current: import("./session-archive.js").ArchiveEntry[] = [];
     let currentStatus: "available" | "empty" | "missing" | "failed" = "missing";
+    let sessionId = s.session?.status().sessionId;
+    let retainedIncomplete = false;
     if (s.session?.archiveEntries) {
       try { current = s.session.archiveEntries(); currentStatus = current.length ? "available" : "empty"; }
       catch { currentStatus = "failed"; }
+    } else if (!s.session && this.runtime.retainedSessionHistory) {
+      try {
+        const retained = await this.runtime.retainedSessionHistory(s.key);
+        if (retained) {
+          current = retained.entries; sessionId = retained.sessionId; retainedIncomplete = !!retained.incomplete;
+          currentStatus = current.length ? "available" : "empty";
+        }
+      } catch { currentStatus = "failed"; }
     }
     let archiveStatus: "available" | "empty" | "missing" | "failed" = "missing";
     let archived: { entries: import("./session-archive.js").ArchiveEntry[]; incomplete: boolean; status?: "available" | "empty" | "missing" | "failed" } = { entries: [], incomplete: false };
-    const sessionId = s.session?.status().sessionId;
     if (sessionId && this.opts.contextMaintenance?.archives) {
       try { archived = await this.opts.contextMaintenance.archives.completionEvidence(s.key, sessionId); archiveStatus = archived.status ?? (archived.entries.length ? "available" : "empty"); }
       catch { archived.incomplete = true; archiveStatus = "failed"; }
     }
     const resolved = resolveCompletionContext(taskId, ingress, [...archived.entries, ...(task?.completionObservations ?? [])], current,
-      archived.incomplete || currentStatus === "missing" || currentStatus === "failed" || archiveStatus === "missing" || archiveStatus === "failed");
+      retainedIncomplete || archived.incomplete || currentStatus === "missing" || currentStatus === "failed" || archiveStatus === "missing" || archiveStatus === "failed");
     resolved.transcript = { current: currentStatus, archive: archiveStatus };
+    if (currentStatus === "available" && sessionId)
+      this.transcriptFingerprints.set(s, createHash("sha256").update(JSON.stringify([sessionId, current.length, current.at(-1)?.id, this.opts.currentRuntime?.revision])).digest("hex"));
+    else this.transcriptFingerprints.delete(s);
 
     return { resolved, ...(task ? { retained: {
       original: task.original.slice(0, 8000), savedNext: task.next?.slice(0, 4000), priorReply: task.lastReply?.slice(0, 8000),
+      ...(this.opts.currentRuntime ? { runtime: { phase: "process-started" as const, ...this.opts.currentRuntime } } : {}),
       technical: { verdict: task.supervisorDecision?.verdict, diagnostic: task.supervisorDecision?.diagnostic,
         assessment: task.recoveryAssessment, attempts: task.recoveryRetry?.attempts, nextAt: task.recoveryRetry?.nextAt,
         retryDiagnostic: task.recoveryRetry?.diagnostic, termination: task.termination },
@@ -2207,7 +2225,17 @@ export class Harness {
       await this.outbox.barrier();
       return;
     }
-    if (retry && this.now() < retry.nextAt) return;
+    if (retry && this.now() < retry.nextAt) {
+      if (!startup) return;
+      const before = JSON.stringify(task);
+      // Newly accessible retained evidence is a reason for ONE tool-free boot
+      // reassessment, not for replay or resetting an assessment/productive budget.
+      await this.completionEvidence(s, { sessionKey: s.key, source: "cron", text: task.original, taskId: task.id });
+      const fingerprint = this.transcriptFingerprints.get(s);
+      if (!eligible() || JSON.stringify(task) !== before || this.hasPendingDependency(s.key, task.id) ||
+          !fingerprint || task.recoveryTranscriptFingerprint === fingerprint) return;
+      task.recoveryTranscriptFingerprint = fingerprint;
+    }
     if (waitingProbe) { this.startupWaitProbed.add(task); this.startupWaitPending.delete(task); }
     // Reserve and save before inference. A crash consumes this attempt, not authority.
     // A usable decision releases the reservation and ends this failure sequence.
