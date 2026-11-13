@@ -98,6 +98,7 @@ export interface DurableTask {
   preexistingUnscoped?: string[];
   /** Persist before inference; legacy claims without retry metadata remain fail-closed. */
   recoveryAssessment?: "claimed" | "decided";
+  recoveryPolicyStamp?: string;
   /** Consecutive unusable assessments, including an in-flight crash reservation.
    * Used only for persisted backoff, never as a total attempt/authority limit. */
   recoveryRetry?: { attempts: number; nextAt: number; diagnostic?: import("./completion-check.js").CompletionDiagnostic };
@@ -227,6 +228,7 @@ export interface HarnessOptions {
   /** Trusted ingress metadata classifier; never changes task authority. */
   topicLabeler?: import("./topic-labels.js").TopicLabeler;
   /** Advisory fallback; production caller must supply independently authorized task scope. */
+  assessmentPolicy?: () => string | undefined;
   completionCheck?: (input: Inbound, reply: string, signal: AbortSignal, diagnostic?: import("./completion-check.js").CompletionDiagnosticSink) => Promise<NonNullable<Inbound["continuation"]> | undefined>;
   /** Trusted host routing for child approval requests; never supplied by model input. */
   approvalTarget?: (sessionKey: string) => Address | undefined;
@@ -437,6 +439,7 @@ export class Harness {
   private frozen = false;
   private restoredReleased = false;
   private readonly turnAbort = new Map<string, AbortController>();
+  private readonly recoveryAssessmentAbort = new Set<AbortController>();
   private readonly maintenanceForeground = new WeakSet<Inbound>();
   private readonly beforeMaintenance = new Set<string>();
   private readonly yieldedMaintenance = new WeakSet<Inbound>();
@@ -527,6 +530,7 @@ export class Harness {
     // New channel input is refused (channels do not acknowledge it, so it is redelivered);
     // channels stay connected during the drain so replies still go out.
     this.stopping = true;
+    for (const controller of this.recoveryAssessmentAbort) controller.abort();
     // Pending approvals cannot survive a restart (the waiting tool call is gone): deny them;
     // the interrupted turn is replayed and asks again.
     for (const p of this.approvals.values()) p.resolve(false);
@@ -2142,7 +2146,7 @@ export class Harness {
 
   /** Reconstruct checkpointed work, or assess a retained mandate when due.
    * No productive work without persisted admission, no status-polling inference. */
-  async recoverTasks(): Promise<void> {
+  async recoverTasks(releaseAsReady = false): Promise<void> {
     if (this.gatewayChanging) return;
     await this.reconcileStoppedTasks();
     for (const s of this.sessions.values()) {
@@ -2206,6 +2210,10 @@ export class Harness {
       this.inbox.restored.add(input);
       try { await this.onStateChange?.(); }
       catch (error) { s.queue.splice(s.queue.indexOf(input),1); this.inbox.restored.delete(input); throw error; }
+      // Channels/stop reconciliation are already ready in production startup.
+      // One slow unrelated judge must not park every independently admitted task
+      // behind the final assessment in this whole-agent recovery scan.
+      if (releaseAsReady && !this.stopping) this.releaseRestored();
       }
     }
   }
@@ -2304,6 +2312,8 @@ export class Harness {
       input.completionContext = await this.completionEvidence(s, input);
       let plan: Inbound["continuation"];
       let diagnostic: import("./completion-check.js").CompletionDiagnostic | undefined;
+      if (!unchanged()) return;
+      const assessmentController = new AbortController(); this.recoveryAssessmentAbort.add(assessmentController);
       try {
         plan = await this.opts.completionCheck(input, JSON.stringify({
           dependencyReconciliation: "These blocked children remain execution-fenced: do not retry, resume, cancel, resolve or replay their tools or effects. Assess the full original mandate and recent host evidence. Return continue only with a concrete DIFFERENT independent parent step within that original authority and deadline, not work assigned to the blocked child. A valid continue admits that step once. Return blocked/waiting for a true global hold. No worktree inspection has occurred; do not claim otherwise.",
@@ -2311,8 +2321,9 @@ export class Harness {
             recoveryReason: e.recoveryReason, diagnosticCode: e.diagnosticCode,
             intent: e.intent && { key: e.intent.key, replay: e.intent.replay, settled: e.intent.result !== undefined },
             settledEffect: e.settledEffect && { key: e.settledEffect.key }, parentStopped: e.parentStopped }))
-        }), new AbortController().signal, value => { diagnostic = value; });
+        }), assessmentController.signal, value => { diagnostic = value; });
       } catch { diagnostic = "technical"; }
+      finally { this.recoveryAssessmentAbort.delete(assessmentController); }
       if (!unchanged()) return;
       const next = !diagnostic && plan?.state === "continue" && typeof plan.next === "string" &&
         plan.next.trim() && plan.next.length <= 4000 &&
@@ -2415,7 +2426,9 @@ export class Harness {
       await this.outbox.barrier();
       return;
     }
-    if (retry && this.now() < retry.nextAt) {
+    const policyStamp = this.opts.assessmentPolicy?.();
+    const policyChanged = !!policyStamp && task.recoveryPolicyStamp !== policyStamp;
+    if (retry && this.now() < retry.nextAt && !policyChanged) {
       if (!startup) return;
       const before = JSON.stringify(task);
       // Newly accessible retained evidence is a reason for ONE tool-free boot
@@ -2433,6 +2446,7 @@ export class Harness {
     task.recoveryRetry = { attempts, nextAt: this.now() + assessmentRetryDelay(attempts),
       ...(retry?.diagnostic ? { diagnostic: retry.diagnostic } : {}) };
     task.recoveryAssessment = "claimed";
+    if (policyStamp) task.recoveryPolicyStamp = policyStamp;
     const claimedAuthority = JSON.stringify(task);
     await this.onStateChange?.();
     const unchanged = () => eligible() && JSON.stringify(task) === claimedAuthority &&
@@ -2449,10 +2463,13 @@ export class Harness {
     // retained task. Persisted observations and linked archives remain available.
     input.completionContext = await this.completionEvidence(s, input);
     let diagnostic: import("./completion-check.js").CompletionDiagnostic | undefined;
-    try { plan = await this.opts.completionCheck(input, evidence, new AbortController().signal, value => {
+    if (!unchanged()) return;
+    const assessmentController = new AbortController(); this.recoveryAssessmentAbort.add(assessmentController);
+    try { plan = await this.opts.completionCheck(input, evidence, assessmentController.signal, value => {
       if (["technical", "invalid_response", "inconclusive", "unavailable"].includes(value)) diagnostic = value;
     }); }
     catch { diagnostic = "technical"; this.log("retained task assessment failed; deferred retry retained"); }
+    finally { this.recoveryAssessmentAbort.delete(assessmentController); }
     if (!unchanged()) return;
     if (diagnostic) task.recoveryRetry.diagnostic = diagnostic;
     task.recoveryAssessment = "decided";

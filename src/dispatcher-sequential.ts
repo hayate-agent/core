@@ -2,7 +2,7 @@ import { archiveCompletedPrefix, validPlanHistory } from "./rolling-plan.js";
 import { createHash } from "node:crypto";
 import { assessmentRetryDelay } from "./assessment-retry.js";
 import type { AgentRuntime } from "./types.js";
-import { assessCompletion, type CompletionDiagnostic } from "./completion-check.js";
+import { assessCompletion, assessmentPolicyStamp, type CompletionDiagnostic } from "./completion-check.js";
 import type { CompletionFailureDetail } from "./validator.js";
 import { runtimeReviewer } from "./runtime/reviewer.js";
 import { validExecutionFollowUp, executionDecisionRevision, ExecutionDeadlineExpired, ExecutionAssessmentHold } from "./execution.js";
@@ -34,6 +34,8 @@ export interface SequentialState {
   appliedFollowUps?: string[];
   /** Once-only adoption of independent ready-step assessment for saved plans. */
   readyStepPolicy?: 1;
+  /** Once per trusted provider/model/budget contract, read-only reassessment. */
+  assessmentPolicy?: string;
   /** Fresh ready-step admission is bound to the parent decision snapshot until effects begin. */
   readyAdmission?: { stepId: number; decisionRevision: number; from: number };
   /** Settled evidence for genuinely blocked steps moved behind independently ready work. */
@@ -239,19 +241,24 @@ export function sequentialStrategy(deps: SequentialDeps): DispatcherStrategy {
     name: "sequential", version: 1, replaySafe: false, reconcile: true,
     refreshAssessment: (task, now) => {
       const state = readState(task);
-      if (!state || state === "invalid" || state.readyStepPolicy === 1 || !state.assessment ||
-          state.outcomes.length + 1 >= state.plan.length) return;
+      if (!state || state === "invalid" || !state.assessment) return;
+      const stamp = assessmentPolicyStamp(deps.validators, deps.roles(), STEP_VALIDATION_TIMEOUT_MS);
+      const changed = !!stamp && state.assessmentPolicy !== stamp;
+      const oldReadyPolicy = state.readyStepPolicy !== 1 && state.outcomes.length + 1 < state.plan.length;
+      if (!changed && !oldReadyPolicy) return;
       const index = state.outcomes.length;
+      if (state.assessment.index !== index || !state.plan[index]) return;
       const role = state.escalation?.index === index ? state.escalation.to : state.plan[index]!.role;
       const key = `step:${task.id}:${state.stepIds?.[index] ?? index}:${role}`;
       // Exactly the same durable-evidence proof as the scoped decision boundary.
       // An opaque interrupted worker, even one with a future timer, never qualifies.
       if (task.intent ? task.intent.key !== key || !task.intent.route : task.settledEffect?.key !== key) return;
       state.readyStepPolicy = 1;
+      if (stamp) state.assessmentPolicy = stamp;
       state.assessment.nextAt = Math.min(state.assessment.nextAt ?? now, now);
       const checkpoint = JSON.stringify(state);
       if (checkpoint.length > 64000) return;
-      return { checkpoint, reason: "Prüfpolitik aktualisiert: erhaltenen Prüfbericht einmalig neu bewerten und separat mögliche Arbeit prüfen; keine Worker-Wiederholung, kein Budget-Reset." };
+      return { checkpoint, reason: "Prüfpolitik/Providergrenze aktualisiert: erhaltenen Prüfbericht einmalig neu bewerten; keine Worker-Wiederholung, kein Budget-Reset." };
     },
     decisionBoundary: task => {
       try {
@@ -501,7 +508,7 @@ export function sequentialStrategy(deps: SequentialDeps): DispatcherStrategy {
             candidates: candidates.map(({ candidate, position }) => ({ number: position + 1, ...candidate })) });
           await authorize();
           let readyDiagnostic: CompletionDiagnostic | undefined;
-          const choice = await assessCompletion({ review: (text, _model, _thinking, signal) => backend.review(text, reviewer.model!, reviewer.thinking ?? "off", signal) },
+          const choice = await assessCompletion({ admit: backend.admit?.bind(backend), review: (text, _model, _thinking, signal) => backend.review(text, reviewer.model!, reviewer.thinking ?? "off", signal) },
             { id: `schedule:${task.id}:${stepId}`, sessionKey, source: "host", text: task.input,
               completionContext: { recent: [], tasks: [], tools: evidence, retained: { original: task.input, parentReconciliation: task.parentContinuation ? JSON.stringify(task.parentContinuation) : undefined, technical: { assessment: "ready-step" },
                 workers: { provenance: "host-execution-store", omitted: 0, unassociated: 0,
@@ -553,10 +560,12 @@ Correctable vs blocked: a worker "blocked" claim or evidence shortfall that rest
             await authorize();
             const attempt = Math.min(Number.MAX_SAFE_INTEGER, (priorAssessment?.attempts ?? 0) + 1);
             let nextAt = Date.now() + assessmentRetryDelay(attempt);
+            const stamp = assessmentPolicyStamp(deps.validators, deps.roles(), STEP_VALIDATION_TIMEOUT_MS);
+            if (stamp) state.assessmentPolicy = stamp;
             await retain(attempt, validation, nextAt);
             validation = undefined;
             failure = undefined;
-            verdict = await assessCompletion({ review: (text, _model, _thinking, signal) =>
+            verdict = await assessCompletion({ admit: backend.admit?.bind(backend), review: (text, _model, _thinking, signal) =>
               backend.review(text, reviewer.model!, reviewer.thinking ?? "off", signal) }, {
               id: `validate:${task.id}:${index}`, sessionKey, source: "host", text: prompt,
               completionContext: { recent: [], tasks: [], tools: evidence, retained: { original: task.input, parentReconciliation: task.parentContinuation ? JSON.stringify(task.parentContinuation) : undefined,
