@@ -82,5 +82,17 @@
   "mcp.action.logout": "logout",
   "mcp.action.edit": "edit",
   "mcp.action.remove": "remove",
-  "mcp.action.exposure": "exposure"
+  "mcp.action.exposure": "exposure",
+  "cron.noScheduler": "no scheduler",
+  "cron.empty": "no jobs",
+  "cron.next": "next {next}",
+  "cron.paused": "paused",
+  "cron.reloaded": "reloaded {count} job(s)",
+  "cron.unknown": "unknown job: {name}",
+  "cron.triggered": "▶️ {name} triggered",
+  "cron.pauseResult": "{name} paused",
+  "cron.resumeResult": "{name} resumed",
+  "cron.usage": "usage: /cron list|run|pause|resume|reload|language <name> <BCP-47 tag|reset>",
+  "language.listing": "Show/set default, system, background, conversation or per-MCP language (BCP-47)",
+  "command.failure": "⚠️ /{name}: command failed (details withheld)"
 }

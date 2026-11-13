@@ -82,5 +82,17 @@
   "mcp.action.logout": "cerrar sesión",
   "mcp.action.edit": "editar",
   "mcp.action.remove": "eliminar",
-  "mcp.action.exposure": "exposición"
+  "mcp.action.exposure": "exposición",
+  "cron.noScheduler": "Planificador no disponible",
+  "cron.empty": "No hay tareas",
+  "cron.next": "próxima ejecución {next}",
+  "cron.paused": "en pausa",
+  "cron.reloaded": "{count} tarea(s) recargada(s)",
+  "cron.unknown": "Tarea desconocida: {name}",
+  "cron.triggered": "▶️ {name} iniciada",
+  "cron.pauseResult": "{name} en pausa",
+  "cron.resumeResult": "{name} reanudada",
+  "cron.usage": "Uso: /cron list|run|pause|resume|reload|language <name> <BCP-47 tag|reset>",
+  "language.listing": "Mostrar/configurar idioma predeterminado, del sistema, segundo plano, conversación o MCP (BCP-47)",
+  "command.failure": "⚠️ /{name}: falló el comando (detalles omitidos)"
 }

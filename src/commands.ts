@@ -696,20 +696,20 @@ export const COMMANDS: Command[] = [
     name: "cron",
     help: "Scheduled jobs: list | run <name> | pause <name> | resume <name> | reload | language <name> <BCP-47 tag|reset>",
     run: async (args, input, ctx) => {
-      if (!ctx.scheduler) return "no scheduler";
+      const locale = resolveLanguage(ctx.language?.get(), { kind: "system" });
+      if (!ctx.scheduler) return message(locale, "cron.noScheduler");
       const [sub, ...rest] = args.trim().split(/\s+/);
       const name = rest.join(" ");
       if (!sub || sub === "list") {
         const jobs = ctx.scheduler.list();
-        return jobs.length ? jobs.map((j) => `• ${j.name} [${j.schedule}] ${j.enabled ? `next ${j.next ?? "?"}` : "paused"}`).join("\n") : "no jobs";
+        return jobs.length ? jobs.map((j) => `• ${j.name} [${j.schedule}] ${j.enabled ? message(locale, "cron.next", { next: j.next ?? "?" }) : message(locale, "cron.paused")}`).join("\n") : message(locale, "cron.empty");
       }
       if (sub === "reload") {
         await ctx.scheduler.load();
-        return `reloaded ${ctx.scheduler.jobs.length} job(s)`;
+        return message(locale, "cron.reloaded", { count: ctx.scheduler.jobs.length });
       }
-      if (!isAdmin(ctx, input)) return "⛔ admin only";
+      if (!isAdmin(ctx, input)) return message(locale, "command.adminOnly");
       if (sub === "language") {
-        const locale = resolveLanguage(ctx.language?.get(), { kind: "system" });
         if (!ctx.language) return message(locale, "language.unavailable");
         const jobName = rest.slice(0, -1).join(" "), raw = rest.at(-1);
         if (!ctx.scheduler.find(jobName) || !raw) return message(locale, "language.help");
@@ -723,16 +723,16 @@ export const COMMANDS: Command[] = [
         return message(resolveLanguage(ctx.language.get(), { kind: "system" }), "language.changed");
       }
       const job = ctx.scheduler.find(name);
-      if (!job) return `unknown job: ${name}`;
+      if (!job) return message(locale, "cron.unknown", { name });
       if (sub === "run") {
         await ctx.scheduler.runJob(job);
-        return `▶️ ${name} triggered`;
+        return message(locale, "cron.triggered", { name });
       }
       if (sub === "pause" || sub === "resume") {
         ctx.scheduler.setEnabled(name, sub === "resume");
-        return `${name} ${sub}d`;
+        return message(locale, sub === "pause" ? "cron.pauseResult" : "cron.resumeResult", { name });
       }
-      return "usage: /cron list|run|pause|resume|reload";
+      return message(locale, "cron.usage");
     },
   },
   // -- Info
@@ -746,7 +746,7 @@ export const COMMANDS: Command[] = [
         ...[...(ctx.pluginCommands?.values() ?? [])].map((c) => ({ ...c, aliases: undefined, origin: "Plugin" })),
       ].sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
       const group = (admin: boolean) => commands.filter((c) => Boolean(c.admin) === admin)
-        .map((c) => `/${c.name}${c.aliases?.length ? ` (${c.aliases.map((a) => `/${a}`).join(" ")})` : ""}${c.admin ? " [admin]" : ""} [${c.origin}]: ${c.help}`).join("\n");
+        .map((c) => `/${c.name}${c.aliases?.length ? ` (${c.aliases.map((a) => `/${a}`).join(" ")})` : ""}${c.admin ? " [admin]" : ""} [${c.origin}]: ${c.name === "language" && c.origin === "Hayate Agent" ? message(resolveLanguage(ctx.language?.get(), { kind: "system" }), "language.listing") : c.help}`).join("\n");
       return `Hayate Agent commands ([admin] requires administrator access):\n\nGeneral commands:\n${group(false)}\n\nAdmin commands:\n${group(true)}`;
     },
   },
@@ -814,7 +814,7 @@ export function installCommands(ctx: CommandContext): void {
     if (!cmd) {
       const plugin = ctx.pluginCommands?.get(parsed.name);
       if (plugin) {
-        if (plugin.admin && !isAdmin(ctx, input)) reply(ctx, input, "⛔ admin only");
+        if (plugin.admin && !isAdmin(ctx, input)) reply(ctx, input, message(resolveLanguage(ctx.language?.get(), { kind: "system" }), "command.adminOnly"));
         else {
           try {
             const text = await plugin.run(parsed.args, { sessionKey: input.sessionKey, sender: input.sender, cwd: ctx.cwdFor?.(input.sessionKey),
@@ -833,12 +833,13 @@ export function installCommands(ctx: CommandContext): void {
       return true;
     }
     let out: string | void;
-    if (cmd.admin && !isAdmin(ctx, input)) out = "⛔ admin only";
+    if (cmd.admin && !isAdmin(ctx, input)) out = message(resolveLanguage(ctx.language?.get(), { kind: "system" }), "command.adminOnly");
     else {
       try {
         out = await cmd.run(parsed.args, input, ctx);
       } catch (err) {
-        out = `⚠️ /${cmd.name}: ${err instanceof Error ? err.message : String(err)}`;
+        out = cmd.name === "cron" ? message(resolveLanguage(ctx.language?.get(), { kind: "system" }), "command.failure", { name: cmd.name })
+          : `⚠️ /${cmd.name}: ${err instanceof Error ? err.message : String(err)}`;
       }
     }
     if (out) reply(ctx, input, out);

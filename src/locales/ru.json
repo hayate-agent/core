@@ -82,5 +82,17 @@
   "mcp.action.logout": "выйти",
   "mcp.action.edit": "изменить",
   "mcp.action.remove": "удалить",
-  "mcp.action.exposure": "доступ"
+  "mcp.action.exposure": "доступ",
+  "cron.noScheduler": "Планировщик недоступен",
+  "cron.empty": "Нет заданий",
+  "cron.next": "следующий запуск {next}",
+  "cron.paused": "приостановлено",
+  "cron.reloaded": "Перезагружено заданий: {count}",
+  "cron.unknown": "Неизвестное задание: {name}",
+  "cron.triggered": "▶️ {name} запущено",
+  "cron.pauseResult": "{name} приостановлено",
+  "cron.resumeResult": "{name} возобновлено",
+  "cron.usage": "Использование: /cron list|run|pause|resume|reload|language <name> <BCP-47 tag|reset>",
+  "language.listing": "Показать/задать язык по умолчанию, системы, фона, диалога или MCP (BCP-47)",
+  "command.failure": "⚠️ /{name}: ошибка команды (подробности скрыты)"
 }

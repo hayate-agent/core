@@ -82,5 +82,17 @@
   "mcp.action.logout": "Abmelden",
   "mcp.action.edit": "Bearbeiten",
   "mcp.action.remove": "Entfernen",
-  "mcp.action.exposure": "Werkzeugfreigabe"
+  "mcp.action.exposure": "Werkzeugfreigabe",
+  "cron.noScheduler": "Kein Scheduler verfügbar",
+  "cron.empty": "Keine Jobs",
+  "cron.next": "nächster Lauf {next}",
+  "cron.paused": "pausiert",
+  "cron.reloaded": "{count} Job(s) neu geladen",
+  "cron.unknown": "Unbekannter Job: {name}",
+  "cron.triggered": "▶️ {name} gestartet",
+  "cron.pauseResult": "{name} pausiert",
+  "cron.resumeResult": "{name} fortgesetzt",
+  "cron.usage": "Verwendung: /cron list|run|pause|resume|reload|language <name> <BCP-47 tag|reset>",
+  "language.listing": "Standardsprache, System-, Hintergrund-, Gesprächs- oder MCP-Sprache anzeigen/festlegen (BCP-47)",
+  "command.failure": "⚠️ /{name}: Befehl fehlgeschlagen (Details zurückgehalten)"
 }
