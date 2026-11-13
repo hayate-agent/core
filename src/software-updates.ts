@@ -3,6 +3,8 @@ import { createHash, randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, readFile, realpath, rename, stat, symlink, unlink } from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { restoreVerifiedMatrixAddon } from "./native-addon-cache.js";
 import { writeFileDurable } from "./durable.js";
 
 export const softwareComponents = ["core", "plugins", "webui"] as const;
@@ -255,7 +257,11 @@ export class NativeSoftwareUpdates {
           // npm12 may report successful rebuild while silently blocking this
           // install script. Run only this reviewed native downloader explicitly,
           // then require the addon so a missing binary fails before tests/stop.
-          await this.command(process.execPath, [path.join(cwd, "node_modules/@matrix-org/matrix-sdk-crypto-nodejs/download-lib.js")], cwd, buildEnv);
+          stage = "native dependency verification";
+          const cacheSources = [fileURLToPath(new URL("../", import.meta.url)),
+            ...(this.selection ? [path.join(this.directory, "releases", this.selection.release, "core")] : [])];
+          if (!await restoreVerifiedMatrixAddon(cwd, cacheSources))
+            await this.command(process.execPath, [path.join(cwd, "node_modules/@matrix-org/matrix-sdk-crypto-nodejs/download-lib.js")], cwd, buildEnv);
           await this.command(process.execPath, ["--input-type=commonjs", "-e", "require('@matrix-org/matrix-sdk-crypto-nodejs')"], cwd, buildEnv);
         }
         stage = "build"; await this.command("npm", ["run", "build"], cwd, buildEnv);
