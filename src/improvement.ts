@@ -216,7 +216,8 @@ export class ImprovementController {
             if (report.version !== 1 || report.night + ".json" !== name || !Array.isArray(report.experiments)) throw Error("Invalid archive");
             const receipts = [...(Array.isArray(report.deliveryBacklog) ? report.deliveryBacklog : []), ...report.experiments];
             for (const receipt of receipts) {
-              if (!receipt || !["hypothesis", "baseline", "candidate", "evidence"].every(key => typeof receipt[key] === "string") ||
+              if (!receipt || JSON.stringify(receipt).length > 32768 ||
+                  !["hypothesis", "baseline", "candidate", "evidence"].every(key => typeof receipt[key] === "string" && receipt[key].trim() && receipt[key].length <= 2000) ||
                   !["improved", "rejected", "inconclusive"].includes(receipt.outcome)) throw Error("Invalid archived receipt");
             }
             history.push(...receipts);
