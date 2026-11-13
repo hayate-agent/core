@@ -16,7 +16,7 @@ test("parent maintenance tool keeps exact conversation binding and typed non-des
   assert.equal(status.revision, 1);
   await tool.execute({ action: "read", id: "same-owner", requestId: "old" }, { sessionKey: "parent" });
   await tool.execute({ action: "consolidate", id: "same-owner", requestId: "new", decision: "Preserve scope and all gates", replaces: ["old"] }, { sessionKey: "parent" });
-  assert.deepEqual(calls, [["parent", "same-owner", "old"], ["parent", "same-owner", "new", "Preserve scope and all gates", ["old"]]]);
+  assert.deepEqual(calls, [["parent", "same-owner", "old"], ["parent", "same-owner", "new", "Preserve scope and all gates", ["old"], undefined]]);
   for (const sessionKey of ["dispatch:worker", "subagent:worker", "foreign"]) await assert.rejects(tool.execute({ action: "consolidate", id: "same-owner", requestId: "new", decision: "x", replaces: ["old"] }, { sessionKey }));
   await assert.rejects(tool.execute({ action: "consolidate", id: "same-owner", requestId: "new", decision: "x", replaces: [7] }, { sessionKey: "parent" }));
   assert.equal(calls.length, 2, "invalid/foreign requests never reach mutation");

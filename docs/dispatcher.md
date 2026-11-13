@@ -308,6 +308,16 @@ lifetime decisions. Consolidation cannot steal a running claim, clear an unsafe
 intent, reset budgets, bypass a question/manual pause/stop, or create a second
 writer. The existing strategy still owns safe reassessment admission.
 
+If the parent amendment introduces still-authorized work absent from the remaining
+saved steps (for example fixing compatibility after a source publication milestone),
+`consolidate` may include a typed `followUp` task, role, reason and required evidence.
+The sequential strategy attaches that exact receipt once at the retained assessment
+boundary. It preserves the existing open step and all completed outcomes, and uses
+the same independent readiness admission before moving to the follow-up. New work
+never marks the old hold completed or replays its worker. Stable original intent
+IDs, checkpoint size and the six-step plan bound remain enforced. Unsupported,
+out-of-scope or dependent follow-ups receive no execution admission.
+
 ## Persistence and restart
 
 `executions.json` under Harness home holds tasks, claims, checkpoints, effect

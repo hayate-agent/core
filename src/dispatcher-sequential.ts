@@ -4,7 +4,7 @@ import type { AgentRuntime } from "./types.js";
 import { assessCompletion, type CompletionDiagnostic } from "./completion-check.js";
 import type { CompletionFailureDetail } from "./validator.js";
 import { runtimeReviewer } from "./runtime/reviewer.js";
-import { executionDecisionRevision, ExecutionDeadlineExpired, ExecutionAssessmentHold } from "./execution.js";
+import { validExecutionFollowUp, executionDecisionRevision, ExecutionDeadlineExpired, ExecutionAssessmentHold } from "./execution.js";
 import { derivedPlanBoundary, stepCompletionPrompt, parentDecisionContext, readyStepPrompt } from "./dispatcher-step-prompt.js";
 import type { DispatchContext, DispatcherStrategy } from "./dispatcher.js";
 import type { Execution, ExecutionStore } from "./execution.js";
@@ -25,6 +25,8 @@ export interface SequentialState {
   plan: PlanStep[];
   /** Stable original step identities; reordering never reuses another step's effect intent. */
   stepIds?: number[];
+  /** Exact amendment receipts already attached as independently assessable work. */
+  appliedFollowUps?: string[];
   /** Once-only adoption of independent ready-step assessment for saved plans. */
   readyStepPolicy?: 1;
   /** Fresh ready-step admission is bound to the parent decision snapshot until effects begin. */
@@ -162,6 +164,8 @@ function readState(task: Readonly<Execution>): SequentialState | undefined | "in
         (a.diagnostic !== undefined && !["technical", "inconclusive", "invalid_response", "unavailable"].includes(a.diagnostic)))) return "invalid";
     if (a?.route && (Object.keys(a.route).some(k => !["model", "thinking"].includes(k)) || typeof a.route.model !== "string" || a.route.model.length > 200 || (a.route.thinking !== undefined && (typeof a.route.thinking !== "string" || a.route.thinking.length > 40)))) return "invalid";
     if (a?.session !== undefined && (typeof a.session !== "string" || !a.session.startsWith(`dispatch:${task.id}:`) || a.session.length > 300)) return "invalid";
+    if (state.appliedFollowUps !== undefined && (!Array.isArray(state.appliedFollowUps) || state.appliedFollowUps.length > MAX_STEPS ||
+        new Set(state.appliedFollowUps).size !== state.appliedFollowUps.length || state.appliedFollowUps.some(id => typeof id !== "string" || !id || id.length > 128))) return "invalid";
     if (state.readyStepPolicy !== undefined && state.readyStepPolicy !== 1) return "invalid";
     const ids = state.stepIds;
     if (ids !== undefined && (!Array.isArray(ids) || ids.length !== state.plan.length || new Set(ids).size !== ids.length || ids.some(id => !Number.isSafeInteger(id) || id < 0 || id >= state.plan.length))) return "invalid";
@@ -299,6 +303,28 @@ export function sequentialStrategy(deps: SequentialDeps): DispatcherStrategy {
       };
       let recovering = !!task.intent && task.claimedRecoveryAction !== "retry";
       while (state.outcomes.length < state.plan.length) {
+        // Explicit new parent work must become schedulable in the SAME execution,
+        // not disappear because an earlier source milestone was already recorded.
+        // Attach only at an exact settled assessment boundary; the existing
+        // independent ready-step check still has to admit it before any effects.
+        if (state.assessment) {
+          const steering = await context.decisions?.() ?? [];
+          const pending = steering.filter(d => d.followUp && !(state as SequentialState).appliedFollowUps?.includes(d.requestId));
+          if (pending.length) {
+            if (state.plan.length + pending.length > MAX_STEPS || pending.some(d => !validExecutionFollowUp(d.followUp)))
+              return block("Scoped follow-up exceeds the bounded retained plan; no worker or effect replay admitted.");
+            const amended: SequentialState = structuredClone(state);
+            amended.stepIds ??= amended.plan.map((_, i) => i);
+            amended.appliedFollowUps ??= [];
+            for (const decision of pending) {
+              amended.stepIds.push(amended.plan.length);
+              amended.plan.push(structuredClone(decision.followUp!)); amended.appliedFollowUps.push(decision.requestId);
+            }
+            if (JSON.stringify(amended).length > 63000) return block("Scoped follow-up checkpoint exceeds safe storage budget; retained evidence preserved.");
+            await authorize(); await context.fenceDecisions?.(executionDecisionRevision(steering));
+            await context.checkpoint(JSON.stringify(amended)); state = amended;
+          }
+        }
         const index = state.outcomes.length;
         const step = state.plan[index]!;
         const stepId = state.stepIds?.[index] ?? index;
