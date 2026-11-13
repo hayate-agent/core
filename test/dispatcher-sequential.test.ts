@@ -57,7 +57,7 @@ async function setup(t: import("node:test").TestContext, script: Script, opts: {
     // Retained-session recovery is a real requirement after a deferred check.
     Object.assign(session, {
       archiveEntries: () => (opts.retainedTranscript ? [{ prompt: opts.retainedTranscript }] : calls.worker)
-        .map(call => ({ type: "message", role: "assistant", content: call.prompt })),
+        .map((call, index) => ({ id: `retained-${index}`, role: "assistant", text: call.prompt })),
       seedHandover: async (_text: string) => {},
     });
     const prompt = session.prompt.bind(session);
