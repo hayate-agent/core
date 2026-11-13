@@ -1,5 +1,5 @@
 {
-  "contentDigest": "b809ce5f029ef37484ec7f51e8b89ec3ad7afa18bd6f5d8314f81d049dded9a4",
+  "contentDigest": "2ba60394f2959952943b9ac340f9b2c251969eba1790e95e5b9ea15a6e63e070",
   "files": [
     {
       "mode": "100644",
@@ -1385,6 +1385,11 @@
       "mode": "100644",
       "path": "test/build-info.test.ts",
       "sha256": "f540b6725a534f2983d9f1c38df1d2e5941baf77b924b99d82fc036ba3c35a10"
+    },
+    {
+      "mode": "100644",
+      "path": "test/builtin-validator-artifact.test.ts",
+      "sha256": "9dbb1c02463d6981e132191fbadd59f8e0fed3aa5eab85f991fd9cb46aec7b4f"
     },
     {
       "mode": "100644",
@@ -3485,5 +3490,5 @@
   "historyPolicy": "fresh-root; no source commits, tags, refs or deleted blobs",
   "pluginSHA": "794136ff0b87ecb32121b17b101e8e361d3ee199",
   "schema": 1,
-  "sourceSHA": "ed100821deb7baae70807339381daec78654e2f2"
+  "sourceSHA": "b22bdd80018a54796afbdfaab1d1df412168bec4"
 }
