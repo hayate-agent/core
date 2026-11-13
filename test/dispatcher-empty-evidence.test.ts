@@ -33,7 +33,7 @@ function fixture(options: { assessment?: boolean; seedFailure?: boolean; bareInt
   };
   const harness = {
     runtime, state: () => ({ queue: [] }),
-    sessionFor: async () => ({ archiveEntries: () => [], seedHandover: async (text: string) => {
+    sessionFor: async () => ({ status: () => ({ sessionId: "retained-source", busy: false }), archiveEntries: () => [], seedHandover: async (text: string) => {
       if (options.seedFailure) throw Error("handover persistence failed");
       calls.handovers.push(text);
     } }),

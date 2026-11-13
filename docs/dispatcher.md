@@ -238,7 +238,14 @@ scheduler, ledger and worker bridge. It requires enabled [model roles](model-rol
    survive restart; restarting/resuming does not reset the inference budget. A
    correction after restart reconciles the retained session before any worker
    turn. Evidence excerpts may be truncated to the checkpoint budget. Effects
-   are never replayed blindly.
+   are never replayed blindly. Recovery transfers a bounded evidence projection
+   (at most 48 KiB of serialized UTF-8 JSON), not the entire recursively nested
+   transcript. Older handovers become original-session references. Omitted or
+   truncated entries are explicitly marked; missing evidence never proves that an
+   external effect did not occur. Original transcripts and execution checkpoints
+   remain intact for read-only reconciliation. The runtime rejects handover seeds
+   above 64 KiB before modifying the SDK session, avoiding a partially created
+   first session file followed by an endless EEXIST retry loop.
 
 Not yet included: parallel steps, replanning after failure, per-step operator
 approval of the plan, and plugin-visible plan inspection beyond `/dispatch` status.
