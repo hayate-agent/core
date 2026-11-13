@@ -593,7 +593,7 @@ async function main(argv: string[]): Promise<void> {
         tls: apiTls,
         agent: config.agent,
         runs,
-        software: () => readSoftwareVersions(BUILD_INFO, undefined, harness.channels.has("webui")),
+        software: () => readSoftwareVersions(BUILD_INFO),
         lifecycle: { timeoutSeconds: config.lifecycle?.restartTimeoutSeconds ?? 60,
           nativeSoftwareUpdates: !containerRuntime() && config.softwareUpdates?.enabled !== false },
         updateAdmission: harness,
@@ -1076,7 +1076,7 @@ async function main(argv: string[]): Promise<void> {
   // Never acknowledge from the old process or before startup recovery and
   // channel authentication succeed. Delivery remains independent of work.
   const startupNotice = new StartupNotice({ agent: config.agent,
-    build: readSoftwareVersions(BUILD_INFO, undefined, harness.channels.has("webui")), restarted: !!saved,
+    build: readSoftwareVersions(BUILD_INFO), restarted: !!saved,
     post: (input, text) => harness.post(input, text), log });
   announceStartup = () => {
     if (stopping) return;

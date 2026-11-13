@@ -244,24 +244,7 @@ export class NativeSoftwareUpdates {
           bundledPlugins = locked;
         }
       } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
-      // Optional assets can be locked at a different Plugins commit than builtins.
-      // Resolve each through the SAME configured source, never a hardcoded forge.
-      const assetSources: Record<string, string> = { [revisions.plugins]: path.join(root, "plugins") };
-      try {
-        const assetLock = JSON.parse(await readFile(path.join(root, "core/plugin-assets.lock.json"), "utf8"));
-        if (!Array.isArray(assetLock.plugins)) throw Error("invalid asset lock");
-        for (const asset of assetLock.plugins) {
-          if (!/^[a-f0-9]{40}$/.test(asset.revision)) throw Error("invalid asset revision");
-          const vendored = path.join(root, "core/vendor/plugin-assets", asset.revision);
-          if (existsSync(vendored)) { assetSources[asset.revision] = vendored; continue; }
-          if (assetSources[asset.revision]) continue;
-          const checkout = path.join(root, `assets-${asset.revision}`);
-          await this.command("git", ["fetch", "--depth=1", "origin", asset.revision], path.join(root, "plugins"));
-          await this.command("git", ["worktree", "add", "--detach", checkout, asset.revision], path.join(root, "plugins"));
-          assetSources[asset.revision] = checkout;
-        }
-      } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
-      const buildEnv = { HAYATE_PLUGIN_SOURCE: bundledPlugins, HAYATE_PLUGIN_ASSET_SOURCES: JSON.stringify(assetSources),
+      const buildEnv = { HAYATE_PLUGIN_SOURCE: bundledPlugins,
         PATH: `${path.dirname(process.execPath)}${path.delimiter}${process.env.PATH ?? ""}` };
       for (component of ["core", "webui"] as const) {
         stage = "dependency installation";
