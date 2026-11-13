@@ -41,7 +41,7 @@ export interface DispatcherStrategy {
 export async function stopDispatcherParent(store: ExecutionStore, parent: string, dispatcher?: Dispatcher): Promise<void> {
   if (dispatcher) {
     await dispatcher.cancelParent(parent);
-    await Promise.all(store.list(parent).map(task => dispatcher.waitForExecution(task.id)));
+    await Promise.all(store.list(parent).map(task => dispatcher.drainRevokedExecution(task.id)));
   } else await store.cancelParent(parent);
 }
 
@@ -396,8 +396,15 @@ export class Dispatcher {
   }
   /** Host fence: durable cancellation alone does not mean execution has drained. */
   async waitForExecution(id: string): Promise<void> {
-    // Callers revoke the exact ledger first. Late claims recheck live ownership
-    // before publishing a worker, so a global scheduler barrier is unnecessary.
+    await this.scheduling;
+    await this.active.get(id)?.done;
+  }
+  /** Exact stopped scope only: never wait on another parent's scheduling. */
+  async drainRevokedExecution(id: string): Promise<void> {
+    const task = this.store.list().find(task => task.id === id);
+    if (!task || task.status !== "cancelled" && !task.parentStopped)
+      throw Error("Scoped drain requires durable execution revocation");
+    // Late claims recheck live ownership before publishing/executing a worker.
     await this.active.get(id)?.done;
   }
   flushEvents(): Promise<void> {
