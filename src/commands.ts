@@ -205,10 +205,15 @@ export const COMMANDS: Command[] = [
       const matches = refs.filter(ref => ref.tag === args.trim().slice(1).toLowerCase());
       if (!matches.length) return "No references for this hashtag.";
       const rows: string[] = [];
+      const history = new Map<string, Awaited<ReturnType<NonNullable<typeof ctx.harness.runtime.sessionHistory>>>>();
       for (const ref of matches) {
         try {
           if (!ctx.harness.runtime.sessionHistory) throw new Error("Runtime history retrieval unavailable");
-          const entries = await ctx.harness.runtime.sessionHistory(input.sessionKey, ref.sessionId);
+          let entries = history.get(ref.sessionId);
+          if (!entries) {
+            entries = await ctx.harness.runtime.sessionHistory(input.sessionKey, ref.sessionId);
+            history.set(ref.sessionId, entries);
+          }
           const message = entries.find(entry => entry.id === ref.messageId && entry.role === "user");
           if (!message) throw new Error("Referenced message no longer retained");
           rows.push(`${ref.date} · ${ref.sessionId}\n  ${message.text.replace(/\s+/g, " ").slice(0, 180)}\n  /resume ${ref.sessionId}`);
@@ -258,8 +263,9 @@ export const COMMANDS: Command[] = [
     name: "sessions", help: "List conversation sessions: /sessions [page]",
     run: async (args, input, ctx) => {
       const page = args.trim() ? Number(args) : 1;
-      if (!Number.isInteger(page) || page < 1) return "usage: /sessions [page]";
-      const list = await ctx.harness.runtime.sessions?.(input.sessionKey, (page - 1) * 20) ?? [];
+      const offset = (page - 1) * 20;
+      if (!Number.isSafeInteger(page) || page < 1 || !Number.isSafeInteger(offset)) return "usage: /sessions [page]";
+      const list = await ctx.harness.runtime.sessions?.(input.sessionKey, offset) ?? [];
       return list.length ? list.map((s) => `${s.title} · ${s.updated} · ${s.key}\n  /resume ${s.id}`).join("\n") : "No sessions on this page.";
     },
   },
