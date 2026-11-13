@@ -57,8 +57,7 @@ export function createTypeSafeProvider(config: TypeSafeConfig,
         !Object.values(answer.probabilities).every(probability)) return;
     const values = Object.values(answer.probabilities) as number[];
     if (Math.abs(values.reduce((a, b) => a + b, 0) - 1) > 0.02 ||
-        (answer.probabilities[answer.choice] as number) < Math.max(...values) ||
-        Math.abs(answer.confidence - (answer.probabilities[answer.choice] as number)) > 0.02) return;
+        (answer.probabilities[answer.choice] as number) < Math.max(...values)) return;
     const state = bank.choices[answer.choice].category;
     return { state: answer.confidence < minConfidence ? "uncertain" : state };
   }

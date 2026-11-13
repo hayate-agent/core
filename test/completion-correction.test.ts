@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { Harness } from "../src/harness.js";
 import { FakeRuntime, MemoryChannel, msg } from "./fakes.js";
 import type { Inbound } from "../src/types.js";
-import { assessCompletion } from "../src/completion-check.js";
+import { assessCompletion } from "./completion-selected.js";
 import { completionPrompt } from "../src/builtin-plugins/completion-prompt.js";
 
 for (const state of ["completed", "stopped"] as const) {

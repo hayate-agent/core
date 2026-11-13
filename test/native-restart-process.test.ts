@@ -12,7 +12,7 @@ for (const entry of ["dist/cli.js", "dist/launcher.js"]) test(`${entry}: real /r
   await writeFile(path.join(home, "hung-plugin.mjs"), "export default {apiVersion:1,activate(api){api.onStop(()=>new Promise(()=>{}));}};");
   await writeFile(path.join(home, "hayate-agent.yaml"), JSON.stringify({ agent: "restart-process-fixture",
     softwareUpdates: { enabled: false }, lifecycle: { restartTimeoutSeconds: 2 }, loop: { drainSeconds: 60 },
-    memory: { enabled: false }, dispatcher: { enabled: false }, mcp: { enabled: false }, plugins: ["hung-plugin.mjs"] }));
+    completionCheck: { provider: "legacy-llm" }, memory: { enabled: false }, dispatcher: { enabled: false }, mcp: { enabled: false }, plugins: ["hung-plugin.mjs"] }));
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("API_SERVER_") &&
     !key.startsWith("MATRIX_") && !key.startsWith("SLACK_") && !key.startsWith("HAYATE_AGENT_") && !key.startsWith("HERMES_")));
   Object.assign(env, { HOME: home, HAYATE_AGENT_HOME: home, API_SERVER_HOST: "127.0.0.1", API_SERVER_PORT: "0", API_SERVER_KEY: "restart-process-test-key" });
@@ -25,14 +25,14 @@ for (const entry of ["dist/cli.js", "dist/launcher.js"]) test(`${entry}: real /r
     assert.ok(condition(), `runtime did not reach expected state: ${stderr.join("").slice(-2000)}`);
   };
   try {
-    await waitFor(() => listeners().length >= 1 && stdout.join("").includes("Gestartet und bereit."));
-    assert.doesNotMatch(stdout.join(""), /Neustart abgeschlossen/);
+    await waitFor(() => listeners().length >= 1 && stdout.join("").includes("Started and ready."));
+    assert.doesNotMatch(stdout.join(""), /Restart complete/);
     const oldPort = listeners()[0];
     const began = Date.now();
     child.stdin.write("/restart\n");
-    await waitFor(() => listeners().length >= 2 && stdout.join("").includes("Neustart abgeschlossen – wieder bereit."));
-    assert.equal([...stdout.join("").matchAll(/Neustart abgeschlossen – wieder bereit\./g)].length, 1);
-    assert.match(stdout.join(""), /Softwarestand:/);
+    await waitFor(() => listeners().length >= 2 && stdout.join("").includes("Restart complete — ready again."));
+    assert.equal([...stdout.join("").matchAll(/Restart complete — ready again\./g)].length, 1);
+    assert.match(stdout.join(""), /Software versions:/);
     assert.equal(child.exitCode, null, "foreground owner must survive its runtime restart");
     assert.match(stdout.join(""), /Restarting: new input is fenced/);
     assert.ok(Date.now() - began < 10_000, "restart must not wait for the never-resolving plugin cleanup or the 60s drain");

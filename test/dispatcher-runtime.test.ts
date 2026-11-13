@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { legacyValidatorRegistry } from "./completion-selected.js";
 import { DispatcherRuntime } from "../src/dispatcher-runtime.js";
 import { Harness } from "../src/harness.js";
 import { FakeRuntime } from "./fakes.js";
@@ -26,7 +27,7 @@ test("recovery after settled direct turn reuses result without another worker", 
     calls++;
     await bridge.channel.send({ channel: "dispatch", target: input.replyTo.target }, "created resource 123");
   } } as unknown as Harness;
-  bridge = new DispatcherRuntime(harness, store);
+  bridge = new DispatcherRuntime(harness, store, undefined, undefined, legacyValidatorRegistry());
   const answer = await bridge.strategy.execute(running, {
     signal: new AbortController().signal,
     intent: (key, replay) => store.intent(task.id, running.token!, key, replay),
@@ -38,7 +39,7 @@ test("recovery after settled direct turn reuses result without another worker", 
   const restored = new ExecutionStore(file); await restored.load();
   assert.equal(restored.list()[0]!.status, "running");
   assert.equal(restored.list()[0]!.intent, undefined);
-  const newBridge = new DispatcherRuntime(harness, restored);
+  const newBridge = new DispatcherRuntime(harness, restored, undefined, undefined, legacyValidatorRegistry());
   const result = gate();
   dispatcher = new Dispatcher(restored, newBridge.strategy, 1, async event => {
     if (event.type === "result") { assert.equal(event.text, answer); result.resolve(); }
@@ -67,7 +68,7 @@ test("cancelled runtime execution waits for stop and actual pump settlement", as
     stopConversation: async () => { stopEntered.resolve(); await stopRelease.promise; },
     waitForSessionIdle: async () => { idleEntered.resolve(); await idleRelease.promise; },
   } as unknown as Harness;
-  const bridge = new DispatcherRuntime(harness, {} as ExecutionStore);
+  const bridge = new DispatcherRuntime(harness, {} as ExecutionStore, undefined, undefined, legacyValidatorRegistry());
   const abort = new AbortController();
   let settled = false;
   const execution = bridge.strategy.execute({ id: "task", token: "token", input: "work" } as never, {

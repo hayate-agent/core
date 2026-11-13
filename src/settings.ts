@@ -1,3 +1,4 @@
+import { validateLanguagePolicy, type LanguagePolicy } from "./language.js";
 import { validatePolicyOverlay, type PolicyOverlay, type PolicyOverride } from "./policy-modules.js";
 import { dispatcherConfig, type DispatcherConfig } from "./dispatcher-config.js";
 import { mergeConversationPolicy } from "./gateway-settings.js";
@@ -18,6 +19,7 @@ import { validateModelSetting, type ModelSetting } from "./model-settings.js";
 
 /** Explicit runtime-writable allowlist; security policy and secrets are deliberately excluded. */
 export interface LocalSettings {
+  language?: LanguagePolicy;
   /** Explicit operator MCP management choice; not an LLM setting tool. */
   mcp?: { enabled: boolean };
   modelRoles?: ModelRoles;
@@ -47,7 +49,9 @@ function validate(value: unknown, defaults: Partial<ContextPolicy> = {}, pruning
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid local settings overlay");
   const data = value as Record<string, unknown>;
   for (const [key, item] of Object.entries(data)) {
-    if (key === "mcp") {
+    if (key === "language") {
+      validateLanguagePolicy(item);
+    } else if (key === "mcp") {
       if (!item || typeof item !== "object" || Array.isArray(item) || Object.keys(item).length !== 1 || typeof (item as { enabled?: unknown }).enabled !== "boolean") throw Error("Invalid MCP settings");
     } else if (key === "modelRoles") {
       validateModelRoles(item);
@@ -126,6 +130,10 @@ function mergeSettings(base: LocalSettings, layer: LocalSettings): LocalSettings
       ...(overrides[name]?.conversation || fields.conversation ? { conversation: mergeConversationPolicy(overrides[name]?.conversation, fields.conversation) } : {}) };
     result.gateways = { ...base.gateways, ...layer.gateways, overrides };
   }
+  if (base.language || layer.language) result.language = { ...base.language, ...layer.language,
+    conversations: { ...base.language?.conversations, ...layer.language?.conversations },
+    mcp: { ...base.language?.mcp, ...layer.language?.mcp },
+    jobs: { ...base.language?.jobs, ...layer.language?.jobs } };
   return structuredClone(result);
 }
 
@@ -171,7 +179,7 @@ export class SettingsService {
     const result: Record<string, any> = Object.assign(Object.create(null), live ? structuredClone(previous) : {});
     const check = (value: unknown) => validate(value, this.defaults.contextMaintenance, this.defaults.toolResultPruning, this.defaults.dispatcher, this.defaults.benchmark);
     const object = (v: unknown): v is Record<string, any> => !!v && typeof v === "object" && !Array.isArray(v);
-    const livePath = (parts: string[]) => parts[0] === "modelRoles" || parts[0] === "reasoningEffortNoneModels" || ["model", "thinking", "review.model", "review.thinking", "dispatcher.rules"].includes(parts.join("."));
+    const livePath = (parts: string[]) => parts[0] === "language" || parts[0] === "modelRoles" || parts[0] === "reasoningEffortNoneModels" || ["model", "thinking", "review.model", "review.thinking", "dispatcher.rules"].includes(parts.join("."));
     if (live) {
       try { check(raw); } catch { this.diagnose("Ignored invalid local settings overlay; retaining previous settings."); return; }
     }
@@ -302,13 +310,15 @@ export class SettingsService {
     const before = mergeSettings(this.defaults, active);
     const after = mergeSettings(this.defaults, candidate);
     for (const key of new Set([...Object.keys(before), ...Object.keys(after)]) as Set<keyof LocalSettings>) {
-      if (["modelRoles", "model", "thinking", "review", "reasoningEffortNoneModels"].includes(key)) continue;
+      if (["language", "modelRoles", "model", "thinking", "review", "reasoningEffortNoneModels"].includes(key)) continue;
       if (key === "dispatcher") {
         const { rules: _a, ...a } = before.dispatcher ?? {};
         const { rules: _b, ...b } = after.dispatcher ?? {};
         if (!isDeepStrictEqual(a, b)) this.restartPending.push(key);
       } else if (!isDeepStrictEqual(before[key], after[key])) this.restartPending.push(key);
     }
+    if (candidate.language === undefined) delete active.language;
+    else active.language = structuredClone(candidate.language);
     if (candidate.modelRoles === undefined) delete active.modelRoles;
     else active.modelRoles = structuredClone(candidate.modelRoles);
     if (candidate.reasoningEffortNoneModels === undefined) delete active.reasoningEffortNoneModels;
@@ -446,6 +456,19 @@ export class SettingsService {
     });
     this.writing = next;
     return next;
+  }
+  setLanguage(value: LanguagePolicy): Promise<void> {
+    validateLanguagePolicy(value);
+    return this.updateLanguage(() => structuredClone(value));
+  }
+  updateLanguage(change: (current: LanguagePolicy) => LanguagePolicy): Promise<void> {
+    const next = this.writing.catch(() => {}).then(async () => {
+      const updated = await this.localForMutation();
+      updated.language = change(structuredClone(updated.language ?? {}));
+      validateLanguagePolicy(updated.language);
+      await this.saveLocal(updated, ["language"]);
+    });
+    this.writing = next; return next;
   }
   setMcpEnabled(enabled: boolean): Promise<void> {
     const next = this.writing.catch(() => {}).then(async () => {

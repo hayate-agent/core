@@ -1,5 +1,23 @@
 # Configuration
 
+## Completion provider compatibility change
+
+Completion checks no longer select `legacy-llm` implicitly. Set
+`completionCheck.provider` to a registered provider name, or explicitly set it to
+`false` to disable completion checks. An absent provider setting is a configuration
+error; an unregistered name fails after plugin activation, before work admission.
+Registration alone does not select a provider. To retain the former LLM judge,
+explicitly select `"legacy-llm"`; no replacement cloud endpoint or model is inferred.
+
+Embedders calling `assessCompletion` must supply a registry with an explicit
+selection. Missing or unknown providers reject rather than becoming an
+`unavailable` verdict. Authorization/cancellation guards still prevent assessment,
+and explicitly disabled checks remain unavailable. Provider runtime failures remain
+fail-closed and non-semantic: public task snapshots retain only a bounded `detail`
+(cause, allowlisted transport code and HTTP error status), never exception messages,
+URLs, prompts or credentials. These diagnostics do not authorize continuation.
+
+
 ## Start with a working profile
 
 For an end-to-end setup, use the [terminal/WebUI/Matrix guide](gateways.md), then

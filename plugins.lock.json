@@ -8,9 +8,9 @@
     "context-plugin.ts": "1da424038b5f5dd8e88999d86c4b26fecca5d21ca4170b83fdba9958eef787f0",
     "context-strategy-plugin.ts": "104c0e4a9b9619d361a8089b43724986366bc3665993c2146268e5f847698643",
     "continuation-plugin.ts": "e5485881f09b871912fa5574af6fe9c7b323abe01b03b8876cd235b436595a7d",
-    "cron-report-plugin.ts": "71bb9d6432985d25defb18d4ef45653342c2243f42e215b972b0eb586d24a260",
-    "cron-report-processing.ts": "4e40d3f4c9801d87af1bdd8e2624a12f21e02ad49378a504abaea7a1bb49856f",
-    "cron-reports.ts": "0bbf04e0c3ce1c8a499cdcc2e3bba1d27c88aacd71218f1b4027002591947991",
+    "cron-report-plugin.ts": "76129c76f18f73f86c961c56bc40bccf0b1061f36a1166c52555270a514ef871",
+    "cron-report-processing.ts": "c2dd4c396ffd53066ae26de5eac7158b4d0bcd0d8bb3a23c0d873c0af37814c2",
+    "cron-reports.ts": "259683d237e6322917e1f41df26a8221b7fbb20a85c505669bebc521e68f8b9f",
     "dispatcher-plugin.ts": "8dcafde10d1aa6676835b89571ef9dfaf51bdbb026cec81aa133b7e9c7be27c6",
     "execution-metadata.ts": "a19904571ba749a4821bcd47f4b9c4f496b067c553090a18cb36cc4bdd666cbc",
     "extension-manager-plugin.ts": "51ea7b167e2683b180f510a005305975afabb22819e02aa03aafbc434061200c",
@@ -33,6 +33,7 @@
     "nightly-default.ts": "d76da5b8016785bc0fae04ac7129f0841a82c5b7e9839510419f15a6b13eda13",
     "nightly-strategy-plugin.ts": "f2307c66003387167318055b7e49ce84e115ffd5d8e7d1a21ae8106318dbc0a8",
     "policy-manager-plugin.ts": "ef61d6f32c3fadd75f16bec3732763f15e0fa131a12a7af30240a0599a44ef44",
+    "output-language.ts": "7ddc3dbeb169dfdb168b0b63fe5129c998b368cb51d2621613a2cf5f00ff652a",
     "protected-content-plugin.ts": "1340a07212f5b30001478d1b761ef4e8c3c8e367fbfc36c02ccb80894b4fe9d0",
     "reloadable-tools-plugin.ts": "ae2680f7dd5f2bc1e95896599c349ec4fe61b5dc4f871f1896e6606f11b8e961",
     "review-engine.ts": "6f6ca5766b1c1c0a2e61f94483fd55db5e4be6241efe68ea9bd60f11f5c68f90",
@@ -47,10 +48,10 @@
     "session-observer-plugin.ts": "53de3d2a70d69f6a37ed8abfedd44ec234486a31ddfd36ee63757bb69d2d8a38",
     "subagent-plugin.ts": "5b7ae55c28e50c48ce0a3671c400245ee0fd725ce7c5ad6866a8e63f0b65cd5e",
     "tool-result-projector.ts": "69658e2adef5d5327797762886199b87fd3bff94f20beab8a199280e0d517746",
-    "typesafe-validator-provider.ts": "1351371e83e6895553ec5828e32b8e1cbe83e15f1a714cdf1d8f33c7e4cf1aeb",
+    "typesafe-validator-provider.ts": "08316fb1da8ac351a5fc6602204cac3aa3fd8c4c1ff5c3ced5acd26c9693dddd",
     "wasm-tools-plugin.ts": "438c6ac8899e283e4268f51ef451275bf16a37b584db84ee8302a26200cc70de"
   },
   "repository": "https://git.vanillacore.net/harness/plugins",
-  "revision": "5bd7516b74545a36b5d33f448a1a406501054be9",
+  "revision": "fb38b7d7fbd7236549c723035bbaf006fd5d5eff",
   "schema": 1
 }

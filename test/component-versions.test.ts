@@ -30,16 +30,16 @@ test("component versions come from installed locked files, not the independently
   }, true);
   const text = formatSoftwareVersions(info);
   assert.match(text, /Core: 0\.1\.253 · aaaaaaaaaaaa/);
-  assert.match(text, /Plugins \(Core-Bundle\): 0\.1\.253 · bbbbbbbbbbbb/);
+  assert.match(text, /Plugins \(Core bundle\): 0\.1\.253 · bbbbbbbbbbbb/);
   assert.equal(info.components?.webui, undefined);
   assert.doesNotMatch(text, /mitgeliefert|Gateway|0\.1\.7/);
-  assert.match(text, /Web-Dashboard \(Paket installiert; Laufzeit nicht bestätigt\): 0\.2\.1\+dev\.cccccccccccc · cccccccccccc/);
+  assert.match(text, /Web dashboard \(package installed; runtime not confirmed\): 0\.2\.1\+dev\.cccccccccccc · cccccccccccc/);
   assert.deepEqual(paths, ["plugins.lock.json", "dist/source-build-info.json"]);
 });
 
 test("unavailable or malformed legacy metadata remains explicit without blocking readiness", () => {
   const missing = readSoftwareVersions({ version: "0.1.253" }, () => { throw Error("ENOENT"); });
-  assert.match(formatSoftwareVersions(missing), /Plugins: Versionsdaten nicht vorhanden/);
+  assert.match(formatSoftwareVersions(missing), /Plugins: Version data unavailable/);
   assert.doesNotMatch(formatSoftwareVersions(missing), /Web/);
   const malformed = readSoftwareVersions({ version: "0.1.253" }, path => path === "plugins.lock.json"
     ? { schema: 1, revision: "fake" }

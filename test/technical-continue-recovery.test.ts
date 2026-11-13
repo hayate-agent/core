@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {Harness} from '../src/harness.js';
 import {FakeRuntime,MemoryChannel,msg} from './fakes.js';
-import {assessCompletion} from '../src/completion-check.js';
+import {assessCompletion} from './completion-selected.js';
 import {completionPrompt} from '../src/builtin-plugins/completion-prompt.js';
 import {ExecutionStore} from '../src/execution.js';
 import {mkdtemp,rm} from 'node:fs/promises';

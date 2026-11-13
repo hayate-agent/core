@@ -580,3 +580,42 @@ test("operator controls and inspection bypass failing skill discovery", async ()
   assert.ok(ch.sent.length >= 2);
   await assert.rejects(harness.commandHandler!({ sessionKey: "mem:room1", text: "/unknown-skill", source: "channel" }), /integrity failure/);
 });
+
+test("cron management uses system locale and preserves controls and admitted run language", async () => {
+  const { ctx, send, ch, harness } = setup({ admins: ["owner"] });
+  let policy: import("../src/language.js").LanguagePolicy = { system: "de", background: "es" };
+  ctx.language = { get: () => policy, update: async change => { policy = change(policy); } };
+  const job = { name: "weather", schedule: "0 * * * *", prompt: "weather", audience: "agent" as const };
+  let enabled = true, present = false;
+  const admitted: string[] = [];
+  ctx.scheduler = {
+    jobs: [job], list: () => present ? [{ name: job.name, schedule: job.schedule, enabled, next: "tomorrow" }] : [],
+    find: (name: string) => present && name === job.name ? job : undefined,
+    load: async () => {}, setEnabled: (_name: string, value: boolean) => { enabled = value; },
+    runJob: async () => { admitted.push(policy.jobs?.["cron:weather"] ?? policy.background!); },
+  } as unknown as import("../src/scheduler.js").Scheduler;
+  const check = async (command: string, expected: RegExp, sender = "owner") => { await send(command, sender); assert.match(ch.texts().at(-1)!, expected); };
+  try {
+    await check("/cron list", /Keine Jobs/);
+    present = true;
+    await check("/cron list", /weather \[0 \* \* \* \*\] nächster Lauf tomorrow/);
+    await check("/cron pause weather", /Nur für Administratoren/, "other");
+    assert.equal(enabled, true);
+    await check("/cron pause weather", /weather pausiert/);
+    await check("/cron list", /pausiert/);
+    await check("/cron resume weather", /weather fortgesetzt/);
+    await check("/cron reload", /1 Job\(s\) neu geladen/);
+    await check("/cron run missing", /Unbekannter Job: missing/);
+    await check("/cron nonsense weather", /Verwendung: \/cron/);
+    await check("/cron run weather", /weather gestartet/);
+    await check("/cron language weather ru", /gespeichert/);
+    await check("/cron run weather", /weather gestartet/);
+    assert.deepEqual(admitted, ["es", "ru"]);
+    await check("/help", /\/language.*Standardsprache/);
+    ctx.scheduler!.load = async () => { throw Error("sensitive failure"); };
+    await check("/cron reload", /Befehl fehlgeschlagen/);
+    assert.doesNotMatch(ch.texts().at(-1)!, /sensitive failure/);
+    ctx.scheduler = undefined;
+    await check("/cron", /Kein Scheduler/);
+  } finally { await harness.stop(1000); }
+});

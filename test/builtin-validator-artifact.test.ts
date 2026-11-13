@@ -30,14 +30,14 @@ test("built TypeSafe provider exports register with the built Core host and rema
   try {
     assert.equal(createTypeSafeProvider(config).name, "typesafe");
     host.validators.select("typesafe"); // Same selection-before-load order as CLI startup.
-    assert.equal(host.validators.current, undefined);
+    assert.throws(() => host.validators.current, /not registered/);
     await host.load([], { agent: "artifact-test", home: "/unused", cwd: "/unused" }, [], [], [createTypeSafeValidatorPlugin(config)]);
     assert.deepEqual(host.validators.versions(), [{ name: "typesafe", version: 1, apiVersion: 1 }]);
     assert.equal(host.validators.selected, "typesafe");
     assert.equal(host.validators.current?.name, "typesafe");
     assert.equal(typeof host.validators.current?.assess, "function");
     host.validators.select("missing-provider");
-    assert.equal(host.validators.current, undefined, "missing selection must not fall back to TypeSafe");
+    assert.throws(() => host.validators.current, /not registered/, "missing selection must fail explicitly");
     host.validators.select(false);
     assert.equal(host.validators.current, undefined, "disabled selection must not activate a provider");
     assert.equal(network.mock.callCount(), 0);
