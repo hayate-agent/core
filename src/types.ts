@@ -219,6 +219,8 @@ export interface AgentRuntime {
   models?(): Promise<string[]>;
   sessions?(key: string, offset?: number): Promise<import("./sessions.js").SessionSummary[]>;
   /** Read the exact resume binding without creating/activating a model session. */
+  /** Metadata-only durable worker evidence, before any opaque execution intent. Never opens models/tools/MCP. */
+  prepareWorkerEvidence?(key: string, evidence: { executionId: string; task: string }): Promise<void>;
   retainedSessionHistory?(key: string): Promise<{ sessionId: string; sessionFile?: string; entries: import("./session-archive.js").ArchiveEntry[]; incomplete?: boolean } | undefined>;
   /** Read retained history without opening, binding or activating a session. */
   sessionHistory?(key: string, id: string): Promise<import("./session-archive.js").ArchiveEntry[]>;
