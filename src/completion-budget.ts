@@ -8,6 +8,8 @@ export function fitsCompletionPrompt(prompt: unknown): prompt is string {
   return typeof prompt === "string" && prompt.length <= COMPLETION_PROMPT_LIMIT && Buffer.byteLength(prompt, "utf8") <= COMPLETION_PROMPT_LIMIT;
 }
 
+const hostPromptFits = fitsCompletionPrompt;
+
 export function prefix(text: string, limit: number): string {
   let end = Math.min(text.length, Math.max(0, limit));
   if (end < text.length && end > 0 && /[\uD800-\uDBFF]/.test(text[end - 1]) && /[\uDC00-\uDFFF]/.test(text[end])) end--;
@@ -56,7 +58,9 @@ export function projectObservation(text: string, role: string, limit: number): {
 /** One existing collector; immutable projection only. Each candidate is fully
  * rendered and measured. No final-string slicing and no model-selected evidence. */
 export function renderCompletionPrompt(strategy: CompletionPrompt, input: Inbound, reply: string,
-  authorization: CompletionAuthorization, now: () => number): string | undefined {
+  authorization: CompletionAuthorization, now: () => number, maximumBytes = COMPLETION_PROMPT_LIMIT): string | undefined {
+  if (!Number.isSafeInteger(maximumBytes) || maximumBytes < 1024 || maximumBytes > COMPLETION_PROMPT_LIMIT) return undefined;
+  const fitsCompletionPrompt = (value: unknown): value is string => hostPromptFits(value) && Buffer.byteLength(value, "utf8") <= maximumBytes;
   const clock = now();
   const render = (value: Inbound, response: string) => strategy(value, response, authorization, () => clock);
   const full = render(input, reply);

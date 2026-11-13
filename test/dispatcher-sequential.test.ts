@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { DispatcherRuntime } from "../src/dispatcher-runtime.js";
 import { legacyValidatorRegistry } from "./completion-selected.js";
+import { assessmentPolicyStamp } from "../src/completion-check.js";
 import { ValidatorRegistry } from "../src/validator.js";
 import { Dispatcher } from "../src/dispatcher.js";
 import { ExecutionStore, type ExecutionEvent } from "../src/execution.js";
@@ -1417,6 +1418,7 @@ test("crash after failed assessment commit retains exactly one diagnostic, backo
   await store.workerSession(task.id, claim.token!, workerSession);
   const nextAt = Date.now() + 60000;
   await store.checkpoint(task.id, claim.token!, JSON.stringify({ v: 1, planner: { requested: {} },
+    assessmentPolicy: assessmentPolicyStamp(legacyValidatorRegistry(), { config: roles, defaults }, 120000),
     plan: JSON.parse(steps(["verify resource", "simple"])).steps, outcomes: [],
     assessment: { index: 0, reply: "already created\nSTEP-STATUS: complete", tools: 1,
       evidence: [{ name: "bash", error: false, result: "receipt17" }], attempts: 1, nextAt, diagnostic: "invalid_response" } }),
