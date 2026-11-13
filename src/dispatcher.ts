@@ -1,6 +1,6 @@
 import type { ExecutionRecoveryPolicy } from "./execution-recovery.js";
 import { validateWorkerPin } from "./model-roles.js";
-import { ExecutionClaimConflict, ExecutionDecisionConflict, ExecutionDeadlineExpired, ExecutionWorkerFailure, ExecutionAssessmentHold, type Execution, type ExecutionEvent, type ExecutionStore } from "./execution.js";
+import { executionDecisionRevision, ExecutionClaimConflict, ExecutionDecisionConflict, ExecutionDeadlineExpired, ExecutionWorkerFailure, ExecutionAssessmentHold, type Execution, type ExecutionEvent, type ExecutionStore } from "./execution.js";
 import { toolGuardDenialReason } from "./tool-guard-error.js";
 import { PriorityScheduler, type TaskPriority } from "./task-priority.js";
 
@@ -292,7 +292,7 @@ export class Dispatcher {
         decisions: async () => {
           check();
           const rows = await this.store.applyDecisions(task.id, token);
-          decisionRevision = rows.length;
+          decisionRevision = executionDecisionRevision(rows);
           return rows;
         },
         fenceDecisions: revision => this.store.fenceDecisions(task.id, token, revision),
@@ -312,7 +312,7 @@ export class Dispatcher {
     } catch (error) {
       const current = this.store.list().find(row => row.id === task.id);
       if (error instanceof ExecutionDecisionConflict || (current?.status === "running" && current.token === token &&
-          (current.decisions?.length ?? 0) !== decisionRevision && strategy.decisionBoundary?.(current))) {
+          executionDecisionRevision(current.decisions) !== decisionRevision && strategy.decisionBoundary?.(current))) {
         await this.store.deferDecision(task.id, token).catch(this.report);
         return;
       }
@@ -338,6 +338,14 @@ export class Dispatcher {
     if (action === "continue" && task.intent && !this.strategyFor(task)?.reconcile) throw Error("Strategy has no reconciliation support; choose explicit retry or cancel");
     await this.store.resolve(parent, id, actor, action, evidence);
     await this.kick();
+  }
+  async consolidateDecisions(parent: string, id: string, requestId: string, text: string, replaces: readonly string[], followUp?: import("./execution.js").ExecutionFollowUp): Promise<import("./execution.js").ExecutionDecision> {
+    const task = this.store.list(parent).find(item => item.id === id);
+    if (!task) throw Error("Execution not in this conversation");
+    const strategy = this.strategyFor(task);
+    if (!strategy?.decisionBoundary) throw Error("Strategy has no retained assessment decision boundary");
+    const receipt = await this.store.consolidateDecisions(parent, id, requestId, text, replaces, current => strategy.decisionBoundary!(current), followUp);
+    await this.kick(); return receipt;
   }
   async decide(parent: string, id: string, requestId: string, text: string): Promise<import("./execution.js").ExecutionDecision> {
     if (/^(dispatch|subagent):/.test(parent)) throw Error("Nested worker decisions are disabled");

@@ -312,6 +312,33 @@ for (const gate of ["current", "manual-pause", "held-legacy", "expired", "opaque
   }
 });
 
+for (const admit of [true, false]) test(`consolidated parent follow-up after publication ${admit ? "runs in the original execution" : "requires independent readiness admission"}`, async t => {
+  const env = await setup(t, { plan: steps(["source publication", "medium"], ["live verification", "simple"]),
+    ready: admit ? '{"state":"continue","next":"3"}' : '{"state":"blocked"}',
+    worker: text => text.includes("live verification") && !text.includes("compatibility repair\nREQUIRED EVIDENCE")
+      ? (text.includes("STEP 1/2:\nsource publication") ? "source publication milestone\nSTEP-STATUS: complete" : "Live gate missing\nSTEP-STATUS: blocked: external")
+      : "compatibility repair and existing source integration verified\nSTEP-STATUS: complete",
+    verdict: text => JSON.parse(text.slice(text.lastIndexOf("DATA: ") + 6)).reply.includes("Live gate missing") ? '{"state":"blocked"}' : '{"state":"completed"}',
+  });
+  const task = await env.run("Publish source through required CI and perform separately gated live verification. Source compatibility repair remains authorized; never bypass the live gate.");
+  assert.equal(task.status, "paused"); assert.equal(state(task.checkpoint).outcomes.length, 1);
+  await env.dispatcher.decide("parent", task.id, "old-scope", "Preserve all original restrictions and effect receipts");
+  await env.dispatcher.waitForExecution(task.id);
+  const before = env.calls.worker.length;
+  const next = { task: "compatibility repair", role: "high" as const, reason: "repair existing failed compatibility contract", evidence: "Verified source integration and required CI receipts; no live effect" };
+  await env.dispatcher.consolidateDecisions("parent", task.id, "current-source-repair", "Source compatibility repair is pending after publication; live verification remains OPEN. Original scope and gates remain binding. No second writer or replay.", ["old-scope"], next);
+  await env.dispatcher.waitForExecution(task.id);
+  const current = env.store.list()[0]!, checkpoint = state(current.checkpoint);
+  assert.equal(current.id, task.id); assert.equal(current.status, "paused", "genuine live hold is not falsely completed");
+  assert.deepEqual(checkpoint.appliedFollowUps, ["current-source-repair"]);
+  assert.equal(checkpoint.plan.length, 3);
+  assert.equal(env.calls.worker.length, before + (admit ? 1 : 0));
+  if (admit) { assert.deepEqual(checkpoint.stepIds, [0, 2, 1]); assert.equal(checkpoint.outcomes.length, 2); assert.match(checkpoint.outcomes[1]!.result, /compatibility repair/); }
+  await env.dispatcher.control("parent", task.id, "resume"); await env.dispatcher.waitForExecution(task.id);
+  assert.equal(state(env.store.list()[0]!.checkpoint).plan.length, 3, "same amendment never adds another follow-up on repeated wake");
+  assert.equal(env.calls.worker.length, before + (admit ? 1 : 0), "neither publication nor settled repair replays");
+});
+
 test("delegated step uses selected dedicated provider, not legacy LLM", async t => {
   const validators = new ValidatorRegistry(); let assessments = 0;
   validators.register({ apiVersion: 1, name: "dedicated", version: 1,
