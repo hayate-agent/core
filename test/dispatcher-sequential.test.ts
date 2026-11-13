@@ -4,6 +4,7 @@ import { mkdtemp, rm, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { DispatcherRuntime } from "../src/dispatcher-runtime.js";
+import { legacyValidatorRegistry } from "./completion-selected.js";
 import { ValidatorRegistry } from "../src/validator.js";
 import { Dispatcher } from "../src/dispatcher.js";
 import { ExecutionStore, type ExecutionEvent } from "../src/execution.js";
@@ -90,7 +91,7 @@ async function setup(t: import("node:test").TestContext, script: Script, opts: {
   let bridge!: DispatcherRuntime;
   const harness = new Harness({ runtime, tickMs: 60000, busyMode: "queue", beforeExecution: input => bridge.beforeTurn(input.sessionKey) });
   harness.onStateChange = async () => {};
-  bridge = new DispatcherRuntime(harness, store, undefined, () => ({ config: opts.roles ?? roles, defaults }), opts.validators, opts.runtimeProvenance);
+  bridge = new DispatcherRuntime(harness, store, undefined, () => ({ config: opts.roles ?? roles, defaults }), opts.validators ?? legacyValidatorRegistry(), opts.runtimeProvenance);
   harness.addChannel(bridge.channel);
   const events: ExecutionEvent[] = [];
   let settle!: () => void; let settled = new Promise<void>(r => { settle = r; });
@@ -955,7 +956,7 @@ test("direct strategy remains the default and unchanged", async t => {
   let bridge!: DispatcherRuntime;
   const harness = new Harness({ runtime, tickMs: 60000, busyMode: "queue", beforeExecution: input => bridge.beforeTurn(input.sessionKey) });
   harness.onStateChange = async () => {};
-  bridge = new DispatcherRuntime(harness, store); harness.addChannel(bridge.channel);
+  bridge = new DispatcherRuntime(harness, store, undefined, undefined, legacyValidatorRegistry()); harness.addChannel(bridge.channel);
   let done!: () => void; const result = new Promise<void>(r => { done = r; });
   const dispatcher = new Dispatcher(store, bridge.strategy, 1, async e => { if (e.type === "result") done(); }, () => {});
   t.after(async () => { await dispatcher.stop(); await harness.stop(1000); await rm(home, { recursive: true, force: true }); });
@@ -1503,6 +1504,7 @@ test("retained assessment bounds reports and tool entries to the reloadable chec
   const evidence = Array.from({ length: 40 }, (_, i) => ({ name: "bash".repeat(50), error: false,
     call: "command".repeat(100), result: String(i) + "result".repeat(200) }));
   const strategy = sequentialStrategy({ harness: env.harness, store: env.store,
+    validators: legacyValidatorRegistry(),
     roles: () => ({ config: roles, defaults }), resetTurn: () => {}, turn: () => ({ tools: 40, evidence }),
     runTurn: async () => "report".repeat(10600) + "\nSTEP-STATUS: complete" });
   await assert.rejects(strategy.execute(claim, { signal: new AbortController().signal,
@@ -1525,6 +1527,7 @@ test("Matrix status delivery failure cannot pause a persisted sequential plan", 
   const task = await env.store.submit("parent", "isolated", "read", "sequential");
   const claim = await env.store.claim(task.id);
   const strategy = sequentialStrategy({ harness: env.harness, store: env.store,
+    validators: legacyValidatorRegistry(),
     roles: () => ({ config: roles, defaults }), resetTurn: () => {}, turn: () => ({ tools: 0 }),
     runTurn: async () => "done\nSTEP-STATUS: complete" });
   const result = await strategy.execute(claim, { signal: new AbortController().signal,

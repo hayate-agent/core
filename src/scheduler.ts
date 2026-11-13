@@ -8,6 +8,7 @@
  * - Otherwise the prompt (+ script output) runs as an agent turn in session `cron:<name>`.
  * - NO_REPLY output stays silent.
  */
+import { languageTag } from "./language.js";
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
@@ -21,6 +22,8 @@ import type { Address } from "./types.js";
 const run = promisify(execFile);
 
 export interface CronJob {
+  /** Optional BCP-47 output language; omission inherits background/system defaults. */
+  language?: string;
   name: string;
   schedule: string;
   prompt?: string;
@@ -45,6 +48,7 @@ export function parseJobs(text: string): CronJob[] {
   for (const j of jobs) {
     if (!j || typeof j.name !== "string") throw new Error("cron job without name");
     if (!j.absent && typeof j.schedule !== "string") throw new Error(`cron job "${j.name}" has no schedule`);
+    if (j.language !== undefined) languageTag(j.language);
     if (j.audience !== undefined && !["agent", "user"].includes(j.audience)) throw Error("Invalid cron audience");
     if (j.audience === "agent" && j.no_agent) throw Error("Agent-only cron requires agent processing");
     if (j.follow_up && (!j.audience || typeof j.follow_up.authorization !== "string" ||
@@ -71,6 +75,8 @@ export function resolveDelivery(job: CronJob, home?: Address): Address | undefin
 }
 
 export interface SchedulerOptions {
+  /** Resolve once when admitting each occurrence, not when delivering its report. */
+  language?: (job: CronJob) => string;
   jobsFile?: string;
   /** Directory scripts are resolved against (default: <jobs dir>/scripts). */
   scriptsDir?: string;
@@ -160,6 +166,7 @@ export class Scheduler {
   }
 
   private async runJobForeground(job: CronJob): Promise<void> {
+    const language = languageTag(this.opts.language?.(job) ?? job.language ?? "en");
     let scriptOut = "";
     if (job.script) {
       const scriptsDir = this.opts.scriptsDir ?? path.join(this.baseDir(), "scripts");
@@ -179,7 +186,7 @@ export class Scheduler {
       authorization: job.follow_up?.authorization, maxTasks: job.follow_up?.max_tasks ?? 0 } : undefined;
     if (job.no_agent && metadata) {
       if (scriptOut && scriptOut !== NO_REPLY) await this.harness.accept({ id: metadata.runId, sessionKey: `cron:${job.name}`,
-        text: metadata.original, source: "cron", replyTo: to, cronReport: { ...metadata, output: scriptOut } });
+        text: metadata.original, source: "cron", language, replyTo: to, cronReport: { ...metadata, output: scriptOut } });
       return;
     }
     if (job.no_agent) {
@@ -197,7 +204,7 @@ export class Scheduler {
     prompt += `\n\n(Scheduled job "${job.name}". If there is nothing worth reporting, reply exactly ${NO_REPLY}.)`;
     if (metadata) {
       metadata.original = prompt;
-      await this.harness.accept({ id: metadata.runId, sessionKey: `cron:${job.name}`, text: prompt, source: "cron", replyTo: to, cronReport: metadata });
-    } else this.harness.enqueue({ sessionKey: `cron:${job.name}`, text: prompt, source: "cron", replyTo: to });
+      await this.harness.accept({ id: metadata.runId, sessionKey: `cron:${job.name}`, text: prompt, source: "cron", language, replyTo: to, cronReport: metadata });
+    } else this.harness.enqueue({ sessionKey: `cron:${job.name}`, text: prompt, source: "cron", language, replyTo: to });
   }
 }

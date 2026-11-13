@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { assessCompletion } from "../src/completion-check.js";
+import { assessCompletion } from "./completion-selected.js";
 import { fitsCompletionPrompt, prefix, projectObservation, renderCompletionPrompt } from "../src/completion-budget.js";
 import { completionPrompt } from "../src/builtin-plugins/completion-prompt.js";
 import { Harness } from "../src/harness.js";

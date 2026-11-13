@@ -40,7 +40,7 @@ test("ready notice is persisted before send, once per boot, without model work o
   const n = notice(h); n.ready(ROOM); n.ready(ROOM);
   for (let i = 0; i < 10 && !channel.sent.length; i++) await settle();
   assert.equal(channel.sent.length, 1); assert.deepEqual(channel.sent[0].to, ROOM);
-  assert.match(channel.sent[0].text, /Neustart abgeschlossen.*wieder bereit/);
+  assert.match(channel.sent[0].text, /Restart complete.*ready again/);
   assert.match(channel.sent[0].text, /0\.1\.251.*aaaaaaaaaaaa/);
   assert.deepEqual(h.snapshotSessions()[0].task, task); assert.equal(h.paused, true); assert.equal(runtime.sessions.size, 0);
 });
@@ -65,7 +65,7 @@ test("first startup is not mislabeled as restart; no recipient means log only", 
   t.after(() => h.stop(0)); h.onStateChange = async () => {};
   notice(h, false).ready(ROOM);
   for (let i = 0; i < 10 && !c.sent.length; i++) await settle();
-  assert.match(c.sent[0].text, /Gestartet und bereit/); assert.doesNotMatch(c.sent[0].text, /Neustart/);
+  assert.match(c.sent[0].text, /Started and ready/); assert.doesNotMatch(c.sent[0].text, /Restart/);
   notice(h).ready(); assert.equal(h.pendingInputs().length, 0); assert.equal(h.outboxEntries().length, 0);
 });
 

@@ -2,6 +2,8 @@
  * Hermes-compatible slash commands (gateway-relevant subset; TUI-only commands are left out).
  * Names and aliases follow hermes_cli/commands.py so operators can keep their habits.
  */
+import { languageCommand, type LanguageSettings } from "./language-command.js";
+import { languageTag, message, resolveLanguage } from "./language.js";
 import { validateModelRoles } from "./model-roles.js";
 import { McpUserError } from "./mcp-management.js";
 import { isTaskPriority } from "./task-priority.js";
@@ -20,6 +22,7 @@ import { renderBenchmarkReport } from "./benchmark/report.js";
 export const VERSION = BUILD_INFO.version;
 
 export interface CommandContext {
+  language?: LanguageSettings;
   harness: Harness;
   mcp?: import("./mcp-management.js").McpManagement;
   modelSettings?: {
@@ -142,6 +145,9 @@ function recurringCommand(kind: "heartbeat" | "loop"): Command["run"] {
 }
 
 export const COMMANDS: Command[] = [
+  { name: "language", aliases: ["sprache"], help: "Show/set default, system, background, conversation or per-MCP language (BCP-47)",
+    run: (args, input, ctx) => languageCommand(args, input.sessionKey, ctx.language, isAdmin(ctx, input)) },
+
   {
     name: "model-roles", admin: true, help: "Inspect or configure persistent model roles",
     run: async (args, input, ctx) => {
@@ -609,7 +615,7 @@ export const COMMANDS: Command[] = [
     help: "Fence new input, checkpoint work and restart within lifecycle.restartTimeoutSeconds (default 60s)",
     admin: true,
     run: async (_a, input, ctx) => {
-      reply(ctx, input, "♻️ Restarting: new input is fenced; current work is checkpointed for recovery (default deadline 60s).");
+      reply(ctx, input, message(resolveLanguage(ctx.language?.get(), { kind: "system" }), "lifecycle.restarting"));
       await ctx.restart();
     },
   },
@@ -663,15 +669,17 @@ export const COMMANDS: Command[] = [
     admin: true,
     help: "Manage MCP servers, connections, tools and OAuth: /mcp help",
     run: async (args, input, ctx) => {
-      if (!ctx.mcp) return "MCP management is unavailable in this runtime";
+      const locale = resolveLanguage(ctx.language?.get(), { kind: "system" });
+      if (!ctx.mcp) return message(locale, "mcp.unavailable");
       const op = {
+        language: locale,
         owner: JSON.stringify([input.replyTo?.channel ?? "console", input.replyTo?.target ?? "local", input.replyTo?.thread ?? null, input.sender ?? "console:local", input.sessionKey]),
         cwd: ctx.cwdFor?.(input.sessionKey) ?? process.cwd(),
         notify: (text: string) => ctx.harness.post(input, text),
         ui: input.replyTo?.channel === "console" && input.sessionKey === (ctx.localSessionKey?.() ?? "console:local") ? ctx.pluginUI?.() : undefined,
       };
       try { return args.trim() ? await ctx.mcp.execute(args, op) : await ctx.mcp.menu(op); }
-      catch (error) { return error instanceof McpUserError ? error.message : "MCP operation failed. Check the server name/configuration and /mcp status. Credential and callback details are withheld. /mcp help lists commands."; }
+      catch (error) { return error instanceof McpUserError ? error.message : message(locale, "mcp.failure"); }
     },
   },
   {
@@ -686,31 +694,45 @@ export const COMMANDS: Command[] = [
   },
   {
     name: "cron",
-    help: "Scheduled jobs: list | run <name> | pause <name> | resume <name> | reload",
+    help: "Scheduled jobs: list | run <name> | pause <name> | resume <name> | reload | language <name> <BCP-47 tag|reset>",
     run: async (args, input, ctx) => {
-      if (!ctx.scheduler) return "no scheduler";
+      const locale = resolveLanguage(ctx.language?.get(), { kind: "system" });
+      if (!ctx.scheduler) return message(locale, "cron.noScheduler");
       const [sub, ...rest] = args.trim().split(/\s+/);
       const name = rest.join(" ");
       if (!sub || sub === "list") {
         const jobs = ctx.scheduler.list();
-        return jobs.length ? jobs.map((j) => `• ${j.name} [${j.schedule}] ${j.enabled ? `next ${j.next ?? "?"}` : "paused"}`).join("\n") : "no jobs";
+        return jobs.length ? jobs.map((j) => `• ${j.name} [${j.schedule}] ${j.enabled ? message(locale, "cron.next", { next: j.next ?? "?" }) : message(locale, "cron.paused")}`).join("\n") : message(locale, "cron.empty");
       }
       if (sub === "reload") {
         await ctx.scheduler.load();
-        return `reloaded ${ctx.scheduler.jobs.length} job(s)`;
+        return message(locale, "cron.reloaded", { count: ctx.scheduler.jobs.length });
       }
-      if (!isAdmin(ctx, input)) return "⛔ admin only";
+      if (!isAdmin(ctx, input)) return message(locale, "command.adminOnly");
+      if (sub === "language") {
+        if (!ctx.language) return message(locale, "language.unavailable");
+        const jobName = rest.slice(0, -1).join(" "), raw = rest.at(-1);
+        if (!ctx.scheduler.find(jobName) || !raw) return message(locale, "language.help");
+        let tag: string | undefined;
+        try { tag = raw === "reset" ? undefined : languageTag(raw); } catch { return message(locale, "language.invalid"); }
+        await ctx.language.update(current => {
+          current.jobs = { ...current.jobs };
+          if (tag) current.jobs[`cron:${jobName}`] = tag; else delete current.jobs[`cron:${jobName}`];
+          return current;
+        });
+        return message(resolveLanguage(ctx.language.get(), { kind: "system" }), "language.changed");
+      }
       const job = ctx.scheduler.find(name);
-      if (!job) return `unknown job: ${name}`;
+      if (!job) return message(locale, "cron.unknown", { name });
       if (sub === "run") {
         await ctx.scheduler.runJob(job);
-        return `▶️ ${name} triggered`;
+        return message(locale, "cron.triggered", { name });
       }
       if (sub === "pause" || sub === "resume") {
         ctx.scheduler.setEnabled(name, sub === "resume");
-        return `${name} ${sub}d`;
+        return message(locale, sub === "pause" ? "cron.pauseResult" : "cron.resumeResult", { name });
       }
-      return "usage: /cron list|run|pause|resume|reload";
+      return message(locale, "cron.usage");
     },
   },
   // -- Info
@@ -724,12 +746,12 @@ export const COMMANDS: Command[] = [
         ...[...(ctx.pluginCommands?.values() ?? [])].map((c) => ({ ...c, aliases: undefined, origin: "Plugin" })),
       ].sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
       const group = (admin: boolean) => commands.filter((c) => Boolean(c.admin) === admin)
-        .map((c) => `/${c.name}${c.aliases?.length ? ` (${c.aliases.map((a) => `/${a}`).join(" ")})` : ""}${c.admin ? " [admin]" : ""} [${c.origin}]: ${c.help}`).join("\n");
+        .map((c) => `/${c.name}${c.aliases?.length ? ` (${c.aliases.map((a) => `/${a}`).join(" ")})` : ""}${c.admin ? " [admin]" : ""} [${c.origin}]: ${c.name === "language" && c.origin === "Hayate Agent" ? message(resolveLanguage(ctx.language?.get(), { kind: "system" }), "language.listing") : c.help}`).join("\n");
       return `Hayate Agent commands ([admin] requires administrator access):\n\nGeneral commands:\n${group(false)}\n\nAdmin commands:\n${group(true)}`;
     },
   },
   { name: "harness", help: "Locate built-in Hayate Agent customization/development guide", run: async () => `Hayate Agent development guide: ${developmentGuide}\nRead this guide before changing Hayate Agent. Identity/voice, tools and models are configurable; native plugins support commands/channels/model tools/text panels/lifecycle (see plugins.md); interactive plugin dialogs are available locally; automatic runtime promotion remains planned.` },
-  { name: "version", help: "Show installed Core, Plugins and local Web versions", run: async (_a, _i, ctx) => `Hayate Agent ${VERSION} (runtime: ${ctx.harness.runtime.name})\n${formatSoftwareVersions(readSoftwareVersions(BUILD_INFO, undefined, ctx.harness.channels.has("webui")))}` },
+  { name: "version", help: "Show installed Core, Plugins and local Web versions", run: async (_a, _i, ctx) => `Hayate Agent ${VERSION} (runtime: ${ctx.harness.runtime.name})\n${formatSoftwareVersions(readSoftwareVersions(BUILD_INFO, undefined, ctx.harness.channels.has("webui")), resolveLanguage(ctx.language?.get(), { kind: "system" }))}` },
 ];
 
 const BY_NAME = new Map<string, Command>();
@@ -792,7 +814,7 @@ export function installCommands(ctx: CommandContext): void {
     if (!cmd) {
       const plugin = ctx.pluginCommands?.get(parsed.name);
       if (plugin) {
-        if (plugin.admin && !isAdmin(ctx, input)) reply(ctx, input, "⛔ admin only");
+        if (plugin.admin && !isAdmin(ctx, input)) reply(ctx, input, message(resolveLanguage(ctx.language?.get(), { kind: "system" }), "command.adminOnly"));
         else {
           try {
             const text = await plugin.run(parsed.args, { sessionKey: input.sessionKey, sender: input.sender, cwd: ctx.cwdFor?.(input.sessionKey),
@@ -811,12 +833,13 @@ export function installCommands(ctx: CommandContext): void {
       return true;
     }
     let out: string | void;
-    if (cmd.admin && !isAdmin(ctx, input)) out = "⛔ admin only";
+    if (cmd.admin && !isAdmin(ctx, input)) out = message(resolveLanguage(ctx.language?.get(), { kind: "system" }), "command.adminOnly");
     else {
       try {
         out = await cmd.run(parsed.args, input, ctx);
       } catch (err) {
-        out = `⚠️ /${cmd.name}: ${err instanceof Error ? err.message : String(err)}`;
+        out = cmd.name === "cron" ? message(resolveLanguage(ctx.language?.get(), { kind: "system" }), "command.failure", { name: cmd.name })
+          : `⚠️ /${cmd.name}: ${err instanceof Error ? err.message : String(err)}`;
       }
     }
     if (out) reply(ctx, input, out);

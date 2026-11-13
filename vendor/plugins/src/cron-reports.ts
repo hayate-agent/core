@@ -7,6 +7,8 @@ import type { Address } from "./types.js";
 export interface CronReport {
   id: string;
   job: string;
+  /** Resolved output preference retained with this exact job occurrence. */
+  language?: string;
   runId: string;
   createdAt: number;
   audience: "agent" | "user";

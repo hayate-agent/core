@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { assessCompletion } from "../src/completion-check.js";
+import { assessCompletion } from "./completion-selected.js";
 import { readyStepPrompt } from "../src/dispatcher-step-prompt.js";
 import { COMPLETION_PROMPT_LIMIT, fitsCompletionPrompt } from "../src/completion-budget.js";
 import type { Inbound } from "../src/types.js";

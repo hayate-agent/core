@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { legacyValidatorRegistry } from "./completion-selected.js";
 import { DispatcherRuntime } from "../src/dispatcher-runtime.js";
 import { Dispatcher } from "../src/dispatcher.js";
 import type { SequentialState } from "../src/dispatcher-sequential.js";
@@ -55,7 +56,7 @@ async function pausedLikeD2494ffb(home: string) {
   let bridge!: DispatcherRuntime;
   const harness = new Harness({ runtime, tickMs: 60000, busyMode: "queue", beforeExecution: input => bridge.beforeTurn(input.sessionKey) });
   harness.onStateChange = async () => {};
-  bridge = new DispatcherRuntime(harness, store, undefined, () => ({ config: roles, defaults: { model: "p/default", thinking: "high" } }));
+  bridge = new DispatcherRuntime(harness, store, undefined, () => ({ config: roles, defaults: { model: "p/default", thinking: "high" } }), legacyValidatorRegistry());
   harness.addChannel(bridge.channel);
   let settle!: () => void; const settled = new Promise<void>(r => { settle = r; });
   const dispatcher = new Dispatcher(store, bridge.sequential, 1, async event => {

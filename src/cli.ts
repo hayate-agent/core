@@ -105,6 +105,8 @@ import { handoverWorktreeReview } from "./review-worktree.js";
 import { ReviewWorkers } from "./review-execution.js";
 import { ReviewSubagents } from "./review-subagents.js";
 import { capabilityContext } from "./capability-context.js";
+import { resolveLanguage } from "./language.js";
+import { languageService } from "./language-service.js";
 import { messagePlugin } from "./message-plugin.js";
 import { conversationPolicyPlugin } from "./conversation-policy-plugin.js";
 import { roleAwareReviewer, resolveModelRole } from "./model-roles.js";
@@ -227,7 +229,7 @@ async function main(argv: string[]): Promise<void> {
   await reloadSkills();
 
   const plugins = new PluginHost();
-  plugins.validators.select(config.completionCheck?.provider ?? "legacy-llm");
+  plugins.validators.select(config.completionCheck?.provider);
   const initialReloadableTools: PluginHost["tools"] = new Map();
   const reloadableTools = config.reloadableToolPlugins?.length
     ? new ReloadableTools({home:config.home,cwd:config.cwd,agent:config.agent},config.reloadableToolPlugins,log,true, tools => {
@@ -272,6 +274,7 @@ async function main(argv: string[]): Promise<void> {
     apiVersion: 1, executionContexts: (createReviewEngine as typeof createReviewEngine & { executionContexts?: 1 }).executionContexts, modelTools: ["plugin_review"], create: context => createReviewEngine({ ...context, config: reviewSettings }),
   }) : undefined;
   const settings = new SettingsService(path.join(config.home, "settings.local.yaml"), {
+    language: config.language,
     model: config.model, thinking: config.thinking,
     mcp: config.mcp,
     dispatcher: config.dispatcher,
@@ -358,6 +361,7 @@ async function main(argv: string[]): Promise<void> {
   const adaptiveSkills = config.skills.adaptive === true ? new AdaptiveSkills(config.home, config.cwd, skillCatalog) : undefined;
   const runtime = new PiRuntime({
     adaptiveSkills,
+    language: () => settings.effective().language ?? {},
     // Capture worker ancestry before token ownership changes; a reopened worker
     // must never silently fall back to the host startup directory.
     executionContext: key => executionContexts.capture(key),
@@ -499,6 +503,7 @@ async function main(argv: string[]): Promise<void> {
       subagents.beforeTurn(input.sessionKey);
       dispatchRuntime?.beforeTurn(input.sessionKey);
     },
+    language: () => settings.effective().language ?? {},
     capabilityContext: input => capabilityContext({
       revision: settings.revision, sessionKey: input.sessionKey,
       selectedTools: (() => {
@@ -658,7 +663,12 @@ async function main(argv: string[]): Promise<void> {
   } else if (process.stdin.isTTY || rest.includes("--console") || harness.channels.size === 0) harness.addChannel(new ConsoleChannel());
   if (!harness.home && harness.channels.has("console")) harness.home = { channel: "console", target: "local" };
 
-  const scheduler = new Scheduler(harness, { jobsFile: config.cron.jobsFile, timezone: config.timezone });
+  const scheduler = new Scheduler(harness, { jobsFile: config.cron.jobsFile, timezone: config.timezone,
+    language: job => {
+      const policy = settings.effective().language ?? {}, key = `cron:${job.name}`;
+      return resolveLanguage(policy, { kind: "background", sessionKey: key,
+        language: Object.hasOwn(policy.jobs ?? {}, key) ? policy.jobs![key] : job.language });
+    } });
 
   // Restore runtime state (heartbeats, loops, goals, settings) from the last run.
   const store = new StateStore(path.join(config.home, "state.json"));
@@ -737,7 +747,7 @@ async function main(argv: string[]): Promise<void> {
     },
   });
   let requestRestart: () => Promise<void> = async () => { throw Error("Lifecycle startup not complete; retry restart"); };
-  await plugins.load(config.plugins ?? [], { agent: config.agent, home: config.home, cwd: config.cwd, executionContexts: executionContextCapability, foregroundWork: work => harness.withForegroundWork(work) }, [...builtinCommandNames, "sessions", "resume", ...skills.map((s) => s.name)], ["console", "api", "dispatch", ...Object.keys(bundledGatewayModules()), ...harness.channels.keys()], [taskPriorityPlugin(harness, async (key, taskId, priority, signal) => {
+  await plugins.load(config.plugins ?? [], { agent: config.agent, home: config.home, cwd: config.cwd, executionContexts: executionContextCapability, foregroundWork: work => harness.withForegroundWork(work) }, [...builtinCommandNames, "sessions", "resume", ...skills.map((s) => s.name)], ["console", "api", "dispatch", ...Object.keys(bundledGatewayModules()), ...harness.channels.keys()], [languageService(() => settings.effective().language ?? {}), taskPriorityPlugin(harness, async (key, taskId, priority, signal) => {
     const session = harness.sessions.get(key), input = session?.current;
     const task = (session?.tasks ?? (session?.task ? [session.task] : [])).find(task => task.id === taskId);
     if (!task || input?.source !== "channel" || !(input.replyTo?.channel === "console" || !!input.sender && admins.includes(input.sender))) return false;
@@ -764,6 +774,8 @@ async function main(argv: string[]): Promise<void> {
       const mandate = await harness.operatorTaskMandate(parent, requestId, input);
       return dispatcher.submitScheduled(parent, requestId, input, mandate);
     }), subagentPlugin(subagents,async()=>{await persist();}), ...(reloadableTools ? [reloadableToolsPlugin(reloadableTools)] : []), wasmToolsPlugin(config.home, config.wasmTools ?? []), continuationPlugin(harness), loopPlugin(harness), improvementPlugin(improvement!), protectedContentPlugin(protectedContent), gatewayManagerPlugin(gatewayManager, settings), messagePlugin(config.home, gatewayManager), conversationPolicyPlugin(settings, harness), policyManagerPlugin(policyManager, settings), extensionManagerPlugin(extensionManager, settings), gatewayPlugin(settings, harness), contextPlugin(maintenance, settings), ...(config.memory.enabled ? [memoryPlugin(memory), ...(config.memory.consolidation ? [memoryConsolidationHost(config.memory.consolidation, runtime, memory, log)] : [])] : []), skillSearchPlugin(skillCatalog), ...(adaptiveSkills ? [adaptiveSkills.plugin()] : []), ...reviewEngine.plugins], [settings.desired().gatewayPlugins?.webui?.module].filter((value): value is string => typeof value === "string"));
+  // Registration may happen during plugin activation; reject an unresolved name before admitting work.
+  void plugins.validators.current;
   if (dispatchPolicy.enabled) {
     dispatchRuntime = new DispatcherRuntime(harness, executions, async () => {
       await reloadRuntimeSettings();
@@ -982,6 +994,7 @@ async function main(argv: string[]): Promise<void> {
       return reloadSkills();
     }, cron: () => scheduler.load() }),
     approvals,
+    language: { get: () => settings.effective().language ?? {}, update: change => settings.updateLanguage(change) },
     modelRoles: { get: () => settings.effective().modelRoles, set: value => settings.setModelRoles(value) },
     modelSettings: {
       get: effectiveModels,
@@ -1093,7 +1106,7 @@ async function main(argv: string[]): Promise<void> {
   // Never acknowledge from the old process or before startup recovery and
   // channel authentication succeed. Delivery remains independent of work.
   const startupNotice = new StartupNotice({ agent: config.agent,
-    build: readSoftwareVersions(BUILD_INFO), restarted: !!saved,
+    build: readSoftwareVersions(BUILD_INFO), restarted: !!saved, language: resolveLanguage(settings.effective().language, { kind: "system" }),
     post: (input, text) => harness.post(input, text), log });
   announceStartup = () => {
     if (stopping) return;
