@@ -60,7 +60,7 @@ export class DispatcherRuntime {
     if (!task) throw new ToolGuardError("parent_mandate_missing", "Host result execution missing");
     if (task.ownershipHold) throw new ToolGuardError("ownership_lost", "Legacy execution ancestry held after scoped stop");
     if (task.parentStopped || task.status === "cancelled") throw new ToolGuardError("execution_cancelled", "Host result stopped");
-    if (task.status !== "completed") throw new ToolGuardError("authority_revoked", "Host result not completed");
+    if (task.status !== "completed") throw new ToolGuardError("result_not_ready", "Host result not completed");
   }
   beforeTurn(key: string): void {
     if (!this.isWorker(key)) return;
@@ -68,7 +68,7 @@ export class DispatcherRuntime {
     if (!task) throw new ToolGuardError("ownership_lost", "Dispatcher worker no longer authorized: ownership missing");
     if (task.ownershipHold) throw new ToolGuardError("ownership_lost", "Legacy execution ancestry held after scoped stop");
     if (task.parentStopped || task.status === "cancelled") throw new ToolGuardError("execution_cancelled", "Dispatcher worker no longer authorized: stopped");
-    if (task.status !== "running") throw new ToolGuardError("authority_revoked", "Dispatcher worker no longer authorized: not running");
+    if (task.status !== "running") throw new ToolGuardError("ownership_lost", "Dispatcher worker no longer authorized: not running");
   }
   guardTool(key: string, tool: string): void {
     this.beforeTurn(key);
