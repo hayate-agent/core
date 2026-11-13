@@ -24,6 +24,7 @@ export interface PersistedSession {
   heartbeat?: Recurring;
   heartbeatDisabled?: boolean;
   stopPending?: boolean;
+  resetPending?: boolean;
   loop?: Recurring;
   goal?: Goal;
 }

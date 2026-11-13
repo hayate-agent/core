@@ -94,5 +94,6 @@
   "cron.resumeResult": "{name} resumed",
   "cron.usage": "usage: /cron list|run|pause|resume|reload|language <name> <BCP-47 tag|reset>",
   "language.listing": "Show/set default, system, background, conversation or per-MCP language (BCP-47)",
-  "command.failure": "⚠️ /{name}: command failed (details withheld)"
+  "command.failure": "⚠️ /{name}: command failed (details withheld)",
+  "conversation.reset": "🆕 Fresh conversation context. Previous conversation tasks, continuations and child executions were stopped; conversation loops, heartbeat and goal were cleared. Other conversations and independent scheduled jobs are unchanged."
 }

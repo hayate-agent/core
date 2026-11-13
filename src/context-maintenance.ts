@@ -158,6 +158,26 @@ export class ContextMaintenance {
     private readonly now: () => number = Date.now,
     private readonly handoverSummary?: (instructions: string, entries: import("./session-archive.js").ArchiveEntry[], model: string | undefined, signal: AbortSignal) => Promise<string>) { this.archives = new SessionArchives(home); }
 
+  /** Explicit /new cancels old maintenance; never seed its prepared handover
+   * into the fresh conversation. Preserve failed-attempt counters and archives. */
+  async resetConversation(key: string, sessionId: string): Promise<void> {
+    this.interrupt(key);
+    await this.serial(this.file(key), async () => {
+      const state = await this.load(key);
+      this.finishAdmission(state, "cancelled");
+      if (state.recovery) { state.recovery.state = "cancelled"; state.recovery.inFlight = false; }
+      state.pending = undefined; state.continuationPreparationRequired = undefined;
+      state.handover = undefined; state.handoverAfterFailure = undefined; state.recoveryRetry = undefined;
+      state.notices = undefined; state.completionNotice = undefined; state.noticeTarget = undefined;
+      state.sessionId = sessionId; state.epochSessionId = sessionId;
+      state.turns = 0; state.lastMaintenance = 0; state.pressureSinceCompaction = false;
+      state.failure = undefined; state.lastError = undefined; state.lastCompact = undefined; state.lastHandover = undefined;
+      state.observation = undefined; state.beforeObservation = undefined; state.assessmentDiagnostic = undefined;
+      state.unknownUsageNotified = false;
+      await this.save(key, state);
+    });
+  }
+
   /** Successful rotation closes the old maintenance epoch, including crash recovery.
    * Keep the completed operation ID for host prerequisite dedupe, not its pressure. */
   private finishHandover(state: ContextRecord, id: string): void {

@@ -94,7 +94,7 @@ explicit admin/approver configuration and optional WebUI customization tools.
 
 | Task | Commands |
 | --- | --- |
-| Start or resume a conversation | `/new`, `/title`, `/sessions`, `/resume` |
+| Start or resume a conversation | `/new` / `/reset` stop old conversation work before fresh context; `/title`, `/sessions`, `/resume` |
 | Control current work | `/stop`, `/queue`, `/steer`, `/busy` |
 | Schedule work | `/goal`, `/heartbeat`, `/loop`, `/cron` |
 | Choose models and reasoning | `/model`, `/reasoning`, `/model-roles`, `/reload-models` |

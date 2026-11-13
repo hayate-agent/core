@@ -637,6 +637,7 @@ async function main(argv: string[]): Promise<void> {
         return { running: !!state?.running, queued: state?.queue.length ?? 0 };
       },
       remainingWorkNotice: () => harness.remainingWorkNotice(localSessions!.current!.key),
+      resetConversation: () => harness.resetSession(localSessions!.current!.key),
       canSwitchSession: () => {
         const key = localSessions?.current?.key;
         const state = key ? harness.sessions.get(key) : undefined;
@@ -770,7 +771,7 @@ async function main(argv: string[]): Promise<void> {
     admit: (id: string, request: import("./context-maintenance.js").MaintenanceRequest, version: number) => maintenance.admit(values["--maintenance-session"]!, id, request, version),
     cancel: (id: string, version: number) => maintenance.cancelAdmission(values["--maintenance-session"]!, id, version),
     maintain: () => harness.maintainIdle(values["--maintenance-session"]!),
-  }), path.resolve(values["--maintenance-directory"]))] : []), ...(values["--observe-directory"] ? [sessionObserverPlugin(Object.freeze({ observeSession: (key: string) => harness.observeSession(key) }), path.resolve(values["--observe-directory"]), values["--observe-session"]!)] : []), validatorPlugin, memoryOrchestrationPlugin(plugins.memoryOrchestration, settings, harness, config.memory.enabled), completionStrategyPlugin(completion, settings, harness), contextStrategyPlugin(strategies, settings, harness, maintenance), compactionStrategyPlugin(selectedCompaction, settings, harness, maintenance), nightlyStrategyPlugin(nightly, settings, improvement), reportPlugin, dispatcherPlugin(() => dispatcher), dispatchDecisionsPlugin(() => dispatcher), dispatchPlanHistoryPlugin(() => dispatcher), dispatchRecoveryPlugin(() => dispatcher, key => runtime.retainedSessionHistory?.(key) ?? Promise.resolve(undefined)), ...(dispatchPolicy.enabled ? [executionControlPlugin(() => dispatcher, path.join(config.home, "operator-control"))] : []), workerTasksPlugin(config.home, () => dispatcher, async (parent, requestId, input) => {
+  }), path.resolve(values["--maintenance-directory"]))] : []), ...(values["--observe-directory"] ? [sessionObserverPlugin(Object.freeze({ observeSession: (key: string) => harness.observeSession(key) }), path.resolve(values["--observe-directory"]), values["--observe-session"]!)] : []), validatorPlugin, memoryOrchestrationPlugin(plugins.memoryOrchestration, settings, harness, config.memory.enabled), completionStrategyPlugin(completion, settings, harness), contextStrategyPlugin(strategies, settings, harness, maintenance), compactionStrategyPlugin(selectedCompaction, settings, harness, maintenance), nightlyStrategyPlugin(nightly, settings, improvement), reportPlugin, dispatcherPlugin(() => dispatcher), dispatchDecisionsPlugin(() => dispatcher), dispatchPlanHistoryPlugin(() => dispatcher), dispatchRecoveryPlugin(() => dispatcher, key => runtime.retainedSessionHistory?.(key) ?? Promise.resolve(undefined)), ...(dispatchPolicy.enabled ? [executionControlPlugin(() => dispatcher, path.join(config.home, "operator-control"), key => harness.resetSession(key))] : []), workerTasksPlugin(config.home, () => dispatcher, async (parent, requestId, input) => {
       if (!dispatcher || harness.paused) throw Error("Dispatcher unavailable or Harness paused");
       const existing = await executions.findRequest(parent, requestId);
       if (existing) {
@@ -1089,7 +1090,8 @@ async function main(argv: string[]): Promise<void> {
     await subagents.revokeChildren(session.key);
   }
   for (const session of harness.snapshotSessions()) {
-    if (session.stopPending) await harness.stopConversation(session.key);
+    if (session.resetPending) await harness.resetSession(session.key);
+    else if (session.stopPending) await harness.stopConversation(session.key);
   }
   if (apiKey) await harness.reconcileCancelledApiTasks((key, inputId) => {
     const receipt = runs.get(inputId.slice("api:".length));

@@ -104,7 +104,7 @@ test("retry cannot bypass revoked authority, pending dependencies or stale concu
   for (const mode of ["paused", "stopped", "blocked", "completed", "waiting", "expiry", "dependency", "cancel", "anchor", "depth"] as const) {
     let now = 1000, calls = 0, child = false;
     const runtime = new FakeRuntime();
-    const store = { list: () => child ? [{ id: "child", status: "running" }] : [] } as unknown as ExecutionStore;
+    const store = { cancelParent: async () => {}, list: () => child ? [{ id: "child", status: "running" }] : [] } as unknown as ExecutionStore;
     const h = new Harness({ runtime, executionStore: store, tickMs: 60000, now: () => now,
       completionCheck: async () => { calls++; return undefined; } });
     h.restoreSessions([{ key, task: task() }]); h.onStateChange = async () => {};

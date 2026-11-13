@@ -86,7 +86,7 @@ harness.state('mem:room1').hashtags.push({tag:'broken',sessionId:id,messageId:'m
 assert.match(await send('/hashtags #broken'),/Referenced message no longer retained/);
 assert.equal(await send('/hashtags nope'),'usage: /hashtags [#slug]');
 assert.equal(await send('/hashtags #absent'),'No references for this hashtag.');
-await send('/new');assert.equal(await send('/hashtags'),'#broken\\n#release');
+await send('/new');assert.equal(await send('/hashtags'),'No hashtags indexed yet.');
 harness.restoreSessions([{key:'legacy'}]);assert.equal(harness.state('legacy').hashtags,undefined);
 await harness.stop(1000);
 console.log('HASHTAGS_OK');`;

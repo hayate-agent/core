@@ -146,6 +146,7 @@ export interface SessionState {
   heartbeatDisabled?: boolean;
   /** Interrupted stop must finish child revocation before startup admission. */
   stopPending?: boolean;
+  resetPending?: boolean;
   loop?: Recurring;
   goal?: Goal;
   /** Last user/channel input (for /retry). */
@@ -206,6 +207,7 @@ export interface HarnessOptions {
   contextMaintenance?: {
     archives?: Pick<import("./session-archive.js").SessionArchives, "completionEvidence">;
     interrupt?(key: string): boolean;
+    resetConversation?(key: string, sessionId: string): Promise<void>;
     guidance(key: string, session: RuntimeSession): Promise<string>;
     prepareContinuation?(key: string, session: RuntimeSession, rotate: (handover: import("./context-maintenance.js").ContextRecord["handover"]) => Promise<RuntimeSession>, action: "compact" | "handover", preserve: string, resume: string, target?: Address, operationId?: string): Promise<void>;
     admissionStatus?(key: string): Promise<{ execution?: string }>;
@@ -1052,6 +1054,8 @@ export class Harness {
 
   /** Runtime pre-execution guard: model prose is not proof of a pure wait. */
   async guardWaitTool(key: string, tool: string, args: unknown): Promise<void> {
+    if (this.sessionResets.has(key) || this.stoppingHostParents.has(key) || this.sessions.get(key)?.resetPending)
+      throw new ToolGuardError("execution_cancelled", "Conversation stop or reset in progress");
     const input = this.sessions.get(key)?.current;
     const independentTask = input?.taskId ? this.tasks(this.sessions.get(key)!).find(t => t.id === input.taskId) : undefined;
     if (independentTask?.recoveryAdmission?.independent) {
@@ -1486,15 +1490,53 @@ export class Harness {
     return `Remaining work stays owned by conversation ${safe(key)}:\n${details.join("\n")}\nContext reset does not cancel this work or recurring sources. Use /stop in the owning conversation to revoke its tasks; manage recurring sources separately.`;
   }
 
-  async resetSession(key: string): Promise<void> {
-    if (this.budgetChanging) throw Error("Host control in progress; retry reset");
-    const s = this.state(key);
-    if (s.running) {
-      this.turnAbort.get(s.key)?.abort();
-      await s.session?.abort();
-    }
-    s.queue.length = 0;
-    await this.sessionFor(key, true);
+  private readonly sessionResets = new Map<string, Promise<void>>();
+  private readonly resetDiscarded = new WeakSet<Inbound>();
+  private resetAdmissionBlocked(input: Inbound): boolean {
+    const pending = this.sessionResets.has(input.sessionKey) || this.sessions.get(input.sessionKey)?.resetPending;
+    return !!pending && !(input.source === "channel" && /^\/(new|reset|stop)(?:\s|$)/.test(input.text.trim()));
+  }
+
+  /** /new revokes the old conversation mandate before opening a fresh context.
+   * Retain stopped ledgers as evidence; never transfer or replay their work. */
+  resetSession(key: string): Promise<void> {
+    const prior = this.sessionResets.get(key);
+    if (prior) return prior;
+    const resetting = Promise.resolve().then(async () => {
+      if (this.budgetChanging) throw Error("Host control in progress; retry reset");
+      const s = this.state(key);
+      s.resetPending = true;
+      for (const input of [...s.queue, ...(s.steered ?? []), ...this.inbox.accepting, ...this.inbox.handoff, ...this.inbox.unsaved,
+        ...(s.current ? [s.current] : [])])
+        if (input.sessionKey === key) {
+          this.resetDiscarded.add(input);
+          this.inbox.handoff.delete(input); this.inbox.unsaved.delete(input);
+        }
+      s.loop = undefined; s.heartbeat = undefined; s.heartbeatDisabled = true; s.goal = undefined;
+      s.heldRecoveryInputs = undefined;
+      await this.stopConversation(key, true);
+      // abort() may only signal cancellation. Do not dispose/open over a live turn.
+      const deadline = Date.now() + 30_000;
+      while (s.running) {
+        if (Date.now() >= deadline) throw Error("Conversation stopped; previous turn has not drained; retry /new");
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+      s.queue.length = 0; s.steered = undefined; s.outbox.length = 0;
+      s.lastInput = undefined; s.completionRecent = undefined; s.hashtags = undefined;
+      // An interrupted turn can restore a prior goal during rollback.
+      s.loop = undefined; s.heartbeat = undefined; s.heartbeatDisabled = true; s.goal = undefined;
+      await this.onStateChange?.();
+      if (s.opening) await s.opening;
+      const fresh = await this.sessionFor(key, true);
+      await this.opts.contextMaintenance?.resetConversation?.(key, fresh.status().sessionId);
+      s.resetPending = undefined; s.stopPending = undefined;
+      try { await this.onStateChange?.(); }
+      catch (error) { s.resetPending = true; s.stopPending = true; throw error; }
+      this.stoppingHostParents.delete(key);
+    });
+    this.sessionResets.set(key, resetting);
+    void resetting.finally(() => this.sessionResets.delete(key)).catch(() => {});
+    return resetting;
   }
 
   // ---------------------------------------------------------------- input
@@ -1532,6 +1574,7 @@ export class Harness {
   }
   async accept(input: Inbound): Promise<void> {
     this.captureLanguage(input);
+    if (this.resetAdmissionBlocked(input)) throw Error("Conversation reset in progress; retry input");
     if (this.stopping || this.gatewayChanging || this.updateFenced) throw new Error("shutting down, update admission or gateway transition; retry input");
     validateAttachmentAdmission(this.opts.attachmentRoot, input);
     if (input.attachments?.length) {
@@ -1666,7 +1709,7 @@ export class Harness {
     let tags = parseHashtags(input.text);
     // Control commands remain usable when the semantic service is down.
     if (!tags.length && this.opts.topicLabeler && !input.text.trimStart().startsWith("/") && !naturalBudgetReset(input.text)) {
-      const candidates = this.tasks(s).filter(t => t.anchor?.outputTags?.length).slice(-16)
+      const candidates = this.tasks(s).filter(t => t.state !== "stopped" && t.anchor?.outputTags?.length).slice(-16)
         .map(t => ({ id: t.id, text: t.original.slice(0, 2000), tags: [...t.anchor!.outputTags!] }));
       // Reuse the persisted, bounded conversation evidence; metadata only, not
       // a mandate selector. Do not include queued/unprocessed channel inputs.
@@ -1680,6 +1723,8 @@ export class Harness {
 
   private async submitForeground(input: Inbound, deferPump = false): Promise<void> {
     if (this.budgetChanging) throw Error("Host control in progress; retry input");
+    if (this.resetDiscarded.has(input)) return;
+    if (this.resetAdmissionBlocked(input)) throw Error("Conversation reset in progress; retry input");
     const s = this.state(input.sessionKey);
     if (this.needsTopic(input)) {
       input.id ??= `ingress:${randomUUID()}`;
@@ -1695,6 +1740,8 @@ export class Harness {
       return;
     }
     if (input.source === "channel") await this.prepareTopic(input);
+    if (this.resetDiscarded.has(input)) return;
+    if (this.resetAdmissionBlocked(input)) throw Error("Conversation reset in progress; retry input");
     // API runs answer to the run itself, never become the session's conversation address.
     if (input.replyTo && input.source !== "api" && input.source !== "host") s.replyTo = input.replyTo;
     s.lastActivity = this.now();
@@ -1744,6 +1791,7 @@ export class Harness {
           throw err;
         }
         this.inbox.handoff.delete(input);
+        if (this.resetDiscarded.has(input)) return;
         let steered = false;
         if (s.current === turn && s.prompting && s.session) {
           // Still the same prompt running (not just outbox flushing): steer into it.
@@ -1772,6 +1820,7 @@ export class Harness {
             this.log(`steer failed, queued as next turn: ${err instanceof Error ? err.message : err}`);
           }
         }
+        if (this.resetDiscarded.has(input)) return;
         if (!steered) {
           // The turn ended meanwhile: run it as the next turn instead.
           s.queue.push(input);
@@ -1797,10 +1846,11 @@ export class Harness {
    * Cancel an accepted input by id (API stop). A queued input is answered as cancelled right
    * away; a running one is aborted and finishes as cancelled. False if it is not pending.
    */
-  async stopConversation(sessionKey: string): Promise<number> {
+  async stopConversation(sessionKey: string, retainFence = false): Promise<number> {
     if (this.budgetChanging) throw Error("Host control in progress; retry stop");
     this.stoppingHostParents.add(sessionKey);
     const s = this.state(sessionKey);
+    retainFence ||= !!s.resetPending;
     s.stopPending = true;
     const dropped = s.queue.length;
     for (const input of s.queue) this.inbox.unsaved.delete(input);
@@ -1815,14 +1865,15 @@ export class Harness {
     // On save failure keep the local fence: retry /stop, never claim success or
     // restore authority to a turn whose effects may already have happened.
     await this.onStateChange?.();
+    await this.opts.executionStore?.cancelParent(sessionKey);
     await this.opts.conversationStopping?.(sessionKey);
     await this.opts.conversationStopped?.(sessionKey);
     this.turnAbort.get(sessionKey)?.abort();
     this.opts.contextMaintenance?.interrupt?.(sessionKey);
     if (s.running) await s.session?.abort();
-    s.stopPending = undefined;
+    if (!retainFence) s.stopPending = undefined;
     await this.onStateChange?.();
-    this.stoppingHostParents.delete(sessionKey);
+    if (!retainFence) this.stoppingHostParents.delete(sessionKey);
     return dropped;
   }
 
@@ -2069,7 +2120,7 @@ export class Harness {
     if (this.gatewayChanging) return;
     await this.reconcileStoppedTasks();
     for (const s of this.sessions.values()) {
-      if (this.opts.sessionEnabled?.(s.key) === false) continue;
+      if (s.resetPending || this.opts.sessionEnabled?.(s.key) === false) continue;
       if (this.opts.externallyRecoveredSession?.(s.key)) continue;
       if (await this.opts.contextMaintenance?.recoveryStatus?.(s.key)) continue;
       for (const task of [...this.tasks(s)].sort((a, b) => priorityRank(this.committedPriority(b)) - priorityRank(this.committedPriority(a)))) {
@@ -2506,10 +2557,10 @@ export class Harness {
     // An already-accepted dispatcher worker is part of its current durable step.
     // Let it produce its receipt; never start ordinary queued continuations.
     const heldForUpdate = () => this.updateFenced && !(this.maintenancePreparing && this.opts.externallyRecoveredSession?.(s.key));
-    if (s.running || heldForUpdate() || this.gatewayChanging || this.stoppingHostParents.has(s.key) || this.opts.sessionEnabled?.(s.key) === false) return;
+    if (s.running || s.resetPending || heldForUpdate() || this.gatewayChanging || this.stoppingHostParents.has(s.key) || this.opts.sessionEnabled?.(s.key) === false) return;
     s.running = true;
     try {
-      while (!this.halting && !heldForUpdate() && !this.stoppingHostParents.has(s.key) && this.opts.sessionEnabled?.(s.key) !== false) {
+      while (!this.halting && !s.resetPending && !heldForUpdate() && !this.stoppingHostParents.has(s.key) && this.opts.sessionEnabled?.(s.key) !== false) {
         // A finished turn's reply goes out only once its completion is durable.
         if (s.unsaved) {
           try {
@@ -3392,7 +3443,7 @@ export class Harness {
     }
     if (this.paused || this.stopping || this.gatewayChanging || this.activeDeliveries || this.outbox.held) return;
     for (const s of this.sessions.values()) {
-      if (this.opts.sessionEnabled?.(s.key) === false || s.running || s.queue.length || s.outbox.length || s.unsaved || this.stoppingHostParents.has(s.key)) continue;
+      if (s.resetPending || this.opts.sessionEnabled?.(s.key) === false || s.running || s.queue.length || s.outbox.length || s.unsaved || this.stoppingHostParents.has(s.key)) continue;
       if (await this.opts.contextMaintenance?.recoveryStatus?.(s.key)) continue;
       for (const task of this.tasks(s)) {
       if (task.recoveryEnrollment === "held-legacy") continue;
@@ -3503,7 +3554,7 @@ export class Harness {
     const out: PersistedSession[] = [];
     for (const s of this.sessions.values()) {
       if (!s.stopPending && !s.hashtags?.length && !this.tasks(s).length && !s.heldRecoveryInputs?.length && !s.heartbeat && !s.heartbeatDisabled && !s.loop && !s.goal && !s.replyTo) continue;
-      out.push({ stopPending: s.stopPending, hashtags: structuredClone(s.hashtags), operatorBudgetGrants: structuredClone(s.operatorBudgetGrants), key: s.key, heldRecoveryInputs: structuredClone(s.heldRecoveryInputs), task: s.task ? structuredClone(s.task) : undefined, tasks: structuredClone(this.tasks(s)), completionRecent: structuredClone(s.completionRecent), statusDelivered: structuredClone(s.statusDelivered), replyTo: s.replyTo, heartbeat: s.heartbeat, heartbeatDisabled: s.heartbeatDisabled, loop: s.loop, goal: s.goal });
+      out.push({ stopPending: s.stopPending, resetPending: s.resetPending, hashtags: structuredClone(s.hashtags), operatorBudgetGrants: structuredClone(s.operatorBudgetGrants), key: s.key, heldRecoveryInputs: structuredClone(s.heldRecoveryInputs), task: s.task ? structuredClone(s.task) : undefined, tasks: structuredClone(this.tasks(s)), completionRecent: structuredClone(s.completionRecent), statusDelivered: structuredClone(s.statusDelivered), replyTo: s.replyTo, heartbeat: s.heartbeat, heartbeatDisabled: s.heartbeatDisabled, loop: s.loop, goal: s.goal });
     }
     return out;
   }
@@ -3522,6 +3573,7 @@ export class Harness {
       s.heartbeat = p.heartbeat;
       s.heartbeatDisabled = p.heartbeatDisabled;
       s.stopPending = p.stopPending;
+      s.resetPending = p.resetPending;
       s.loop = p.loop;
       s.goal = p.goal;
     }
