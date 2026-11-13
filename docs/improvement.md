@@ -77,7 +77,12 @@ not deployed. Morning reports separate these states. Night-window/turn/pause
 limits are unchanged, even if delivery remains unfinished.
 
 Unactivated improvements survive rollover in `deliveryBacklog`, separate from
-new experiments and recent-hypothesis counting. At the next normally authorized
+new experiments and recent-hypothesis counting. On the first compatible load,
+validated prior `improvement/reports/YYYY-MM-DD.json` receipt arrays are also
+imported as historical candidates; matching current experiment identities are not
+duplicated. No effects or old budgets are replayed. Non-readable, malformed or
+oversized (>8MiB) archives remain untouched and are surfaced by archive name in
+`deliveryImportIssues` and the report rather than silently declared delivered. At the next normally authorized
 night turn they are supplied before new experimentation; concretely blocked items
 are not prioritized ahead of actionable work. A delivery receipt for the same
 hypothesis/baseline/candidate updates existing evidence without another experiment.

@@ -51,6 +51,16 @@ test('next night retains delivery backlog and prioritizes it without resetting o
  const s=JSON.parse(await readFile(path.join(home,'improvement/state.json'),'utf8'));assert.equal(s.night,'2026-11-13');assert.equal(s.experiments.length,0);assert.equal(s.deliveryBacklog.length,1);assert.equal(s.turns,0);assert.match(text,/Offene Auslieferung zuerst/);assert.match(text,/delivery fixture/);
 });
 
+test('legacy archived improvements are imported once as backlog, not experiments or authority',async t=>{
+ const home=await mkdtemp(path.join(os.tmpdir(),'nightly-delivery-history-'));t.after(()=>rm(home,{recursive:true,force:true}));await mkdir(path.join(home,'improvement/reports'),{recursive:true});
+ await writeFile(path.join(home,'improvement/state.json'),JSON.stringify({version:1,night:'2026-11-12',turns:0,results:[],experiments:[],recentHypotheses:[]}));
+ await writeFile(path.join(home,'improvement/reports/2026-11-11.json'),JSON.stringify({version:1,night:'2026-11-11',experiments:[base]}));
+ await writeFile(path.join(home,'improvement/reports/2026-11-10.json'),'{broken archive');
+ const harness=new Harness({runtime:new FakeRuntime(),tickMs:60000});t.after(()=>harness.stop(1000));harness.enqueue=()=>{};
+ const c=new ImprovementController(home,harness,'UTC',()=>Date.parse('2026-11-12T23:30Z'),nightly);await c.tick(true);
+ const s=JSON.parse(await readFile(path.join(home,'improvement/state.json'),'utf8'));assert.equal(s.turns,0);assert.equal(s.experiments.length,0);assert.equal(s.deliveryHistoryImported,true);assert.equal(s.deliveryBacklog.length,1);assert.deepEqual(s.deliveryBacklog[0],base);assert.deepEqual(s.deliveryImportIssues,['2026-11-10.json']);
+});
+
 test('late delegated delivery updates retained evidence without a new turn or reopening the night',async t=>{
  const home=await mkdtemp(path.join(os.tmpdir(),'nightly-delivery-late-'));t.after(()=>rm(home,{recursive:true,force:true}));await mkdir(path.join(home,'improvement'));
  await writeFile(path.join(home,'improvement/state.json'),JSON.stringify({version:1,night:'2026-11-12',turns:1,done:true,results:[],experiments:[base],recentHypotheses:[base.hypothesis],noExperimentTurns:2}));

@@ -2,7 +2,7 @@ import { Cron } from "croner";
 import type { ExperimentReceipt } from "./improvement-receipt.js";
 import type { NightlyStrategy } from "./nightly-strategy.js";
 import type { PureStrategy, StrategySelection } from "./pure-strategy.js";
-import { mkdir, readFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import { parse } from "yaml";
 import { writeFileDurable } from "./durable.js";
@@ -67,6 +67,9 @@ export function improvementDeadline(now: number, policy: ImprovementPolicy): num
 export interface NightState {
   /** Unactivated improved work survives night rollover; evidence, not authority. */
   deliveryBacklog?: ExperimentReceipt[];
+  deliveryHistoryImported?: boolean;
+  /** Archive names only, never exception text or credentials. */
+  deliveryImportIssues?: string[];
   /** Canonical dispatcher results adopted as evidence, never replayed as turns. */
   delegatedResults?: string[];
   /** Absent on legacy/baseline nights; path identity, not an immutable code digest. */
@@ -196,6 +199,39 @@ export class ImprovementController {
           (c.verdict !== undefined && c.verdict.state !== "completed" &&
             !(c.verdict.state === "continue" && typeof c.verdict.next === "string" && c.verdict.next.trim() && c.verdict.next.length <= 4000))))
         throw Error("Invalid nightly closure assessment");
+      if (!s.deliveryHistoryImported) {
+        const history: ExperimentReceipt[] = [];
+        const issues: string[] = [];
+        const directory = path.join(this.home, "improvement", "reports");
+        let files: string[] = [];
+        try { files = (await readdir(directory, { withFileTypes: true })).filter(entry => entry.isFile()).map(entry => entry.name); }
+        catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") issues.push("reports-directory"); }
+        for (const name of files.filter(name => /^\d{4}-\d{2}-\d{2}\.json$/.test(name)).sort()) {
+          try {
+            const file = path.join(directory, name);
+            if ((await stat(file)).size > 8 * 1024 * 1024) throw Error("Archive exceeds import bound");
+            const report = JSON.parse(await readFile(file, "utf8"));
+            if (report.version !== 1 || report.night + ".json" !== name || !Array.isArray(report.experiments)) throw Error("Invalid archive");
+            const receipts = [...(Array.isArray(report.deliveryBacklog) ? report.deliveryBacklog : []), ...report.experiments];
+            for (const receipt of receipts) {
+              if (!receipt || !["hypothesis", "baseline", "candidate", "evidence"].every(key => typeof receipt[key] === "string") ||
+                  !["improved", "rejected", "inconclusive"].includes(receipt.outcome)) throw Error("Invalid archived receipt");
+              history.push(receipt);
+            }
+          } catch { issues.push(name); }
+        }
+        // Latest evidence wins; archive import never executes or authorizes work.
+        const identity = (receipt: ExperimentReceipt) => JSON.stringify([receipt.hypothesis.trim().toLowerCase(), receipt.baseline, receipt.candidate]);
+        const current = new Set((s.experiments ?? []).map(identity));
+        const retained = [...history, ...(s.deliveryBacklog ?? [])];
+        s.deliveryBacklog = [...new Map(retained.map(receipt => [identity(receipt), receipt])).values()]
+          .filter(receipt => !current.has(identity(receipt)) && receipt.outcome === "improved" && receipt.delivery?.status !== "deployed");
+        s.deliveryHistoryImported = true;
+        if (issues.length) {
+          s.deliveryImportIssues = issues;
+          s.results.push(`Historische Auslieferungsbelege teilweise nicht lesbar: ${issues.length} Archive/Verzeichnis; Details in deliveryImportIssues. Keine Effekte wiederholt.`);
+        }
+      }
       this.state = s;
     } catch (err) { if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err; }
   }
@@ -384,7 +420,8 @@ export class ImprovementController {
         await mkdir(directory, { recursive: true, mode: 0o700 });
         await writeFileDurable(artifact, JSON.stringify({
           version: 1, night: this.state.night, timezone: p.timezone,
-          turns: this.state.turns, experiments, deliveryBacklog: this.state.deliveryBacklog, results: this.state.results,
+          turns: this.state.turns, experiments, deliveryBacklog: this.state.deliveryBacklog,
+          deliveryImportIssues: this.state.deliveryImportIssues, results: this.state.results,
           delivery: to ? "outbox-pending" : "local-only",
         }));
         if (!to) {
@@ -392,7 +429,9 @@ export class ImprovementController {
           await this.save();
           return;
         }
-        this.harness.post({ id: `improvement-report:${this.state.night}`, sessionKey: KEY, source: "cron", text: "", replyTo: to }, strategy.report(this.state, p.timezone, experiments, artifact));
+        this.harness.post({ id: `improvement-report:${this.state.night}`, sessionKey: KEY, source: "cron", text: "", replyTo: to },
+          strategy.report(this.state, p.timezone, experiments, artifact) + (this.state.deliveryImportIssues?.length ?
+            `\nHistorische Auslieferung unvollständig geprüft: ${this.state.deliveryImportIssues.length} Archive/Verzeichnis nicht importierbar; Details im lokalen Artefakt, keine alte Arbeit wiederholt.` : ""));
         await this.harness.onStateChange?.(); // ensure report is durable before marking adopted
         this.state.reportQueued = true;
         await this.save();
@@ -408,7 +447,8 @@ export class ImprovementController {
           .filter(receipt => receipt.outcome === "improved" && receipt.delivery?.status !== "deployed");
         const deliveryBacklog = [...new Map(deliveries.map(receipt => [JSON.stringify([receipt.hypothesis.trim().toLowerCase(), receipt.baseline, receipt.candidate]), receipt])).values()];
         this.state = { version: 1, strategySelection: this.strategyHolder?.selection ?? undefined, night: w.night, turns: 0,
-          results: [], experiments: [], deliveryBacklog, recentHypotheses: this.state?.recentHypotheses ?? [] };
+          results: [], experiments: [], deliveryBacklog, deliveryHistoryImported: true,
+          deliveryImportIssues: this.state?.deliveryImportIssues, recentHypotheses: this.state?.recentHypotheses ?? [] };
         await this.save(); // persist Cron intent even if interactive work delays execution
       }
       if (this.harness.paused || busy || [...this.harness.sessions.values()].some((s) => s.running || s.queue.length)) return;
