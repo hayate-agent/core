@@ -58,7 +58,7 @@ export async function appendFileDurable(file: string, data: string, mode = 0o600
   await syncDir(path.dirname(file)); // a newly created file must survive power loss too
 }
 
-async function syncDir(dir: string): Promise<void> {
+export async function syncDir(dir: string): Promise<void> {
   let fh;
   try {
     fh = await open(dir, "r");

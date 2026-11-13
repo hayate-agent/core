@@ -3576,11 +3576,14 @@ export class Harness {
   // ---------------------------------------------------------------- persistence
 
   /** Sessions worth persisting (anything beyond a bare conversation). */
-  snapshotSessions(): PersistedSession[] {
+  snapshotSessions(copy = true): PersistedSession[] {
+    // Only the synchronous StateStore capture boundary may request a view.
+    // Public callers keep independent snapshots; no live view survives an await.
+    const clone = <T>(value: T): T => copy ? structuredClone(value) : value;
     const out: PersistedSession[] = [];
     for (const s of this.sessions.values()) {
       if (!s.stopPending && !s.sourceOwner && !s.hashtags?.length && !this.tasks(s).length && !s.heldRecoveryInputs?.length && !s.heartbeat && !s.heartbeatDisabled && !s.loop && !s.goal && !s.replyTo) continue;
-      out.push({ stopPending: s.stopPending, resetPending: s.resetPending, resetSources: s.resetSources, sourceOwner: s.sourceOwner, hashtags: structuredClone(s.hashtags), operatorBudgetGrants: structuredClone(s.operatorBudgetGrants), key: s.key, heldRecoveryInputs: structuredClone(s.heldRecoveryInputs), task: s.task ? structuredClone(s.task) : undefined, tasks: structuredClone(this.tasks(s)), completionRecent: structuredClone(s.completionRecent), statusDelivered: structuredClone(s.statusDelivered), replyTo: s.replyTo, heartbeat: s.heartbeat, heartbeatDisabled: s.heartbeatDisabled, loop: s.loop, goal: s.goal });
+      out.push({ stopPending: s.stopPending, resetPending: s.resetPending, resetSources: s.resetSources, sourceOwner: s.sourceOwner, hashtags: clone(s.hashtags), operatorBudgetGrants: clone(s.operatorBudgetGrants), key: s.key, heldRecoveryInputs: clone(s.heldRecoveryInputs), task: s.task ? clone(s.task) : undefined, tasks: clone(this.tasks(s)), completionRecent: clone(s.completionRecent), statusDelivered: structuredClone(s.statusDelivered), replyTo: s.replyTo, heartbeat: s.heartbeat, heartbeatDisabled: s.heartbeatDisabled, loop: s.loop, goal: s.goal });
     }
     return out;
   }
