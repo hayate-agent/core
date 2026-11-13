@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { mkdtemp, rm, lstat, readFile } from "node:fs/promises";
+import { mkdtemp, rm, lstat, readFile, mkdir, chmod } from "node:fs/promises";
 import { createConnection } from "node:net";
 import path from "node:path";
 import os from "node:os";
@@ -62,6 +62,15 @@ test("expected decision revision is checked inside the serialized store commit",
   await f.store.recordDecision(f.task.parent, f.task.id, "intervening", "Original restriction remains");
   await assert.rejects(f.store.recordDecision(f.task.parent, f.task.id, "stale", "stale update", undefined, 0), ExecutionDecisionConflict);
   assert.equal(f.store.list()[0]!.decisions!.length, 1);
+});
+
+test("unsafe PVC/fsGroup owner directory disables only optional privileged control, never repairs permissions or aborts agent activation", async t => {
+  const f = await fixture(t), directory = path.join(f.dir, "group-shared"); await mkdir(directory); await chmod(directory, 0o770);
+  let tools = 0, stops = 0;
+  await executionControlPlugin(() => f.dispatcher, directory).activate({ onStop: () => { stops++; }, registerTool: () => { tools++; } } as unknown as PluginAPI);
+  assert.equal((await lstat(directory)).mode & 0o777, 0o770); assert.equal(tools, 0); assert.equal(stops, 0);
+  await assert.rejects(readFile(path.join(directory, "owner.json")), /ENOENT/);
+  assert.equal(f.store.list()[0]!.status, "ready", "unrelated execution remains schedulable");
 });
 
 test("native control socket is owner-private, tool-free and drains/unlinks on shutdown", async t => {
