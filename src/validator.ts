@@ -74,7 +74,10 @@ export class ValidatorRegistry {
     if (!provider) throw Error("Selected completion-check provider is not registered");
     return provider;
   }
-  get selected(): string | false | undefined { return this.selection; }
+  get selected(): string | false {
+    if (this.selection === undefined) throw Error("completionCheck.provider is required; no implicit validator fallback");
+    return this.selection;
+  }
   versions(): Array<{ name: string; version: number; apiVersion: 1 }> {
     return [...this.providers.values()].map(({ name, version, apiVersion }) => ({ name, version, apiVersion }));
   }
