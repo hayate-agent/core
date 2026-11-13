@@ -169,6 +169,12 @@ export class Dispatcher {
     for (const task of this.store.list(parent)) this.active.get(task.id)?.abort.abort();
     await this.kick();
   }
+  async cancelTask(parent: string, taskId: string, preexistingUnscoped: readonly string[] = []): Promise<void> {
+    await this.store.cancelTask(parent, taskId, preexistingUnscoped);
+    for (const task of this.store.list(parent))
+      if (task.dependency?.taskId === taskId || task.ownershipHold) this.active.get(task.id)?.abort.abort();
+    await this.kick();
+  }
   /** Also called by host retry ticks; no model calls are used to poll task status. */
   kick(): Promise<void> {
     if (this.stopped || !this.recovered || this.admissionFenced()) return Promise.resolve();
@@ -184,7 +190,7 @@ export class Dispatcher {
   }
   private async schedule(): Promise<void> {
     void this.flushEvents().catch(this.report);
-    const tasks = this.store.list().filter(task => task.recoveryEnrollment !== "held-legacy" &&
+    const tasks = this.store.list().filter(task => !task.ownershipHold && task.recoveryEnrollment !== "held-legacy" &&
       !this.active.has(task.id) && this.parentEnabled(task.parent) && !!this.strategyFor(task) &&
       (task.status === "ready" && this.store.assessmentDue(task) ||
         ["worker-failed", "runtime-failure"].includes(task.diagnosticCode ?? "") && ["blocked", "paused", "ready"].includes(task.status) &&
@@ -363,7 +369,8 @@ export class Dispatcher {
     if (this.admissionFenced()) return Promise.resolve();
     this.delivering = (async () => {
       while (!this.stopped) {
-        const events = this.store.events().filter(event => this.parentEnabled(event.parent));
+        const events = this.store.events().filter(event => this.parentEnabled(event.parent) &&
+          !this.store.list(event.parent).find(task => task.id === event.executionId)?.ownershipHold);
         if (!events.length) return;
         for (const event of events) {
           if (this.stopped || this.admissionFenced()) return;

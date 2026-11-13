@@ -87,6 +87,8 @@ export interface Execution {
   question?: { id: string; text: string; answer?: string };
   /** Parent stop permanently revokes result delivery as well as execution. */
   parentStopped?: boolean;
+  /** Unknown legacy ancestry after a task-scoped stop: evidence retained, no replay. */
+  ownershipHold?: "unscoped-parent-stop";
   intent?: { key: string; replay: "safe" | "unsafe"; result?: string; route?: import("./model-roles.js").ModelPair };
   /** Last committed effect outcome, retained across the completion commit gap. */
   settledEffect?: { key: string; result: string };
@@ -184,6 +186,7 @@ export class ExecutionStore {
             (item.question.answer !== undefined && (typeof item.question.answer !== "string" || item.question.answer.length > 8000)))) throw Error("Invalid execution question");
         if (item.terminalAt !== undefined && (!Number.isSafeInteger(item.terminalAt) || item.terminalAt < 0)) throw Error("Invalid terminal timestamp");
         if (item.parentStopped !== undefined && typeof item.parentStopped !== "boolean") throw Error("Invalid parent stop marker");
+        if (item.ownershipHold !== undefined && item.ownershipHold !== "unscoped-parent-stop") throw Error("Invalid ownership hold");
         if (item.origin !== undefined && !validAddress(item.origin)) throw Error("Invalid execution origin");
         if (item.checkpointNotices !== undefined && (!Array.isArray(item.checkpointNotices) || item.checkpointNotices.length > 32 ||
             item.checkpointNotices.some(k => typeof k !== "string" || !k || k.length > 100))) throw Error("Invalid checkpoint notice receipts");
@@ -423,7 +426,7 @@ export class ExecutionStore {
   /** Current policy is supplied by the trusted host registry, never by model input.
    * Recovery is not itself a replay grant: policy is checked again at claim time. */
   assessmentDue(task: Readonly<Execution>): boolean {
-    return (task.assessmentRetryAt === undefined || task.assessmentRetryAt <= this.now()) &&
+    return !task.ownershipHold && (task.assessmentRetryAt === undefined || task.assessmentRetryAt <= this.now()) &&
       (task.workerRetry === undefined || task.workerRetry.nextAt <= this.now());
   }
   claim(id: string, current?: RecoveryStrategy & { strategy: string }, policy?: ExecutionRecoveryPolicy): Promise<Execution> {
@@ -671,16 +674,29 @@ export class ExecutionStore {
       this.event(draft, task, "result", result);
     });
   }
-  cancelParent(parent: string): Promise<void> {
+  cancelTask(parent: string, taskId: string, preexistingUnscoped: readonly string[] = []): Promise<void> {
+    if (!taskId.trim()) return Promise.reject(Error("Task identity required"));
+    return this.cancelParent(parent, taskId, preexistingUnscoped);
+  }
+  cancelParent(parent: string, taskId?: string, preexistingUnscoped: readonly string[] = []): Promise<void> {
     return this.mutate(draft => {
+      const revoked = new Set<string>();
       for (const task of draft.executions) {
         if (task.parent !== parent) continue;
+        if (taskId !== undefined && !task.dependency?.taskId && !preexistingUnscoped.includes(task.id) && task.status !== "cancelled") {
+          task.ownershipHold = "unscoped-parent-stop";
+          if (task.status === "ready") task.status = "blocked";
+          task.recoveryReason ??= "Legacy execution ancestry held after a task-scoped parent stop; inspect ownership before retrying.";
+          continue;
+        }
+        if (taskId !== undefined && task.dependency?.taskId !== taskId) continue;
+        revoked.add(task.id);
         task.parentStopped = true;
         if (!["completed", "cancelled"].includes(task.status)) task.status = "cancelled";
         task.terminalAt ??= this.now();
         delete task.token;
       }
-      draft.events = draft.events.filter(event => event.parent !== parent);
+      draft.events = draft.events.filter(event => taskId === undefined ? event.parent !== parent : !revoked.has(event.executionId));
     });
   }
   /** Token fencing prevents a late failure from pausing a replacement claim. */

@@ -481,6 +481,10 @@ async function main(argv: string[]): Promise<void> {
       await stopDispatcherParent(executions, key, dispatcher);
       await subagents.cancelChildren(key);
     },
+    taskStopped: async (key, taskId, preexistingUnscoped) => {
+      if (dispatcher) await dispatcher.cancelTask(key, taskId, preexistingUnscoped);
+      await subagents.cancelTaskChildren(key, taskId);
+    },
     hostEventAllowed: input => !!input.hostEvent && !!dispatchRuntime?.resultAllowed(input.sessionKey, input.hostEvent.executionId),
     // Reserve this namespace even with dispatch disabled: stale opaque turns
     // must be reconciled through the ledger, not replayed by Harness startup.
@@ -1047,6 +1051,11 @@ async function main(argv: string[]): Promise<void> {
   for (const session of harness.snapshotSessions()) {
     if (session.stopPending) await harness.stopConversation(session.key);
   }
+  if (apiKey) await harness.reconcileCancelledApiTasks((key, inputId) => {
+    const receipt = runs.get(inputId.slice("api:".length));
+    return receipt?.status === "cancelled" && receipt.session_key === key && receipt.input_id === inputId;
+  });
+  await harness.reconcileStoppedTasks();
   await subagents.reconcile(sessionEnabled);
   await dispatcher?.start();
   await harness.recoverTasks();

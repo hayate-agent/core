@@ -16,6 +16,11 @@ export interface SubagentHandover {
 export interface SubagentRecord {
   id: string;
   parent: string;
+  /** Host-captured mandate, never supplied by the model handover. */
+  parentTaskId?: string;
+  parentStopped?: boolean;
+  /** Legacy ancestry cannot be guessed when one parent mandate is stopped. */
+  ownershipHold?: "unscoped-parent-stop";
   sessionKey: string;
   handover: SubagentHandover;
   state: "queued" | "running" | "completed" | "failed" | "cancelled";
@@ -45,6 +50,11 @@ export class Subagents {
     if (!this.isChild(key)) return;
     const record = [...this.records.values()].find(r => r.sessionKey === key);
     if (!record) throw new ToolGuardError("ownership_lost", "Subagent ownership missing");
+    const parent = record.parentTaskId ? this.harness.sessions.get(record.parent) : undefined;
+    if (record.parentTaskId && (parent?.tasks ?? (parent?.task ? [parent.task] : [])).some(task => task.id === record.parentTaskId && task.state === "stopped"))
+      throw new ToolGuardError("execution_cancelled", "Subagent parent mandate stopped");
+    if (record.parentStopped) throw new ToolGuardError("execution_cancelled", "Subagent parent task stopped");
+    if (record.ownershipHold) throw new ToolGuardError("ownership_lost", "Legacy subagent ancestry held after scoped parent stop; reconcile explicitly");
     if (record.expiresAt <= Date.now()) throw new ToolGuardError("deadline_expired", "Subagent no longer authorized: deadline elapsed");
     if (record.state === "cancelled") throw new ToolGuardError("execution_cancelled", "Subagent no longer authorized: cancelled");
     if (!["queued", "running"].includes(record.state)) throw new ToolGuardError("authority_revoked", "Subagent no longer active");
@@ -79,11 +89,27 @@ export class Subagents {
     await this.revokeChildren(parent);
     for (const record of this.list(parent)) await this.cancel(parent, record.id);
   }
+  async cancelTaskChildren(parent: string, taskId: string): Promise<void> {
+    const records = this.list(parent);
+    const bound = records.filter(record => record.parentTaskId === taskId);
+    const children = bound.filter(record => !["completed", "failed"].includes(record.state));
+    const unscoped = records.filter(record => !record.parentTaskId && record.state !== "cancelled");
+    for (const child of bound) this.records.get(child.id)!.parentStopped = true;
+    for (const child of children) this.records.get(child.id)!.state = "cancelled";
+    // Never guess that a legacy child belongs to this task, nor silently keep
+    // executing after its possible mandate was stopped. Retain it under a
+    // durable ownership hold instead of cancelling unrelated work.
+    for (const child of unscoped) this.records.get(child.id)!.ownershipHold = "unscoped-parent-stop";
+    await this.save();
+    for (const child of children) await this.cancel(parent, child.id);
+    for (const child of unscoped) await this.harness.sessions.get(child.sessionKey)?.session?.abort();
+  }
   /** Never resubmit an orphaned start: its acceptance may already have had effects. */
   async reconcile(enabled: (parent: string) => boolean = () => true): Promise<void> {
     const pending = new Set(this.harness.pendingInputs().map(input => input.sessionKey));
     for (const record of this.records.values()) {
       if (!enabled(record.parent) || !["queued", "running"].includes(record.state)) continue;
+      if (record.ownershipHold) continue;
       if (pending.has(record.sessionKey) || this.harness.sessions.get(record.sessionKey)?.outbox.length) {
         if (!Number.isFinite(record.expiresAt) || record.expiresAt <= Date.now()) await this.cancel(record.parent, record.id);
         else this.arm(record);
@@ -121,7 +147,12 @@ export class Subagents {
     if ([...this.records.values()].some(r=>r.sessionKey===parent)) throw Error("Nested subagents are not enabled");
     const id=randomUUID();
     const selected={...handover,...this.policy.get(parent)};
-    const record:SubagentRecord={id,parent,sessionKey:`subagent:${id}`,handover:selected,state:"queued",expiresAt:Date.now()+this.maxDurationMs};
+    const parentState = this.harness.sessions.get(parent);
+    if (parentState?.current && (parentState.cancelling === parentState.current ||
+        (parentState.tasks ?? (parentState.task ? [parentState.task] : [])).some(task => task.id === parentState.current?.taskId && task.state === "stopped")))
+      throw new ToolGuardError("execution_cancelled", "Parent task cancelled");
+    const parentTaskId = this.harness.dependencyCheckpoint(parent)?.taskId;
+    const record:SubagentRecord={id,parent,...(parentTaskId ? { parentTaskId } : {}),sessionKey:`subagent:${id}`,handover:selected,state:"queued",expiresAt:Date.now()+this.maxDurationMs};
     this.records.set(id,record);
     try { await this.save(); } catch(error) { this.records.delete(id);throw error; }
     if (record.state === "cancelled" || record.expiresAt <= Date.now()) {
@@ -159,7 +190,8 @@ export class Subagents {
       if (!record) throw Error("Unknown subagent delivery");
       if (meta?.approvalId) throw Error("Approval requests must use the trusted parent operator destination");
       if (meta?.maintenance && meta.maintenance.state !== "blocked") return;
-      if (record.state === "cancelled") return;
+      if (record.state === "cancelled" || record.parentStopped) return;
+      if (record.ownershipHold) { record.result = text; await this.save(); return; }
       clearTimeout(this.timers.get(record.id));
       this.timers.delete(record.id);
       record.result=text.slice(0,64000);
