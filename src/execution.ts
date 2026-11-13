@@ -9,6 +9,9 @@ import { recoveryBlock, type RecoveryStrategy, type ExecutionRecoveryPolicy } fr
 export class ExecutionClaimConflict extends Error {}
 /** New parent data invalidated a verdict, not the retained worker evidence. */
 export class ExecutionDecisionConflict extends Error {}
+export interface PlanHistoryRef { head: string; completed: number; segments: number; maxStepId: number }
+export interface CompletedPlanStep { stepId: number; step: import("./dispatcher-sequential.js").PlanStep; outcome: import("./dispatcher-sequential.js").StepOutcome }
+export interface PlanHistorySegment { previous?: PlanHistoryRef; steps: CompletedPlanStep[]; followUps: string[] }
 export interface ExecutionFollowUp { task: string; role: "simple" | "medium" | "high"; reason: string; evidence: string }
 export function validExecutionFollowUp(value: unknown): value is ExecutionFollowUp {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
@@ -546,10 +549,11 @@ export class ExecutionStore {
       !!task.classifierReceipt && ["initial", "fallback"].includes(task.classifierReceipt.phase) &&
       (!strategy || strategy.version === task.strategyVersion && !!strategy.reconcile);
   }
-  checkpoint(id: string, token: string, checkpoint: string, notice?: { key: string; text: string }): Promise<void> {
+  checkpoint(id: string, token: string, checkpoint: string, notice?: { key: string; text: string }, decisionRevision?: number): Promise<void> {
     return this.mutate(draft => {
       if (typeof checkpoint !== "string" || checkpoint.length > 64000) throw Error("Invalid checkpoint");
-      const task = this.owned(draft, id, token);
+      const task = this.owned(draft, id, token); this.checkDecisionRevision(task, decisionRevision);
+      if (decisionRevision !== undefined && task.dependency?.expiresAt !== undefined && task.dependency.expiresAt <= this.now()) throw new ExecutionDeadlineExpired();
       if (notice) {
         if (typeof notice.key !== "string" || !notice.key || notice.key.length > 100 ||
             typeof notice.text !== "string" || !notice.text || notice.text.length > 8000) throw Error("Invalid checkpoint notice");
@@ -709,6 +713,68 @@ export class ExecutionStore {
       }
       this.event(draft, task, "status", `Decision consolidated: ${requestId}; ${old.length} originals archived, pending strategy consumption`);
       return receipt;
+    });
+  }
+  private planHistoryFile(task: Pick<Execution, "parent" | "id">, head: string): string {
+    if (!/^[a-f0-9]{64}$/.test(head)) throw Error("Invalid plan history hash");
+    const scope = createHash("sha256").update(JSON.stringify([task.parent, task.id])).digest("hex");
+    return path.join(path.dirname(this.file), "execution-plan-audit", scope, head + ".json");
+  }
+  /** A reference into this exact execution's immutable evidence, never authority. */
+  planHistoryReference(parent: string, id: string, history: PlanHistoryRef): PlanHistoryRef & { file: string } {
+    const task = this.list(parent).find(item => item.id === id);
+    if (!task) throw Error("Execution not in this conversation");
+    return { ...history, file: this.planHistoryFile(task, history.head) };
+  }
+  async readPlanHistory(parent: string, id: string, head: string): Promise<PlanHistorySegment & { reference: PlanHistoryRef }> {
+    // Bind the archive to parent/id even after normal terminal-ledger compaction.
+    // Caller identity is host-owned; neither component is used as a file path.
+    const file = this.planHistoryFile({ parent, id }, head);
+    if ((await stat(file)).size > 256 * 1024) throw Error("Oversized plan history segment");
+    const text = await readFile(file, "utf8");
+    if (createHash("sha256").update(text).digest("hex") !== head) throw Error("Plan history content mismatch");
+    const record = JSON.parse(text);
+    if (record.schema !== 1 || record.parent !== parent || record.executionId !== id || !Array.isArray(record.steps) || !record.steps.length ||
+        record.completed !== (record.previous?.completed ?? 0) + record.steps.length || record.segments !== (record.previous?.segments ?? 0) + 1 ||
+        record.maxStepId !== Math.max(record.previous?.maxStepId ?? -1, ...record.steps.map((entry: CompletedPlanStep) => entry.stepId))) throw Error("Invalid plan history binding");
+    return { previous: record.previous, steps: record.steps, followUps: record.followUps,
+      reference: { head, completed: record.completed, segments: record.segments, maxStepId: record.maxStepId } };
+  }
+  /** Archive exact independently completed steps before retiring their active slots.
+   * The old active checkpoint remains intact if the subsequent checkpoint fails;
+   * an orphan immutable blob is harmless and reused exactly on retry. */
+  archiveCompletedPlan(id: string, token: string, segment: PlanHistorySegment, decisionRevision?: number): Promise<PlanHistoryRef> {
+    return this.mutate(async draft => {
+      const task = this.owned(draft, id, token); this.checkDecisionRevision(task, decisionRevision);
+      if (task.parentStopped || task.ownershipHold || task.recoveryEnrollment === "held-legacy") throw Error("Completed plan archival requires current retained ownership");
+      if (task.dependency?.expiresAt !== undefined && task.dependency.expiresAt <= this.now()) throw new ExecutionDeadlineExpired();
+      if (!Array.isArray(segment.steps) || !segment.steps.length || segment.steps.length > 6 || new Set(segment.steps.map(step => step.stepId)).size !== segment.steps.length ||
+          segment.steps.some(step => !Number.isSafeInteger(step.stepId) || step.stepId < 0 || !validExecutionFollowUp(step.step) ||
+            !step.outcome || typeof step.outcome.result !== "string" || step.outcome.result.length > 8000) ||
+          !Array.isArray(segment.followUps) || segment.followUps.length > 6 || segment.followUps.some(id => !validDecisionInput(id, "audit"))) throw Error("Invalid completed plan segment");
+      const saved = JSON.parse(task.checkpoint ?? "null");
+      if (!saved || saved.v !== 1 || !Array.isArray(saved.plan) || !Array.isArray(saved.outcomes) || saved.outcomes.length !== segment.steps.length ||
+          (saved.planHistory?.head ?? null) !== (segment.previous?.head ?? null) ||
+          (saved.planHistory?.completed ?? 0) !== (segment.previous?.completed ?? 0) || (saved.planHistory?.segments ?? 0) !== (segment.previous?.segments ?? 0) ||
+          (saved.planHistory?.maxStepId ?? -1) !== (segment.previous?.maxStepId ?? -1) || segment.steps.some((entry, index) =>
+            entry.stepId !== (saved.stepIds?.[index] ?? index) || JSON.stringify(entry.step) !== JSON.stringify(saved.plan[index]) ||
+            JSON.stringify(entry.outcome) !== JSON.stringify(saved.outcomes[index]))) throw Error("Completed archive does not match retained checkpoint");
+      if (segment.previous) {
+        const previous = await this.readPlanHistory(task.parent, task.id, segment.previous.head);
+        if (previous.reference.completed !== segment.previous.completed || previous.reference.segments !== segment.previous.segments || previous.reference.maxStepId !== segment.previous.maxStepId) throw Error("Plan history chain mismatch");
+      }
+      const completed = (segment.previous?.completed ?? 0) + segment.steps.length, segments = (segment.previous?.segments ?? 0) + 1;
+      if (!Number.isSafeInteger(completed) || !Number.isSafeInteger(segments)) throw Error("Plan history counter exhausted");
+      const maxStepId = Math.max(segment.previous?.maxStepId ?? -1, ...segment.steps.map(entry => entry.stepId));
+      const text = JSON.stringify({ schema: 1, executionId: task.id, parent: task.parent, ...segment, completed, segments, maxStepId }) + "\n";
+      if (Buffer.byteLength(text) > 256 * 1024) throw Error("Completed plan segment exceeds archive budget");
+      const head = createHash("sha256").update(text).digest("hex"), file = this.planHistoryFile(task, head);
+      try { if (await readFile(file, "utf8") !== text) throw Error("Conflicting completed plan archive"); }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        await mkdir(path.dirname(file), { recursive: true }); await writeFileDurable(file, text);
+      }
+      return { head, completed, segments, maxStepId };
     });
   }
   /** Delivery receipt at an owned boundary; never a semantic approval. */
