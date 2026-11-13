@@ -160,6 +160,10 @@ export interface RuntimeSessionStatus {
   /** Provider/model price estimate for this runtime session, not a billing statement. */
   costUsd?: number;
   contextPercent?: number;
+  /** Separately labelled host estimate for an explicitly configured local working budget. */
+  contextBudgetTokens?: number;
+  contextEstimateTokens?: number;
+  contextBudgetPercent?: number;
   contextWindow?: number;
   /** Effective runtime system prompt size; excludes conversation history and tool schemas. */
   systemPrompt?: { characters: number; bytes: number };

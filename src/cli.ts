@@ -42,6 +42,7 @@ import { MemoryService } from "./builtin-plugins/memory-service.js";
 import { MemoryProviderLifecycle } from "./memory-provider-lifecycle.js";
 import { memoryPlugin } from "./builtin-plugins/memory-plugin.js";
 import { WorkingMemory } from "./working-memory.js";
+import { compactSkillCatalog } from "./local-context.js";
 import { memoryOrchestrationPlugin } from "./builtin-plugins/memory-orchestration-plugin.js";
 import { maintenanceClient } from "./builtin-plugins/maintenance-client.js";
 import { maintenanceControlPlugin } from "./builtin-plugins/maintenance-control-plugin.js";
@@ -129,7 +130,7 @@ import { completionPrompt } from "./builtin-plugins/completion-prompt.js";
 import { completionStrategyHolder } from "./completion-strategy.js";
 import { completionStrategyPlugin } from "./builtin-plugins/completion-strategy-plugin.js";
 import { reviewConfig } from "./review-config.js";
-import { appendFileDurable } from "./durable.js";
+import { appendFileDurable, writeFileDurable } from "./durable.js";
 
 const USAGE = `Hayate Agent ${VERSION}
 
@@ -404,7 +405,10 @@ async function main(argv: string[]): Promise<void> {
       // Skill metadata is computed once per session and reused, so the leading prompt
       // prefix stays byte-stable across turns (prefix-cache friendly) and skill dirs are
       // not re-scanned every turn; invalidated whenever skills reload.
-      return skillContextCache ??= `Available skills (metadata only; read the named SKILL.md when relevant):\n${JSON.stringify(skills)}`;
+      if (skillContextCache) return skillContextCache;
+      const file = path.join(config.home, "skill-catalog.json");
+      await writeFileDurable(file, JSON.stringify(skills));
+      return skillContextCache = compactSkillCatalog(skills, file);
     },
     toolGuard: async (key, tool, input) => {
       if (tool === "plugin_review") await reloadRuntimeSettings();

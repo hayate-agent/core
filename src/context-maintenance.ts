@@ -16,6 +16,9 @@ export interface ContextPolicy {
   mainContextTokens?: number;
   /** Explicit local backend model references; local budgets are half of frontier. */
   localModels?: string[];
+  /** Small by default, explicitly adjustable without changing provider/locality. */
+  localMainContextTokens?: number;
+  localWorkerContextTokens?: number;
   checkEveryTurns: number;
   assessPercent: number;
   compactPercent: number;
@@ -23,13 +26,14 @@ export interface ContextPolicy {
   autoHandover: boolean;
 }
 export const defaultContextPolicy: ContextPolicy = {
-  compactionOwner: "harness", enabled: true, workerContextTokens: 131072, mainContextTokens: 262144, localModels: [], checkEveryTurns: 5, assessPercent: 60, compactPercent: 75, cooldownTurns: 5, autoHandover: true,
+  compactionOwner: "harness", enabled: true, workerContextTokens: 131072, mainContextTokens: 262144, localModels: [], localMainContextTokens: 16384, localWorkerContextTokens: 8192, checkEveryTurns: 5, assessPercent: 60, compactPercent: 75, cooldownTurns: 5, autoHandover: true,
 };
 export function contextPolicy(input: Partial<ContextPolicy> = {}): ContextPolicy {
   const policy = { ...defaultContextPolicy, ...input };
   if (!["harness", "agent"].includes(policy.compactionOwner!)) throw new Error("Invalid compaction owner");
   if (!Number.isSafeInteger(policy.workerContextTokens) || policy.workerContextTokens! < 8192) throw new Error("Invalid worker context token budget");
   if (!Number.isSafeInteger(policy.mainContextTokens) || policy.mainContextTokens! < 8192) throw new Error("Invalid main context token budget");
+  if (![policy.localMainContextTokens, policy.localWorkerContextTokens].every(value => Number.isSafeInteger(value) && value! >= 4096)) throw Error("Invalid local context token budget");
   if (!Array.isArray(policy.localModels) || policy.localModels.some(m => typeof m !== "string" || !/^[^\s/]+\/.+/.test(m))) throw new Error("Invalid local model references");
   if (typeof policy.enabled !== "boolean" || typeof policy.autoHandover !== "boolean" ||
       !Number.isInteger(policy.checkEveryTurns) || policy.checkEveryTurns < 1 ||
@@ -87,7 +91,7 @@ export interface ContextRecord {
   pressureSinceCompaction?: boolean;
   /** Recovery switches to a fresh session, never retries old native compaction. */
   handoverAfterFailure?: boolean;
-  observation?: { phase: "before" | "after"; usage: "known" | "unknown"; percent?: number; decision: string; turn: number };
+  observation?: { phase: "before" | "after"; usage: "known" | "unknown"; basis?: "working-estimate" | "provider-context"; percent?: number; decision: string; turn: number };
   beforeObservation?: ContextRecord["observation"];
   unknownUsageNotified?: boolean;
   assessmentFailures?: Partial<Record<"before" | "after", number>>;
@@ -539,11 +543,11 @@ export class ContextMaintenance {
       }
     });
     const state = await this.status(key); const policy = this.policy();
-    const percent = session.status().contextPercent;
+    const status = session.status(), percent = status.contextBudgetPercent ?? status.contextPercent;
     if (!policy.enabled || state.turns % policy.checkEveryTurns !== 0) return "";
     if (percent === undefined || !Number.isFinite(percent)) return "Context usage is unknown; no percentage was inferred. Assess useful boundaries explicitly with plugin_context_maintenance.";
     if (percent < policy.assessPercent) return "";
-    return `Context usage is ${Math.round(percent)}%. Assess whether compaction is useful at this task boundary. If needed request plugin_context_maintenance with what to preserve and how to resume. Continue normally if continuity is more important. ${preserve}`;
+    return `${status.contextBudgetPercent !== undefined ? "Estimated local working-budget pressure (not provider-reported usage)" : "Context usage"} is ${Math.round(percent)}%. Assess whether compaction is useful at this task boundary. If needed request plugin_context_maintenance with what to preserve and how to resume. Continue normally if continuity is more important. ${preserve}`;
   }
   /** Checker prerequisite uses the same durable request, archive and runtime lifecycle.
    * Unlike optional threshold maintenance, failure must hold the working prompt.
@@ -665,7 +669,7 @@ export class ContextMaintenance {
       state.sessionId = id;
       if (phase === "after" && advanceTurn) state.turns++;
       const request = state.pending;
-      const usage = session.status().contextPercent;
+      const status = session.status(), usage = status.contextBudgetPercent ?? status.contextPercent;
       const percent = usage !== undefined && Number.isFinite(usage) ? usage : undefined;
       // Independent cooldowns: compaction cannot continually postpone handover.
       const last = phase === "before" ? state.lastHandover : state.lastCompact;
@@ -697,7 +701,7 @@ export class ContextMaintenance {
         decision = `assessment-${action}`;
         automatic = action === (phase === "before" ? "handover" : "compact");
       }
-      state.observation = { phase, usage: percent === undefined ? "unknown" : "known", percent, decision, turn: state.turns };
+      state.observation = { phase, usage: percent === undefined ? "unknown" : "known", basis: status.contextBudgetPercent !== undefined ? "working-estimate" : "provider-context", percent, decision, turn: state.turns };
       if (phase === "before") state.beforeObservation = state.observation;
       let diagnostic: string | undefined;
       if (policy.enabled && percent === undefined && !state.unknownUsageNotified) {

@@ -1,9 +1,9 @@
 import type { ContextPolicy } from './context-maintenance.js';
 import type { SkillInfo } from './skills.js';
 /** Explicit host declaration only. Never infer privacy/locality from a model name. */
-export function localModel(policy: Pick<ContextPolicy,'localModels'>|undefined,ref:string):boolean{return policy?.localModels?.includes(ref)??false;}
-export function localContextBudget(budget:number,child:boolean,local:boolean):number{
- return local?Math.min(budget,child?8192:16384):budget;
+export function localModel(policy: {localModels?:readonly string[]}|undefined,ref:string):boolean{return policy?.localModels?.includes(ref)??false;}
+export function localContextBudget(budget:number,child:boolean,local:boolean,policy?:Pick<ContextPolicy,'localMainContextTokens'|'localWorkerContextTokens'>):number{
+ return local?Math.min(budget,child?policy?.localWorkerContextTokens??8192:policy?.localMainContextTokens??16384):budget;
 }
 /** Paths and full descriptions live in the on-demand catalog, not every request. */
 export function compactSkillCatalog(skills:readonly SkillInfo[],file:string):string{
