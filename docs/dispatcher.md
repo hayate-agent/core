@@ -396,6 +396,13 @@ of steering or interrupting it. Their authority is checked again before executio
 after asynchronous setup, at runtime execution and at tool boundaries. They do
 not overwrite the parent's task checkpoint or conversation destination.
 
+On restart, old worker evidence is read through the runtime's read-only
+`retainedSessionHistory` interface when no source session is already open. Reading
+history must not reopen the old model, MCP processes, extensions or tools. A
+missing persisted source is an explicit hold, never a newly created empty source;
+incomplete history remains unknown evidence. Only the replacement working
+session is opened after the retained evidence has been read.
+
 Recovery handover durability is a prerequisite for publishing a replacement
 worker session: native PI custom-message-only histories must be crash-durably
 published even before their first user/assistant prompt. The host writes the

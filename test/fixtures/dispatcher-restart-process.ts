@@ -8,6 +8,7 @@ import { ExecutionStore } from "../../src/execution.js";
 import { DispatcherRuntime } from "../../src/dispatcher-runtime.js";
 import { Harness } from "../../src/harness.js";
 import { PiSession } from "../../src/runtime/pi.js";
+import { retainedSessionFile } from "../../src/runtime/retained-session-file.js";
 
 const [home, phase] = process.argv.slice(2), file = path.join(home!, "executions.json");
 const store = new ExecutionStore(file); await store.load();
@@ -17,10 +18,20 @@ const get = (key: string) => {
   if (!manager) { manager = SessionManager.continueRecent(home!, path.join(home!, "sessions", key.replace(/[^a-zA-Z0-9_-]/g, "_"))); managers.set(key, manager); }
   return manager;
 };
-const runtime = { open: async (key: string) => {
-  const manager = get(key), pi = new PiSession({ sessionManager: manager, isStreaming: false, isCompacting: false,
-    sendCustomMessage: async (m: { customType: string; content: string; display: boolean }) => { manager.appendCustomMessageEntry(m.customType, m.content, m.display); },
-  } as never, {} as never, {});
+const wrap = (manager: SessionManager) => new PiSession({ sessionManager: manager, isStreaming: false, isCompacting: false,
+  sendCustomMessage: async (m: { customType: string; content: string; display: boolean }) => { manager.appendCustomMessageEntry(m.customType, m.content, m.display); },
+} as never, {} as never, {});
+const runtime = {
+ retainedSessionHistory: async (key: string) => {
+  const directory = path.join(home!, "sessions", key.replace(/[^a-zA-Z0-9_-]/g, "_")), found = await retainedSessionFile(directory, home!);
+  if (!found) return undefined;
+  const entries = (await readFile(found.file, "utf8")).trim().split("\n").map(line => JSON.parse(line));
+  const manager = SessionManager.inMemory(home, undefined, entries);
+  return { sessionId: found.id, sessionFile: found.file, entries: wrap(manager).archiveEntries() };
+ },
+ open: async (key: string) => {
+  if (phase !== "original" && key === store.list()[0]!.recoverySession) throw Error("Old worker model must not reopen just to read evidence");
+  const manager = get(key), pi = wrap(manager);
   return { status: () => ({ sessionId: manager.getSessionId(), model: "fixture/deterministic", thinking: "off" }),
     archiveEntries: () => pi.archiveEntries(), seedHandover: (text: string) => pi.seedHandover(text), abort: async () => {}, dispose: async () => {},
     prompt: async () => { throw Error("Fixture inference is routed explicitly, never network"); } };

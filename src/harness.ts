@@ -1344,9 +1344,23 @@ export class Harness {
     const sourceState = this.state(sourceKey);
     const targetState = this.state(targetKey);
     if ([sourceState, targetState].some(s => s.running || s.opening || s.queue.length)) throw Error("Recovery session has active or queued work");
-    const source = await this.sessionFor(sourceKey);
-    if (!source.archiveEntries) throw Error("Runtime does not expose retained execution evidence");
-    const entries = [...source.archiveEntries()];
+    // Restart recovery must not open the OLD worker as a live model/MCP/tool
+    // session just to read its evidence. Its model/backend/cwd may have changed.
+    // Prefer an already-open session, otherwise use the runtime's read-only
+    // persisted-history API; never turn a missing history into a fresh source.
+    let entries: import("./session-archive.js").ArchiveEntry[];
+    let sourceStatus: { sessionId: string; sessionFile?: string };
+    if (!sourceState.session && this.runtime.retainedSessionHistory) {
+      const saved = await this.runtime.retainedSessionHistory(sourceKey);
+      if (!saved) throw Error("Retained execution evidence is empty; explicit retry requires reconciliation");
+      entries = [...saved.entries]; sourceStatus = { sessionId: saved.sessionId, ...(saved.sessionFile ? { sessionFile: saved.sessionFile } : {}) };
+      if (saved.incomplete) entries.push({ id: "incomplete-retained-worker", role: "host-evidence", truncated: true,
+        text: "Persisted worker transcript is incomplete. Missing tool outcomes remain unknown; never infer absence of effects or replay permission." });
+    } else {
+      const source = sourceState.session ?? await this.sessionFor(sourceKey);
+      if (!source.archiveEntries) throw Error("Runtime does not expose retained execution evidence");
+      entries = [...source.archiveEntries()]; sourceStatus = source.status();
+    }
     if (retained) {
       // Host-owned evidence for a checkpointed correction, not a retry grant.
       // Both sessions must belong to the same execution; missing transcript
@@ -1363,7 +1377,7 @@ export class Harness {
     if (!entries.length) throw Error("Retained execution evidence is empty; explicit retry requires reconciliation");
     const target = await this.sessionFor(targetKey);
     if (!target.seedHandover) throw Error("Runtime does not support recovery evidence handover");
-    await target.seedHandover(recoveryEvidence(sourceKey, source.status(), entries));
+    await target.seedHandover(recoveryEvidence(sourceKey, sourceStatus, entries));
   }
 
   async resumeSession(key: string, id: string): Promise<void> {

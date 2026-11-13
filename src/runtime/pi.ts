@@ -594,7 +594,7 @@ export class PiRuntime implements AgentRuntime {
     return (await runtime.getAvailable()).map((m) => `${m.provider}/${m.id}`);
   }
 
-  async retainedSessionHistory(key: string): Promise<{ sessionId: string; entries: import("../session-archive.js").ArchiveEntry[]; incomplete?: boolean } | undefined> {
+  async retainedSessionHistory(key: string): Promise<{ sessionId: string; sessionFile?: string; entries: import("../session-archive.js").ArchiveEntry[]; incomplete?: boolean } | undefined> {
     const cwd = (await this.opts.executionContext?.(key))?.cwd ?? this.opts.cwd;
     let provider = this.opts.sessionProvider?.();
     if (!provider && await this.opts.legacySessionProvider?.active(key)) provider = this.opts.legacySessionProvider;
@@ -620,7 +620,7 @@ export class PiRuntime implements AgentRuntime {
       const entries = parseSessionEntries(raw);
       if (!entries.length || entries[0].type !== "session" || entries[0].id !== info.id) throw Error("Retained session identity changed");
       const manager = SessionManager.inMemory(cwd, undefined, entries);
-      return { sessionId: info.id, entries: archiveBranch(manager), incomplete: entries.length !== raw.split("\n").filter(line => line.trim()).length };
+      return { sessionId: info.id, sessionFile: info.file, entries: archiveBranch(manager), incomplete: entries.length !== raw.split("\n").filter(line => line.trim()).length };
     } finally { lease?.release(); }
   }
 
