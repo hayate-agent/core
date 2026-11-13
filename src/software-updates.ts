@@ -50,11 +50,15 @@ export function containerRuntime(): boolean {
   return process.env.HAYATE_RUNTIME_KIND === "container" || !!process.env.KUBERNETES_SERVICE_HOST || existsSync("/.dockerenv") || existsSync("/run/.containerenv");
 }
 export type SoftwareUpdateAction = "status" | "check" | "install";
-interface Plan { id: string; revisions: Record<SoftwareComponent, string>; sources: SoftwareUpdatePolicy["sources"]; variant?: VariantIdentity }
+interface Plan { id: string; revisions: Record<SoftwareComponent, string>; sources: SoftwareUpdatePolicy["sources"]; variant?: VariantIdentity;
+  variantSelector?: Pick<VariantPolicy, "repository" | "branch" | "manifest"> }
+function variantSelector(policy: VariantPolicy): Plan["variantSelector"] {
+  return { repository: policy.repository, branch: policy.branch, manifest: policy.manifest };
+}
 function planId(plan: Omit<Plan, "id">): string {
   return createHash("sha256").update(JSON.stringify({ revisions: plan.revisions, sources: plan.sources,
     ...(plan.variant ? { variant: { binding: plan.variant.binding, profile: plan.variant.profile,
-      repository: plan.variant.repository, manifest: plan.variant.manifest } } : {}) })).digest("hex");
+      repository: plan.variant.repository, manifest: plan.variant.manifest, selector: plan.variantSelector } } : {}) })).digest("hex");
 }
 interface Selection { schema: 1; release: string; plan: Plan; baseline?: string; installation?: "automatic" | "operator" }
 export interface SoftwareUpdateStatus {
@@ -115,8 +119,11 @@ export class NativeSoftwareUpdates {
   async open(): Promise<void> {
     if (this.external) return; // A mounted native profile cannot replace container code.
     await mkdir(this.directory, { recursive: true, mode: 0o700 });
-    try {
-      const selected = JSON.parse(await readFile(path.join(this.directory, "selected.json"), "utf8")) as Selection;
+    let selectedBytes: string | undefined;
+    try { selectedBytes = await readFile(path.join(this.directory, "selected.json"), "utf8"); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw Error("Native selector unreadable; reconcile before starting"); }
+    if (selectedBytes !== undefined) try {
+      const selected = JSON.parse(selectedBytes) as Selection;
       await this.verifySelection(selected);
       if (selected.plan.variant && selected.baseline !== this.baseline && this.policy.variant !== null)
         throw Error("External bootstrap replacement requires explicit variant migration");
@@ -125,13 +132,16 @@ export class NativeSoftwareUpdates {
         this.selection = selected;
         this.status = { phase: "activated", detail: "Selected native source installation", selection: selected, updatedAt: Date.now() };
       } // An externally replaced base supersedes its old self-update selector.
-    } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw Error("Invalid native update selection; reconcile before starting"); }
+    } catch { throw Error("Invalid native update selection; reconcile before starting"); }
     try {
       const retained = JSON.parse(await readFile(path.join(this.directory, "status.json"), "utf8")) as SoftwareUpdateStatus;
       if (retained.phase === "prepared" && retained.pendingSelection && retained.pendingSelection.plan.id !== this.selection?.plan.id && retained.pendingSelection.baseline === this.baseline &&
           this.policy.enabled && !this.external && !!retained.pendingSelection.plan.variant === !!this.policy.variant &&
+          JSON.stringify(retained.pendingSelection.plan.variantSelector) === JSON.stringify(this.policy.variant ? variantSelector(this.policy.variant) : undefined) &&
           JSON.stringify(retained.pendingSelection.plan.sources) === JSON.stringify(this.policy.sources)) {
         await this.verifySelection(retained.pendingSelection); this.prepared = retained.pendingSelection; this.status = retained;
+      } else if (retained.phase === "prepared" && retained.pendingSelection?.plan.variant) {
+        this.status = { ...this.status, phase: "failed", detail: "Prepared private variant policy changed; candidate not resumed, last-good selection retained", updatedAt: Date.now() };
       } else if (["checking", "preparing"].includes(retained.phase)) {
         this.status = { ...this.status, phase: "failed", detail: "Previous preparation interrupted; active selection unchanged; next check can prepare afresh", updatedAt: Date.now() };
       }
@@ -249,7 +259,8 @@ export class NativeSoftwareUpdates {
         if (lines.length !== 1 || !/^[a-f0-9]{40}\s/.test(lines[0]!)) throw Error("invalid source identity");
         revisions[component] = lines[0]!.split(/\s/)[0]!;
       }
-      const identity = { revisions, sources: this.policy.sources, ...(variant ? { variant: variant.identity } : {}) };
+      const identity = { revisions, sources: this.policy.sources,
+        ...(variant ? { variant: variant.identity, variantSelector: variantSelector(this.policy.variant!) } : {}) };
       const id = planId(identity);
       const plan: Plan = { id, ...identity };
       if (id === this.selection?.plan.id) {
@@ -378,7 +389,17 @@ export class NativeSoftwareUpdates {
       retainedVariant(resolved, review);
       const payload = JSON.parse(await readFile(path.join(root, "variant-payload.json"), "utf8"));
       if (payload.binding !== v.binding || payload.sha256 !== await variantPayloadDigest(root)) throw Error("Prepared variant payload changed");
-      if (freshReview && this.policy.variant) await verifyVariantReview(this.policy.variant, resolved, this.abort.signal);
+      if (freshReview && this.policy.variant) {
+        if (JSON.stringify(selection.plan.variantSelector) !== JSON.stringify(variantSelector(this.policy.variant))) throw Error("Prepared variant selector changed");
+        const signal = AbortSignal.any([this.abort.signal, AbortSignal.timeout(30000)]);
+        const checkout = path.join(this.directory, `verify-variant-${randomUUID()}`); await mkdir(checkout, { mode: 0o700 });
+        try {
+          const current = await resolveVariant(this.policy.variant, checkout,
+            (cmd, args, cwd, env) => this.runCommand(cmd, args, cwd, env, signal));
+          if (current.identity.binding !== resolved.identity.binding) throw Error("Prepared variant source changed");
+          await verifyVariantReview(this.policy.variant, current, signal);
+        } finally { await rm(checkout, { recursive: true, force: true }); }
+      }
     }
     const prepared = JSON.parse(await readFile(path.join(root, "prepared.json"), "utf8"));
     if (JSON.stringify(prepared) !== JSON.stringify(selection) || !(await stat(path.join(root, "core/dist/cli.js"))).isFile()) throw Error("Unprepared source selection");

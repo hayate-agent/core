@@ -89,6 +89,8 @@ test('native reviewed variant prepares, activates only after exit, survives offl
  await owner.request('check');for(let i=0;i<300&&owner.snapshot().phase==='checking';i++)await new Promise(r=>setTimeout(r,10));assert.equal(owner.snapshot().phase,'available');assert.equal(owner.snapshot().variantBaseCandidates?.core,nextBase);assert.equal(await readFile(path.join(home,'software-updates/selected.json'),'utf8'),before);assert.equal(owner.entrypoint('original'),entry);
  await rm(f.runner);
  const restored=new NativeSoftwareUpdates(home,policy,()=>{},command,false);t.after(()=>restored.close());await restored.open();assert.equal(restored.entrypoint('original'),entry,'startup must not depend on a review network call');
+ const evidence=path.join(path.dirname(path.dirname(path.dirname(entry))),'variant-review.json');const savedEvidence=await readFile(evidence,'utf8');await rm(evidence);
+ const missing=new NativeSoftwareUpdates(home,policy,()=>{},command,false);t.after(()=>missing.close());await assert.rejects(missing.open(),/reconcile/,'missing dependent evidence must not be mistaken for missing selected.json');assert.equal(await readFile(path.join(home,'software-updates/selected.json'),'utf8'),before);await writeFile(evidence,savedEvidence);
  const replaced=new NativeSoftwareUpdates(home,policy,()=>{},command,false,'/another/bootstrap.js');t.after(()=>replaced.close());await assert.rejects(replaced.open(),/reconcile/);
  const dropped=new NativeSoftwareUpdates(home,softwareUpdatePolicy({sources:policy.sources}),()=>{},command,false);t.after(()=>dropped.close());await assert.rejects(dropped.open(),/reconcile/);assert.equal(await readFile(path.join(home,'software-updates/selected.json'),'utf8'),before);
 });
@@ -100,6 +102,20 @@ test('approval failure after preparation retains bootstrap instead of activating
   if(cmd===process.execPath)return '';return updateCommand(cmd,args,cwd,...rest);
  };
  const policy=softwareUpdatePolicy({variant:f.policy,sources:Object.fromEntries(Object.entries(f.bases).map(([c,b]:any)=>[c,{repository:b.repository}]))});const owner=new NativeSoftwareUpdates(home,policy,()=>{},command,false);t.after(()=>owner.close());await owner.open();await owner.request('install');for(let i=0;i<500&&!['prepared','failed'].includes(owner.snapshot().phase);i++)await new Promise(r=>setTimeout(r,10));assert.equal(owner.snapshot().phase,'prepared',owner.snapshot().detail);await writeFile(f.runner,'tampered');await owner.afterExit();assert.equal(owner.snapshot().phase,'failed');assert.equal(owner.entrypoint('original'),'original');await assert.rejects(readFile(path.join(home,'software-updates/selected.json')),/ENOENT/);
+});
+
+test('prepared candidate cannot survive a variant policy branch change or a changed recipe on the same branch',async t=>{
+ const f=await fixture(t),home=path.join(f.tmp,'policy-change-home');
+ const command:any=async(cmd:string,args:string[],cwd:string,...rest:any[])=>{
+  if(cmd==='npm'){if(args[0]==='run'&&path.basename(cwd)==='core'){await mkdir(path.join(cwd,'dist'),{recursive:true});await writeFile(path.join(cwd,'dist/cli.js'),'// fixture');await writeFile(path.join(cwd,'dist/launcher.js'),'// fixture');}return '';}
+  if(cmd===process.execPath)return '';return updateCommand(cmd,args,cwd,...rest);
+ };
+ const sources=Object.fromEntries(Object.entries(f.bases).map(([c,b]:any)=>[c,{repository:b.repository}]));
+ const owner=new NativeSoftwareUpdates(home,softwareUpdatePolicy({sources,variant:f.policy}),()=>{},command,false);await owner.open();await owner.request('install');for(let i=0;i<500&&!['prepared','failed'].includes(owner.snapshot().phase);i++)await new Promise(r=>setTimeout(r,10));assert.equal(owner.snapshot().phase,'prepared',owner.snapshot().detail);
+ git(f.profile,'checkout','-b','replacement');await writeFile(path.join(f.profile,'variant.json'),JSON.stringify({...f.recipe,patches:[]}));git(f.profile,'add','.');git(f.profile,'commit','-qm','new branch recipe');
+ await owner.close();const next=new NativeSoftwareUpdates(home,softwareUpdatePolicy({sources,variant:{...f.policy,branch:'replacement'}}),()=>{},command,false);t.after(()=>next.close());await next.open();assert.notEqual(next.snapshot().phase,'prepared');await next.afterExit();assert.equal(next.entrypoint('original'),'original');await assert.rejects(readFile(path.join(home,'software-updates/selected.json')),/ENOENT/);
+ git(f.profile,'checkout','main');await writeFile(path.join(f.profile,'variant.json'),JSON.stringify({...f.recipe,patches:[]}));git(f.profile,'add','.');git(f.profile,'commit','-qm','changed original branch recipe');
+ const stale=new NativeSoftwareUpdates(home,softwareUpdatePolicy({sources,variant:f.policy}),()=>{},command,false);t.after(()=>stale.close());await stale.open();assert.equal(stale.snapshot().phase,'prepared');await stale.afterExit();assert.equal(stale.snapshot().phase,'failed');assert.equal(stale.entrypoint('original'),'original');await assert.rejects(readFile(path.join(home,'software-updates/selected.json')),/ENOENT/);
 });
 
 test('container composer binds private sources and emits test-qualified Core and WebUI build contexts without publishing',async t=>{
