@@ -725,7 +725,7 @@ export const COMMANDS: Command[] = [
       const job = ctx.scheduler.find(name);
       if (!job) return message(locale, "cron.unknown", { name });
       if (sub === "run") {
-        await ctx.scheduler.runJob(job);
+        await ctx.scheduler.runJob(job, true);
         return message(locale, "cron.triggered", { name });
       }
       if (sub === "pause" || sub === "resume") {

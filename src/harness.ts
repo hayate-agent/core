@@ -147,6 +147,8 @@ export interface SessionState {
   /** Interrupted stop must finish child revocation before startup admission. */
   stopPending?: boolean;
   resetPending?: boolean;
+  resetSources?: string[];
+  sourceOwner?: string;
   loop?: Recurring;
   goal?: Goal;
   /** Last user/channel input (for /retry). */
@@ -229,6 +231,7 @@ export interface HarnessOptions {
   /** Trusted host routing for child approval requests; never supplied by model input. */
   approvalTarget?: (sessionKey: string) => Address | undefined;
   /** Persist child authority revocation; must not signal runtimes. */
+  conversationSourcesReset?: (sessionKey: string, reset: (sources: () => Promise<readonly string[]>, planned: readonly string[]) => Promise<void>) => Promise<void>;
   conversationStopping?: (sessionKey: string) => Promise<void>;
   conversationStopped?: (sessionKey: string) => Promise<void>;
   /** Interrupt only descendants with this exact durable parent task binding. */
@@ -1505,6 +1508,11 @@ export class Harness {
     const resetting = Promise.resolve().then(async () => {
       if (this.budgetChanging) throw Error("Host control in progress; retry reset");
       const s = this.state(key);
+      const reset = async (resetSources?: () => Promise<readonly string[]>, planned: readonly string[] = []) => {
+      if (s.resetSources !== undefined && (!Array.isArray(s.resetSources) ||
+          s.resetSources.some(source => typeof source !== "string" || !source.startsWith("cron:"))) ||
+          planned.some(source => !source.startsWith("cron:"))) throw Error("Invalid reset source provenance");
+      s.resetSources = [...new Set([...(s.resetSources ?? []), ...planned])];
       s.resetPending = true;
       for (const input of [...s.queue, ...(s.steered ?? []), ...this.inbox.accepting, ...this.inbox.handoff, ...this.inbox.unsaved,
         ...(s.current ? [s.current] : [])])
@@ -1515,6 +1523,8 @@ export class Harness {
       s.loop = undefined; s.heartbeat = undefined; s.heartbeatDisabled = true; s.goal = undefined;
       s.heldRecoveryInputs = undefined;
       await this.stopConversation(key, true);
+      await resetSources?.();
+      for (const source of s.resetSources) if (source !== key) await this.resetSession(source);
       // abort() may only signal cancellation. Do not dispose/open over a live turn.
       const deadline = Date.now() + 30_000;
       while (s.running) {
@@ -1529,10 +1539,14 @@ export class Harness {
       if (s.opening) await s.opening;
       const fresh = await this.sessionFor(key, true);
       await this.opts.contextMaintenance?.resetConversation?.(key, fresh.status().sessionId);
-      s.resetPending = undefined; s.stopPending = undefined;
+      const sourcesBefore = s.resetSources;
+      s.resetPending = undefined; s.stopPending = undefined; s.resetSources = undefined;
       try { await this.onStateChange?.(); }
-      catch (error) { s.resetPending = true; s.stopPending = true; throw error; }
+      catch (error) { s.resetPending = true; s.stopPending = true; s.resetSources = sourcesBefore; throw error; }
       this.stoppingHostParents.delete(key);
+      };
+      if (this.opts.conversationSourcesReset) await this.opts.conversationSourcesReset(key, reset);
+      else await reset();
     });
     this.sessionResets.set(key, resetting);
     void resetting.finally(() => this.sessionResets.delete(key)).catch(() => {});
@@ -3553,8 +3567,8 @@ export class Harness {
   snapshotSessions(): PersistedSession[] {
     const out: PersistedSession[] = [];
     for (const s of this.sessions.values()) {
-      if (!s.stopPending && !s.hashtags?.length && !this.tasks(s).length && !s.heldRecoveryInputs?.length && !s.heartbeat && !s.heartbeatDisabled && !s.loop && !s.goal && !s.replyTo) continue;
-      out.push({ stopPending: s.stopPending, resetPending: s.resetPending, hashtags: structuredClone(s.hashtags), operatorBudgetGrants: structuredClone(s.operatorBudgetGrants), key: s.key, heldRecoveryInputs: structuredClone(s.heldRecoveryInputs), task: s.task ? structuredClone(s.task) : undefined, tasks: structuredClone(this.tasks(s)), completionRecent: structuredClone(s.completionRecent), statusDelivered: structuredClone(s.statusDelivered), replyTo: s.replyTo, heartbeat: s.heartbeat, heartbeatDisabled: s.heartbeatDisabled, loop: s.loop, goal: s.goal });
+      if (!s.stopPending && !s.sourceOwner && !s.hashtags?.length && !this.tasks(s).length && !s.heldRecoveryInputs?.length && !s.heartbeat && !s.heartbeatDisabled && !s.loop && !s.goal && !s.replyTo) continue;
+      out.push({ stopPending: s.stopPending, resetPending: s.resetPending, resetSources: s.resetSources, sourceOwner: s.sourceOwner, hashtags: structuredClone(s.hashtags), operatorBudgetGrants: structuredClone(s.operatorBudgetGrants), key: s.key, heldRecoveryInputs: structuredClone(s.heldRecoveryInputs), task: s.task ? structuredClone(s.task) : undefined, tasks: structuredClone(this.tasks(s)), completionRecent: structuredClone(s.completionRecent), statusDelivered: structuredClone(s.statusDelivered), replyTo: s.replyTo, heartbeat: s.heartbeat, heartbeatDisabled: s.heartbeatDisabled, loop: s.loop, goal: s.goal });
     }
     return out;
   }
@@ -3574,6 +3588,8 @@ export class Harness {
       s.heartbeatDisabled = p.heartbeatDisabled;
       s.stopPending = p.stopPending;
       s.resetPending = p.resetPending;
+      s.resetSources = p.resetSources;
+      s.sourceOwner = p.sourceOwner;
       s.loop = p.loop;
       s.goal = p.goal;
     }

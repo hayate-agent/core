@@ -37,7 +37,8 @@ export interface CronJob {
   model?: string | { model: string; provider?: string };
   /** "origin" | "local" | "<channel>:<target>" */
   deliver?: string;
-  origin?: { platform: string; chat_id: string; thread_id?: string | null };
+  /** Captured creator context; user_id distinguishes provenance from delivery-only config. */
+  origin?: { platform: string; chat_id: string; thread_id?: string | null; user_id?: string };
   enabled?: boolean;
   absent?: boolean;
 }
@@ -90,6 +91,63 @@ export class Scheduler {
   /** Runtime overrides from /cron pause|resume (persisted by the caller). */
   readonly overrides = new Map<string, boolean>();
   private readonly log: (m: string) => void;
+  private readonly active = new Map<string, Set<{ creator?: string; abort: AbortController; done: Promise<void> }>>();
+  private readonly resettingNames = new Set<string>();
+  private readonly resettingParents = new Set<string>();
+  private resetGeneration = 0;
+
+  private creator(job: CronJob): string | undefined {
+    const origin = job.origin;
+    if (!origin?.user_id?.trim() || !origin.platform || !origin.chat_id ||
+        ["cron", "dispatch", "subagent", "loop", "heartbeat", "goal"].includes(origin.platform)) return undefined;
+    return `${origin.platform}:${origin.chat_id}${origin.thread_id ? `:${origin.thread_id}` : ""}`;
+  }
+
+  private originResetPending(job: CronJob): boolean {
+    const key = this.creator(job);
+    return !!this.harness.sessions?.get(`cron:${job.name}`)?.resetPending ||
+      !!this.harness.sessions && [...this.harness.sessions.values()].some(s => s.resetPending && s.resetSources?.includes(`cron:${job.name}`)) ||
+      !!key && !!this.harness.sessions.get(key)?.resetPending;
+  }
+
+  /** Only creator provenance, never a matching delivery address, binds a job. */
+  async resetConversation(parent: string,
+    reset?: (sources: () => Promise<readonly string[]>, planned: readonly string[]) => Promise<void>): Promise<string[]> {
+    const owned = this.jobs.filter(job => this.creator(job) === parent);
+    const persisted = this.harness.sessions?.get(parent)?.resetSources ?? [];
+    if (!Array.isArray(persisted) || persisted.some(source => typeof source !== "string" || !source.startsWith("cron:")))
+      throw Error("Invalid reset source provenance");
+    const activeNames = [...this.active].filter(([, tasks]) => [...tasks].some(task => task.creator === parent)).map(([name]) => name);
+    const retained = [...this.harness.sessions?.values() ?? []]
+      .filter(s => s.key.startsWith("cron:") && s.sourceOwner === parent).map(s => s.key.slice(5));
+    const names = new Set([...owned.map(job => job.name), ...activeNames, ...retained, ...persisted.map(source => source.slice(5))]);
+    if (this.jobs.some(job => names.has(job.name) && this.creator(job) !== parent) ||
+        [...names].some(name => [...this.active.get(name) ?? []].some(task => task.creator !== parent) ||
+          !!this.harness.sessions?.get(`cron:${name}`)?.sourceOwner && this.harness.sessions.get(`cron:${name}`)!.sourceOwner !== parent))
+      throw Error("Ambiguous cron name ownership; reset not completed");
+    if (this.resettingParents.has(parent) || [...names].some(name => this.resettingNames.has(name))) throw Error("Cron reset in progress");
+    // Reserve the exact preflight set synchronously, before parent stop or any
+    // async persistence. Hold it through all recursive resets and fresh opening.
+    for (const name of names) this.resettingNames.add(name);
+    this.resettingParents.add(parent); this.resetGeneration++;
+    const parents = [...names].map(name => `cron:${name}`);
+    const sources = async () => {
+      for (const name of names) this.overrides.set(name, false);
+      this.jobs.forEach((job, i) => { if (names.has(job.name)) this.crons[i]?.pause(); });
+      if (names.size) await this.harness.onStateChange?.();
+      const active = [...names].flatMap(name => [...this.active.get(name) ?? []]).filter(task => task.creator === parent);
+      for (const task of active) task.abort.abort();
+      await Promise.allSettled(active.map(task => task.done));
+      return parents;
+    };
+    try {
+      if (reset) await reset(sources, parents); else await sources();
+      return parents;
+    } finally {
+      for (const name of names) this.resettingNames.delete(name);
+      this.resettingParents.delete(parent);
+    }
+  }
 
   constructor(
     private readonly harness: Harness,
@@ -99,14 +157,20 @@ export class Scheduler {
   }
 
   async load(): Promise<void> {
+    if (this.resettingParents.size) throw Error("Cron reset in progress; retry reload");
+    const generation = this.resetGeneration;
     if (!this.opts.jobsFile) { this.stop(); this.jobs = []; return; }
     let text: string;
     try {
       text = await readFile(this.opts.jobsFile, "utf8");
     } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === "ENOENT") { this.stop(); this.jobs = []; return; }
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        if (this.resettingParents.size || generation !== this.resetGeneration) throw Error("Cron reset in progress or changed; retry reload");
+        this.stop(); this.jobs = []; return;
+      }
       throw err;
     }
+    if (this.resettingParents.size || generation !== this.resetGeneration) throw Error("Cron reset in progress or changed; retry reload");
     const jobs = parseJobs(text);
     const crons: Cron[] = [];
     try {
@@ -148,6 +212,7 @@ export class Scheduler {
   }
 
   setEnabled(name: string, enabled: boolean): boolean {
+    if (enabled && this.resettingNames.has(name)) throw Error("Cron reset in progress; retry enable");
     const i = this.jobs.findIndex((j) => j.name === name);
     if (i < 0) return false;
     this.overrides.set(name, enabled);
@@ -160,12 +225,36 @@ export class Scheduler {
     return this.opts.jobsFile ? path.dirname(this.opts.jobsFile) : process.cwd();
   }
 
-  async runJob(job: CronJob): Promise<void> {
-    if (this.harness.paused || this.harness.stopping || this.harness.updateFenced) return;
-    return this.harness.withForegroundWork(() => this.runJobForeground(job));
+  async runJob(job: CronJob, explicit = false): Promise<void> {
+    if (this.resettingNames.has(job.name) || this.resettingParents.has(this.creator(job) ?? "") || this.harness.paused || this.harness.stopping || this.harness.updateFenced || !explicit && this.overrides.get(job.name) === false ||
+        this.originResetPending(job)) return;
+    const abort = new AbortController();
+    const done = this.harness.withForegroundWork(async () => {
+      const owner = this.creator(job);
+      const previousOwner = this.harness.sessions?.get(`cron:${job.name}`)?.sourceOwner;
+      if (previousOwner && previousOwner !== owner) throw Error("Cron creator ownership changed; reconcile source first");
+      if (owner) {
+        const source = this.harness.state(`cron:${job.name}`);
+        source.sourceOwner = owner;
+        await this.harness.onStateChange?.();
+      }
+      this.assertOccurrence(job, abort.signal);
+      await this.runJobForeground(job, abort.signal);
+    });
+    const active = this.active.get(job.name) ?? new Set(); this.active.set(job.name, active);
+    const task = { creator: this.creator(job), abort, done }; active.add(task);
+    try { await done; }
+    finally { active.delete(task); if (!active.size) this.active.delete(job.name); }
   }
 
-  private async runJobForeground(job: CronJob): Promise<void> {
+  private assertOccurrence(job: CronJob, signal: AbortSignal): void {
+    signal.throwIfAborted();
+    if (this.originResetPending(job))
+      throw Error("Origin conversation reset; old occurrence revoked");
+  }
+
+  private async runJobForeground(job: CronJob, signal: AbortSignal): Promise<void> {
+    this.assertOccurrence(job, signal);
     const language = languageTag(this.opts.language?.(job) ?? job.language ?? "en");
     let scriptOut = "";
     if (job.script) {
@@ -174,9 +263,13 @@ export class Scheduler {
       if (!file.startsWith(path.resolve(scriptsDir) + path.sep)) throw new Error(`script outside scripts dir: ${job.script}`);
       // Enforce the deadline even when the direct script ignores SIGTERM. This is
       // not process-tree isolation: independently running descendants may survive.
-      const { stdout } = await run(file, [], { timeout: 10 * 60_000, killSignal: "SIGKILL", maxBuffer: 4 * 1024 * 1024 });
-      scriptOut = stdout.trim();
+      const running = run(file, [], { timeout: 10 * 60_000, killSignal: "SIGKILL", maxBuffer: 4 * 1024 * 1024 });
+      const stop = () => { running.child.kill("SIGTERM"); };
+      signal.addEventListener("abort", stop, { once: true });
+      try { const { stdout } = await running; scriptOut = stdout.trim(); }
+      finally { signal.removeEventListener("abort", stop); }
     }
+    this.assertOccurrence(job, signal);
     const delivery = resolveDelivery(job, this.harness.home);
     const to = delivery === "home" ? this.harness.home : delivery;
 
@@ -199,6 +292,7 @@ export class Scheduler {
 
     let prompt = job.prompt ?? "";
     if (job.prompt_file) prompt = await readFile(path.resolve(this.baseDir(), job.prompt_file), "utf8");
+    this.assertOccurrence(job, signal);
     if (scriptOut) prompt += `\n\n## Script output\n\n${scriptOut}`;
     if (!prompt.trim()) return;
     prompt += `\n\n(Scheduled job "${job.name}". If there is nothing worth reporting, reply exactly ${NO_REPLY}.)`;
