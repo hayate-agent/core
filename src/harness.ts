@@ -205,7 +205,7 @@ export interface HarnessOptions {
   reportContext?: (input: Inbound) => Promise<string>;
   /** Non-reserving authority check repeated after async setup and by the runtime before execution. */
   beforeExecution?: (input: Inbound) => void;
-  memory?: { recall(sessionKey: string, text: string): Promise<string>; capture(turn: import("./memory.js").MemoryTurn): Promise<void> };
+  memory?: { recall(sessionKey: string, text: string): Promise<string>; capture(turn: import("./memory.js").MemoryTurn): Promise<void>; reset?(key: string): Promise<void> };
   contextMaintenance?: {
     archives?: Pick<import("./session-archive.js").SessionArchives, "completionEvidence">;
     interrupt?(key: string): boolean;
@@ -1538,6 +1538,7 @@ export class Harness {
       await this.onStateChange?.();
       if (s.opening) await s.opening;
       const fresh = await this.sessionFor(key, true);
+      await this.opts.memory?.reset?.(key);
       await this.opts.contextMaintenance?.resetConversation?.(key, fresh.status().sessionId);
       const sourcesBefore = s.resetSources;
       s.resetPending = undefined; s.stopPending = undefined; s.resetSources = undefined;
@@ -1707,6 +1708,17 @@ export class Harness {
       for (const s of sessions) void this.pump(s);
     }
     return count;
+  }
+
+  /** Host-selected scope only; historical memory never grants execution authority. */
+  async rememberMemory(turn: import("./memory.js").MemoryTurn): Promise<void> {
+    try { await this.opts.memory?.capture(turn); }
+    catch { this.log("memory capture failed; task/effect ledger retained"); }
+  }
+
+  async recallMemory(key: string, text: string): Promise<string> {
+    try { return (await this.opts.memory?.recall(key, text) ?? "").slice(0, 5000); }
+    catch { this.log("memory recall unavailable"); return ""; }
   }
 
   private readonly labeledInputs = new WeakSet<Inbound>();
@@ -3084,7 +3096,7 @@ export class Harness {
       // Child sessions cannot call parent-owned continuation tools; give them
       // their actual outcome contract instead of continuation instructions.
       const child = childDeniedTools(s.key).length > 0;
-      const guidance = (child ? `\n${CHILD_OUTCOME_CONTRACT}\n` : "\nTask continuation allowance: 20 consecutive stalled or unevidenced attempts, not 20 total turns. Distinct independently assessed verification, research and analysis count as progress without tracked-file edits. Checker calls and nudges themselves are not failures. Queue depth is separate. Working-model claims or changed wording do not grant progress credit. Original mandate and deadline remain binding.\n") + (await this.opts.contextMaintenance?.guidance(s.key, session) ?? "") + (await this.opts.memory?.recall(s.key, input.text) ?? "") + (await this.opts.reportContext?.(input) ?? "");
+      const guidance = (child ? `\n${CHILD_OUTCOME_CONTRACT}\n` : "\nTask continuation allowance: 20 consecutive stalled or unevidenced attempts, not 20 total turns. Distinct independently assessed verification, research and analysis count as progress without tracked-file edits. Checker calls and nudges themselves are not failures. Queue depth is separate. Working-model claims or changed wording do not grant progress credit. Original mandate and deadline remain binding.\n") + (await this.opts.contextMaintenance?.guidance(s.key, session) ?? "") + (await this.recallMemory(s.key, input.text)) + (await this.opts.reportContext?.(input) ?? "");
       if (await this.opts.contextMaintenance?.recoveryStatus?.(s.key)) throw MAINTENANCE_YIELD;
       const text = input.replyOptional
         ? `${input.text}\n\n(Not addressed to you directly. Reply only if you have something useful to add; otherwise reply exactly ${NO_REPLY}.)`

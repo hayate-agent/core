@@ -41,6 +41,7 @@ import { LocalMemory } from "./memory-local.js";
 import { MemoryService } from "./builtin-plugins/memory-service.js";
 import { MemoryProviderLifecycle } from "./memory-provider-lifecycle.js";
 import { memoryPlugin } from "./builtin-plugins/memory-plugin.js";
+import { WorkingMemory } from "./working-memory.js";
 import { memoryOrchestrationPlugin } from "./builtin-plugins/memory-orchestration-plugin.js";
 import { maintenanceClient } from "./builtin-plugins/maintenance-client.js";
 import { maintenanceControlPlugin } from "./builtin-plugins/maintenance-control-plugin.js";
@@ -486,7 +487,7 @@ async function main(argv: string[]): Promise<void> {
     progressEvidence: input => workingTreeEvidence(cwdFor(input.sessionKey)),
     executionStore: executions,
     contextMaintenance: maintenance,
-    memory: plugins.memoryOrchestration,
+    memory: new WorkingMemory(config.home, plugins.memoryOrchestration, () => ({ ...config.memory, enabled: config.memory.enabled && plugins.memoryOrchestration.active !== "none" }), log),
     approvalTarget: key => dispatchRuntime?.isWorker(key) ? dispatchRuntime.approvalTarget(key) : subagents.approvalTarget(key),
     conversationSourcesReset: async (key, reset) => { await scheduler.resetConversation(key, reset); },
     conversationStopping: async key => {
