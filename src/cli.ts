@@ -123,7 +123,7 @@ import { contextStrategyPlugin } from "./builtin-plugins/context-strategy-plugin
 import { guardResultOrchestration } from "./result-orchestration.js";
 import { assessCompletion, assessmentPolicyStamp, completionTimeout } from "./completion-check.js";
 import { validatorPlugin } from "./builtin-plugins/completion-validator-plugin.js";
-import { semanticTopicLabeler } from "./topic-labels.js";
+import { fastTopicLabeler, topicModelChain } from "./topic-labels.js";
 import { completionPrompt } from "./builtin-plugins/completion-prompt.js";
 import { completionStrategyHolder } from "./completion-strategy.js";
 import { completionStrategyPlugin } from "./builtin-plugins/completion-strategy-plugin.js";
@@ -537,7 +537,7 @@ async function main(argv: string[]): Promise<void> {
     reportContext: input => plugins.reportProcessing.context(input),
     turnCommitted: async (input) => { await improvement?.committed(input); },
     continuationDeadline: input => config.completionCheck?.authorizations?.[input.sessionKey]?.expiresAt,
-    topicLabeler: semanticTopicLabeler(runtimeReviewer(runtime), () => effectiveModels().reviewModel),
+    topicLabeler: fastTopicLabeler(runtimeReviewer(runtime), () => topicModelChain(settings.effective().modelRoles, effectiveModels().model), plugins.services),
     assessmentPolicy: () => assessmentPolicyStamp(plugins.validators, validatorSettings(), completionTimeout(config.completionCheck?.timeoutMs)),
     completionCheck: async (input, reply, signal, diagnostic) => {
       const grant = config.completionCheck?.authorizations?.[input.sessionKey] ??
