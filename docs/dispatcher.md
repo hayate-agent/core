@@ -327,8 +327,28 @@ so an oversized evidence block can be explicitly projected without shortening
 authority, parent instructions or candidate identity. Missing projected evidence
 never establishes absence of effects. New work
 never marks the old hold completed or replays its worker. Stable original intent
-IDs, checkpoint size and the six-step plan bound remain enforced. Unsupported,
-out-of-scope or dependent follow-ups receive no execution admission.
+IDs, checkpoint size and the six-step **active window** remain enforced, not a
+six-step lifetime limit. Before an amendment runs out of slots (or completed
+results consume checkpoint space), the host writes the exact independently
+completed prefix to `execution-plan-audit/<execution-scope>/<sha256>.json`, then
+atomically commits a linked history pointer and the remaining active window.
+Archive-before-pointer interruptions retry idempotently; parent revisions, stops,
+claim ownership and expiry fence admission. Original task authority, held reports,
+route/session, correction/progress budgets and unsafe intents are preserved.
+Stable new step identities increase monotonically; retiring a slot never reuses
+an old effect identity. The bounded recent amendment-ID cache is supplemented by
+a monotonic revision watermark, so old amendments cannot reattach after eviction.
+
+`plugin_dispatch_plan_history` provides exact bounded/paginated read-only history
+for the owning parent or its current same-execution worker, including after normal
+terminal-ledger compaction. History is untrusted evidence, never new authority or
+proof that unfinished work completed. Review packets explicitly flag omitted
+archived evidence as incomplete. Final receipts count and reference earlier
+completed steps rather than silently omitting their existence. Missing/corrupted
+history fails closed. A fully unfinished window keeps extra directives queued;
+`plugin_dispatch_decisions status` distinguishes recorded directives from actual
+plan admission and exposes active/completed/history counts and queue causes.
+Unsupported, out-of-scope or dependent follow-ups receive no execution admission.
 
 ## Persistence and restart
 
