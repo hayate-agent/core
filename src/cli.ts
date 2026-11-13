@@ -1107,7 +1107,6 @@ async function main(argv: string[]): Promise<void> {
   await harness.reconcileStoppedTasks();
   await subagents.reconcile(sessionEnabled);
   await dispatcher?.start();
-  await harness.recoverTasks(true);
   if (saved?.pending?.length || saved?.outbox?.length || harness.pendingInputs().length) {
     const pending = (saved?.pending ?? []).filter(input => sessionEnabled(input.sessionKey)).length;
     const replies = (saved?.outbox ?? []).filter(entry => sessionEnabled(entry.sessionKey)).length;
@@ -1119,8 +1118,9 @@ async function main(argv: string[]): Promise<void> {
   await persist(); // Complete failure-capable startup work before claiming readiness.
   if (stopping) return;
   hostAdmissionReady = true;
-  // Never acknowledge from the old process or before startup recovery and
-  // channel authentication succeed. Delivery remains independent of work.
+  // Never acknowledge from the old process or before structural recovery,
+  // revocation reconciliation and channel authentication succeed. Read-only
+  // semantic reassessments remain independently pending, never effect grants.
   const startupNotice = new StartupNotice({ agent: config.agent,
     build: readSoftwareVersions(BUILD_INFO), restarted: !!saved, language: resolveLanguage(settings.effective().language, { kind: "system" }),
     post: (input, text) => harness.post(input, text), log });
@@ -1135,6 +1135,15 @@ async function main(argv: string[]): Promise<void> {
   };
   announceStartup();
   if (process.send && process.connected) process.send({ type: "hayate-runtime-ready" }, () => {});
+  // Structural recovery, revocations and durable inbox publication above are
+  // readiness fences. External semantic judgments are NOT: a large backlog of
+  // slow/unavailable reviewers must not withhold launcher readiness for minutes
+  // (or make an otherwise healthy Kubernetes agent fail startup probes).
+  // Each retained task still independently persists/rechecks its admission.
+  void harness.recoverTasks(true).catch(() => {
+    log("retained task recovery scan failed; shutting down without bypassing admission");
+    void shutdown(1);
+  });
 }
 
 main(process.argv.slice(2)).catch(async (err) => {
