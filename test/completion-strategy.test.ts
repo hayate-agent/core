@@ -4,7 +4,7 @@ import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { completionStrategy, completionStrategyHolder } from "../src/completion-strategy.js";
-import { assessCompletion } from "../src/completion-check.js";
+import { assessCompletion } from "./completion-selected.js";
 
 test("custom advisory prompt is selected but host still rejects expiry and invalid results", async t => {
   const home = await mkdtemp(path.join(os.tmpdir(), "completion-strategy-")); t.after(() => rm(home, { recursive: true, force: true }));

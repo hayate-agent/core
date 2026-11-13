@@ -22,7 +22,8 @@ test("provider registry validates protocol, identity, version, duplicates and se
     { ...provider(), name: "../invalid" }, { ...provider(), assess: undefined }]) assert.throws(() => r.register(bad as ValidatorProvider));
   r.register(provider());
   assert.throws(() => r.register(provider()), /Duplicate/);
-  assert.equal(r.current, undefined);
+  assert.throws(() => r.current, /provider is required/);
+  assert.throws(() => r.select(undefined), /provider is required/);
   r.select("dedicated");
   assert.equal(r.current?.name, "dedicated");
   assert.deepEqual(r.versions(), [{ name: "dedicated", version: 1, apiVersion: 1 }]);
@@ -33,6 +34,8 @@ test("provider registry validates protocol, identity, version, duplicates and se
 test("real plugin registers replaceable legacy judge through PluginAPI", async () => {
   const host = new PluginHost();
   await host.load([], { agent: "test", home: "/tmp", cwd: "/tmp" }, [], [], [validatorPlugin]);
+  assert.throws(() => host.validators.current, /provider is required/);
+  host.validators.select("legacy-llm");
   assert.equal(host.validators.current?.name, "legacy-llm");
   assert.deepEqual(await assess(host.validators), { state: "completed" });
   await host.stop();
@@ -42,7 +45,7 @@ test("selection enabled, disabled and unavailable never implicitly falls back", 
   const r = new ValidatorRegistry(); r.register(legacyLLMProvider); r.register(provider());
   r.select("dedicated"); assert.deepEqual(await assess(r), { state: "completed" });
   r.select(false); assert.equal(await assess(r), undefined);
-  r.select("missing"); assert.equal(await assess(r), undefined);
+  r.select("missing"); await assert.rejects(assess(r), /not registered/);
   r.register({ ...provider("error"), async assess() { throw Error("credential-secret"); } });
   r.select("error"); const diagnostics: string[] = [];
   assert.equal(await assessCompletion(backend, input(), "report", grant, signal(), undefined, () => 1000,
@@ -51,7 +54,7 @@ test("selection enabled, disabled and unavailable never implicitly falls back", 
 });
 
 test("task and delegated-step extraction parity and persisted continuation compatibility", async () => {
-  const r = new ValidatorRegistry(); r.register(legacyLLMProvider);
+  const r = new ValidatorRegistry(); r.register(legacyLLMProvider); r.select("legacy-llm");
   const answers = [{ state: "completed" }, { state: "waiting" }, { state: "blocked" },
     { state: "continue", next: "Run regression", contextPreparation: "handover", progress: { advanced: true, fingerprint: "test:one" } }];
   for (const answer of answers) for (const prompt of [completionPrompt, stepCompletionPrompt]) {

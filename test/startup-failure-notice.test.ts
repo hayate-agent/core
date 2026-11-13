@@ -9,7 +9,7 @@ test("failed channel startup never emits a ready/restarted notice", { timeout: 2
   const home = await mkdtemp(path.join(os.tmpdir(), "failed-start-notice-"));
   await writeFile(path.join(home, "failed-gateway.mjs"), `export default {apiVersion:1,activate(api){api.registerChannel({name:'offline',async start(){throw Error('fixture gateway unavailable')},async send(){throw Error('must not send')},async stop(){}})}};`);
   await writeFile(path.join(home, "hayate-agent.yaml"), JSON.stringify({ agent: "failed-start-fixture", softwareUpdates: { enabled: false },
-    memory: { enabled: false }, dispatcher: { enabled: false }, mcp: { enabled: false }, plugins: ["failed-gateway.mjs"] }));
+    completionCheck: { provider: "legacy-llm" }, memory: { enabled: false }, dispatcher: { enabled: false }, mcp: { enabled: false }, plugins: ["failed-gateway.mjs"] }));
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(API_SERVER_|MATRIX_|SLACK_|HAYATE_AGENT_|HERMES_)/.test(key)));
   Object.assign(env, { HOME: home, HAYATE_AGENT_HOME: home });
   const child = spawn(process.execPath, ["dist/cli.js", "run", "--home", home, "--console"], { env, stdio: ["pipe", "pipe", "pipe"] });
