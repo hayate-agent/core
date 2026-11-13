@@ -904,17 +904,37 @@ export class Harness {
     const pending = store?.list(key).filter(e => !["completed", "cancelled"].includes(e.status) &&
       (!taskId || this.mayDependOn(e, taskId, task))) ?? [];
     if (!pending.length) return false;
-    const admission = task?.recoveryAdmission;
-    const receipt = admission?.independent;
-    return !(task && admission && receipt && receipt.taskId === task.id && receipt.sessionKey === key &&
-      task.state === "active" && admission.id === this.taskQueueId(task, task.depth + 1) &&
-      admission.depth === task.depth + 1 && admission.next === task.next && admission.original === task.original &&
-      admission.expiresAt === task.expiresAt && !task.termination &&
-      (!task.expiresAt || task.expiresAt > this.now()) &&
+    return !(task && this.independentSnapshotMatches(key, task, pending));
+  }
+
+  private independentSnapshotMatches(key: string, task: DurableTask, pending = this.opts.executionStore?.list(key).filter(e =>
+    !["completed", "cancelled"].includes(e.status) && this.mayDependOn(e, task.id, task)) ?? []): boolean {
+    const receipt = task.recoveryAdmission?.independent;
+    return !!(receipt && this.independentAdmissionMatches(key, task) &&
       pending.every(e => this.supervisable(e) && !e.parentStopped &&
         e.dependency?.taskId === task.id && e.dependency.original === task.original &&
         !(e.question && !e.question.answer)) &&
       receipt.evidence === createHash("sha256").update(JSON.stringify(pending)).digest("hex"));
+  }
+
+  private independentAdmissionMatches(key: string, task: DurableTask): boolean {
+    const admission = task.recoveryAdmission, receipt = admission?.independent;
+    return !!(admission && receipt && receipt.taskId === task.id && receipt.sessionKey === key &&
+      task.state === "active" && admission.id === this.taskQueueId(task, task.depth + 1) &&
+      admission.depth === task.depth + 1 && admission.next === task.next && admission.original === task.original &&
+      admission.expiresAt === task.expiresAt && !task.termination &&
+      (task.expiresAt === undefined || Number.isSafeInteger(task.expiresAt) && task.expiresAt > this.now()));
+  }
+
+  /** A scheduler changing a child invalidates independent effects, not an exact
+   * read of that same scoped child's status. Never grant control or a new writer. */
+  private independentStatusRead(key: string, task: DurableTask, tool: string, args: unknown): boolean {
+    if (tool !== "plugin_dispatch" || !args || typeof args !== "object") return false;
+    const input = args as { action?: unknown; id?: unknown };
+    if (input.action !== "status" || typeof input.id !== "string" || !input.id) return false;
+    return !!this.opts.executionStore?.list(key).some(e => e.id === input.id &&
+      e.dependency?.taskId === task.id && e.dependency.original === task.original &&
+      !e.parentStopped && !e.ownershipHold && e.status !== "cancelled");
   }
 
   /** Provenance only: a scoped child belongs to its task; an unscoped one may belong
@@ -1035,9 +1055,13 @@ export class Harness {
     const input = this.sessions.get(key)?.current;
     const independentTask = input?.taskId ? this.tasks(this.sessions.get(key)!).find(t => t.id === input.taskId) : undefined;
     if (independentTask?.recoveryAdmission?.independent) {
-      if (!input || input.id !== independentTask.recoveryAdmission.id || this.hasPendingDependency(key, independentTask.id) ||
-          this.paused || this.stopping || independentTask.state !== "active")
-        throw new ToolGuardError("authority_revoked", "Independent parent admission no longer matches host authority");
+      if (this.paused || this.stopping || independentTask.state === "stopped")
+        throw new ToolGuardError("execution_cancelled", "Independent parent is stopped or paused");
+      if (independentTask.expiresAt !== undefined && Number.isSafeInteger(independentTask.expiresAt) && independentTask.expiresAt <= this.now())
+        throw new ToolGuardError("deadline_expired", "Independent parent deadline elapsed");
+      if (!input || input.id !== independentTask.recoveryAdmission.id || !this.independentAdmissionMatches(key, independentTask) ||
+          !this.independentSnapshotMatches(key, independentTask) && !this.independentStatusRead(key, independentTask, tool, args))
+        throw new ToolGuardError("ownership_lost", "Independent parent admission no longer matches current host state");
       const action = args && typeof args === "object" ? (args as { action?: unknown }).action : undefined;
       const allowed: Record<string, readonly string[]> = {
         plugin_dispatch: ["submit", "status"],
