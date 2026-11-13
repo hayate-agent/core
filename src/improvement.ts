@@ -95,6 +95,7 @@ const KEY = "improvement:nightly";
 /** Controller owns time/budget, while Harness owns execution, review, inbox and delivery. */
 export class ImprovementController {
   private state?: NightState;
+  private deliveryImportPending = false;
   private checking = false;
   private strategyChanging = false;
   private strategyHolder?: PureStrategy<NightlyStrategy>;
@@ -228,18 +229,19 @@ export class ImprovementController {
         s.deliveryBacklog = [...new Map(retained.map(receipt => [identity(receipt), receipt])).values()]
           .filter(receipt => !current.has(identity(receipt)) && receipt.outcome === "improved" && receipt.delivery?.status !== "deployed");
         s.deliveryHistoryImported = true;
+        this.deliveryImportPending = history.length > 0 || issues.length > 0;
         if (issues.length) {
           s.deliveryImportIssues = issues;
           s.results.push(`Historische Auslieferungsbelege teilweise nicht lesbar: ${issues.length} Archive/Verzeichnis; Details in deliveryImportIssues. Keine Effekte wiederholt.`);
         }
       }
       this.state = s;
-      if (importedHistory) await this.save(); // Evidence durable before a turn can consume it.
     } catch (err) { if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err; }
   }
   private async save(beforeCommit?: () => void): Promise<void> {
     await mkdir(path.dirname(this.file), { recursive: true, mode: 0o700 });
     await writeFileDurable(this.file, JSON.stringify(this.state), 0o600, beforeCommit);
+    this.deliveryImportPending = false;
   }
   async evaluate(sessionKey: string, cwd: string, input: ExperimentSpec): Promise<string> {
     const p = await this.policy();
@@ -404,6 +406,9 @@ export class ImprovementController {
       if (!strategy) return;
       const p = await this.policy();
       const w = improvementWindow(this.now(), p);
+      // Persist actual imported evidence only after strategy/policy validation;
+      // loading a mismatched retained strategy must never rewrite its state.
+      if (this.deliveryImportPending) await this.save();
       if (cronStart && p.enabled && w.active && this.state && this.state.night !== w.night) {
         this.state.nextNightRequested = w.night;
         await this.save();
