@@ -683,7 +683,7 @@ export class ExecutionStore {
    * Originals are archived BEFORE the atomic active-window commit. Failed saves
    * leave the old window executable, and retries verify the same immutable audit. */
   consolidateDecisions(parent: string, id: string, requestId: string, text: string, replaces: readonly string[],
-      wake?: (task: Readonly<Execution>) => boolean, followUp?: ExecutionFollowUp): Promise<ExecutionDecision> {
+      wake?: (task: Readonly<Execution>) => boolean, followUp?: ExecutionFollowUp, expectedRevision?: number): Promise<ExecutionDecision> {
     return this.mutate(async draft => {
       if (/^(dispatch|subagent):/.test(parent)) throw Error("Nested worker decisions are disabled");
       if (!validDecisionInput(requestId, text) || (followUp !== undefined && !validExecutionFollowUp(followUp)) || !Array.isArray(replaces) || !replaces.length || replaces.length > 32 ||
@@ -696,6 +696,9 @@ export class ExecutionStore {
         if (prior.text !== text || JSON.stringify(prior.supersedes) !== JSON.stringify(replaces) || JSON.stringify(prior.followUp) !== JSON.stringify(followUp)) throw Error("Conflicting decision requestId reuse");
         return prior;
       }
+      this.checkDecisionRevision(task, expectedRevision);
+      if (expectedRevision !== undefined && (task.ownershipHold || task.recoveryEnrollment === "held-legacy" || task.diagnosticCode === "manual-pause" ||
+          task.question && task.question.answer === undefined || task.dependency?.expiresAt !== undefined && task.dependency.expiresAt <= this.now())) throw Error("Execution steering authority held or expired");
       const old = replaces.map(key => receipts.find(d => d.requestId === key));
       if (old.some(receipt => !receipt || receipt.state !== "applied")) throw Error("Only exact applied active decisions may be consolidated; pending steering must first be consumed");
       const receipt: ExecutionDecision = { requestId, text, recordedAt: this.now(), state: "pending", revision: nextDecisionRevision(receipts), supersedes: [...replaces], ...(followUp ? { followUp: structuredClone(followUp) } : {}) };

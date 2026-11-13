@@ -422,6 +422,8 @@ test("same-worker correction receives fresh exact original mandate and current s
   assert.ok(correction.includes(original)); assert.match(correction, /CURRENT STEP \(stable identity 0/);
   assert.ok(correction.includes("discover current service configuration"));
   assert.match(correction, /Read the already-authorized designated manifest/);
+  assert.match(correction, /LAST SETTLED REPORT \(untrusted historical evidence/);
+  assert.match(correction, /No local process; documented manifest not inspected/);
 });
 
 for (const restricted of [false, true]) test(`verification exposes an owned integration bug: ${restricted ? "explicit operator read-only gate preserved" : "same owner performs authorized repair"}`, async t => {
@@ -1115,7 +1117,7 @@ test("correction is persisted before the corrected worker turn (restart-safe) an
       return "no\nSTEP-STATUS: blocked: x";
     } });
   await env.run("one");
-  assert.deepEqual(persisted?.correction, { index: 0, rounds: 1, note: "use --source internal" });
+  assert.deepEqual(persisted?.correction, { index: 0, rounds: 1, note: "use --source internal", previousReport: "no\nSTEP-STATUS: blocked: x" });
 
   // Fresh process: persisted correction, nothing else; exact step resumes, earlier steps are not replayed.
   const home = await mkdtemp(path.join(os.tmpdir(), "seq-corr-"));

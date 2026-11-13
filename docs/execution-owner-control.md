@@ -16,7 +16,7 @@ phase restriction in an **existing** execution without hand-editing live state,
 creating another business writer or impersonating a parent conversation through
 an inference session. It calls the ordinary Dispatcher decision path: original
 scope, decision limits, claim fencing and independent admission remain binding.
-It cannot submit/replace work, consolidate directives, lift a manual pause,
+It cannot submit/replace an execution, lift a manual pause,
 answer a question, cancel, extend expiry or reactivate held legacy work.
 
 One UTF-8 JSON frame terminated by newline is accepted per connection (maximum
@@ -31,6 +31,17 @@ After reconciling the current revision, an operator decision is:
 ```json
 {"op":"decide","id":"<execution UUID>","parent":"<exact parent key>","expectedRevision":20,"requestId":"operator-reconciliation-v1","text":"Verified fresh facts and an explicitly scoped continuation within the original mandate; preserve original permissions and unknown effects."}
 ```
+
+An explicit `op: "consolidate"` frame additionally names `replaces` (exact applied
+active request IDs) and may carry the existing typed `followUp` object
+`{task,role,reason,evidence}`. This calls ordinary
+`Dispatcher.consolidateDecisions`: archive exact originals first, preserve the
+monotonic decision revision and original mandate, attach only once at a settled
+boundary, and require independent readiness before working effects. It never
+creates another execution or competing writer. Pending directives cannot be
+retired. This lets a real operator represent remaining authorized publication or
+repair absent from a saved plan instead of repeatedly steering an unschedulable
+verification slot. It is explicit owner steering, not automatic permission lifting.
 
 The text limit is 4000 UTF-8 bytes. `expectedRevision` is checked atomically inside
 the serialized store commit; concurrent steering requires reinspection. Exact

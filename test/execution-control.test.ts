@@ -13,7 +13,7 @@ async function fixture(t: { after(fn: () => unknown): void }) {
   const dir = await mkdtemp(path.join(os.tmpdir(), "host-execution-control-")); t.after(() => rm(dir, { recursive: true, force: true }));
   const store = new ExecutionStore(path.join(dir, "executions.json")); await store.load();
   const task = await store.submit("matrix:original-parent", "sole-owner", "Original authorized discovery; no side effects without permission", "sequential");
-  const dispatcher = { store, decide: (parent: string, id: string, requestId: string, text: string, revision: number) => store.recordDecision(parent, id, requestId, text, undefined, revision) } as unknown as Dispatcher;
+  const dispatcher = { store, consolidateDecisions: (parent: string, id: string, requestId: string, text: string, replaces: string[], followUp: import("../src/execution.js").ExecutionFollowUp | undefined, revision: number) => store.consolidateDecisions(parent, id, requestId, text, replaces, undefined, followUp, revision), decide: (parent: string, id: string, requestId: string, text: string, revision: number) => store.recordDecision(parent, id, requestId, text, undefined, revision) } as unknown as Dispatcher;
   const frame = { op: "decide", parent: task.parent, id: task.id, expectedRevision: 0, requestId: "operator-current-evidence-v1", text: "Source phase complete; continue original authorized read-only discovery. No repeated effects, new writer or permission expansion." };
   return { dir, store, task, dispatcher, frame };
 }
@@ -42,6 +42,19 @@ for (const hold of ["manual-pause", "cancel", "question", "expired", "held-legac
   }
   await assert.rejects(executionControlRequest(f.dispatcher, f.frame));
   assert.equal(f.store.list()[0]!.decisions?.length ?? 0, 0);
+});
+
+test("explicit native consolidation preserves exact applied originals and queues only a same-owner typed follow-up", async t => {
+  const f = await fixture(t); await executionControlRequest(f.dispatcher, f.frame);
+  const claim = await f.store.claim(f.task.id); await f.store.applyDecisions(f.task.id, claim.token!);
+  const followUp = { task: "finish same owned source delivery", role: "high", reason: "explicit remaining authorized repair", evidence: "normal reviewed merge and validation" };
+  const frame = { ...f.frame, op: "consolidate", requestId: "complete-current-context", expectedRevision: 1, replaces: [f.frame.requestId], text: "Complete replacement context; original permissions and completed effects remain binding", followUp };
+  const reply = await executionControlRequest(f.dispatcher, frame) as { decision: { revision: number } }; assert.equal(reply.decision.revision, 2);
+  assert.equal(f.store.list().length, 1); assert.equal(f.store.list()[0]!.decisions!.length, 1);
+  assert.equal((await f.store.readDecision(f.task.parent, f.task.id, f.frame.requestId))!.text, f.frame.text);
+  assert.equal((await executionControlRequest(f.dispatcher, frame) as { replayed: boolean }).replayed, true);
+  await assert.rejects(executionControlRequest(f.dispatcher, { ...frame, requestId: "retire-pending", expectedRevision: 2, replaces: [frame.requestId] }));
+  await assert.rejects(executionControlRequest(f.dispatcher, { ...frame, followUp: { ...followUp, task: "changed" } }));
 });
 
 test("expected decision revision is checked inside the serialized store commit", async t => {
