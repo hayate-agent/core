@@ -349,13 +349,13 @@ export class Dispatcher {
     const receipt = await this.store.consolidateDecisions(parent, id, requestId, text, replaces, current => strategy.decisionBoundary!(current), followUp);
     await this.kick(); return receipt;
   }
-  async decide(parent: string, id: string, requestId: string, text: string): Promise<import("./execution.js").ExecutionDecision> {
+  async decide(parent: string, id: string, requestId: string, text: string, expectedRevision?: number): Promise<import("./execution.js").ExecutionDecision> {
     if (/^(dispatch|subagent):/.test(parent)) throw Error("Nested worker decisions are disabled");
     const task = this.store.list(parent).find(row => row.id === id);
     if (!task) throw Error("Unknown execution in this conversation");
     const strategy = this.strategyFor(task);
     if (!strategy?.decisionBoundary) throw Error("Strategy does not support parent decisions");
-    const receipt = await this.store.recordDecision(parent, id, requestId, text, current => strategy.decisionBoundary!(current));
+    const receipt = await this.store.recordDecision(parent, id, requestId, text, current => strategy.decisionBoundary!(current), expectedRevision);
     await this.kick();
     return receipt;
   }

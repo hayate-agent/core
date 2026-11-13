@@ -628,7 +628,7 @@ export class ExecutionStore {
    * wake is trusted strategy code proving a retained assessment boundary.
    * Recording never changes a token, clears intent, or grants replay authority. */
   recordDecision(parent: string, id: string, requestId: string, text: string,
-      wake?: (task: Readonly<Execution>) => boolean): Promise<ExecutionDecision> {
+      wake?: (task: Readonly<Execution>) => boolean, expectedRevision?: number): Promise<ExecutionDecision> {
     return this.mutate(async draft => {
       if (/^(dispatch|subagent):/.test(parent)) throw Error("Nested worker decisions are disabled");
       if (!validDecisionInput(requestId, text)) throw Error("Invalid decision requestId or text");
@@ -641,6 +641,9 @@ export class ExecutionStore {
         if (prior.text !== text) throw Error("Conflicting decision requestId reuse");
         return prior;
       }
+      this.checkDecisionRevision(task, expectedRevision);
+      if (expectedRevision !== undefined && (task.ownershipHold || task.recoveryEnrollment === "held-legacy" || task.diagnosticCode === "manual-pause" ||
+          task.question && task.question.answer === undefined || task.dependency?.expiresAt !== undefined && task.dependency.expiresAt <= this.now())) throw Error("Execution steering authority held or expired");
       if (receipts.length >= 32) throw Error("Execution decision limit reached; use plugin_dispatch_decisions consolidate for explicitly superseded applied steering, originals remain archived");
       const receipt: ExecutionDecision = { requestId, text, recordedAt: this.now(), state: "pending", revision: nextDecisionRevision(receipts) };
       if (decisionDataBytes([...receipts, receipt]) > 16000)

@@ -18,7 +18,7 @@
     "gateway-manager-plugin.ts": "520465902c186b429fde132b2a4120b0ff6bd8e68439c6ed35c1049e852a316a",
     "gateway-plugin.ts": "f75c78e301e972ac8b668de6522721cc5574d8c38876b02096a06b4a908c8434",
     "improvement-plugin.ts": "97e965b6f71567d823549d8a3b2a6888a2ed1f86eda76c2bc29c565b82431ca5",
-    "improvement-report.ts": "f6205fdb56737b00493068d6d4e50c2f16ff116632ff0a1d1f23770fbe6f444f",
+    "improvement-report.ts": "a69bdb628b1fd659b42e556ee6d45468b424ee9ec9701c926c407ebc7a417257",
     "loop-plugin.ts": "ab7e0ea59919503cd4d9c36b01eb08f7687c00ef88679de2dcc33067b56ae6cd",
     "maintenance-client.ts": "ed8a8178f38ed8c3dc7b58e339ca3f358baf48e6feee298c9f83ce2ac6c755c5",
     "maintenance-control-plugin.ts": "6c8033b24190672a7200e6c60ed99c6a14b89de54e535c5ce33b2b07cea27cf4",
@@ -30,7 +30,7 @@
     "memory-plugin.ts": "d253236ebdda0f6914532afcef299939e98d0f4dab17dcfa178ce39628e1eee5",
     "memory-service.ts": "9c6ee6c2a052e4e366bef8d7972d154df3e60d2942fb8fde0f7a239429cbe48b",
     "native-activity.ts": "b9878941092065a395c9333f0533080a258dbb8a0c28e2c901a60fb8ac20a6cc",
-    "nightly-default.ts": "183997df6de31a1e930bec71b4b1e50332a113c4b6db4d579b6091fe64ba624e",
+    "nightly-default.ts": "d76da5b8016785bc0fae04ac7129f0841a82c5b7e9839510419f15a6b13eda13",
     "nightly-strategy-plugin.ts": "f2307c66003387167318055b7e49ce84e115ffd5d8e7d1a21ae8106318dbc0a8",
     "policy-manager-plugin.ts": "ef61d6f32c3fadd75f16bec3732763f15e0fa131a12a7af30240a0599a44ef44",
     "protected-content-plugin.ts": "1340a07212f5b30001478d1b761ef4e8c3c8e367fbfc36c02ccb80894b4fe9d0",
@@ -51,6 +51,6 @@
     "wasm-tools-plugin.ts": "438c6ac8899e283e4268f51ef451275bf16a37b584db84ee8302a26200cc70de"
   },
   "repository": "https://git.vanillacore.net/harness/plugins",
-  "revision": "794136ff0b87ecb32121b17b101e8e361d3ee199",
+  "revision": "5bd7516b74545a36b5d33f448a1a406501054be9",
   "schema": 1
 }
