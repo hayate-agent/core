@@ -294,13 +294,14 @@ export class NativeSoftwareUpdates {
       try {
         const lock = JSON.parse(await readFile(lockFile, "utf8"));
         if (!/^[a-f0-9]{40}$/.test(lock.revision)) throw Error("invalid plugin lock");
+        if (variant && lock.revision !== revisions.plugins) throw Error("Variant Plugins base must exactly match Core lock");
         if (lock.revision !== revisions.plugins && bundledPlugins === path.join(root, "plugins")) {
           await this.command("git", ["fetch", "--depth=1", "origin", lock.revision], bundledPlugins);
           const locked = path.join(root, "bundled-plugins");
           await this.command("git", ["worktree", "add", "--detach", locked, lock.revision], bundledPlugins);
           bundledPlugins = locked;
         }
-      } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+      } catch (error) { if (variant || (error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
       const buildEnv = { HAYATE_PLUGIN_SOURCE: bundledPlugins,
         PATH: `${path.dirname(process.execPath)}${path.delimiter}${process.env.PATH ?? ""}` };
       for (component of ["core", "webui"] as const) {
