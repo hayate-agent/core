@@ -302,7 +302,7 @@ export function sequentialStrategy(deps: SequentialDeps): DispatcherStrategy {
         await deps.harness.reconcileSession(source, sessionKey, retained);
       };
       let recovering = !!task.intent && task.claimedRecoveryAction !== "retry";
-      while (state.outcomes.length < state.plan.length) {
+      work: while (state.outcomes.length < state.plan.length) {
         // Explicit new parent work must become schedulable in the SAME execution,
         // not disappear because an earlier source milestone was already recorded.
         // Attach only at an exact settled assessment boundary; the existing
@@ -439,6 +439,46 @@ export function sequentialStrategy(deps: SequentialDeps): DispatcherStrategy {
         // A worker "blocked" claim is equally only a proposal: it is assessed too.
         // The independent reviewer, not the worker's self-reported pause/block,
         // owns completion. A confirmed completion never needs a parent nudge.
+        const selectReadyStep = async (): Promise<boolean> => {
+          const retained = state as SequentialState;
+          const ids = retained.stepIds ?? retained.plan.map((_, i) => i);
+          const candidates = retained.plan.map((candidate, position) => ({ candidate, position }))
+            .filter(({ position }) => position > index && !retained.deferred?.some(d => d.stepId === ids[position]));
+          if (!candidates.length || !retained.assessment) return false;
+          decisions = await context.decisions?.() ?? []; decisionRevision = executionDecisionRevision(decisions);
+          const reviewer = await validatorRole(runtime, deps.roles());
+          if (typeof reviewer === "string") return false;
+          const backend = runtimeReviewer(runtime, "supervisor");
+          const schedulingPrompt = readyStepPrompt({ task: task.input, expiresAt: task.dependency?.expiresAt, decisions,
+            outcomes: retained.outcomes, blocked: { step, reply, evidence },
+            candidates: candidates.map(({ candidate, position }) => ({ number: position + 1, ...candidate })) });
+          await authorize();
+          const choice = await assessCompletion({ review: (text, _model, _thinking, signal) => backend.review(text, reviewer.model!, reviewer.thinking ?? "off", signal) },
+            { id: `schedule:${task.id}:${stepId}`, sessionKey, source: "host", text: task.input }, reply,
+            { task: task.input, ...(task.dependency?.expiresAt !== undefined ? { expiresAt: task.dependency.expiresAt } : {}) },
+            context.signal, reviewer.model, Date.now, schedulingPrompt, undefined, STEP_VALIDATION_TIMEOUT_MS, deps.validators);
+          await authorize(); await context.fenceDecisions?.(decisionRevision);
+          const selected = choice?.state === "continue" && /^[1-6]$/.test(choice.next ?? "") ? Number(choice.next) - 1 : -1;
+          if (!candidates.some(candidate => candidate.position === selected)) return false;
+          const reordered = structuredClone(retained);
+          reordered.stepIds = [...ids];
+          reordered.readyAdmission = { stepId: ids[selected]!, decisionRevision, from: selected };
+          reordered.deferred = [...reordered.deferred ?? [], { stepId, assessment: reordered.assessment!, correction: reordered.correction,
+            progress: reordered.progress, prior: reordered.prior, escalation: reordered.escalation }];
+          const [ready] = reordered.plan.splice(selected, 1); reordered.plan.splice(index, 0, ready!);
+          const [readyId] = reordered.stepIds.splice(selected, 1); reordered.stepIds.splice(index, 0, readyId!);
+          delete reordered.assessment; delete reordered.correction; delete reordered.progress; delete reordered.prior; delete reordered.escalation;
+          if (JSON.stringify(reordered).length > 63000) return false;
+          const current = deps.store.list(task.parent).find(item => item.id === task.id);
+          // Before a correction the old step still owns its unsafe intent. Its
+          // worker report is already settled: atomically retain that evidence and
+          // select new work, never start a second writer or replay the old tools.
+          if (current?.intent) await context.settleIntent(intentKey, reply.slice(0, STEP_RESULT_LIMIT), JSON.stringify(reordered), decisionRevision);
+          else await context.checkpoint(JSON.stringify(reordered));
+          state = reordered;
+          await context.status?.(`Schritt ${stepId + 1} bleibt offen; unabhängige Prüfung gibt separat möglichen Schritt ${readyId! + 1} frei. Bestehender Auftrag, keine Wiederholung abgeschlossener Effekte.`).catch(() => {});
+          return true;
+        };
         const authority = `Current authority: mandate deadline ${task.dependency?.expiresAt !== undefined ? new Date(task.dependency.expiresAt).toISOString() : "none"}; scope is exactly the mandate above.
 Correctable vs blocked: a worker "blocked" claim or evidence shortfall that rests on an unverified or false assumption (wrong tool capability, wrong working directory, artificial evidence-count requirement) and is contradicted or not supported by the host tool observations in the data is CORRECTABLE: answer state "continue" with "next" = one concrete correction citing the host evidence, or the exact read-only facts the worker must report first. Answer "blocked" only for a genuine external dependency, missing permission or safety boundary. Never grant new scope.`;
         for (let round = state.correction?.index === index ? state.correction.rounds : 0; status !== "inadequate"; round++) {
@@ -487,6 +527,11 @@ Correctable vs blocked: a worker "blocked" claim or evidence shortfall that rest
           // Concurrent input invalidates this verdict, not settled evidence.
           await context.fenceDecisions?.(decisionRevision);
           verdictState = verdict?.state ?? "technical";
+          // A current-step "continue" is not a global scheduling veto. In
+          // particular, old correctable evidence requests must not starve an
+          // explicit parent follow-up while endlessly refining the deferred step.
+          // This second independent decision admits only exact existing work.
+          if (verdict?.state === "continue" && state.appliedFollowUps?.length && await selectReadyStep()) continue work;
           if (verdict?.state === "completed" && claimed === "complete") break;
           if (claimed === "complete") status = undefined;
           // An empty report still needs a final report; a nonempty blocked report
@@ -590,41 +635,7 @@ End your reply with exactly one final line: "STEP-STATUS: complete" only if the 
             // Ask the independently selected validator, never the worker, whether one EXACT
             // existing later step is presently authorized and independent. Keep the blocked
             // evidence and its original intent identity; never mark it done or replay it.
-            const ids = state.stepIds ?? state.plan.map((_, i) => i);
-            const candidates = state.plan.map((candidate, position) => ({ candidate, position }))
-              .filter(({ position }) => position > index && !(state as SequentialState).deferred?.some(d => d.stepId === ids[position]));
-            if (candidates.length && state.assessment) {
-              decisions = await context.decisions?.() ?? []; decisionRevision = executionDecisionRevision(decisions);
-              const reviewer = await validatorRole(runtime, deps.roles());
-              if (typeof reviewer !== "string") {
-                const backend = runtimeReviewer(runtime, "supervisor");
-                const schedulingPrompt = readyStepPrompt({ task: task.input, expiresAt: task.dependency?.expiresAt, decisions,
-                  outcomes: state.outcomes, blocked: { step, reply, evidence },
-                  candidates: candidates.map(({ candidate, position }) => ({ number: position + 1, ...candidate })) });
-                await authorize();
-                const choice = await assessCompletion({ review: (text, _model, _thinking, signal) => backend.review(text, reviewer.model!, reviewer.thinking ?? "off", signal) },
-                  { id: `schedule:${task.id}:${stepId}`, sessionKey, source: "host", text: task.input }, reply,
-                  { task: task.input, ...(task.dependency?.expiresAt !== undefined ? { expiresAt: task.dependency.expiresAt } : {}) },
-                  context.signal, reviewer.model, Date.now, schedulingPrompt, undefined, STEP_VALIDATION_TIMEOUT_MS, deps.validators);
-                await authorize(); await context.fenceDecisions?.(decisionRevision);
-                const selected = choice?.state === "continue" && /^[1-6]$/.test(choice.next ?? "") ? Number(choice.next) - 1 : -1;
-                if (candidates.some(candidate => candidate.position === selected)) {
-                  const reordered = structuredClone(state);
-                  reordered.stepIds = [...ids];
-                  reordered.readyAdmission = { stepId: ids[selected]!, decisionRevision, from: selected };
-                  reordered.deferred = [...reordered.deferred ?? [], { stepId, assessment: reordered.assessment!, correction: reordered.correction,
-                    progress: reordered.progress, prior: reordered.prior, escalation: reordered.escalation }];
-                  const [ready] = reordered.plan.splice(selected, 1); reordered.plan.splice(index, 0, ready!);
-                  const [readyId] = reordered.stepIds.splice(selected, 1); reordered.stepIds.splice(index, 0, readyId!);
-                  delete reordered.assessment; delete reordered.correction; delete reordered.progress; delete reordered.prior; delete reordered.escalation;
-                  if (JSON.stringify(reordered).length <= 63000) {
-                    await context.checkpoint(JSON.stringify(reordered)); state = reordered;
-                    await context.status?.(`Schritt ${stepId + 1} bleibt offen; unabhängige Prüfung gibt separat möglichen Schritt ${readyId! + 1} frei. Bestehender Auftrag, keine Wiederholung abgeschlossener Effekte.`).catch(() => {});
-                    continue;
-                  }
-                }
-              }
-            }
+            if (await selectReadyStep()) continue work;
             await context.status?.(`Sequenzieller Plan blockiert: ${reason}`.slice(0, 8000)).catch(() => {});
             throw new ExecutionAssessmentHold(verdictState, index, reason);
           }
