@@ -421,7 +421,15 @@ questions, missing/incomplete/compacted transcript evidence and unmatched tool
 calls remain fenced. A tool response is not proof that its effect did not occur:
 reconcile actual state before continuing. Concurrent state changes invalidate the
 fingerprint; identical request retries return their original receipt without
-starting another worker. Do not make a replacement submission to bypass this
+starting another worker. An ordinary `continue` never clears a manual pause.
+When the current operator mandate explicitly authorizes resuming that paused
+writer, the parent uses `action: resume-paused` with the same evidence and
+fingerprint gates. This is explicit pause/resume control, NOT an automatic
+recovery permission or effect retry. The receipt audits the resumed pause. Every
+pause/resume/cancel increments the execution control revision: even a repeated
+identical pause invalidates earlier fingerprints. Parent/operator stops, expiry,
+questions, unknown effects and host policy cannot be bypassed this way.
+Do not make a replacement submission to bypass this
 boundary, and never edit live ledger files.
 
 This is not exactly-once execution for arbitrary tools. A process can die after
