@@ -57,7 +57,7 @@ function nextDecisionRevision(receipts: readonly ExecutionDecision[]): number {
 }
 
 /** Closed host-owned causes; exception/worker text is never persisted here. */
-export type ExecutionDiagnosticCode = "runtime-failure" | "worker-failed" | "worker-cancelled" | "maintenance-blocked" | "manual-pause" | "deadline-expired";
+export type ExecutionDiagnosticCode = "runtime-failure" | "worker-failed" | "worker-cancelled" | "maintenance-blocked" | "manual-pause" | "deadline-expired" | "retry-exhausted" | "empty-result";
 export class ExecutionDeadlineExpired extends Error {
   constructor() { super("deadline-expired: saved execution deadline has elapsed"); }
 }
@@ -176,8 +176,16 @@ export class ExecutionStore {
   constructor(private readonly file: string, private readonly retention: {
     now?: () => number;
     protectedExecutions?: () => ReadonlySet<string>;
+    /** Maximum total worker attempts (initial run + retries) per task before a manual-intervention hold. */
+    workerRetryMax?: number | (() => number);
   } = {}) {}
   private now(): number { return this.retention.now?.() ?? Date.now(); }
+  /** Configured automatic worker retry budget; invalid or missing values fall back to the default. */
+  private retryCap(): number {
+    const value = this.retention.workerRetryMax;
+    const resolved = typeof value === "function" ? value() : value;
+    return typeof resolved === "number" && Number.isSafeInteger(resolved) && resolved >= 1 ? resolved : 12;
+  }
   private archiveFile(parent: string, requestId: string): string {
     const key = createHash("sha256").update(JSON.stringify([parent, requestId])).digest("hex");
     return path.join(`${this.file}.archive`, `${key}.json`);
@@ -850,6 +858,10 @@ export class ExecutionStore {
       task.terminalAt = this.now();
       task.result = result;
       delete task.token;
+      if (result.length === 0) {
+        task.diagnosticCode = "empty-result";
+        this.event(draft, task, "status", "empty-result: Worker abgeschlossen ohne Ergebnis-Text; leeres Ergebnis ist markiert, kein Fehler. Ergebnis prüfen und bei Bedarf neu einreichen oder explizit auflösen.");
+      }
       this.event(draft, task, "result", result);
     });
   }
@@ -896,7 +908,9 @@ export class ExecutionStore {
       this.event(draft, task, "status", scheduled
         ? task.assessmentHold ? "Unabhängige Prüfung meldet weiter eine Blockade oder externe Wartebedingung. Ursache prüfen; Dispatcher bewertet automatisch erneut, ohne abgeschlossene Effekte zu wiederholen."
           : "Interne Ausführungsunterbrechung; automatischer Wiederanlauf nach Backoff, keine Nutzeraktion erforderlich."
-        : code === "deadline-expired" ? `${task.status}: deadline-expired` : task.status,
+        : code === "deadline-expired" ? `${task.status}: deadline-expired`
+        : task.diagnosticCode === "retry-exhausted" ? `${task.status}: retry-exhausted; automatische Wiederanläufe beendet nach ${this.retryCap()} Versuchen. Manuelle Intervention erforderlich: Aufgabe explizit fortsetzen oder abbrechen.`
+        : task.status,
         !!task.assessmentHold && (priorHold?.state !== task.assessmentHold.state || priorHold?.step !== task.assessmentHold.step));
     });
   }
@@ -910,6 +924,8 @@ export class ExecutionStore {
       const reason = task.recoveryReason;
       if (this.scheduleWorkerRetry(task, strategy, policy, false))
         this.event(draft, task, "status", "Interne Pause mit dauerhaftem automatischem Wiederanlauf und Backoff; keine Nutzeraktion erforderlich.");
+      else if (task.diagnosticCode === "retry-exhausted")
+        this.event(draft, task, "status", "retry-exhausted: automatisches Retry-Budget erschöpft; manuelle Intervention erforderlich: Aufgabe explizit fortsetzen oder abbrechen.");
       else if (task.recoveryReason && task.recoveryReason !== reason)
         this.event(draft, task, "status", task.diagnosticCode === "deadline-expired"
           ? "Auftragsfrist abgelaufen; automatische Wiederaufnahme beendet."
@@ -952,7 +968,16 @@ export class ExecutionStore {
       task.status = "ready";
       return true;
     }
-    const attempts = Math.min(Number.MAX_SAFE_INTEGER, (task.workerRetry?.attempts ?? 0) + 1);
+    const prior = task.workerRetry?.attempts ?? 0;
+    // Cap bounds total worker attempts (initial run + retries): once the next
+    // attempt would exceed the budget, hold the task for manual intervention.
+    if (prior + 1 >= this.retryCap()) {
+      task.status = task.intent ? "blocked" : "paused";
+      task.diagnosticCode = "retry-exhausted";
+      delete task.workerRetry;
+      return false;
+    }
+    const attempts = prior + 1;
     task.workerRetry = { attempts, nextAt: this.now() + Math.min(300000, 15000 * 2 ** Math.min(attempts - 1, 5)) };
     // Runtime/validator holds stay observable during backoff, but unlike manual
     // pauses have a durable wake-up owner. Worker transport retries keep ready.
