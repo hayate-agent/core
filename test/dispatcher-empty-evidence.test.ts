@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { legacyValidatorRegistry } from "./completion-selected.js";
 import { sequentialStrategy } from "../src/dispatcher-sequential.js";
 import { Harness } from "../src/harness.js";
 import type { DispatchContext } from "../src/dispatcher.js";
@@ -42,6 +43,7 @@ function fixture(options: { assessment?: boolean; seedFailure?: boolean; bareInt
     },
   } as unknown as Harness;
   const strategy = sequentialStrategy({
+    validators: legacyValidatorRegistry(),
     harness, store: { list: () => [task] } as unknown as ExecutionStore,
     roles: () => ({ config: { enabled: true, roles: { simple: { model: "p/cheap", thinking: "off" }, validator: { model: "p/check", thinking: "off" } } }, defaults: {} }),
     resetTurn: () => {}, turn: () => ({ tools: 1, evidence: [{ name: "read", result: "synthetic verified receipt" }] }),

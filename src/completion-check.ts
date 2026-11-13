@@ -3,12 +3,12 @@ import type { AssessmentBackend as ReviewBackend } from "./assessment-backend.js
 import type { CompletionAuthorization, CompletionPrompt, CompletionDiagnosticSink } from "./validator.js";
 import { ValidatorRegistry } from "./validator.js";
 import { renderCompletionPrompt } from "./completion-budget.js";
-import { assessCompletion as validate, legacyLLMProvider } from "./builtin-plugins/completion-validator-plugin.js";
+import { assessCompletion as validate } from "./builtin-plugins/completion-validator-plugin.js";
 export type { CompletionAuthorization, CompletionDiagnostic, CompletionDiagnosticSink, CompletionPrompt } from "./validator.js";
 
 /** Compatibility entry point. Host authority and ownership fences remain outside providers.
  * Plugin results are advisory; execution/worker precedence is enforced by existing callers.
- * With no registry, use the shipped legacy provider (existing embedding/test API).
+ * Embedders must supply an explicitly selected registry; there is no implicit cloud provider.
  */
 export async function assessCompletion(backend: ReviewBackend, input: Inbound, reply: string,
   authorization: CompletionAuthorization | undefined, signal: AbortSignal,
@@ -20,8 +20,10 @@ export async function assessCompletion(backend: ReviewBackend, input: Inbound, r
     !signal.aborted && !!authorization?.task.trim() &&
     (authorization.expiresAt === undefined || (Number.isSafeInteger(authorization.expiresAt) && authorization.expiresAt > now())) &&
     input.continuation === checkpoint;
-  const provider = registry ? registry.current : legacyLLMProvider;
-  if (!permitted() || !provider || !promptStrategy) { diagnostic?.("unavailable"); return; }
+  if (!permitted()) { diagnostic?.("unavailable"); return; }
+  if (!registry) throw Error("Completion-check provider registry is required; no implicit validator fallback");
+  const provider = registry.current;
+  if (!provider || !promptStrategy) { diagnostic?.("unavailable"); return; }
   let prompt: string | undefined;
   try { prompt = renderCompletionPrompt(promptStrategy, input, reply, authorization!, now); }
   catch { diagnostic?.("unavailable"); return; }

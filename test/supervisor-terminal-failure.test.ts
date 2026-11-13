@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { Harness } from "../src/harness.js";
 import { FakeRuntime, MemoryChannel, msg } from "./fakes.js";
-import { assessCompletion } from "../src/completion-check.js";
+import { assessCompletion } from "./completion-selected.js";
 import { completionPrompt } from "../src/builtin-plugins/completion-prompt.js";
 
 for (const state of ["waiting", "blocked", "completed"] as const) {
@@ -40,7 +40,8 @@ for (const state of ["waiting", "blocked", "completed"] as const) {
         assert.equal(task.recoveryAdmission, undefined);
         assert.equal(h.pendingInputs().length, 0, "uncertainty never admits productive work");
         assert.deepEqual(task.supervisorDecision, { proposal: state, verdict: "unresolved",
-          diagnostic: failure === "missing" ? "unavailable" : failure === "error" ? "technical" : "invalid_response" });
+          diagnostic: failure === "missing" ? "unavailable" : failure === "error" ? "technical" : "invalid_response",
+          ...(failure === "missing" ? {} : { detail: { cause: failure === "error" ? "provider_error" : "invalid_shape" } }) });
         const restored = new Harness({ runtime: new FakeRuntime(), tickMs: 60000,
           now: () => Math.max(Date.now(), task.recoveryRetry?.nextAt ?? 0),
           completionCheck: async () => ({ state: "continue", next: "Inspect the isolated test result without repeating uncertain effects" }) });

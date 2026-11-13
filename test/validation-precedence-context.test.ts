@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { Harness } from "../src/harness.js";
 import { ExecutionStore } from "../src/execution.js";
-import { assessCompletion } from "../src/completion-check.js";
+import { assessCompletion } from "./completion-selected.js";
 import { completionPrompt } from "../src/builtin-plugins/completion-prompt.js";
 import { COMPLETION_PROMPT_LIMIT } from "../src/completion-budget.js";
 import { FakeRuntime, MemoryChannel, msg } from "./fakes.js";
