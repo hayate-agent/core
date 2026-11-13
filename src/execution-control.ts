@@ -1,7 +1,7 @@
 import { createServer, type Socket } from "node:net";
 import { mkdir, lstat, chmod, unlink } from "node:fs/promises";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
+import { randomUUID, createHash } from "node:crypto";
 import { writeFileDurable } from "./durable.js";
 import { validExecutionFollowUp, executionDecisionRevision } from "./execution.js";
 import type { Dispatcher } from "./dispatcher.js";
@@ -66,8 +66,15 @@ export async function executionControlRequest(dispatcher: Dispatcher | undefined
   if (!task) throw Error("Execution not in exact parent scope");
   if (frame.op === "status" && Object.keys(frame).length === 3) return {
     id: task.id, parent: task.parent, status: task.status, revision: executionDecisionRevision(task.decisions), diagnostic: task.diagnosticCode,
+    checkpointHash: task.checkpoint ? createHash("sha256").update(task.checkpoint).digest("hex") : undefined,
     expiresAt: task.dependency?.expiresAt, parentStopped: !!task.parentStopped, ownershipHold: !!task.ownershipHold,
   };
+  if (frame.op === "reopen-contradiction") {
+    if (Object.keys(frame).some(k => !["op", "id", "parent", "expectedRevision", "requestId", "text", "checkpointHash"].includes(k)) ||
+        !Number.isSafeInteger(frame.expectedRevision) || Number(frame.expectedRevision) < 0 || typeof frame.requestId !== "string" || typeof frame.text !== "string" || typeof frame.checkpointHash !== "string") throw Error("Invalid exact contradictory-completion reconciliation");
+    const restored = await dispatcher.reopenContradictoryCompletion(task.parent, task.id, frame.requestId, frame.text, frame.checkpointHash, Number(frame.expectedRevision));
+    return { id: restored.id, status: restored.status, executionStarted: false, reviewOnly: true, note: "Original terminal receipt archived; no effect replay or permission reset. Verify actual same-owner admission separately." };
+  }
   const consolidating = frame.op === "consolidate";
   if (frame.op !== "decide" && !consolidating || Object.keys(frame).some(k => !["op", "id", "parent", "expectedRevision", "requestId", "text", ...(consolidating ? ["replaces", "followUp"] : [])].includes(k)) ||
       !Number.isSafeInteger(frame.expectedRevision) || Number(frame.expectedRevision) < 0 || typeof frame.requestId !== "string" ||

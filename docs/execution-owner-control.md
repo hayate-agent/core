@@ -57,6 +57,29 @@ graceful shutdown. Unsafe directory ownership/permissions fail closed. Unique en
 unknown socket; the private pointer is atomically replaced. Native lifecycle
 single-owner locking remains responsible for preventing two agent processes.
 
+## Contradictory completion
+
+A worker's final `blocked` or missing status cannot become terminal success merely
+because a reviewer calls a failure report completed. One consistency clarification
+is host-enforced **tool-free** (including after restart): it can report existing
+verified facts, never repeat work. If it still reports blocked/missing status,
+completion is refused. A genuinely false worker block can still resolve without
+a parent nudge or productive replay. Failed required acceptance tests are not
+completed integration deliverables.
+
+A local owner may submit `op: "reopen-contradiction"` with the same exact scope,
+revision, requestId/text and `checkpointHash` returned by status. This is restricted
+to an existing sequential terminal record whose last retained outcome actually
+ends `STEP-STATUS: blocked`, with matching settled effect/session and no pending
+terminal delivery. It rejects healthy completions, cancellations, manual/legacy
+holds, questions, stopped parents and expired mandates. Original terminal record
+is archived first under `execution-reopen-audit`; identical retries are exact and
+idempotent. It only withdraws that contradictory completion claim for read-only
+reassessment, preserving the original task ID, scope, effects and completed prefix.
+It cannot replay the old worker. Remaining authorized source work still needs an
+explicit same-owner follow-up and independent admission, not an arbitrary terminal
+reset. Neither inference credentials nor model tools acquire this local owner power.
+
 ## Step evidence and phase scope
 
 Parent decisions retain their revision and typed follow-up metadata in both

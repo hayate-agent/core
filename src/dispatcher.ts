@@ -359,6 +359,10 @@ export class Dispatcher {
     await this.kick();
     return receipt;
   }
+  async reopenContradictoryCompletion(parent: string, id: string, requestId: string, text: string, checkpointHash: string, expectedRevision: number): Promise<Execution> {
+    const task = await this.store.reopenContradictoryCompletion(parent, id, requestId, text, checkpointHash, expectedRevision);
+    await this.kick(); return task;
+  }
   async answer(parent: string, id: string, questionId: string, text: string): Promise<void> {
     await this.store.answer(parent, id, questionId, text);
     await this.kick();
