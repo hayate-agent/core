@@ -39,6 +39,12 @@ test("completed child result outside window/after done is evidence, never a fres
  await restored.delegatedResult(f.task.id);assert.equal((await f.state()).results.length,1);
 });
 
+test("duplicate hypothesis in another child is evidence but not another empty experiment attempt",async t=>{
+ const f=await fixture(t,{noExperimentTurns:2,recentHypotheses:["new delegated fixture"]});
+ await f.controller.delegatedResult(f.task.id);
+ const state=await f.state();assert.equal(state.noExperimentTurns,2);assert.equal(state.experiments.length,0);assert.equal(state.turns,8);
+});
+
 test("child marker cannot close an open night or replace its pending turn",async t=>{
  const f=await fixture(t,{done:false,pending:"improvement:2026-11-12:9"});
  await f.controller.delegatedResult(f.task.id);

@@ -231,7 +231,8 @@ export class ImprovementController {
     try {
       const strategy = this.currentStrategy;
       const receipts = task.status === "completed" ? strategy?.receipts(task.result) ?? [] : [];
-      if (strategy && receipts.some(receipt => receipt.execution === "performed")) {
+      if (strategy && receipts.some(receipt => receipt.execution === "performed" &&
+          !(this.state!.recentHypotheses ?? []).includes(receipt.hypothesis.trim().toLowerCase()))) {
         const progress = structuredClone({ experiments: this.state.experiments, recentHypotheses: this.state.recentHypotheses,
           noExperimentTurns: this.state.noExperimentTurns, results: [] as string[] });
         strategy.completed(progress, task.result);
