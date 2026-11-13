@@ -229,7 +229,7 @@ async function main(argv: string[]): Promise<void> {
   await reloadSkills();
 
   const plugins = new PluginHost();
-  plugins.validators.select(config.completionCheck?.provider ?? "legacy-llm");
+  plugins.validators.select(config.completionCheck?.provider);
   const initialReloadableTools: PluginHost["tools"] = new Map();
   const reloadableTools = config.reloadableToolPlugins?.length
     ? new ReloadableTools({home:config.home,cwd:config.cwd,agent:config.agent},config.reloadableToolPlugins,log,true, tools => {
@@ -774,6 +774,8 @@ async function main(argv: string[]): Promise<void> {
       const mandate = await harness.operatorTaskMandate(parent, requestId, input);
       return dispatcher.submitScheduled(parent, requestId, input, mandate);
     }), subagentPlugin(subagents,async()=>{await persist();}), ...(reloadableTools ? [reloadableToolsPlugin(reloadableTools)] : []), wasmToolsPlugin(config.home, config.wasmTools ?? []), continuationPlugin(harness), loopPlugin(harness), improvementPlugin(improvement!), protectedContentPlugin(protectedContent), gatewayManagerPlugin(gatewayManager, settings), messagePlugin(config.home, gatewayManager), conversationPolicyPlugin(settings, harness), policyManagerPlugin(policyManager, settings), extensionManagerPlugin(extensionManager, settings), gatewayPlugin(settings, harness), contextPlugin(maintenance, settings), ...(config.memory.enabled ? [memoryPlugin(memory), ...(config.memory.consolidation ? [memoryConsolidationHost(config.memory.consolidation, runtime, memory, log)] : [])] : []), skillSearchPlugin(skillCatalog), ...(adaptiveSkills ? [adaptiveSkills.plugin()] : []), ...reviewEngine.plugins], [settings.desired().gatewayPlugins?.webui?.module].filter((value): value is string => typeof value === "string"));
+  // Registration may happen during plugin activation; reject an unresolved name before admitting work.
+  void plugins.validators.current;
   if (dispatchPolicy.enabled) {
     dispatchRuntime = new DispatcherRuntime(harness, executions, async () => {
       await reloadRuntimeSettings();

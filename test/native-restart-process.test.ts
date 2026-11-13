@@ -12,7 +12,7 @@ for (const entry of ["dist/cli.js", "dist/launcher.js"]) test(`${entry}: real /r
   await writeFile(path.join(home, "hung-plugin.mjs"), "export default {apiVersion:1,activate(api){api.onStop(()=>new Promise(()=>{}));}};");
   await writeFile(path.join(home, "hayate-agent.yaml"), JSON.stringify({ agent: "restart-process-fixture",
     softwareUpdates: { enabled: false }, lifecycle: { restartTimeoutSeconds: 2 }, loop: { drainSeconds: 60 },
-    memory: { enabled: false }, dispatcher: { enabled: false }, mcp: { enabled: false }, plugins: ["hung-plugin.mjs"] }));
+    completionCheck: { provider: "legacy-llm" }, memory: { enabled: false }, dispatcher: { enabled: false }, mcp: { enabled: false }, plugins: ["hung-plugin.mjs"] }));
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("API_SERVER_") &&
     !key.startsWith("MATRIX_") && !key.startsWith("SLACK_") && !key.startsWith("HAYATE_AGENT_") && !key.startsWith("HERMES_")));
   Object.assign(env, { HOME: home, HAYATE_AGENT_HOME: home, API_SERVER_HOST: "127.0.0.1", API_SERVER_PORT: "0", API_SERVER_KEY: "restart-process-test-key" });

@@ -47,7 +47,7 @@ test("real CLI reaches readiness with a missing configured optional Web module i
   const home = await mkdtemp(path.join(os.tmpdir(), "optional-web-cli-")); t.after(() => rm(home, { recursive: true, force: true }));
   const module = path.join(home, "dist/optional-plugins/webui/index.mjs");
   await writeFile(path.join(home, "hayate-agent.yaml"), JSON.stringify({ agent: "optional-web-cli", softwareUpdates: { enabled: false }, memory: { enabled: false }, dispatcher: { enabled: false }, mcp: { enabled: false },
-    home_address: { channel: "console", target: "local" }, plugins: [module] }));
+    completionCheck: { provider: "legacy-llm" }, home_address: { channel: "console", target: "local" }, plugins: [module] }));
   await writeFile(path.join(home, "settings.local.yaml"), JSON.stringify({ gatewayPlugins: { webui: { module } } }));
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(API_SERVER_|MATRIX_|SLACK_|HAYATE_AGENT_|HERMES_)/.test(key)));
   Object.assign(env, { HOME: home, HAYATE_AGENT_HOME: home });

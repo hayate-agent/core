@@ -1,3 +1,4 @@
+import { completionFailureDetail } from "./validator.js";
 /**
  * The agent loop. One long-running process; per conversation (session key) a FIFO
  * of inputs, processed one turn at a time. A periodic tick re-enters idle sessions
@@ -76,6 +77,7 @@ export interface DurableTask {
   supervisorDecision?: { proposal?: "continue" | "waiting" | "blocked" | "completed";
     verdict: "continue" | "waiting" | "blocked" | "completed" | "unresolved";
     diagnostic?: import("./completion-check.js").CompletionDiagnostic;
+    detail?: import("./validator.js").CompletionFailureDetail;
     /** Host reason for a non-decision, not a semantic denial or execution permit. */
     deferred?: "queued-input" | "interrupted" | "paused" | "stopping" | "unavailable" | "no-verdict";
     /** One-shot assessment receipt. Only recoveryAdmission grants execution. */
@@ -927,7 +929,16 @@ export class Harness {
     // parent repair/admission while that same child is waiting for its due time.
     const scheduledRetry = e.workerRetry && !e.recoveryReason &&
       ["runtime-failure", "worker-failed"].includes(e.diagnosticCode ?? "");
-    return !scheduledRetry && (e.status === "blocked" ||
+    // A settled independent blocked/waiting verdict is not a running writer.
+    // Its read-only retry remains owned by Dispatcher, but must not suppress
+    // every independent parent step for hundreds of assessment retries. Child
+    // effects/holds are neither released nor retried by parent supervision.
+    const settledAssessment = e.recoveryEnrollment === "current" && !e.ownershipHold &&
+      !!e.assessmentHold && !!e.settledEffect &&
+      ["ready", "paused", "blocked"].includes(e.status) &&
+      !e.intent && !e.question && !e.parentStopped && !e.recoveryReason &&
+      e.diagnosticCode === "runtime-failure" && !!e.workerRetry;
+    return settledAssessment || !scheduledRetry && (e.status === "blocked" ||
       (e.status === "paused" && e.diagnosticCode === "runtime-failure" && !e.intent && !e.question && !e.parentStopped));
   }
 
@@ -2778,11 +2789,13 @@ export class Harness {
   }
 
   private readonly completionDiagnostics = new WeakMap<Inbound, import("./completion-check.js").CompletionDiagnostic>();
+  private readonly completionFailureDetails = new WeakMap<Inbound, import("./validator.js").CompletionFailureDetail>();
   private readonly supervisorDecisions = new WeakMap<Inbound, NonNullable<DurableTask["supervisorDecision"]>>();
   private readonly assessedProgress = new WeakMap<Inbound, { fingerprint?: string; advanced?: boolean; normal?: boolean; receipt?: string }>();
 
   private async runTurn(s: SessionState, input: Inbound, selectedHistory = ""): Promise<void> {
     this.completionDiagnostics.delete(input);
+    this.completionFailureDetails.delete(input);
     this.supervisorDecisions.delete(input);
     this.assessedProgress.delete(input);
     let reply: string;
@@ -3056,8 +3069,13 @@ export class Harness {
         const assessed = await this.opts.completionCheck(assessmentInput,
           (checkpoint ? `${reply}\nProposed continuation (untrusted, not admission): ${JSON.stringify(checkpoint)}` : reply) +
             (dependencyEvidence ? `\n${dependencyEvidence}` : ""),
-          assessmentAbort.signal, diagnostic => {
-          if (assessmentEligible() && !assessmentAbort.signal.aborted) this.completionDiagnostics.set(input, diagnostic);
+          assessmentAbort.signal, (diagnostic, detail) => {
+          if (assessmentEligible() && !assessmentAbort.signal.aborted) {
+            this.completionDiagnostics.set(input, diagnostic);
+            this.completionFailureDetails.delete(input);
+            const safe = completionFailureDetail(detail);
+            if (safe) this.completionFailureDetails.set(input, safe);
+          }
         });
         // Independent assessment may change the plan, never its selected scope.
         const plan = assessed && { ...assessed, taskId: checkpoint?.taskId };
@@ -3110,6 +3128,7 @@ export class Harness {
         !this.opts.completionCheck ? undefined : !diagnostic ? "no-verdict" : undefined;
       this.supervisorDecisions.set(input, { ...(checkpoint ? { proposal: checkpoint.state } : {}),
         verdict: independentlyResolved ? input.continuation!.state : "unresolved", ...(diagnostic ? { diagnostic } : {}),
+        ...(diagnostic && this.completionFailureDetails.has(input) ? { detail: this.completionFailureDetails.get(input) } : {}),
         ...(deferred ? { deferred } : {}) });
     }
     denyProposal();
