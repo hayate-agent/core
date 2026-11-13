@@ -156,6 +156,41 @@ test("configurable workerRetryMax is respected (cap 2 stops after two total atte
   assert.equal(calls, 2, "initial run + 1 retry = configured budget");
 });
 
+test("raising workerRetryMax live after exhaustion does not wake the hold (regression)", async t => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "hy-caplive-"));
+  const file = path.join(dir, "ledger.json"); let now = 1000;
+  // Live cap reader, as wired in src/cli.ts: the store re-reads the value for every attempt.
+  let cap = 1;
+  const store = new ExecutionStore(file, { now: () => now, workerRetryMax: () => cap }); await store.load();
+  await store.submit("parent", "boom", "always fail", "direct");
+  let calls = 0;
+  const strategy = { name: "direct", version: 1, replaySafe: false, reconcile: true,
+    execute: async () => { calls++; throw new ExecutionWorkerFailure("worker-failed"); } };
+  const dispatcher = new Dispatcher(store, strategy, 1, async () => {}, () => {});
+  t.after(async () => { await dispatcher.stop(); await rm(dir, { recursive: true, force: true }); });
+  await dispatcher.start();
+  await until(() => store.list()[0].diagnosticCode === "retry-exhausted");
+  assert.equal(store.list()[0].status, "paused");
+  assert.equal(calls, 1, "cap 1: the single attempt is the initial run");
+  // Operator raises the live cap far above the exhausted budget.
+  cap = 10;
+  for (let round = 0; round < 3; round++) {
+    now += 24 * 3600 * 1000;
+    await dispatcher.kick();
+    await new Promise(r => setTimeout(r, 50));
+    assert.equal(calls, 1, `kick ${round + 1} after the live cap raise must not wake the hold`);
+    assert.equal(store.list()[0].status, "paused");
+    assert.equal(store.list()[0].diagnosticCode, "retry-exhausted");
+  }
+  // Explicit resume is the manual release path: the task runs again.
+  await store.control(store.list()[0].id, "resume");
+  assert.equal(store.list()[0].status, "ready");
+  await dispatcher.kick();
+  await until(() => calls > 1 && store.list()[0].workerRetry !== undefined);
+  assert.equal(calls, 2, "resume released the hold and the worker ran again");
+  assert.equal(store.list()[0].workerRetry?.attempts, 1, "the counter restarted at zero after exhaustion");
+});
+
 test("mandate deadline takes priority over the retry budget", async t => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "hy-due-"));
   const file = path.join(dir, "ledger.json"); let now = 1000;
