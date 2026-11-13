@@ -120,8 +120,7 @@ test("public snapshots use hash-locked vendored sources rather than leaking priv
     assert.ok(!f.commands.some(c => c.args.includes("e".repeat(40)) || c.args.includes("f".repeat(40))));
     const build = f.commands.find(c => c.command === "npm" && c.args[0] === "run" && c.cwd.endsWith("/core"))!;
     assert.ok(build.env?.HAYATE_PLUGIN_SOURCE?.endsWith("/core/vendor/plugins"));
-    const assets = JSON.parse(build.env!.HAYATE_PLUGIN_ASSET_SOURCES!);
-    assert.ok(assets["f".repeat(40)].endsWith("/core/vendor/plugin-assets/" + "f".repeat(40)));
+    assert.equal(build.env?.HAYATE_PLUGIN_ASSET_SOURCES, undefined, "removed frontend assets are not prepared even when stale metadata exists");
   } finally { await f.cleanup(); }
 });
 

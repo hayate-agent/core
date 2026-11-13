@@ -73,7 +73,7 @@ Follow the **[terminal, WebUI, Matrix and dispatcher setup guide](docs/gateways.
 | --- | --- |
 | Terminal | Run `hayate-agent`; use `/login`, `/model` and `/help` |
 | Standalone WebUI | Follow the [WebUI setup](https://github.com/hayate-agent/webui#readme); install its compatible backend separately |
-| Bundled legacy WebUI | This Core snapshot still packages `dist/optional-plugins/webui`; use `gatewayPlugins.webui.module` and IPv4 loopback only |
+| Browser dashboard | Separate WebUI project; Plugins supplies the API-only dashboard gateway. Core does not package the retired frontend |
 | Matrix | Bundled plugin; inject `MATRIX_HOMESERVER`, bot credentials and sender/room policy |
 | Dispatcher | Optional; verify backend concurrency, then enable `dispatcher` and restart |
 | HTTP run API | Separately enabled with `API_SERVER_KEY` or a private loopback key file |

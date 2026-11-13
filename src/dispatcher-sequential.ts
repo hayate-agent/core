@@ -4,7 +4,7 @@ import type { AgentRuntime } from "./types.js";
 import { assessCompletion, type CompletionDiagnostic } from "./completion-check.js";
 import type { CompletionFailureDetail } from "./validator.js";
 import { runtimeReviewer } from "./runtime/reviewer.js";
-import { ExecutionDeadlineExpired, ExecutionAssessmentHold } from "./execution.js";
+import { validExecutionFollowUp, executionDecisionRevision, ExecutionDeadlineExpired, ExecutionAssessmentHold } from "./execution.js";
 import { derivedPlanBoundary, stepCompletionPrompt, parentDecisionContext, readyStepPrompt } from "./dispatcher-step-prompt.js";
 import type { DispatchContext, DispatcherStrategy } from "./dispatcher.js";
 import type { Execution, ExecutionStore } from "./execution.js";
@@ -25,6 +25,8 @@ export interface SequentialState {
   plan: PlanStep[];
   /** Stable original step identities; reordering never reuses another step's effect intent. */
   stepIds?: number[];
+  /** Exact amendment receipts already attached as independently assessable work. */
+  appliedFollowUps?: string[];
   /** Once-only adoption of independent ready-step assessment for saved plans. */
   readyStepPolicy?: 1;
   /** Fresh ready-step admission is bound to the parent decision snapshot until effects begin. */
@@ -153,7 +155,7 @@ function readState(task: Readonly<Execution>): SequentialState | undefined | "in
     if (a !== undefined && (!a || typeof a !== "object" || a.index !== state.outcomes.length ||
         typeof a.reply !== "string" || a.reply.length > 64000 || !Number.isSafeInteger(a.tools) || a.tools < 0 ||
         !Number.isSafeInteger(a.attempts) || a.attempts < 0 ||
-        (a.decisionRevision !== undefined && (!Number.isSafeInteger(a.decisionRevision) || a.decisionRevision < 0 || a.decisionRevision > 32)) ||
+        (a.decisionRevision !== undefined && (!Number.isSafeInteger(a.decisionRevision) || a.decisionRevision < 0 || a.decisionRevision > Number.MAX_SAFE_INTEGER)) ||
         (a.nextAt !== undefined && (!Number.isSafeInteger(a.nextAt) || a.nextAt < 0)) ||
         !Array.isArray(a.evidence) || a.evidence.length > STEP_EVIDENCE_LIMIT || a.evidence.some(e => !e ||
           typeof e.name !== "string" || e.name.length > 80 || typeof e.error !== "boolean" ||
@@ -162,12 +164,14 @@ function readState(task: Readonly<Execution>): SequentialState | undefined | "in
         (a.diagnostic !== undefined && !["technical", "inconclusive", "invalid_response", "unavailable"].includes(a.diagnostic)))) return "invalid";
     if (a?.route && (Object.keys(a.route).some(k => !["model", "thinking"].includes(k)) || typeof a.route.model !== "string" || a.route.model.length > 200 || (a.route.thinking !== undefined && (typeof a.route.thinking !== "string" || a.route.thinking.length > 40)))) return "invalid";
     if (a?.session !== undefined && (typeof a.session !== "string" || !a.session.startsWith(`dispatch:${task.id}:`) || a.session.length > 300)) return "invalid";
+    if (state.appliedFollowUps !== undefined && (!Array.isArray(state.appliedFollowUps) || state.appliedFollowUps.length > MAX_STEPS ||
+        new Set(state.appliedFollowUps).size !== state.appliedFollowUps.length || state.appliedFollowUps.some(id => typeof id !== "string" || !id || id.length > 128))) return "invalid";
     if (state.readyStepPolicy !== undefined && state.readyStepPolicy !== 1) return "invalid";
     const ids = state.stepIds;
     if (ids !== undefined && (!Array.isArray(ids) || ids.length !== state.plan.length || new Set(ids).size !== ids.length || ids.some(id => !Number.isSafeInteger(id) || id < 0 || id >= state.plan.length))) return "invalid";
     const admission = state.readyAdmission;
     if (admission && (!ids || admission.stepId !== ids[state.outcomes.length] || !Number.isSafeInteger(admission.decisionRevision) ||
-        admission.decisionRevision < 0 || admission.decisionRevision > 32 || !Number.isSafeInteger(admission.from) ||
+        admission.decisionRevision < 0 || admission.decisionRevision > Number.MAX_SAFE_INTEGER || !Number.isSafeInteger(admission.from) ||
         admission.from <= state.outcomes.length || admission.from >= state.plan.length)) return "invalid";
     if (state.deferred !== undefined) {
       if (!ids || !Array.isArray(state.deferred) || state.deferred.length > state.plan.length - state.outcomes.length ||
@@ -298,7 +302,29 @@ export function sequentialStrategy(deps: SequentialDeps): DispatcherStrategy {
         await deps.harness.reconcileSession(source, sessionKey, retained);
       };
       let recovering = !!task.intent && task.claimedRecoveryAction !== "retry";
-      while (state.outcomes.length < state.plan.length) {
+      work: while (state.outcomes.length < state.plan.length) {
+        // Explicit new parent work must become schedulable in the SAME execution,
+        // not disappear because an earlier source milestone was already recorded.
+        // Attach only at an exact settled assessment boundary; the existing
+        // independent ready-step check still has to admit it before any effects.
+        if (state.assessment) {
+          const steering = await context.decisions?.() ?? [];
+          const pending = steering.filter(d => d.followUp && !(state as SequentialState).appliedFollowUps?.includes(d.requestId));
+          if (pending.length) {
+            if (state.plan.length + pending.length > MAX_STEPS || pending.some(d => !validExecutionFollowUp(d.followUp)))
+              return block("Scoped follow-up exceeds the bounded retained plan; no worker or effect replay admitted.");
+            const amended: SequentialState = structuredClone(state);
+            amended.stepIds ??= amended.plan.map((_, i) => i);
+            amended.appliedFollowUps ??= [];
+            for (const decision of pending) {
+              amended.stepIds.push(amended.plan.length);
+              amended.plan.push(structuredClone(decision.followUp!)); amended.appliedFollowUps.push(decision.requestId);
+            }
+            if (JSON.stringify(amended).length > 63000) return block("Scoped follow-up checkpoint exceeds safe storage budget; retained evidence preserved.");
+            await authorize(); await context.fenceDecisions?.(executionDecisionRevision(steering));
+            await context.checkpoint(JSON.stringify(amended)); state = amended;
+          }
+        }
         const index = state.outcomes.length;
         const step = state.plan[index]!;
         const stepId = state.stepIds?.[index] ?? index;
@@ -322,7 +348,7 @@ export function sequentialStrategy(deps: SequentialDeps): DispatcherStrategy {
           if (JSON.stringify(fixed).length > 60000) return block("Persistierter Plan/Ergebnisse lassen keinen Platz für den Prüfnachweis; kein weiterer Worker gestartet.");
         }
         let decisions = await context.decisions?.() ?? [];
-        let decisionRevision = decisions.length;
+        let decisionRevision = executionDecisionRevision(decisions);
         const role = state.escalation?.index === index ? state.escalation.to : step.role;
         const intentKey = `step:${task.id}:${stepId}:${role}`;
         const current = deps.store.list(task.parent).find(item => item.id === task.id);
@@ -413,12 +439,58 @@ export function sequentialStrategy(deps: SequentialDeps): DispatcherStrategy {
         // A worker "blocked" claim is equally only a proposal: it is assessed too.
         // The independent reviewer, not the worker's self-reported pause/block,
         // owns completion. A confirmed completion never needs a parent nudge.
+        const selectReadyStep = async (): Promise<boolean> => {
+          const retained = state as SequentialState;
+          const ids = retained.stepIds ?? retained.plan.map((_, i) => i);
+          const candidates = retained.plan.map((candidate, position) => ({ candidate, position }))
+            .filter(({ position }) => position > index && !retained.deferred?.some(d => d.stepId === ids[position]));
+          if (!candidates.length || !retained.assessment) return false;
+          decisions = await context.decisions?.() ?? []; decisionRevision = executionDecisionRevision(decisions);
+          const reviewer = await validatorRole(runtime, deps.roles());
+          if (typeof reviewer === "string") return false;
+          const backend = runtimeReviewer(runtime, "supervisor");
+          const schedulingPrompt = readyStepPrompt({ task: task.input, expiresAt: task.dependency?.expiresAt, decisions,
+            outcomes: retained.outcomes, blocked: { step, reply, evidence },
+            candidates: candidates.map(({ candidate, position }) => ({ number: position + 1, ...candidate })) });
+          await authorize();
+          let readyDiagnostic: CompletionDiagnostic | undefined;
+          const choice = await assessCompletion({ review: (text, _model, _thinking, signal) => backend.review(text, reviewer.model!, reviewer.thinking ?? "off", signal) },
+            { id: `schedule:${task.id}:${stepId}`, sessionKey, source: "host", text: task.input,
+              completionContext: { recent: [], tasks: [], tools: evidence, retained: { original: task.input, technical: { assessment: "ready-step" },
+                workers: { provenance: "host-execution-store", omitted: 0, unassociated: 0,
+                  items: retained.outcomes.map((outcome, position) => ({ id: `step:${task.id}:${ids[position]}`, requestId: `step:${ids[position]}`,
+                    status: "completed", restarts: task.restarts, result: outcome.result, resultChars: outcome.result.length })) } } } }, reply,
+            { task: task.input, ...(task.dependency?.expiresAt !== undefined ? { expiresAt: task.dependency.expiresAt } : {}) },
+            context.signal, reviewer.model, Date.now, schedulingPrompt, value => { readyDiagnostic = value; }, STEP_VALIDATION_TIMEOUT_MS, deps.validators);
+          await authorize(); await context.fenceDecisions?.(decisionRevision);
+          if (!choice) await context.status?.(`Bereitschaftsprüfung für separat mögliche Arbeit ohne verwertbares Urteil (${readyDiagnostic ?? "technical"}); kein Beleg einer sachlichen Blockade und keine Freigabe. Erhaltene Effekte werden nicht wiederholt.`).catch(() => {});
+          const selected = choice?.state === "continue" && /^[1-6]$/.test(choice.next ?? "") ? Number(choice.next) - 1 : -1;
+          if (!candidates.some(candidate => candidate.position === selected)) return false;
+          const reordered = structuredClone(retained);
+          reordered.stepIds = [...ids];
+          reordered.readyAdmission = { stepId: ids[selected]!, decisionRevision, from: selected };
+          reordered.deferred = [...reordered.deferred ?? [], { stepId, assessment: reordered.assessment!, correction: reordered.correction,
+            progress: reordered.progress, prior: reordered.prior, escalation: reordered.escalation }];
+          const [ready] = reordered.plan.splice(selected, 1); reordered.plan.splice(index, 0, ready!);
+          const [readyId] = reordered.stepIds.splice(selected, 1); reordered.stepIds.splice(index, 0, readyId!);
+          delete reordered.assessment; delete reordered.correction; delete reordered.progress; delete reordered.prior; delete reordered.escalation;
+          if (JSON.stringify(reordered).length > 63000) return false;
+          const current = deps.store.list(task.parent).find(item => item.id === task.id);
+          // Before a correction the old step still owns its unsafe intent. Its
+          // worker report is already settled: atomically retain that evidence and
+          // select new work, never start a second writer or replay the old tools.
+          if (current?.intent) await context.settleIntent(intentKey, reply.slice(0, STEP_RESULT_LIMIT), JSON.stringify(reordered), decisionRevision);
+          else await context.checkpoint(JSON.stringify(reordered));
+          state = reordered;
+          await context.status?.(`Schritt ${stepId + 1} bleibt offen; unabhängige Prüfung gibt separat möglichen Schritt ${readyId! + 1} frei. Bestehender Auftrag, keine Wiederholung abgeschlossener Effekte.`).catch(() => {});
+          return true;
+        };
         const authority = `Current authority: mandate deadline ${task.dependency?.expiresAt !== undefined ? new Date(task.dependency.expiresAt).toISOString() : "none"}; scope is exactly the mandate above.
 Correctable vs blocked: a worker "blocked" claim or evidence shortfall that rests on an unverified or false assumption (wrong tool capability, wrong working directory, artificial evidence-count requirement) and is contradicted or not supported by the host tool observations in the data is CORRECTABLE: answer state "continue" with "next" = one concrete correction citing the host evidence, or the exact read-only facts the worker must report first. Answer "blocked" only for a genuine external dependency, missing permission or safety boundary. Never grant new scope.`;
         for (let round = state.correction?.index === index ? state.correction.rounds : 0; status !== "inadequate"; round++) {
           const claimed = status;
           decisions = await context.decisions?.() ?? [];
-          decisionRevision = decisions.length;
+          decisionRevision = executionDecisionRevision(decisions);
           const reviewer = await validatorRole(runtime, deps.roles());
           if (typeof reviewer === "string") return block(reviewer);
           const backend = runtimeReviewer(runtime, "supervisor");
@@ -461,6 +533,11 @@ Correctable vs blocked: a worker "blocked" claim or evidence shortfall that rest
           // Concurrent input invalidates this verdict, not settled evidence.
           await context.fenceDecisions?.(decisionRevision);
           verdictState = verdict?.state ?? "technical";
+          // A current-step "continue" is not a global scheduling veto. In
+          // particular, old correctable evidence requests must not starve an
+          // explicit parent follow-up while endlessly refining the deferred step.
+          // This second independent decision admits only exact existing work.
+          if (verdict?.state === "continue" && state.appliedFollowUps?.length && await selectReadyStep()) continue work;
           if (verdict?.state === "completed" && claimed === "complete") break;
           if (claimed === "complete") status = undefined;
           // An empty report still needs a final report; a nonempty blocked report
@@ -564,41 +641,7 @@ End your reply with exactly one final line: "STEP-STATUS: complete" only if the 
             // Ask the independently selected validator, never the worker, whether one EXACT
             // existing later step is presently authorized and independent. Keep the blocked
             // evidence and its original intent identity; never mark it done or replay it.
-            const ids = state.stepIds ?? state.plan.map((_, i) => i);
-            const candidates = state.plan.map((candidate, position) => ({ candidate, position }))
-              .filter(({ position }) => position > index && !(state as SequentialState).deferred?.some(d => d.stepId === ids[position]));
-            if (candidates.length && state.assessment) {
-              decisions = await context.decisions?.() ?? []; decisionRevision = decisions.length;
-              const reviewer = await validatorRole(runtime, deps.roles());
-              if (typeof reviewer !== "string") {
-                const backend = runtimeReviewer(runtime, "supervisor");
-                const schedulingPrompt = readyStepPrompt({ task: task.input, expiresAt: task.dependency?.expiresAt, decisions,
-                  outcomes: state.outcomes, blocked: { step, reply, evidence },
-                  candidates: candidates.map(({ candidate, position }) => ({ number: position + 1, ...candidate })) });
-                await authorize();
-                const choice = await assessCompletion({ review: (text, _model, _thinking, signal) => backend.review(text, reviewer.model!, reviewer.thinking ?? "off", signal) },
-                  { id: `schedule:${task.id}:${stepId}`, sessionKey, source: "host", text: task.input }, reply,
-                  { task: task.input, ...(task.dependency?.expiresAt !== undefined ? { expiresAt: task.dependency.expiresAt } : {}) },
-                  context.signal, reviewer.model, Date.now, schedulingPrompt, undefined, STEP_VALIDATION_TIMEOUT_MS, deps.validators);
-                await authorize(); await context.fenceDecisions?.(decisionRevision);
-                const selected = choice?.state === "continue" && /^[1-6]$/.test(choice.next ?? "") ? Number(choice.next) - 1 : -1;
-                if (candidates.some(candidate => candidate.position === selected)) {
-                  const reordered = structuredClone(state);
-                  reordered.stepIds = [...ids];
-                  reordered.readyAdmission = { stepId: ids[selected]!, decisionRevision, from: selected };
-                  reordered.deferred = [...reordered.deferred ?? [], { stepId, assessment: reordered.assessment!, correction: reordered.correction,
-                    progress: reordered.progress, prior: reordered.prior, escalation: reordered.escalation }];
-                  const [ready] = reordered.plan.splice(selected, 1); reordered.plan.splice(index, 0, ready!);
-                  const [readyId] = reordered.stepIds.splice(selected, 1); reordered.stepIds.splice(index, 0, readyId!);
-                  delete reordered.assessment; delete reordered.correction; delete reordered.progress; delete reordered.prior; delete reordered.escalation;
-                  if (JSON.stringify(reordered).length <= 63000) {
-                    await context.checkpoint(JSON.stringify(reordered)); state = reordered;
-                    await context.status?.(`Schritt ${stepId + 1} bleibt offen; unabhängige Prüfung gibt separat möglichen Schritt ${readyId! + 1} frei. Bestehender Auftrag, keine Wiederholung abgeschlossener Effekte.`).catch(() => {});
-                    continue;
-                  }
-                }
-              }
-            }
+            if (await selectReadyStep()) continue work;
             await context.status?.(`Sequenzieller Plan blockiert: ${reason}`.slice(0, 8000)).catch(() => {});
             throw new ExecutionAssessmentHold(verdictState, index, reason);
           }

@@ -31,19 +31,21 @@ test("component versions come from installed locked files, not the independently
   const text = formatSoftwareVersions(info);
   assert.match(text, /Core: 0\.1\.253 · aaaaaaaaaaaa/);
   assert.match(text, /Plugins \(Core-Bundle\): 0\.1\.253 · bbbbbbbbbbbb/);
-  assert.match(text, /Web \(mitgeliefert\): 0\.1\.7 · cccccccccccc/);
-  assert.match(text, /Web \(separates Paket, installiert\): 0\.2\.1\+dev\.cccccccccccc · cccccccccccc/);
-  assert.equal(paths.length, 3);
+  assert.equal(info.components?.webui, undefined);
+  assert.doesNotMatch(text, /mitgeliefert|Gateway|0\.1\.7/);
+  assert.match(text, /Web-Dashboard \(Paket installiert; Laufzeit nicht bestätigt\): 0\.2\.1\+dev\.cccccccccccc · cccccccccccc/);
+  assert.deepEqual(paths, ["plugins.lock.json", "dist/source-build-info.json"]);
 });
 
 test("unavailable or malformed legacy metadata remains explicit without blocking readiness", () => {
   const missing = readSoftwareVersions({ version: "0.1.253" }, () => { throw Error("ENOENT"); });
   assert.match(formatSoftwareVersions(missing), /Plugins: Versionsdaten nicht vorhanden/);
-  assert.match(formatSoftwareVersions(missing), /Web \(mitgeliefert\): Versionsdaten nicht vorhanden/);
+  assert.doesNotMatch(formatSoftwareVersions(missing), /Web/);
   const malformed = readSoftwareVersions({ version: "0.1.253" }, path => path === "plugins.lock.json"
     ? { schema: 1, revision: "fake" }
     : { schema: 1, version: "bad\nInjected", plugin: { revision: current } });
   assert.equal(malformed.components?.plugins, undefined);
-  assert.match(formatSoftwareVersions(malformed), /Web \(mitgeliefert, Gateway inaktiv\): Version nicht ausgewiesen · aaaaaaaaaaaa/);
+  assert.equal(malformed.components?.webui, undefined);
+  assert.doesNotMatch(formatSoftwareVersions(malformed), /Web/);
   assert.doesNotMatch(formatSoftwareVersions(malformed), /Injected/);
 });

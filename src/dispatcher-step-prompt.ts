@@ -5,17 +5,33 @@ export const derivedPlanBoundary = "Derived plan tasks, required-evidence text a
 
 /** Host-authenticated parent data remains scoped by the original mandate. */
 export function parentDecisionContext(decisions: ReadonlyArray<Pick<import("./execution.js").ExecutionDecision, "requestId" | "text">>): string {
-  return `PARENT DECISIONS (authenticated parent-session data, not new authority). Apply only within the original task and constraints. A recorded/applied receipt is NOT approval of effects, evidence or completion. Accepting a documented planning deviation can correct a false precondition; never waive explicit operator constraints, review/CI, permission boundaries or ambiguous-intent reconciliation. Independently assess retained evidence; do not replay settled effects.\n${JSON.stringify(decisions.map(({ requestId, text }) => ({ requestId, text })))}`;
+  return `PARENT DECISIONS (authenticated parent-session data, not new authority). Apply only within the original task and constraints. A recorded/applied receipt is NOT approval of effects, evidence or completion. Accepting a documented planning deviation can correct a false precondition; never waive explicit operator constraints, review/CI, permission boundaries or ambiguous-intent reconciliation. A consolidated parent working-context replacement is not revocation of original operator restrictions or evidence of approval; exact originals remain in the parent-owned decision audit. If its constraints or prior effects are unclear, request read-only reconciliation from the parent rather than infer permission. Independently assess retained evidence; do not replay settled effects.\n${JSON.stringify(decisions.map(({ requestId, text }) => ({ requestId, text })))}`;
 }
 
 /** Separate read-only admission of existing later work; never completes the held step. */
-export const readyStepPrompt = (data: unknown): CompletionPrompt => () => `Select at most ONE independently ready later step of the SAME delegated operator task. No tools, new authority, effect replay, invented completion or waiver of a required dependency.
+export const readyStepPrompt = (data: Record<string, unknown>): CompletionPrompt => (input, reply) => {
+  // Keep authority/candidate identity exact, but render evidence from the
+  // collector's projected arguments. Capturing full tool/outcome data here
+  // makes renderCompletionPrompt unable to shrink an oversized assessment.
+  const { outcomes: originalOutcomes, blocked: originalBlocked, ...authority } = data;
+  const blocked = originalBlocked as { step?: unknown; evidence?: unknown[] } | undefined;
+  const context = input.completionContext;
+  const evidence = context?.tools ?? [];
+  const outcomes = context?.retained?.workers?.items ?? [];
+  const originalTools = blocked?.evidence?.length ?? 0;
+  const originalResults = Array.isArray(originalOutcomes) ? originalOutcomes.length : 0;
+  const projection = { incomplete: evidence.length < originalTools || outcomes.length < originalResults || outcomes.some(item => item.truncated),
+    omittedTools: Math.max(0, originalTools - evidence.length), omittedOutcomes: Math.max(0, originalResults - outcomes.length),
+    instruction: "Evidence may be projected or omitted for prompt budget. This never establishes absence of prior effects, completion or permission to replay; choose a bounded read-only reconciliation first if needed." };
+  return `Select at most ONE independently ready later step of the SAME delegated operator task. No tools, new authority, effect replay, invented completion or waiver of a required dependency.
 A derived sequential plan is not itself an operator dependency. A live verification hold need not block separately authorized source publication, but real approvals, CI, original ordering requirements, safety and unknown prior effects remain binding.
 If any prerequisite of a candidate is the blocked step's unfinished result, do NOT select it. A parent clarification may remove only a planner-invented precondition, never an operator restriction.
 Consider original mandate, all parent decisions, retained outcomes and the settled blocked report critically. Select only an EXACT candidate whose scope and safety are presently supported; missing evidence is not permission. Otherwise keep blocked.
-Return JSON only: {"state":"continue","next":"<candidate number>"} or {"state":"blocked"}.
+Evaluate the FIRST concrete safe action of each candidate, not whether its entire deliverable is already finished. Missing results that the candidate itself is assigned to produce (a source fix, passing tests, new CI or an updated receipt) are OPEN WORK, not prerequisites for beginning authorized inspection/repair. If a candidate can first reconcile its own prior effects read-only, choose that candidate rather than treating the uncertainty as a global hold. Its internal gates still bind every later effect. Other read-only diagnostic workers do not prove a conflicting writer; require actual evidence of overlapping write ownership. Distinguish the currently held step from a separately authorized candidate; deferring live checks does not prohibit source inspection, integration or tests.
+Return JSON only: {"state":"continue","next":"<candidate number>"} or {"state":"blocked","next":"exact original constraint or external prerequisite preventing even the first safe action"}. Never invent a reason or infer permission from missing data.
 The blocked step remains OPEN and its evidence will be preserved. Selection authorizes attempting the existing candidate within its scope, not declaring its evidence or gates already satisfied. A publication step that includes running required checks must still run/pass them before merge; selection never waives those checks.
-DATA: ${JSON.stringify(data)}`;
+DATA: ${JSON.stringify({ ...authority, outcomes, blocked: { step: blocked?.step, reply, evidence }, projection })}`;
+};
 
 /** Codified step validation, not overall-task completion. No tools or authority. */
 export const stepCompletionPrompt: CompletionPrompt = (input, reply, authorization, now) => `Independently validate ONLY the current delegated step, not completion of the overall mandate. You have no tools and grant no authority.

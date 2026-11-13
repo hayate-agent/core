@@ -52,11 +52,12 @@ export class DispatcherRuntime {
   isWorker(key: string): boolean { return key.startsWith("dispatch:"); }
   resultAllowed(parent: string, id: string): boolean {
     const task = this.store.list(parent).find(item => item.id === id);
-    return !!task && task.status === "completed" && !task.parentStopped;
+    return !!task && task.status === "completed" && !task.parentStopped && !task.ownershipHold;
   }
   guardResult(parent: string, id: string): void {
     const task = this.store.list(parent).find(item => item.id === id);
     if (!task) throw new ToolGuardError("parent_mandate_missing", "Host result execution missing");
+    if (task.ownershipHold) throw new ToolGuardError("ownership_lost", "Legacy execution ancestry held after scoped stop");
     if (task.parentStopped || task.status === "cancelled") throw new ToolGuardError("execution_cancelled", "Host result stopped");
     if (task.status !== "completed") throw new ToolGuardError("authority_revoked", "Host result not completed");
   }
@@ -64,6 +65,7 @@ export class DispatcherRuntime {
     if (!this.isWorker(key)) return;
     const task = this.taskForSession(key);
     if (!task) throw new ToolGuardError("ownership_lost", "Dispatcher worker no longer authorized: ownership missing");
+    if (task.ownershipHold) throw new ToolGuardError("ownership_lost", "Legacy execution ancestry held after scoped stop");
     if (task.parentStopped || task.status === "cancelled") throw new ToolGuardError("execution_cancelled", "Dispatcher worker no longer authorized: stopped");
     if (task.status !== "running") throw new ToolGuardError("authority_revoked", "Dispatcher worker no longer authorized: not running");
   }
