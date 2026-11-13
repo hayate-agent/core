@@ -1362,15 +1362,50 @@ export class Harness {
   }
 
   /** Transfer retained execution evidence, never authority or an opaque prompt replay. */
+  async prepareWorkerEvidence(key: string, evidence: { executionId: string; task: string }): Promise<void> {
+    if (!key.startsWith(`dispatch:${evidence.executionId}:`) || !evidence.executionId || !evidence.task) throw Error("Invalid worker admission evidence identity");
+    // A loaded target already has an awaited recovery seed or active native
+    // writer; never create a competing SessionManager beside it.
+    if (this.sessions.get(key)?.session) return;
+    await this.runtime.prepareWorkerEvidence?.(key, evidence);
+  }
+
   async reconcileSession(sourceKey: string, targetKey: string,
-    retained?: { executionId: string; intentKey: string; checkpoint: string }): Promise<void> {
+    retained?: { executionId: string; intentKey: string; checkpoint: string },
+    original?: { executionId: string; sessionKey: string }): Promise<void> {
     if (sourceKey === targetKey) throw Error("Recovery requires a replacement session");
     const sourceState = this.state(sourceKey);
     const targetState = this.state(targetKey);
     if ([sourceState, targetState].some(s => s.running || s.opening || s.queue.length)) throw Error("Recovery session has active or queued work");
-    const source = await this.sessionFor(sourceKey);
-    if (!source.archiveEntries) throw Error("Runtime does not expose retained execution evidence");
-    const entries = [...source.archiveEntries()];
+    // Restart recovery must not open the OLD worker as a live model/MCP/tool
+    // session just to read its evidence. Its model/backend/cwd may have changed.
+    // Prefer an already-open session, otherwise use the runtime's read-only
+    // persisted-history API; never turn a missing history into a fresh source.
+    let entries: import("./session-archive.js").ArchiveEntry[];
+    let evidenceKey = sourceKey;
+    let sourceStatus: { sessionId: string; sessionFile?: string };
+    if (!sourceState.session && this.runtime.retainedSessionHistory) {
+      let saved = await this.runtime.retainedSessionHistory(sourceKey);
+      let missingReplacement = false;
+      if (!saved?.entries.length && original && original.sessionKey !== sourceKey) {
+        const prefix = `dispatch:${original.executionId}:`;
+        if (!original.executionId || ![sourceKey, targetKey, original.sessionKey].every(key => key.startsWith(prefix))) throw Error("Invalid original worker evidence binding");
+        saved = await this.runtime.retainedSessionHistory(original.sessionKey);
+        missingReplacement = true; evidenceKey = original.sessionKey;
+      }
+      if (!saved) throw Error("Retained execution evidence is empty; explicit retry requires reconciliation");
+      entries = [...saved.entries];
+      if (missingReplacement) entries.push({ id: "missing-replacement-worker-history", role: "host-evidence", truncated: true,
+        text: JSON.stringify({ originalSessionKey: original!.sessionKey, missingReplacementSessionKey: sourceKey,
+          uncertainty: "Replacement worker history is absent; intermediate effects remain UNKNOWN. This exact original intent-bound history recovers known prior facts, NOT proof that no later effects occurred. Inspect actual state before any uncertain effect; never replay completed results." }) });
+      sourceStatus = { sessionId: saved.sessionId, ...(saved.sessionFile ? { sessionFile: saved.sessionFile } : {}) };
+      if (saved.incomplete) entries.push({ id: "incomplete-retained-worker", role: "host-evidence", truncated: true,
+        text: "Persisted worker transcript is incomplete. Missing tool outcomes remain unknown; never infer absence of effects or replay permission." });
+    } else {
+      const source = sourceState.session ?? await this.sessionFor(sourceKey);
+      if (!source.archiveEntries) throw Error("Runtime does not expose retained execution evidence");
+      entries = [...source.archiveEntries()]; sourceStatus = source.status();
+    }
     if (retained) {
       // Host-owned evidence for a checkpointed correction, not a retry grant.
       // Both sessions must belong to the same execution; missing transcript
@@ -1387,7 +1422,7 @@ export class Harness {
     if (!entries.length) throw Error("Retained execution evidence is empty; explicit retry requires reconciliation");
     const target = await this.sessionFor(targetKey);
     if (!target.seedHandover) throw Error("Runtime does not support recovery evidence handover");
-    await target.seedHandover(recoveryEvidence(sourceKey, source.status(), entries));
+    await target.seedHandover(recoveryEvidence(evidenceKey, sourceStatus, entries));
   }
 
   async resumeSession(key: string, id: string): Promise<void> {

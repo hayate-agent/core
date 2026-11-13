@@ -96,7 +96,7 @@ test("durable queued Dispatcher requests inherit priority, overlap at capacity a
 });
 
 test("restart coordinates two retained parent tasks while their independent workers run simultaneously, without user nudge", async t => {
-  const dir = await mkdtemp(path.join(os.tmpdir(), "main-dispatch-parallel-")); t.after(() => rm(dir, { recursive: true, force: true }));
+  const dir = await mkdtemp(path.join(os.tmpdir(), "main-dispatch-parallel-"));
   const store = new ExecutionStore(path.join(dir, "executions.json")); await store.load();
   const workers: string[] = [], releases: Array<() => void> = [];
   const strategy: DispatcherStrategy = { name: "parallel-test", version: 1, replaySafe: true, execute: async request => {
@@ -108,9 +108,10 @@ test("restart coordinates two retained parent tasks while their independent work
     await dispatcher.submit(key, `request:${input.taskId}`, `independent ${input.taskId}`, input.taskId);
     h.planContinuation(key, { state: "waiting" }); return "Delegated; awaiting this task's own child.";
   }), completionCheck: async input => input.continuationDepth ? { state: "waiting" } : { state: "continue", next: "delegate bounded independent work" } });
-  t.after(() => h.stop(0)); restore(h, [task("A"), task("B")]);
+  restore(h, [task("A"), task("B")]);
   dispatcher = new Dispatcher(store, strategy, 2, async () => {}, error => { throw error; }, parent => h.dependencyCheckpoint(parent));
-  t.after(() => { releases.forEach(release => release()); return dispatcher.stop(); }); await dispatcher.start();
+  t.after(async () => { await h.stop(0); releases.forEach(release => release()); await dispatcher.stop(); await store.drain(); await rm(dir, { recursive: true, force: true }); });
+  await dispatcher.start();
   await h.recoverTasks(); h.releaseRestored();
   for (let i = 0; i < 50 && workers.length < 2; i++) await tick();
   assert.deepEqual(workers, ["A", "B"]); assert.equal(dispatcher.workers.active, 2);

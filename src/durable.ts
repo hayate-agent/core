@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { open, rename, unlink } from "node:fs/promises";
+import { open, rename, unlink, link } from "node:fs/promises";
 import path from "node:path";
 
 /**
@@ -32,6 +32,18 @@ export async function writeFileDurable(file: string, data: string | Uint8Array, 
     await unlink(tmp).catch(() => {});
     throw err;
   }
+}
+
+/** Crash-durable first publication; never overwrite an existing SDK/session file. */
+export async function writeFileDurableExclusive(file: string, data: string, beforeCommit?: () => void): Promise<void> {
+  const tmp = `${file}.${process.pid}.${randomUUID()}.tmp`;
+  const fh = await open(tmp, "wx", 0o600);
+  try {
+    try { await fh.writeFile(data); await fh.sync(); } finally { await fh.close(); }
+    beforeCommit?.();
+    await link(tmp, file);
+    await syncDir(path.dirname(file));
+  } finally { await unlink(tmp).catch(() => {}); }
 }
 
 /** Append a line and fsync the file and its directory entry (dead-letter records). */

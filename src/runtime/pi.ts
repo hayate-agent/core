@@ -1,5 +1,6 @@
 import { mcpLanguageInstructions, type LanguagePolicy } from "../language.js";
 import { retainedSessionFile } from "./retained-session-file.js";
+import { checkpointNativeSession } from "./native-session-checkpoint.js";
 import { HANDOVER_SEED_BYTES } from "../recovery-evidence.js";
 import { executionMetadata } from "../builtin-plugins/execution-metadata.js";
 /**
@@ -18,7 +19,7 @@ import { nativeCompaction, type CompactionStrategy } from "../compaction.js";
 import type { SessionProvider, SessionRecord, SessionSummary } from "../sessions.js";
 import type { PluginTool } from "../plugins.js";
 import { prepareStructuredToolArgs } from "../tool-args.js";
-import { mkdir, readFile } from "node:fs/promises";
+import { mkdir, readFile, readdir } from "node:fs/promises";
 import { writeFileDurable } from "../durable.js";
 import { createHash } from "node:crypto";
 import path from "node:path";
@@ -405,7 +406,11 @@ export class PiSession implements RuntimeSession {
     // not append the same model-visible handover on every attempt/restart.
     const seeded = this.session.sessionManager.getBranch().some(entry =>
       entry.type === "custom_message" && entry.customType === "harness-handover" && entry.content === content);
+    if (this.busy || this.prompting) throw Error("Cannot checkpoint a recovery handover into an active session");
     if (!seeded) await this.session.sendCustomMessage({ customType: "harness-handover", content, display: false }, { triggerTurn: false });
+    // The caller may durably replace recoverySession immediately after return.
+    // Native PI otherwise does not publish custom-message-only session files.
+    await checkpointNativeSession(this.session.sessionManager);
     await this.checkpoint?.();
   }
 
@@ -589,7 +594,37 @@ export class PiRuntime implements AgentRuntime {
     return (await runtime.getAvailable()).map((m) => `${m.provider}/${m.id}`);
   }
 
-  async retainedSessionHistory(key: string): Promise<{ sessionId: string; entries: import("../session-archive.js").ArchiveEntry[]; incomplete?: boolean } | undefined> {
+  async prepareWorkerEvidence(key: string, evidence: { executionId: string; task: string }): Promise<void> {
+    if (!key.startsWith(`dispatch:${evidence.executionId}:`) || !evidence.executionId || !evidence.task) throw Error("Invalid worker admission evidence identity");
+    const cwd = (await this.opts.executionContext?.(key))?.cwd ?? this.opts.cwd;
+    let provider = this.opts.sessionProvider?.();
+    if (!provider && await this.opts.legacySessionProvider?.active(key)) provider = this.opts.legacySessionProvider;
+    const lease = provider?.retain?.(); if (lease) provider = lease.provider;
+    try {
+      const active = await provider?.active(key);
+      if (provider && active) {
+        const record = await provider.load(active);
+        if (record.key !== key || record.format !== "pi-session-v1") throw Error("Worker preparation provider identity mismatch");
+        return;
+      }
+      const directory = path.join(this.opts.sessionsDir, safeKey(key)); await mkdir(directory, { recursive: true });
+      const retained = await retainedSessionFile(directory, cwd);
+      if (!retained && (await readdir(directory)).some(name => name.endsWith(".jsonl"))) throw Error("Worker admission history exists but cannot be validated");
+      if (retained) return;
+      const manager = provider ? SessionManager.inMemory(cwd) : SessionManager.create(cwd, directory);
+      manager.appendCustomMessageEntry("harness-handover", `Host worker preparation (evidence, not new authority):\n${JSON.stringify({
+        kind: "dispatcher-worker-preparation", executionId: evidence.executionId, sessionKey: key,
+        originalTaskSha256: createHash("sha256").update(evidence.task).digest("hex"),
+        instruction: "This host metadata was persisted before admitting a worker intent. It is NOT proof of executed work or completion. Inspect actual state; never replay completed effects. Original task and restrictions come from the current owned worker request.",
+      })}`, false);
+      if (provider) {
+        const record = await provider.create(key, "pi-session-v1", [manager.getHeader()!, ...manager.getEntries()]);
+        await provider.bind(key, record.id);
+      } else await checkpointNativeSession(manager);
+    } finally { lease?.release(); }
+  }
+
+  async retainedSessionHistory(key: string): Promise<{ sessionId: string; sessionFile?: string; entries: import("../session-archive.js").ArchiveEntry[]; incomplete?: boolean } | undefined> {
     const cwd = (await this.opts.executionContext?.(key))?.cwd ?? this.opts.cwd;
     let provider = this.opts.sessionProvider?.();
     if (!provider && await this.opts.legacySessionProvider?.active(key)) provider = this.opts.legacySessionProvider;
@@ -615,7 +650,7 @@ export class PiRuntime implements AgentRuntime {
       const entries = parseSessionEntries(raw);
       if (!entries.length || entries[0].type !== "session" || entries[0].id !== info.id) throw Error("Retained session identity changed");
       const manager = SessionManager.inMemory(cwd, undefined, entries);
-      return { sessionId: info.id, entries: archiveBranch(manager), incomplete: entries.length !== raw.split("\n").filter(line => line.trim()).length };
+      return { sessionId: info.id, sessionFile: info.file, entries: archiveBranch(manager), incomplete: entries.length !== raw.split("\n").filter(line => line.trim()).length };
     } finally { lease?.release(); }
   }
 
