@@ -27,6 +27,8 @@ on:
       - 'test/software*.test.ts'
       - 'test/shutdown-deadline.test.ts'
       - 'plugins.lock.json'
+      - 'test/builtin-validator-artifact.test.ts'
+      - 'test/plugin-materialization.test.ts'
       - 'test/dispatcher*.test.ts'
       - 'test/execution*.test.ts'
 concurrency:
