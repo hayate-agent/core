@@ -313,7 +313,19 @@ saved steps (for example fixing compatibility after a source publication milesto
 `consolidate` may include a typed `followUp` task, role, reason and required evidence.
 The sequential strategy attaches that exact receipt once at the retained assessment
 boundary. It preserves the existing open step and all completed outcomes, and uses
-the same independent readiness admission before moving to the follow-up. New work
+the same independent readiness admission before moving to the follow-up. That
+admission is checked even when the old step's validator asks for more same-step
+corrections: a local `continue` must not indefinitely starve an explicit independent
+parent follow-up. Before switching, the host atomically settles the old worker's
+intent with its preserved assessment and selected order. A rejected readiness
+assessment never permits follow-up effects. Readiness evaluates the first safe
+in-scope action, not whether the candidate has already produced its deliverable;
+a failed test assigned to be repaired is open work, not itself a prohibition on
+starting the repair. Prior effects are reconciled read-only first. Readiness tool
+and completed-result evidence is supplied through the existing budget collector,
+so an oversized evidence block can be explicitly projected without shortening
+authority, parent instructions or candidate identity. Missing projected evidence
+never establishes absence of effects. New work
 never marks the old hold completed or replays its worker. Stable original intent
 IDs, checkpoint size and the six-step plan bound remain enforced. Unsupported,
 out-of-scope or dependent follow-ups receive no execution admission.
