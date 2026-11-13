@@ -372,6 +372,45 @@ for (const admitted of [true, false]) test(`old-step validator continuations ${a
   else { assert.equal(current.status, "ready"); assert.ok(current.assessmentRetryAt, "unadmitted same-step correction retains durable pacing"); }
 });
 
+test("forty parent follow-ups roll completed evidence instead of exhausting six lifetime plan slots", async t => {
+  let env!: Awaited<ReturnType<typeof setup>>;
+  env = await setup(t, { plan: steps(["source zero", "medium"], ["source one", "simple"], ["source two", "high"], ["source three", "simple"], ["source four", "medium"], ["live verification", "simple"]),
+    ready: async () => {
+      const current = state(env.store.list()[0]!.checkpoint);
+      const candidate = current.plan.findIndex((step, index) => index > current.outcomes.length && step.task.startsWith("source amendment"));
+      return candidate < 0 ? '{"state":"blocked"}' : JSON.stringify({ state: "continue", next: String(candidate + 1) });
+    },
+    worker: text => /STEP \d+\/\d+:\nlive verification\n/.test(text) ? "Original live gate missing\nSTEP-STATUS: blocked: external" : "Existing authorized source milestone verified\nSTEP-STATUS: complete",
+    verdict: text => JSON.parse(text.slice(text.lastIndexOf("DATA: ") + 6)).reply.includes("live gate missing") ? '{"state":"blocked"}' : '{"state":"completed"}',
+  });
+  const original = await env.run("Complete source verification and separately gated live verification; later in-scope source corrections remain authorized. Never bypass the live gate or repeat effects.");
+  assert.equal(original.status, "paused"); assert.equal(state(original.checkpoint).outcomes.length, 5);
+  await env.dispatcher.decide("parent", original.id, "initial-context", "Preserve original restrictions, all completed receipts and live hold");
+  await env.dispatcher.waitForExecution(original.id);
+  for (let i = 0; i < 40; i++) {
+    const before = env.store.list()[0]!;
+    await env.dispatcher.consolidateDecisions("parent", original.id, `amendment-${i}`, "Explicitly replace working context only: perform new in-scope source amendment; live work remains OPEN and all original restrictions/unknown effects bind.", before.decisions!.map(d => d.requestId),
+      { task: `source amendment ${i}`, role: "high", reason: "new scoped source correction", evidence: "Actual independent source verification receipt, not live completion" });
+    await env.dispatcher.waitForExecution(original.id);
+    const current = env.store.list()[0]!, checkpoint = state(current.checkpoint);
+    assert.equal(current.id, original.id); assert.equal(current.status, "paused");
+    assert.ok(checkpoint.plan.length <= 6 && current.checkpoint!.length <= 63000);
+    assert.equal(checkpoint.outcomes.length + (checkpoint.planHistory?.completed ?? 0), 6 + i);
+    assert.equal(checkpoint.stepIds![checkpoint.outcomes.length], 5, "original blocked step identity retained across every rotation");
+    assert.equal(checkpoint.assessment!.tools, 0); assert.ok(checkpoint.nextStepId! > 6 + i);
+    assert.equal(env.calls.worker.length, 7 + i, "each new source amendment exactly once; original six workers never replay");
+    const reload = new ExecutionStore(env.file); await reload.load();
+    assert.deepEqual(state(reload.list()[0]!.checkpoint), checkpoint);
+  }
+  const final = state(env.store.list()[0]!.checkpoint); assert.ok(final.planHistory!.segments > 1);
+  let history = final.planHistory, count = 0;
+  while (history) {
+    const archived = await env.store.readPlanHistory("parent", original.id, history.head);
+    count += archived.steps.length; history = archived.previous;
+  }
+  assert.equal(count, final.planHistory!.completed, "all exact independently completed steps remain retrievable");
+});
+
 test("delegated step uses selected dedicated provider, not legacy LLM", async t => {
   const validators = new ValidatorRegistry(); let assessments = 0;
   validators.register({ apiVersion: 1, name: "dedicated", version: 1,
@@ -1332,7 +1371,7 @@ test("restart after durable worker result revalidates before running any worker"
   assert.equal(env.calls.review.length, 1);
 });
 
-test("checkpoint budget is checked before recording a new unsafe effect intent", async t => {
+test("checkpoint pressure archives completed results before admitting the remaining worker", async t => {
   const home = await mkdtemp(path.join(os.tmpdir(), "seq-fixed-budget-"));
   const file = path.join(home, "executions.json");
   const store = new ExecutionStore(file); await store.load();
@@ -1344,14 +1383,24 @@ test("checkpoint budget is checked before recording a new unsafe effect intent",
   const env = await setup(t, {}, { home, file });
   // Shared fixture cleanup stops every owner before removing this home.
   await env.dispatcher.start();
-  for (let i = 0; i < 300 && env.store.list()[0]!.status !== "paused"; i++) await new Promise(r => setTimeout(r, 10));
-  assert.equal(env.store.list()[0]!.status, "paused");
-  assert.equal(env.store.list()[0]!.intent, undefined);
-  assert.equal(env.calls.worker.length, 0);
-  // Store.fail persists the paused state before Dispatcher delivers its pending
-  // status events. Wait for delivery too; observing paused alone is not a barrier.
-  for (let i = 0; i < 100 && !env.events.some(e => /keinen Platz/.test(e.text)); i++) await new Promise(r => setTimeout(r, 10));
-  assert.ok(env.events.some(e => /keinen Platz/.test(e.text)));
+  for (let i = 0; i < 300 && env.store.list()[0]!.status !== "completed"; i++) await new Promise(r => setTimeout(r, 10));
+  const current = env.store.list()[0]!;
+  assert.equal(current.status, "completed"); assert.equal(current.intent, undefined);
+  assert.equal(env.calls.worker.length, 1, "only remaining work, never the completed prefix");
+  assert.equal(state(current.checkpoint).planHistory!.completed, 5);
+  assert.equal((await env.store.readPlanHistory("parent", task.id, state(current.checkpoint).planHistory!.head)).steps.length, 5);
+});
+
+test("uncompactable checkpoint budget is still checked before any unsafe effect intent", async t => {
+  const home = await mkdtemp(path.join(os.tmpdir(), "seq-uncompactable-budget-")), file = path.join(home, "executions.json");
+  const store = new ExecutionStore(file); await store.load();
+  const task = await store.submit("parent", "req", "six unfinished steps", "sequential"), claim = await store.claim(task.id);
+  await store.checkpoint(task.id, claim.token!, JSON.stringify({ v: 1, planner: { requested: {} },
+    plan: Array.from({ length: 6 }, () => ({ task: "x".repeat(3900), role: "simple", reason: "r", evidence: "e" })), outcomes: [], retainedFutureMetadata: "x".repeat(37500) }));
+  const env = await setup(t, {}, { home, file }); await env.dispatcher.start(); await env.dispatcher.waitForExecution(task.id);
+  const current = env.store.list()[0]!;
+  assert.equal(current.status, "paused"); assert.equal(current.intent, undefined); assert.equal(env.calls.worker.length, 0);
+  assert.equal(state(current.checkpoint).planHistory, undefined, "unfinished or opaque state is not silently archived/discarded");
 });
 
 test("retained assessment bounds reports and tool entries to the reloadable checkpoint schema", async t => {

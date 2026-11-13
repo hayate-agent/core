@@ -6,7 +6,8 @@ import { PriorityScheduler, type TaskPriority } from "./task-priority.js";
 
 export interface DispatchContext {
   readonly signal: AbortSignal;
-  checkpoint(value: string, notice?: { key: string; text: string }): Promise<void>;
+  checkpoint(value: string, notice?: { key: string; text: string }, decisionRevision?: number): Promise<void>;
+  archiveCompletedPlan?(segment: import("./execution.js").PlanHistorySegment, decisionRevision: number): Promise<import("./execution.js").PlanHistoryRef>;
   /** Release the slot until a persisted assessment retry is due. No worker replay. */
   deferAssessment?(nextAt: number): Promise<never>;
   workerSession?(key: string): Promise<void>;
@@ -277,8 +278,8 @@ export class Dispatcher {
           await this.store.yieldStep(task.id, token);
           throw new ExecutionClaimConflict("Settled step yielded to queued work");
         },
-        checkpoint: async (value, notice) => {
-          check(); await this.store.checkpoint(task.id, token, value, notice);
+        checkpoint: async (value, notice, revision) => {
+          check(); await this.store.checkpoint(task.id, token, value, notice, revision);
           if (this.admissionFenced()) {
             const current = this.store.list().find(item => item.id === task.id)!;
             if (!current.intent) await this.store.yieldStep(task.id, token);
@@ -288,6 +289,7 @@ export class Dispatcher {
             throw new ExecutionClaimConflict("Maintenance checkpoint reached");
           }
         },
+        archiveCompletedPlan: (segment, revision) => { check(); return this.store.archiveCompletedPlan(task.id, token, segment, revision); },
         workerSession: key => { check(); return this.store.workerSession(task.id, token, key); },
         decisions: async () => {
           check();
