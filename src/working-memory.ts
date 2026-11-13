@@ -29,20 +29,23 @@ export class WorkingMemory implements MemoryOrchestrator {
  }
  async capture(turn:MemoryTurn):Promise<void>{
   if(!this.policy().enabled||!this.policy().autoCapture)return;
-  if (!turn.reply.trim() || turn.reply.trim()==='NO_REPLY' || (!turn.tools && turn.outcome==='failed' && /^(?:⚠️\s*)?(?:request timed out|model request failed|error:)/i.test(turn.reply.trim()))) return;
+  if (!turn.reply.trim() || turn.reply.trim()==='NO_REPLY' || (!turn.tools && turn.outcome==='failed' && /^(?:⚠️\s*)?(?:request timed out|model request failed)[.!]?\s*$/i.test(turn.reply.trim()))) return;
   // Empty/error transport output is not new knowledge. A normal tool-free
   // answer can contain a decision/preference and must not be skipped.
-  if(turn.reply.trim()&&turn.reply.trim()!=='NO_REPLY')await this.serial(turn.sessionKey,async()=>{
-   const record=await this.read(turn.sessionKey),id=hash(JSON.stringify([turn.id,turn.text,turn.reply,turn.outcome]));
-   if(record.entries.some(e=>e.id===id))return;
+  const recordedAt=await this.serial(turn.sessionKey,async()=>{
+   const record=await this.read(turn.sessionKey),id=hash(JSON.stringify([turn.text,turn.reply,turn.outcome]));
+   const previous=record.entries.find(e=>e.id===id);if(previous)return previous.at;
    const excerpt=turn.reply.length>1000?turn.reply.slice(0,480)+'\n[omitted middle]\n'+turn.reply.slice(-480):turn.reply;
    record.entries.push({id,at:turn.recordedAt??Date.now(),request:turn.text.slice(0,480),reported:excerpt,outcome:turn.outcome,tools:turn.tools??0});record.entries=record.entries.slice(-8);
+   while(record.entries.length>1&&Buffer.byteLength(JSON.stringify(record))>24576)record.entries.shift();
    await mkdir(path.dirname(this.file(turn.sessionKey)),{recursive:true,mode:0o700});await syncDir(this.home);await writeFileDurable(this.file(turn.sessionKey),JSON.stringify(record));
+   return record.entries.at(-1)!.at;
   });
-  await this.backend.capture(turn);
+  await this.backend.capture({...turn,recordedAt});
  }
  async reset(key:string):Promise<void>{await this.serial(key,async()=>{try{await unlink(this.file(key));await syncDir(path.dirname(this.file(key)));}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}});}
- async recall(key:string,text:string):Promise<string>{
+ async recallWorking(key:string,text:string):Promise<string>{return this.recall(key,text,false);}
+ async recall(key:string,text:string,useProvider=true):Promise<string>{
   if(!this.policy().enabled||!this.policy().autoRecall)return '';
   let handover='';
   try{await this.queues.get(key);const record=await this.read(key),query=terms(text),scored=record.entries.map((entry,index)=>({entry,index,score:[...terms(entry.request+' '+entry.reported)].filter(term=>query.has(term)).length}));
@@ -57,7 +60,7 @@ export class WorkingMemory implements MemoryOrchestrator {
   // Optional provider recall cannot hold a local planning turn for a 10-30s
   // embedding/network timeout. At most two abandoned reads can remain in flight.
   let extra='';
-  if(this.recalls<2){this.recalls++;let timer:ReturnType<typeof setTimeout>|undefined;
+  if(useProvider&&this.recalls<2){this.recalls++;let timer:ReturnType<typeof setTimeout>|undefined;
    const work=Promise.resolve().then(()=>this.backend.recall(key,text)).finally(()=>{this.recalls--;});
    try{extra=await Promise.race([work,new Promise<string>(resolve=>{timer=setTimeout(()=>resolve(''),500);})]);}catch{this.log('long-term recall unavailable');}finally{clearTimeout(timer);}
   }

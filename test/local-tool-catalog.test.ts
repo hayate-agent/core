@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, readFile } from 'node:fs/promises';
+import { mkdtemp, rm, readFile, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { PiRuntime } from '../src/runtime/pi.js';
@@ -21,6 +21,10 @@ test('real SDK local tool schemas are deferred/discoverable, restrictions preser
   const total=JSON.stringify(all.map((tool:any)=>tool.parameters)).length;assert.ok(before<total/4);
   await session.getToolDefinition('tool_search').execute('lookup',{query:'plugin_large_7',limit:1});
   assert.ok(session.getActiveToolNames().some((name:string)=>name.startsWith('plugin_large_')));
+  // A completed effect must retain its original result even if artifact mkdir fails.
+  await writeFile(path.join(home,'sessions','tool-results'),'blocked directory');
+  const failedRetention=await session.extensionRunner.emitToolResult({type:'tool_result',toolCallId:'completed-effect',toolName:'write',input:{path:'fixture'},content:[{type:'text',text:'completed write '+ 'e'.repeat(5000)}],isError:false});
+  assert.equal(failedRetention,undefined);await rm(path.join(home,'sessions','tool-results'));
   const original='tool data '+ '🙂 evidence '.repeat(2000);
   const projected=await session.extensionRunner.emitToolResult({type:'tool_result',toolCallId:'large-read',toolName:'read',input:{path:'fixture'},content:[{type:'text',text:original}],isError:false,structuredContent:{receipt:'unchanged'}});
   assert.ok(projected.content[0].text.length<4000);assert.deepEqual(projected.structuredContent,{receipt:'unchanged'});

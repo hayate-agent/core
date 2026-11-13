@@ -4,7 +4,7 @@ import { mkdtemp, rm, readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { WorkingMemory } from '../src/working-memory.js';
-import { compactSkillCatalog, localContextBudget, localModel } from '../src/local-context.js';
+import { compactSkillCatalog, materializeSkillCatalog, localContextBudget, localModel } from '../src/local-context.js';
 const policy=()=>({enabled:true,autoCapture:true,autoRecall:true});
 const backend={recall:async()=>'',capture:async()=>{}};
 async function home(t:any){const h=await mkdtemp(path.join(os.tmpdir(),'working-handover-'));t.after(()=>rm(h,{recursive:true,force:true}));return h;}
@@ -35,6 +35,14 @@ test('small explicit local budgets remain operator adjustable; frontier and phys
  assert.equal(localContextBudget(262144,false,true,{localMainContextTokens:32768}),32768);assert.equal(localContextBudget(4096,false,true),4096);
  assert.equal(localContextBudget(262144,false,false),262144);
 });
+test('content-addressed catalogs stay distinct and late entries are readable with actual SDK offset/limit',async t=>{
+ const h=await home(t),skills=Array.from({length:100},(_,i)=>({name:'skill'+i,description:'large description'.repeat(1000),filePath:'/workspace/skills/'+i+'/SKILL.md',baseDir:'/workspace/skills/'+i}));
+ const [first,second]=await Promise.all([materializeSkillCatalog(h,skills),materializeSkillCatalog(h,[{...skills[0]!,name:'other-runtime'}])]);assert.notEqual(first,second);
+ const offset=(await readFile(first,'utf8')).split('\n').findIndex(line=>line.includes('"name": "skill99"'))+1;
+ const {createReadTool}=await import('@earendil-works/pi-coding-agent');const read=createReadTool(h);const result=await read.execute('catalog-read',{path:first,offset,limit:4});
+ assert.match(JSON.stringify(result),/skill99/);assert.match(JSON.stringify(result),/99\/SKILL.md/);assert.ok(!String(await readFile(first)).includes('other-runtime'));
+});
+
 test('default skill context is a small on-demand index, not every full description and duplicated path',()=>{
  const skills=Array.from({length:100},(_,i)=>({name:'skill'+i,description:'description'.repeat(1000),filePath:'/workspace/skills/'+i+'/SKILL.md',baseDir:'/workspace/skills/'+i}));
  const context=compactSkillCatalog(skills,'/private/skill-catalog.json');assert.ok(context.length<1600);assert.match(context,/100/);assert.match(context,/bounded offset\/limit/);assert.ok(!context.includes('descriptiondescription'));

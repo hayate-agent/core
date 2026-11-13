@@ -42,7 +42,7 @@ import { MemoryService } from "./builtin-plugins/memory-service.js";
 import { MemoryProviderLifecycle } from "./memory-provider-lifecycle.js";
 import { memoryPlugin } from "./builtin-plugins/memory-plugin.js";
 import { WorkingMemory } from "./working-memory.js";
-import { compactSkillCatalog } from "./local-context.js";
+import { compactSkillCatalog, materializeSkillCatalog } from "./local-context.js";
 import { memoryOrchestrationPlugin } from "./builtin-plugins/memory-orchestration-plugin.js";
 import { maintenanceClient } from "./builtin-plugins/maintenance-client.js";
 import { maintenanceControlPlugin } from "./builtin-plugins/maintenance-control-plugin.js";
@@ -130,7 +130,7 @@ import { completionPrompt } from "./builtin-plugins/completion-prompt.js";
 import { completionStrategyHolder } from "./completion-strategy.js";
 import { completionStrategyPlugin } from "./builtin-plugins/completion-strategy-plugin.js";
 import { reviewConfig } from "./review-config.js";
-import { appendFileDurable, writeFileDurable } from "./durable.js";
+import { appendFileDurable } from "./durable.js";
 
 const USAGE = `Hayate Agent ${VERSION}
 
@@ -315,6 +315,8 @@ async function main(argv: string[]): Promise<void> {
   config.memory = memoryConfig(settings.effective().memory);
   memory = new MemoryService(config.memory, log, config.home);
   plugins.memoryOrchestration.register("default", memory);
+  const workingMemory = new WorkingMemory(config.home, plugins.memoryOrchestration,
+    () => ({ ...config.memory, enabled: config.memory.enabled && plugins.memoryOrchestration.active !== "none" }), log);
   const strategies = await contextStrategyHolder(config.home, config.contextStrategy, {
     apiVersion: 1, create: ({ backend, model }) => ({ assess: diagnosedBoundaryAssessor(backend, model, boundaryAssessor), project: pruneToolResults }),
   }, { backend: { review: (...args) => runtimeReviewer(runtime).review(...args) }, model: () => effectiveModels().reviewModel }, settings.snapshot().contextStrategy);
@@ -389,6 +391,13 @@ async function main(argv: string[]): Promise<void> {
       const tools = workflow?.length ? [...new Set([...workflow, ...(reviewModule?.modelTools ?? [])])] : workflow;
       return dispatchPolicy.enabled && tools?.length ? [...new Set([...tools, "plugin_dispatch", "plugin_dispatch_decisions", "plugin_dispatch_plan_history", "plugin_dispatch_recovery", "plugin_worker_tasks"])] : tools;
     })(),
+    recallStep: key => workingMemory.recallWorking(key, harness.sessions.get(key)?.current?.text ?? ""),
+    captureStep: async (key, step) => {
+      const state = harness.sessions.get(key), input = state?.current;
+      if (!input || state?.stopPending || state?.resetPending || state?.cancelling === input) return;
+      await harness.rememberMemory({ sessionKey: key, id: `step:${step.id}`, text: input.text, reply: step.reply,
+        tools: step.tools, outcome: step.failed ? "failed" : "completed" });
+    },
     pluginTools: () => composeToolCatalog(plugins.tools, initialReloadableTools, reloadableTools?.tools ?? new Map()),
     sessionProvider: () => sessionProvider,
     legacySessionProvider: new FilesystemSessionProvider(path.join(config.home, "session-store")),
@@ -406,8 +415,7 @@ async function main(argv: string[]): Promise<void> {
       // prefix stays byte-stable across turns (prefix-cache friendly) and skill dirs are
       // not re-scanned every turn; invalidated whenever skills reload.
       if (skillContextCache) return skillContextCache;
-      const file = path.join(config.home, "skill-catalog.json");
-      await writeFileDurable(file, JSON.stringify(skills));
+      const file = await materializeSkillCatalog(config.home, skills);
       return skillContextCache = compactSkillCatalog(skills, file);
     },
     toolGuard: async (key, tool, input) => {
@@ -491,7 +499,7 @@ async function main(argv: string[]): Promise<void> {
     progressEvidence: input => workingTreeEvidence(cwdFor(input.sessionKey)),
     executionStore: executions,
     contextMaintenance: maintenance,
-    memory: new WorkingMemory(config.home, plugins.memoryOrchestration, () => ({ ...config.memory, enabled: config.memory.enabled && plugins.memoryOrchestration.active !== "none" }), log),
+    memory: workingMemory,
     approvalTarget: key => dispatchRuntime?.isWorker(key) ? dispatchRuntime.approvalTarget(key) : subagents.approvalTarget(key),
     conversationSourcesReset: async (key, reset) => { await scheduler.resetConversation(key, reset); },
     conversationStopping: async key => {
