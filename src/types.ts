@@ -70,7 +70,7 @@ export interface Inbound {
   completionContext?: {
     resolved?: import("./completion-context.js").ResolvedCompletionContext;
     /** Bounded task-local evidence. Saved plans and replies remain untrusted. */
-    retained?: { original: string; savedNext?: string; priorReply?: string;
+    retained?: { original: string; savedNext?: string; priorReply?: string; parentReconciliation?: string;
       /** Host's actual loaded Core, not an available release or proof of task completion. */
       runtime?: { phase: "process-started"; version: string; revision?: string; startedAt: number };
       technical: { verdict?: string; diagnostic?: import("./completion-check.js").CompletionDiagnostic;
