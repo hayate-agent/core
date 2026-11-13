@@ -19,6 +19,6 @@ test("failed channel startup never emits a ready/restarted notice", { timeout: 2
     const code = await Promise.race([new Promise<number | null>((resolve, reject) => { child.once("error", reject); child.once("exit", resolve); }),
       new Promise<never>((_, reject) => { timer = setTimeout(() => { child.kill("SIGTERM"); reject(Error("failed startup did not exit")); }, 20000); })]);
     assert.equal(code, 1); assert.match(output, /fixture gateway unavailable/);
-    assert.doesNotMatch(output, /Neustart abgeschlossen|Gestartet und bereit|Softwarestand:/);
+    assert.doesNotMatch(output, /Restart complete|Started and ready|Software versions:|Neustart abgeschlossen|Gestartet und bereit|Softwarestand:/);
   } finally { clearTimeout(timer); await rm(home, { recursive: true, force: true }); }
 });

@@ -1,0 +1,16 @@
+{
+  "lifecycle.ready": "✅ {agent}: Started and ready.",
+  "lifecycle.restarted": "✅ {agent}: Restart complete — ready again.",
+  "software.heading": "Software versions:",
+  "software.unknownVersion": "Version not reported",
+  "software.noData": "Version data unavailable",
+  "software.bundle": "Core bundle",
+  "software.dashboard": "Web dashboard (package installed; runtime not confirmed)",
+  "language.status": "Language settings: {settings}",
+  "language.changed": "Language settings saved. New turns and future system messages use the updated preferences; active turns remain unchanged.",
+  "language.help": "Usage: /language [default|system|background <BCP-47 tag|reset>] | /language conversation <tag|reset> | /language mcp <server> <tag|reset> | /language job <session-key> <tag|reset>",
+  "language.unavailable": "Language settings are unavailable.",
+  "language.invalid": "Invalid language setting. Use a BCP-47 tag such as en, de, es, ru or en-GB.",
+  "command.adminOnly": "⛔ admin only",
+  "lifecycle.restarting": "♻️ Restarting: new input is fenced; current work is checkpointed for recovery (default deadline 60s)."
+}

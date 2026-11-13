@@ -1,0 +1,16 @@
+{
+  "lifecycle.ready": "✅ {agent}: Агент запущен и готов к работе.",
+  "lifecycle.restarted": "✅ {agent}: Перезапуск завершён — агент снова готов к работе.",
+  "software.heading": "Версии программного обеспечения:",
+  "software.unknownVersion": "Версия не указана",
+  "software.noData": "Данные о версии недоступны",
+  "software.bundle": "В составе Core",
+  "software.dashboard": "Веб-панель (пакет установлен; работа не подтверждена)",
+  "language.status": "Языковые настройки: {settings}",
+  "language.changed": "Языковые настройки сохранены. Они применяются к новым обращениям и будущим системным сообщениям; текущие обращения не изменяются.",
+  "language.help": "Использование: /language [default|system|background <код BCP-47|reset>] | /language conversation <код|reset> | /language mcp <сервер> <код|reset> | /language job <ключ сессии> <код|reset>",
+  "language.unavailable": "Языковые настройки недоступны.",
+  "language.invalid": "Недопустимый язык. Используйте код BCP-47, например en, de, es, ru или en-GB.",
+  "command.adminOnly": "⛔ Только для администраторов",
+  "lifecycle.restarting": "♻️ Перезапуск: новые запросы временно удерживаются, работа сохраняется для восстановления (срок по умолчанию — 60 с)."
+}

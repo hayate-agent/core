@@ -1,0 +1,16 @@
+{
+  "lifecycle.ready": "✅ {agent}: Gestartet und bereit.",
+  "lifecycle.restarted": "✅ {agent}: Neustart abgeschlossen – wieder bereit.",
+  "software.heading": "Softwarestand:",
+  "software.unknownVersion": "Version nicht ausgewiesen",
+  "software.noData": "Versionsdaten nicht vorhanden",
+  "software.bundle": "Core-Bundle",
+  "software.dashboard": "Web-Dashboard (Paket installiert; Laufzeit nicht bestätigt)",
+  "language.status": "Spracheinstellungen: {settings}",
+  "language.changed": "Spracheinstellungen gespeichert. Neue Turns und künftige Systemmeldungen verwenden die neuen Vorgaben; laufende Turns bleiben unverändert.",
+  "language.help": "Verwendung: /language [default|system|background <BCP-47-Code|reset>] | /language conversation <Code|reset> | /language mcp <Server> <Code|reset> | /language job <Sitzungsschlüssel> <Code|reset>",
+  "language.unavailable": "Spracheinstellungen sind nicht verfügbar.",
+  "language.invalid": "Ungültige Spracheinstellung. Bitte einen BCP-47-Code wie en, de, es, ru oder en-GB verwenden.",
+  "command.adminOnly": "⛔ Nur für Administratoren",
+  "lifecycle.restarting": "♻️ Neustart: Neue Eingaben werden zurückgehalten; laufende Arbeit wird zur Wiederaufnahme gesichert (Standardfrist 60 s)."
+}

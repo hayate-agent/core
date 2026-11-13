@@ -1,0 +1,16 @@
+{
+  "lifecycle.ready": "✅ {agent}: Iniciado y listo.",
+  "lifecycle.restarted": "✅ {agent}: Reinicio completado; listo de nuevo.",
+  "software.heading": "Versiones del software:",
+  "software.unknownVersion": "Versión no indicada",
+  "software.noData": "Datos de versión no disponibles",
+  "software.bundle": "Paquete Core",
+  "software.dashboard": "Panel web (paquete instalado; ejecución no confirmada)",
+  "language.status": "Configuración de idioma: {settings}",
+  "language.changed": "Configuración de idioma guardada. Los nuevos turnos y futuros mensajes del sistema usarán las nuevas preferencias; los turnos activos no cambian.",
+  "language.help": "Uso: /language [default|system|background <código BCP-47|reset>] | /language conversation <código|reset> | /language mcp <servidor> <código|reset> | /language job <clave de sesión> <código|reset>",
+  "language.unavailable": "La configuración de idioma no está disponible.",
+  "language.invalid": "Idioma no válido. Use un código BCP-47 como en, de, es, ru o en-GB.",
+  "command.adminOnly": "⛔ Solo administradores",
+  "lifecycle.restarting": "♻️ Reiniciando: se retienen las nuevas entradas y se guarda el trabajo para recuperarlo (plazo predeterminado: 60 s)."
+}
