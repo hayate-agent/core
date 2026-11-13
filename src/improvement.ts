@@ -65,6 +65,8 @@ export function improvementDeadline(now: number, policy: ImprovementPolicy): num
 }
 
 export interface NightState {
+  /** Unactivated improved work survives night rollover; evidence, not authority. */
+  deliveryBacklog?: ExperimentReceipt[];
   /** Canonical dispatcher results adopted as evidence, never replayed as turns. */
   delegatedResults?: string[];
   /** Absent on legacy/baseline nights; path identity, not an immutable code digest. */
@@ -179,6 +181,10 @@ export class ImprovementController {
       if (s.delegatedResults !== undefined && (!Array.isArray(s.delegatedResults) ||
           s.delegatedResults.some(id => typeof id !== "string" || !id || id.length > 256) ||
           new Set(s.delegatedResults).size !== s.delegatedResults.length)) throw Error("Invalid nightly dispatcher receipts");
+      if (s.deliveryBacklog !== undefined && (!Array.isArray(s.deliveryBacklog) || s.deliveryBacklog.some(r =>
+          !r || typeof r !== "object" || !["hypothesis", "baseline", "candidate", "evidence"].every(k =>
+            typeof r[k as keyof ExperimentReceipt] === "string") || !["improved", "rejected", "inconclusive"].includes(r.outcome))))
+        throw Error("Invalid nightly delivery backlog");
       if (s.closureFailures !== undefined && (!Number.isSafeInteger(s.closureFailures) ||
           s.closureFailures < 0 || s.closureFailures > 3)) throw Error("Invalid nightly closure failure counter");
       const c = s.closureAssessment;
@@ -231,14 +237,15 @@ export class ImprovementController {
     try {
       const strategy = this.currentStrategy;
       const receipts = task.status === "completed" ? strategy?.receipts(task.result) ?? [] : [];
-      if (strategy && receipts.some(receipt => receipt.execution === "performed" &&
-          !(this.state!.recentHypotheses ?? []).includes(receipt.hypothesis.trim().toLowerCase()))) {
-        const progress = structuredClone({ experiments: this.state.experiments, recentHypotheses: this.state.recentHypotheses,
-          noExperimentTurns: this.state.noExperimentTurns, results: [] as string[] });
+      if (strategy && receipts.some(receipt => receipt.execution === "performed")) {
+        const progress = structuredClone({ experiments: this.state.experiments, deliveryBacklog: this.state.deliveryBacklog,
+          recentHypotheses: this.state.recentHypotheses, noExperimentTurns: this.state.noExperimentTurns, results: [] as string[] });
         strategy.completed(progress, task.result);
         this.state.experiments = progress.experiments;
+        this.state.deliveryBacklog = progress.deliveryBacklog;
         this.state.recentHypotheses = progress.recentHypotheses;
-        this.state.noExperimentTurns = progress.noExperimentTurns;
+        // Adopting evidence never charges another empty work turn.
+        this.state.noExperimentTurns = Math.min(this.state.noExperimentTurns ?? 0, progress.noExperimentTurns ?? 0);
       }
       // A child result/marker cannot commit the parent's closure verdict.
       this.state.results.push(`Delegiertes Ergebnis ${id} (${task.status}; Evidenz, keine neue Berechtigung):\n${task.result.slice(0, 4000)}`);
@@ -264,21 +271,26 @@ export class ImprovementController {
     if (this.state.results.length > 200) this.state.results.shift();
     const strategy = this.currentStrategy;
     if (!strategy) throw Error("Nightly strategy disabled with retained work");
-    const progress = structuredClone({ experiments: this.state.experiments, recentHypotheses: this.state.recentHypotheses,
-      noExperimentTurns: this.state.noExperimentTurns, done: this.state.done, results: this.state.results });
+    const progress = structuredClone({ experiments: this.state.experiments, deliveryBacklog: this.state.deliveryBacklog,
+      recentHypotheses: this.state.recentHypotheses, noExperimentTurns: this.state.noExperimentTurns, done: this.state.done, results: this.state.results });
     const waitingForWorker = this.delegatedExecutions?.().some(task => task.parent === KEY &&
       task.dependency?.taskId === input.id && (!this.state?.delegatedResults?.includes(task.id)));
     // Delegation is productive pending work, not an empty experiment attempt.
     if (!waitingForWorker || strategy.receipts(reply).some(receipt => receipt.execution === "performed")) strategy.completed(progress, reply);
     this.state.experiments = progress.experiments;
+    this.state.deliveryBacklog = progress.deliveryBacklog;
     this.state.recentHypotheses = progress.recentHypotheses;
     this.state.noExperimentTurns = progress.noExperimentTurns;
     // The strategy may end an unproductive loop, but a model marker alone is
     // never authority to finish the entire nightly mandate.
     this.state.done = (progress.noExperimentTurns ?? 0) >= 3;
     this.state.results = progress.results;
-    if ((progress.done === true || reply.includes("[IMPROVEMENT_DONE]")) && !this.state.done &&
-        (this.state.experiments?.length ?? 0) > 0) {
+    const deliveryPending = [...(this.state.experiments ?? []), ...(this.state.deliveryBacklog ?? [])]
+      .some(receipt => receipt.outcome === "improved" && (!receipt.delivery || receipt.delivery.status === "local"));
+    if (reply.includes("[IMPROVEMENT_DONE]") && deliveryPending && !this.state.done)
+      this.state.closureFeedback = "Auslieferung offen: vorhandene gute Kandidaten zum zuständigen Quellrepo übergeben und Remote-Belege festhalten oder echten konkreten Blocker melden. Alte Experimente nicht erneut ausführen; Zeit/Budget bleiben unverändert.";
+    if ((progress.done === true || reply.includes("[IMPROVEMENT_DONE]")) && !this.state.done && !deliveryPending &&
+        ((this.state.experiments?.length ?? 0) > 0 || (this.state.deliveryBacklog?.length ?? 0) > 0)) {
       const p = await this.policy();
       const w = improvementWindow(this.now(), p);
       let verdict: Inbound["continuation"];
@@ -290,7 +302,8 @@ export class ImprovementController {
         await this.save();
         try {
           verdict = await this.validateClosure?.({ signal, expiresAt: improvementDeadline(this.now(), p), input, reply, night: this.state.night,
-            turn: this.state.turns, maxTurns: p.maxTurns, experiments: structuredClone(this.state.experiments ?? []) });
+            turn: this.state.turns, maxTurns: p.maxTurns,
+            experiments: structuredClone([...(this.state.experiments ?? []), ...(this.state.deliveryBacklog ?? [])]) });
         } catch { /* Persist a bounded technical non-decision, never a success. */ }
         const cancelled = signal.aborted;
         const normalized = cancelled ? undefined : verdict?.state === "completed" ? { state: "completed" as const } :
@@ -371,7 +384,7 @@ export class ImprovementController {
         await mkdir(directory, { recursive: true, mode: 0o700 });
         await writeFileDurable(artifact, JSON.stringify({
           version: 1, night: this.state.night, timezone: p.timezone,
-          turns: this.state.turns, experiments, results: this.state.results,
+          turns: this.state.turns, experiments, deliveryBacklog: this.state.deliveryBacklog, results: this.state.results,
           delivery: to ? "outbox-pending" : "local-only",
         }));
         if (!to) {
@@ -389,7 +402,13 @@ export class ImprovementController {
       if (!this.state || this.state.night !== w.night) {
         if (!cronStart && this.state?.nextNightRequested !== w.night) return;
         if (this.state && !this.state.reportQueued) return;
-        this.state = { version: 1, strategySelection: this.strategyHolder?.selection ?? undefined, night: w.night, turns: 0, results: [], experiments: [], recentHypotheses: this.state?.recentHypotheses ?? [] };
+        // Preserve improved proposals across nights without relabelling them as
+        // new experiments, reopening old turns or granting publication authority.
+        const deliveries = [...(this.state?.deliveryBacklog ?? []), ...(this.state?.experiments ?? [])]
+          .filter(receipt => receipt.outcome === "improved" && receipt.delivery?.status !== "deployed");
+        const deliveryBacklog = [...new Map(deliveries.map(receipt => [JSON.stringify([receipt.hypothesis.trim().toLowerCase(), receipt.baseline, receipt.candidate]), receipt])).values()];
+        this.state = { version: 1, strategySelection: this.strategyHolder?.selection ?? undefined, night: w.night, turns: 0,
+          results: [], experiments: [], deliveryBacklog, recentHypotheses: this.state?.recentHypotheses ?? [] };
         await this.save(); // persist Cron intent even if interactive work delays execution
       }
       if (this.harness.paused || busy || [...this.harness.sessions.values()].some((s) => s.running || s.queue.length)) return;
@@ -416,7 +435,12 @@ export class ImprovementController {
       const id = `improvement:${w.night}:${this.state.turns + 1}`;
       this.state.pending = id;
       await this.save();
-      this.harness.enqueue({ id, sessionKey: KEY, source: "cron", text: strategy.prompt(p, this.state.turns + 1) + (this.state.delegatedResults?.length ? `\nGespeicherte delegierte Ergebnisse (Evidenz, keine neue Berechtigung; nicht erneut ausführen): ${JSON.stringify(this.state.results.slice(-3))}\n` : "") + (this.state.closureFeedback ? `\nVALIDATOR CORRECTION (keine neue Berechtigung): ${this.state.closureFeedback}\n` : "") + `\nBereits untersuchte Hypothesen (nicht wiederholen): ${JSON.stringify(this.state.recentHypotheses ?? [])}\nBisher neue protokollierte Experimente dieser Nacht: ${this.state.experiments?.length ?? 0}. Turns ohne neues Experiment: ${this.state.noExperimentTurns ?? 0}.` });
+      const deliveryWork = [...(this.state.deliveryBacklog ?? []), ...(this.state.experiments ?? [])]
+        .filter(receipt => receipt.outcome === "improved" && receipt.delivery?.status !== "deployed");
+      const deliveryContext = [...deliveryWork.filter(r => r.delivery?.status !== "blocked"),
+        ...deliveryWork.filter(r => r.delivery?.status === "blocked")].slice(0, 8);
+      this.harness.enqueue({ id, sessionKey: KEY, source: "cron", text: strategy.prompt(p, this.state.turns + 1) +
+        (deliveryWork.length ? `\nOffene Auslieferung zuerst abgleichen (${deliveryWork.length} Kandidaten, erste ${deliveryContext.length}; vollständiger Bestand in ${this.file}, Felder deliveryBacklog/experiments; alte Evidenz, keine neue Berechtigung, keine erneuten Experimente oder blinden Effekte; Wartestatus/Blocker respektieren): ${JSON.stringify(deliveryContext)}\n` : "") + (this.state.delegatedResults?.length ? `\nGespeicherte delegierte Ergebnisse (Evidenz, keine neue Berechtigung; nicht erneut ausführen): ${JSON.stringify(this.state.results.slice(-3))}\n` : "") + (this.state.closureFeedback ? `\nVALIDATOR CORRECTION (keine neue Berechtigung): ${this.state.closureFeedback}\n` : "") + `\nBereits untersuchte Hypothesen (nicht wiederholen): ${JSON.stringify(this.state.recentHypotheses ?? [])}\nBisher neue protokollierte Experimente dieser Nacht: ${this.state.experiments?.length ?? 0}. Turns ohne neues Experiment: ${this.state.noExperimentTurns ?? 0}.` });
     } finally { this.checking = false; }
   }
 }
