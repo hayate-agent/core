@@ -1467,6 +1467,7 @@ export class Harness {
   }
   private captureLanguage(input: Inbound): void {
     if (input.language !== undefined) input.language = languageTag(input.language);
+    else if (input.completionAnchor?.language !== undefined) input.language = languageTag(input.completionAnchor.language);
     else if (this.opts.language && this.turnLanguageContext(input) !== "conversation" && ["cron", "loop", "heartbeat", "goal"].includes(input.source))
       input.language = resolveLanguage(this.opts.language(), { kind: "background", job: backgroundLanguageKey(input.source, input.sessionKey) });
   }

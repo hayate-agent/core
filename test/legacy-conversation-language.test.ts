@@ -22,7 +22,7 @@ test("explicit background provenance wins even when a job delivers to a conversa
   h.onStateChange = async () => {}; h.addChannel(new MemoryChannel()); await h.start();
   try {
     const text = "Check configured status";
-    await h.accept({ source: "cron", sessionKey: "mem:room1", language: "es", taskId: "job", text,
+    await h.accept({ source: "cron", sessionKey: "mem:room1", taskId: "job", text,
       completionAnchor: { id: "job", task: text, receivedAt: 1, language: "es", languageContext: "background" } });
     await h.drained(); assert.match(runtime.sessions.get("mem:room1")!.options[0].instructions!, /output in es/);
   } finally { await h.stop(0); }
