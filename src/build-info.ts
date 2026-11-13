@@ -1,10 +1,20 @@
 import { readFileSync } from "node:fs";
 
 /** Build metadata is baked into the image, never read from the agent workspace. */
-export function readBuildInfo(): { version: string; revision?: string } {
+export function readBuildInfo(): { version: string; revision?: string; variant?: { profile: string; binding: string; repository: string; revision: string } } {
   try {
     const data = JSON.parse(readFileSync(new URL("../build-info.json", import.meta.url), "utf8"));
     if (!/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z][0-9A-Za-z.+-]{0,100})?$/.test(data.version) || !/^[a-f0-9]{40}$/.test(data.revision)) throw new Error("Invalid build metadata");
+    if (data.variant !== undefined) {
+      const v = data.variant;
+      if (!v || !/^[a-z][a-z0-9-]{0,62}$/.test(v.profile) || !/^[a-f0-9]{64}$/.test(v.binding) ||
+          !/^[a-f0-9]{40}$/.test(v.revision) || typeof v.repository !== "string") throw Error("Invalid variant metadata");
+      const repository = new URL(v.repository);
+      if (repository.password || repository.search || repository.hash || repository.protocol !== "ssh:" && repository.username)
+        throw Error("Invalid variant repository metadata");
+      return { version: `${data.version.split("+")[0]}+agent.${v.profile.slice(0, 32)}.${v.binding.slice(0, 12)}`,
+        revision: data.revision, variant: { profile: v.profile, binding: v.binding, repository: v.repository, revision: v.revision } };
+    }
     {
       try {
         const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));

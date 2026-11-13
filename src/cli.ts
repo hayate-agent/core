@@ -567,7 +567,8 @@ async function main(argv: string[]): Promise<void> {
     const task = "Prüfe den Abschluss der GESAMTEN autorisierten Nachtarbeit, nicht nur eines Experiments. " +
       "Ein verworfener Versuch oder fehlende Skill-Ideen belegen keine Erschöpfung. Berücksichtige Core, Plugins, " +
       "Integrationen, bestehende und fehlende Features sowie erlaubte öffentliche Ansätze anderer Agenten. " +
-      "Prüfe auch die Auslieferung: Core/Plugins ins zuständige tatsächliche Upstream-Quellrepo, Skills/Instanzänderungen ins zuständige Instanz-/Konfigurationsrepo. " +
+      "Prüfe auch die Auslieferung: Skills/Instanzänderungen ins zuständige Agenten-/Konfigurationsrepo; agentenspezifische Produktanpassungen dürfen als versionierte private Variante im eigenen oder zugeordneten Nicht-Upstream-Repo bleiben. " +
+      "Upstream-Beiträge sind eine gezielte Option, keine Pflicht für jede Core/WebUI/Plugins-Änderung. Source-Änderungen brauchen vor Übernahme/Aktivierung einen belegten unabhängigen externen Review des verwendeten Stands; Selbstreview, CI oder bloß anderer Merger reichen nicht. Forgejo0-Approvals bleibt unverändert. " +
       "Lokale Tests sind keine Remote-Übergabe; Push ist kein Merge und Merge kein Deployment. Prüfe konkrete Repo-/Commit-/PR-/Aktivierungsbelege gegen das Arbeitsergebnis, " +
       "nicht nur status-Behauptungen. Offene Reviews/Releases und echte Zugangsblocker getrennt ausweisen; keinen erfolgreichen Gesamtrollout behaupten. " +
       "Bestätige completed nur bei fachlich begründetem Ende und erledigter autorisierter Übergabe oder konkret belegter externer Blockade; sonst continue mit einem konkreten sicheren nächsten Schritt. " +

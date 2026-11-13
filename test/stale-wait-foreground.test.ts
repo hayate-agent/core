@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { createHash } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -84,7 +85,7 @@ async function priorityFixture(t: { after(fn: () => Promise<void>): void }, o: {
   const old: DurableTask = { id: "old", original: ORIGINAL, state: "active", depth: 2, next,
     anchor: { id: "a-old", task: ORIGINAL, receivedAt: now - 5 * DAY, ...(o.oldUntagged ? {} : { outputTags: o.oldTags }) },
     recoveryAdmission: { id: "task:old:3", depth: 3, next, original: ORIGINAL,
-      ...(o.independent ? { independent: { evidence: "e", taskId: "old", sessionKey: "mem:room1" } } : {}) } };
+      ...(o.independent ? { independent: { evidence: createHash("sha256").update("[]").digest("hex"), taskId: "old", sessionKey: "mem:room1" } } : {}) } };
   const current: DurableTask = { id: "example", original: "Migrate example", state: o.newState ?? "active", depth: 0, // no runnable step
     anchor: { id: "a-new", task: "Migrate example", receivedAt: o.newer === false ? now - 6 * DAY : now - (o.newerAgeMs ?? 1000), outputTags: o.newTags } };
   h.restoreSessions([{ key: "mem:room1", tasks: [old, current], replyTo: { channel: "mem", target: "room1" } }]);

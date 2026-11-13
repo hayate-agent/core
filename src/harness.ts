@@ -904,17 +904,37 @@ export class Harness {
     const pending = store?.list(key).filter(e => !["completed", "cancelled"].includes(e.status) &&
       (!taskId || this.mayDependOn(e, taskId, task))) ?? [];
     if (!pending.length) return false;
-    const admission = task?.recoveryAdmission;
-    const receipt = admission?.independent;
-    return !(task && admission && receipt && receipt.taskId === task.id && receipt.sessionKey === key &&
-      task.state === "active" && admission.id === this.taskQueueId(task, task.depth + 1) &&
-      admission.depth === task.depth + 1 && admission.next === task.next && admission.original === task.original &&
-      admission.expiresAt === task.expiresAt && !task.termination &&
-      (!task.expiresAt || task.expiresAt > this.now()) &&
+    return !(task && this.independentSnapshotMatches(key, task, pending));
+  }
+
+  private independentSnapshotMatches(key: string, task: DurableTask, pending = this.opts.executionStore?.list(key).filter(e =>
+    !["completed", "cancelled"].includes(e.status) && this.mayDependOn(e, task.id, task)) ?? []): boolean {
+    const receipt = task.recoveryAdmission?.independent;
+    return !!(receipt && this.independentAdmissionMatches(key, task) &&
       pending.every(e => this.supervisable(e) && !e.parentStopped &&
         e.dependency?.taskId === task.id && e.dependency.original === task.original &&
         !(e.question && !e.question.answer)) &&
       receipt.evidence === createHash("sha256").update(JSON.stringify(pending)).digest("hex"));
+  }
+
+  private independentAdmissionMatches(key: string, task: DurableTask): boolean {
+    const admission = task.recoveryAdmission, receipt = admission?.independent;
+    return !!(admission && receipt && receipt.taskId === task.id && receipt.sessionKey === key &&
+      task.state === "active" && admission.id === this.taskQueueId(task, task.depth + 1) &&
+      admission.depth === task.depth + 1 && admission.next === task.next && admission.original === task.original &&
+      admission.expiresAt === task.expiresAt && !task.termination &&
+      (task.expiresAt === undefined || Number.isSafeInteger(task.expiresAt) && task.expiresAt > this.now()));
+  }
+
+  /** A scheduler changing a child invalidates independent effects, not an exact
+   * read of that same scoped child's status. Never grant control or a new writer. */
+  private independentStatusRead(key: string, task: DurableTask, tool: string, args: unknown): boolean {
+    if (tool !== "plugin_dispatch" || !args || typeof args !== "object") return false;
+    const input = args as { action?: unknown; id?: unknown };
+    if (input.action !== "status" || typeof input.id !== "string" || !input.id) return false;
+    return !!this.opts.executionStore?.list(key).some(e => e.id === input.id &&
+      e.dependency?.taskId === task.id && e.dependency.original === task.original &&
+      !e.parentStopped && !e.ownershipHold && e.status !== "cancelled");
   }
 
   /** Provenance only: a scoped child belongs to its task; an unscoped one may belong
@@ -1035,9 +1055,13 @@ export class Harness {
     const input = this.sessions.get(key)?.current;
     const independentTask = input?.taskId ? this.tasks(this.sessions.get(key)!).find(t => t.id === input.taskId) : undefined;
     if (independentTask?.recoveryAdmission?.independent) {
-      if (!input || input.id !== independentTask.recoveryAdmission.id || this.hasPendingDependency(key, independentTask.id) ||
-          this.paused || this.stopping || independentTask.state !== "active")
-        throw new ToolGuardError("authority_revoked", "Independent parent admission no longer matches host authority");
+      if (this.paused || this.stopping || independentTask.state === "stopped")
+        throw new ToolGuardError("execution_cancelled", "Independent parent is stopped or paused");
+      if (independentTask.expiresAt !== undefined && Number.isSafeInteger(independentTask.expiresAt) && independentTask.expiresAt <= this.now())
+        throw new ToolGuardError("deadline_expired", "Independent parent deadline elapsed");
+      if (!input || input.id !== independentTask.recoveryAdmission.id || !this.independentAdmissionMatches(key, independentTask) ||
+          !this.independentSnapshotMatches(key, independentTask) && !this.independentStatusRead(key, independentTask, tool, args))
+        throw new ToolGuardError("ownership_lost", "Independent parent admission no longer matches current host state");
       const action = args && typeof args === "object" ? (args as { action?: unknown }).action : undefined;
       const allowed: Record<string, readonly string[]> = {
         plugin_dispatch: ["submit", "status"],
@@ -1338,15 +1362,50 @@ export class Harness {
   }
 
   /** Transfer retained execution evidence, never authority or an opaque prompt replay. */
+  async prepareWorkerEvidence(key: string, evidence: { executionId: string; task: string }): Promise<void> {
+    if (!key.startsWith(`dispatch:${evidence.executionId}:`) || !evidence.executionId || !evidence.task) throw Error("Invalid worker admission evidence identity");
+    // A loaded target already has an awaited recovery seed or active native
+    // writer; never create a competing SessionManager beside it.
+    if (this.sessions.get(key)?.session) return;
+    await this.runtime.prepareWorkerEvidence?.(key, evidence);
+  }
+
   async reconcileSession(sourceKey: string, targetKey: string,
-    retained?: { executionId: string; intentKey: string; checkpoint: string }): Promise<void> {
+    retained?: { executionId: string; intentKey: string; checkpoint: string },
+    original?: { executionId: string; sessionKey: string }): Promise<void> {
     if (sourceKey === targetKey) throw Error("Recovery requires a replacement session");
     const sourceState = this.state(sourceKey);
     const targetState = this.state(targetKey);
     if ([sourceState, targetState].some(s => s.running || s.opening || s.queue.length)) throw Error("Recovery session has active or queued work");
-    const source = await this.sessionFor(sourceKey);
-    if (!source.archiveEntries) throw Error("Runtime does not expose retained execution evidence");
-    const entries = [...source.archiveEntries()];
+    // Restart recovery must not open the OLD worker as a live model/MCP/tool
+    // session just to read its evidence. Its model/backend/cwd may have changed.
+    // Prefer an already-open session, otherwise use the runtime's read-only
+    // persisted-history API; never turn a missing history into a fresh source.
+    let entries: import("./session-archive.js").ArchiveEntry[];
+    let evidenceKey = sourceKey;
+    let sourceStatus: { sessionId: string; sessionFile?: string };
+    if (!sourceState.session && this.runtime.retainedSessionHistory) {
+      let saved = await this.runtime.retainedSessionHistory(sourceKey);
+      let missingReplacement = false;
+      if (!saved?.entries.length && original && original.sessionKey !== sourceKey) {
+        const prefix = `dispatch:${original.executionId}:`;
+        if (!original.executionId || ![sourceKey, targetKey, original.sessionKey].every(key => key.startsWith(prefix))) throw Error("Invalid original worker evidence binding");
+        saved = await this.runtime.retainedSessionHistory(original.sessionKey);
+        missingReplacement = true; evidenceKey = original.sessionKey;
+      }
+      if (!saved) throw Error("Retained execution evidence is empty; explicit retry requires reconciliation");
+      entries = [...saved.entries];
+      if (missingReplacement) entries.push({ id: "missing-replacement-worker-history", role: "host-evidence", truncated: true,
+        text: JSON.stringify({ originalSessionKey: original!.sessionKey, missingReplacementSessionKey: sourceKey,
+          uncertainty: "Replacement worker history is absent; intermediate effects remain UNKNOWN. This exact original intent-bound history recovers known prior facts, NOT proof that no later effects occurred. Inspect actual state before any uncertain effect; never replay completed results." }) });
+      sourceStatus = { sessionId: saved.sessionId, ...(saved.sessionFile ? { sessionFile: saved.sessionFile } : {}) };
+      if (saved.incomplete) entries.push({ id: "incomplete-retained-worker", role: "host-evidence", truncated: true,
+        text: "Persisted worker transcript is incomplete. Missing tool outcomes remain unknown; never infer absence of effects or replay permission." });
+    } else {
+      const source = sourceState.session ?? await this.sessionFor(sourceKey);
+      if (!source.archiveEntries) throw Error("Runtime does not expose retained execution evidence");
+      entries = [...source.archiveEntries()]; sourceStatus = source.status();
+    }
     if (retained) {
       // Host-owned evidence for a checkpointed correction, not a retry grant.
       // Both sessions must belong to the same execution; missing transcript
@@ -1363,7 +1422,7 @@ export class Harness {
     if (!entries.length) throw Error("Retained execution evidence is empty; explicit retry requires reconciliation");
     const target = await this.sessionFor(targetKey);
     if (!target.seedHandover) throw Error("Runtime does not support recovery evidence handover");
-    await target.seedHandover(recoveryEvidence(sourceKey, source.status(), entries));
+    await target.seedHandover(recoveryEvidence(evidenceKey, sourceStatus, entries));
   }
 
   async resumeSession(key: string, id: string): Promise<void> {

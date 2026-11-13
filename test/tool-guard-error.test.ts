@@ -27,9 +27,12 @@ test("guard throw sites classify orchestration and revoked authority", () => {
   task.parentStopped = false;
   task.status = "cancelled";
   denial(() => worker.guardTool("dispatch:id:token", "read"), "execution_cancelled");
+  for (const status of ["ready", "running", "paused", "blocked", "failed"]) {
+    task.status = status;
+    denial(() => worker.guardResult("parent", "id"), "result_not_ready");
+  }
   task.status = "failed";
-  denial(() => worker.guardTool("dispatch:id:token", "read"), "authority_revoked");
-  denial(() => worker.guardResult("parent", "id"), "authority_revoked");
+  denial(() => worker.guardTool("dispatch:id:token", "read"), "ownership_lost");
   task.status = "completed";
   assert.doesNotThrow(() => worker.guardResult("parent", "id"));
   denial(() => worker.guardResult("parent", "absent"), "parent_mandate_missing");
@@ -77,7 +80,7 @@ try {
  const s=wrapped.session;
  const toolCall={type:'toolCall',name:'plugin_probe',id:'probe',arguments:{}};
  const call=()=>runToolCall(toolCall,{tools:[{...tool,execute:async()=>{executions++;return {content:[{type:'text',text:'executed'}]};}}],context:{messages:[]},assistantMessage:{role:'assistant',content:[toolCall]},beforeToolCall:s.agent.beforeToolCall});
- for(const code of ['review_required','worker_orchestration_denied','authority_revoked','dispatcher_unavailable','deadline_expired','execution_cancelled','ownership_lost','parent_mandate_missing']) {
+ for(const code of ['review_required','worker_orchestration_denied','authority_revoked','result_not_ready','dispatcher_unavailable','deadline_expired','execution_cancelled','ownership_lost','parent_mandate_missing']) {
   failure=new ToolGuardError(code,'SECRET arbitrary internal detail');
   const result=await call();
   assert.equal(result.isError,true);
