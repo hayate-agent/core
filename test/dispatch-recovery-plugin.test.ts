@@ -114,6 +114,34 @@ test("concurrent pause invalidates evidence before any continuation", async t =>
   assert.equal(f.store.list()[0]!.diagnosticCode, "manual-pause");
 });
 
+test("explicit authorized parent resume-paused reconciles an existing paused writer without automatic unpause or effect retry", async t => {
+  const f = await fixture(t); await f.store.control(f.initial.id, "pause");
+  const evidence = await f.inspect(); await assert.rejects(f.resume(evidence.fingerprint), /held/);
+  await f.resume(evidence.fingerprint, { action: "resume-paused" });
+  const task = f.store.list()[0]!;
+  assert.equal(task.id, f.initial.id); assert.equal(task.status, "ready"); assert.equal(task.diagnosticCode, undefined);
+  assert.equal(task.parentContinuation?.resumedManualPause, true); assert.ok(task.intent); assert.equal(task.recoveryGrant, undefined);
+  assert.equal(JSON.parse(await f.resume(evidence.fingerprint, { action: "resume-paused" })).replayed, true);
+  await assert.rejects(f.resume(evidence.fingerprint), /identity conflict/);
+  await f.dispatcher.start();
+  for (let i = 0; i < 100 && f.store.list()[0]!.status !== "completed"; i++) await new Promise(resolve => setTimeout(resolve, 5));
+  assert.equal(f.store.list()[0]!.status, "completed"); assert.equal(f.runs(), 1);
+});
+
+test("a repeated identical pause is a new control revision and invalidates an earlier resume fingerprint", async t => {
+  const f = await fixture(t); await f.store.control(f.initial.id, "pause"); const first = await f.inspect();
+  await f.store.control(f.initial.id, "pause"); const second = await f.inspect();
+  assert.notEqual(first.fingerprint, second.fingerprint);
+  await assert.rejects(f.resume(first.fingerprint, { action: "resume-paused" }), /Fresh complete/);
+  assert.equal(f.store.list()[0]!.diagnosticCode, "manual-pause");
+});
+
+test("explicit resume-paused still cannot override an operator parent stop", async t => {
+  const f = await fixture(t); await f.store.control(f.initial.id, "pause"); const evidence = await f.inspect();
+  await f.store.cancelParent("parent"); await assert.rejects(f.resume(evidence.fingerprint, { action: "resume-paused" }));
+  assert.equal(f.runs(), 0);
+});
+
 test("atomic store fence rejects stale execution hash without dropping original intent", async t => {
   const f = await fixture(t), task = f.store.list()[0]!, hash = executionRecoveryHash(task);
   await f.store.control(task.id, "pause");
