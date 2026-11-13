@@ -81,3 +81,43 @@ test('bridge uses typed host cause and never forwards worker prose', async () =>
     assert.doesNotMatch(received.message, /SECRET|instruction/);
   }
 });
+
+test('retry-exhausted and empty-result diagnostics name a user action; live retry still promises automatic recovery', async t => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'dispatch-hints-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  // Cap 1: the single failed attempt exhausts the automatic budget immediately.
+  const store = new ExecutionStore(path.join(dir, 'exhausted.json'), { workerRetryMax: 1 }); await store.load();
+  const task = await store.submit('parent', 'exhaust', 'fixture', 'direct');
+  const owned = await store.claim(task.id);
+  await store.fail(task.id, owned.token!, 'worker-failed', { strategy: { version: 1, replaySafe: false, reconcile: true } });
+  const exhausted = store.list()[0];
+  assert.equal(exhausted.diagnosticCode, 'retry-exhausted');
+  assert.equal(exhausted.workerRetry, undefined);
+  assert.equal(exhausted.status, 'paused');
+  const exhaustedText = await surfaces(store)(task.id);
+  assert.match(exhaustedText, /retry-exhausted/);
+  assert.match(exhaustedText, /resume or cancel the task explicitly/);
+  assert.doesNotMatch(exhaustedText, /No user resume is required/);
+  assert.doesNotMatch(exhaustedText, /automatic dispatcher recovery is scheduled/);
+
+  const done = await store.submit('parent', 'empty', 'fixture', 'direct');
+  const claim = await store.claim(done.id);
+  await store.complete(done.id, claim.token!, '');
+  const marked = store.list().find(row => row.id === done.id)!;
+  assert.equal(marked.status, 'completed');
+  assert.equal(marked.diagnosticCode, 'empty-result');
+  const emptyText = await surfaces(store)(done.id);
+  assert.match(emptyText, /empty-result/);
+  assert.match(emptyText, /re-submit or resolve explicitly/);
+  assert.doesNotMatch(emptyText, /No user resume is required/);
+
+  // Contrast: a live automatic retry still promises recovery without user action.
+  const liveStore = new ExecutionStore(path.join(dir, 'live.json')); await liveStore.load();
+  const live = await liveStore.submit('parent', 'live', 'fixture', 'direct');
+  const liveClaim = await liveStore.claim(live.id);
+  await liveStore.fail(live.id, liveClaim.token!, 'worker-failed', { strategy: { version: 1, replaySafe: false, reconcile: true } });
+  assert.ok(liveStore.list()[0].workerRetry, 'default budget keeps an automatic retry slot');
+  const liveText = await surfaces(liveStore)(live.id);
+  assert.match(liveText, /automatic dispatcher recovery is scheduled/);
+  assert.match(liveText, /No user resume is required/);
+});
