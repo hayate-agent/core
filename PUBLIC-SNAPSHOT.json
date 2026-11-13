@@ -1,5 +1,5 @@
 {
-  "contentDigest": "901083c8b95c207a5cf6c6b0252aa64214a1c99caee4284cd5ae50bb2626c9d0",
+  "contentDigest": "aea51e81ead0d7109b0827b32fe125e6bb9da3bfdb52cd89cfe633fa7bd3915b",
   "files": [
     {
       "mode": "100644",
@@ -79,7 +79,7 @@
     {
       "mode": "100644",
       "path": "docs/configuration.md",
-      "sha256": "4ae9dc0fe4ba581e6422f0ecda4148bac182ae6f8f538d1a1e1d6aad4b3f2cd0"
+      "sha256": "1e043a6780bafb5480ae32185eed5809ad389412b8531d6742a1965f43bb890d"
     },
     {
       "mode": "100644",
@@ -629,7 +629,7 @@
     {
       "mode": "100644",
       "path": "src/cli.ts",
-      "sha256": "9af873dce729ca14f0e74a60102a8b674e7dbc23ac394783e4a061cc8419dacf"
+      "sha256": "cd89166da394b540bc7a273dec96092167d1a2bdeb50b399a9447698c8113f0a"
     },
     {
       "mode": "100644",
@@ -655,6 +655,11 @@
       "mode": "100644",
       "path": "src/completion-context.ts",
       "sha256": "3a5748082bff42cfc08d6edd9a0e1386093f9236f176dcd3a92793d1cf1539a3"
+    },
+    {
+      "mode": "100644",
+      "path": "src/completion-profile.ts",
+      "sha256": "416b2791813fd9970220a604344a46ebdd6741a72f6c336ef74ebfddd94139a7"
     },
     {
       "mode": "100644",
@@ -749,7 +754,7 @@
     {
       "mode": "100644",
       "path": "src/dispatcher-sequential.ts",
-      "sha256": "97143f24c95cf8f19a2da89e931a7f1a305464c324152435612bdf2b85538490"
+      "sha256": "e04c0d59c76a396057ff26ce08a9f966e0fb47eaa1f2df7adfb56c54eb48d6fa"
     },
     {
       "mode": "100644",
@@ -774,7 +779,7 @@
     {
       "mode": "100644",
       "path": "src/execution-control.ts",
-      "sha256": "f8357b444864db5a333deb89f64866c7174baa1f2f313049764ff540dddd3728"
+      "sha256": "2d1a5d8d0f739de5dec65bba5cea5dc2428a94d2a267a85bc484f57cb7b18da8"
     },
     {
       "mode": "100644",
@@ -814,7 +819,7 @@
     {
       "mode": "100644",
       "path": "src/harness.ts",
-      "sha256": "9a030d005cb215a3abfb6baf4c11c82a33172c3b248fa33e0dbdd0d50532a5e2"
+      "sha256": "f0f2b2ccb01b3c1dfc003419f2c9194cc667ba692298bc285b433a66e2a25509"
     },
     {
       "mode": "100644",
@@ -1588,6 +1593,11 @@
     },
     {
       "mode": "100644",
+      "path": "test/completion-profile.test.ts",
+      "sha256": "7dfb3255aca1c50a4d3e58baf976c932c4d57f9885f71ff947f776eb485da6bc"
+    },
+    {
+      "mode": "100644",
       "path": "test/completion-publication-runtime.test.ts",
       "sha256": "231a03379bb69c78d846dfeaa9adc53e54f5c6628b5c8b61a595984cf4a6577e"
     },
@@ -1894,7 +1904,7 @@
     {
       "mode": "100644",
       "path": "test/dispatcher-sequential.test.ts",
-      "sha256": "70bc367f85021f70db71464d8464b9ec61136317239cd7c065b4a90430759dbb"
+      "sha256": "bcc155dbbd76b7abf829114b82e055375c962a8b66a81f0b78638c16ba237545"
     },
     {
       "mode": "100644",
@@ -1968,8 +1978,13 @@
     },
     {
       "mode": "100644",
+      "path": "test/execution-control-remount.test.ts",
+      "sha256": "3cbaaa5c9cfbc5a004866efa8e43982bc307e5b0eaa4233ec7456fd73ba213f4"
+    },
+    {
+      "mode": "100644",
       "path": "test/execution-control.test.ts",
-      "sha256": "8dab961145adba581f5296714e2b86d91ea4fd9e9fac6649a5d72c8d2e90cb5c"
+      "sha256": "df4549532ea0e883a13af625e0f829f97216bb50e560ba638dcc00a904c1c187"
     },
     {
       "mode": "100644",
@@ -2205,6 +2220,11 @@
       "mode": "100644",
       "path": "test/launch.test.ts",
       "sha256": "115d196102fc57e8dca142bed0104b0f9d61856f5ca4724c5e7bf09e5d7f9382"
+    },
+    {
+      "mode": "100644",
+      "path": "test/legacy-conversation-language.test.ts",
+      "sha256": "ce46fa7b49cff7a458eb7149a8e0443e2daf24a73208b01dc1d5df4ec1e1e0fb"
     },
     {
       "mode": "100644",
@@ -2559,7 +2579,7 @@
     {
       "mode": "100644",
       "path": "test/optional-webui-startup.test.ts",
-      "sha256": "619f73d65da3d354a5668f48d9855806a9e2b80c8114bdc4196d13dfbc391976"
+      "sha256": "64847314d55f4c08d81242de6fa31098a9ad506f35692145bcad726f6f98c21d"
     },
     {
       "mode": "100644",
@@ -3650,5 +3670,5 @@
   "historyPolicy": "fresh-root; no source commits, tags, refs or deleted blobs",
   "pluginSHA": "fb38b7d7fbd7236549c723035bbaf006fd5d5eff",
   "schema": 1,
-  "sourceSHA": "32647a747da552376e46e2be8aea634c2bf7804e"
+  "sourceSHA": "e0e9e9f42d080b878078de94b2371239d5029761"
 }
