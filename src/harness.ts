@@ -1990,7 +1990,7 @@ export class Harness {
       // independent assessment, not execution of the saved proposal.
       if (task.state === "blocked" && task.supervisorDecision?.verdict === "unresolved" &&
           (task.supervisorDecision.proposal === "continue" || task.explicitBlocked === false &&
-            ["technical", "invalid_response", "unavailable"].includes(task.supervisorDecision.diagnostic ?? "")) &&
+            ["technical", "invalid_response", "unavailable", "inconclusive"].includes(task.supervisorDecision.diagnostic ?? "")) &&
           !task.supervisorDecision.dependencyHold &&
           !task.termination && !task.recoveryAdmission && !task.wait && !task.lastWait &&
           !!task.next?.trim() && Number.isSafeInteger(task.depth) && task.depth >= 0 &&
@@ -1998,6 +1998,18 @@ export class Harness {
           !this.stoppingHostParents.has(s.key) && !s.stopPending &&
           (task.expiresAt === undefined || Number.isSafeInteger(task.expiresAt) && task.expiresAt > this.now()) &&
           !this.hasPendingDependency(s.key, task.id)) {
+        if (task.supervisorDecision.proposal !== "continue" && task.supervisorDecision.diagnostic === "inconclusive") {
+          // Older code recorded a non-decision as a permanent block. Unlike a
+          // semantic "blocked" verdict, this may receive another independent
+          // assessment, but only for a current mandate with actual retained
+          // context now readable. Prose/diagnostics alone never admit work.
+          if (task.recoveryEnrollment !== "current" || !task.anchor?.id || task.anchor.task !== task.original) continue;
+          const before = JSON.stringify(task);
+          const context = await this.completionEvidence(s, { sessionKey: s.key, source: "cron", text: task.original, taskId: task.id });
+          if (context.resolved?.transcript?.current !== "available" || JSON.stringify(task) !== before ||
+              this.paused || this.stopping || s.stopPending || this.stoppingHostParents.has(s.key) ||
+              task.expiresAt !== undefined && task.expiresAt <= this.now() || this.hasPendingDependency(s.key, task.id)) continue;
+        }
         task.state = "active";
         task.explicitBlocked = false;
         task.recoveryAssessment = undefined;
