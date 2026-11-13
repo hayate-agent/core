@@ -770,7 +770,13 @@ async function main(argv: string[]): Promise<void> {
       return settings.effective().dispatcher?.rules;
     }, () => ({ config: settings.effective().modelRoles,
       defaults: { model: effectiveModels().model, thinking: effectiveModels().thinking },
-      review: settings.effective().review?.model ? { model: settings.effective().review!.model, thinking: settings.effective().review?.thinking ?? "medium" } : undefined }), plugins.validators);
+      review: settings.effective().review?.model ? { model: settings.effective().review!.model, thinking: settings.effective().review?.thinking ?? "medium" } : undefined }), plugins.validators, () => ({
+      coreRevision: readSoftwareVersions(BUILD_INFO).revision,
+      moduleDirectory: fileURLToPath(new URL("./", import.meta.url)),
+      documentationDirectory: fileURLToPath(new URL("../docs/", import.meta.url)),
+      selectedValidator: plugins.validators.selected,
+      registeredValidators: plugins.validators.versions(),
+    }));
     harness.addChannel(dispatchRuntime.channel);
     const strategy = dispatchPolicy.strategy === "direct" ? dispatchRuntime.strategy : dispatchPolicy.strategy === "sequential" ? dispatchRuntime.sequential : plugins.dispatchers.get(dispatchPolicy.strategy);
     if (!strategy) throw Error("Configured dispatcher strategy unavailable");

@@ -100,6 +100,7 @@ export interface Execution {
   workerRetry?: { attempts: number; nextAt: number };
   /** Independent semantic hold: retain actionable attention while rechecking. */
   assessmentHold?: { state: "blocked" | "waiting"; step: number };
+  contradictoryCompletionReopen?: { requestId: string; checkpointHash: string; text: string; at: number };
   /** Bounded host event dedup receipts, committed atomically with checkpoints. */
   checkpointNotices?: string[];
   result?: string;
@@ -683,7 +684,7 @@ export class ExecutionStore {
    * Originals are archived BEFORE the atomic active-window commit. Failed saves
    * leave the old window executable, and retries verify the same immutable audit. */
   consolidateDecisions(parent: string, id: string, requestId: string, text: string, replaces: readonly string[],
-      wake?: (task: Readonly<Execution>) => boolean, followUp?: ExecutionFollowUp): Promise<ExecutionDecision> {
+      wake?: (task: Readonly<Execution>) => boolean, followUp?: ExecutionFollowUp, expectedRevision?: number): Promise<ExecutionDecision> {
     return this.mutate(async draft => {
       if (/^(dispatch|subagent):/.test(parent)) throw Error("Nested worker decisions are disabled");
       if (!validDecisionInput(requestId, text) || (followUp !== undefined && !validExecutionFollowUp(followUp)) || !Array.isArray(replaces) || !replaces.length || replaces.length > 32 ||
@@ -696,6 +697,9 @@ export class ExecutionStore {
         if (prior.text !== text || JSON.stringify(prior.supersedes) !== JSON.stringify(replaces) || JSON.stringify(prior.followUp) !== JSON.stringify(followUp)) throw Error("Conflicting decision requestId reuse");
         return prior;
       }
+      this.checkDecisionRevision(task, expectedRevision);
+      if (expectedRevision !== undefined && (task.ownershipHold || task.recoveryEnrollment === "held-legacy" || task.diagnosticCode === "manual-pause" ||
+          task.question && task.question.answer === undefined || task.dependency?.expiresAt !== undefined && task.dependency.expiresAt <= this.now())) throw Error("Execution steering authority held or expired");
       const old = replaces.map(key => receipts.find(d => d.requestId === key));
       if (old.some(receipt => !receipt || receipt.state !== "applied")) throw Error("Only exact applied active decisions may be consolidated; pending steering must first be consumed");
       const receipt: ExecutionDecision = { requestId, text, recordedAt: this.now(), state: "pending", revision: nextDecisionRevision(receipts), supersedes: [...replaces], ...(followUp ? { followUp: structuredClone(followUp) } : {}) };
@@ -1045,6 +1049,47 @@ export class ExecutionStore {
       task.status = "ready";
       if (task.workerRetry) task.workerRetry.nextAt = this.now();
       this.event(draft, task, "status", `${actor}: ${action}; uncertain effects may duplicate. Evidence: ${evidence}`);
+    });
+  }
+  /** Explicit native owner recovery of a structurally contradictory terminal
+   * report, never automatic replay or reopening an honest completion. Original
+   * terminal receipt is immutable before the active state changes. */
+  reopenContradictoryCompletion(parent: string, id: string, requestId: string, text: string, checkpointHash: string, expectedRevision: number): Promise<Execution> {
+    return this.mutate(async draft => {
+      const task = this.find(draft, id);
+      if (task.parent !== parent || /^(dispatch|subagent):/.test(parent) || !validDecisionInput(requestId, text) || !/^[a-f0-9]{64}$/.test(checkpointHash)) throw Error("Invalid exact owner reconciliation");
+      const prior = task.contradictoryCompletionReopen;
+      if (prior?.requestId === requestId) {
+        if (prior.text !== text || prior.checkpointHash !== checkpointHash) throw Error("Reopen identity conflict");
+        return structuredClone(task);
+      }
+      this.checkDecisionRevision(task, expectedRevision);
+      if (task.status !== "completed" || draft.events.some(event => event.executionId === id && event.type === "result") || task.token || task.intent || task.parentStopped || task.ownershipHold || task.recoveryEnrollment === "held-legacy" || task.question ||
+          task.dependency?.expiresAt !== undefined && task.dependency.expiresAt <= this.now() || task.strategy !== "sequential" || task.strategyVersion !== 1 || !task.checkpoint || !task.recoverySession ||
+          createHash("sha256").update(task.checkpoint).digest("hex") !== checkpointHash) throw Error("Terminal reconciliation not eligible");
+      const saved = JSON.parse(task.checkpoint);
+      if (!Array.isArray(saved.plan) || !Array.isArray(saved.outcomes) || !saved.outcomes.length || saved.plan.length !== saved.outcomes.length) throw Error("Not an exact terminal step boundary");
+      const last = saved.outcomes.at(-1);
+      if (!last || typeof last.result !== "string" || !/\nSTEP-STATUS:\s*blocked:\s*[^\n]+\s*$/i.test(last.result) || !last.requested?.model) throw Error("No retained contradictory blocked terminal report");
+      const key = task.settledEffect?.key;
+      if (!key) throw Error("Missing retained settled effect identity");
+      const scope = createHash("sha256").update(JSON.stringify([parent, id])).digest("hex");
+      const directory = path.join(path.dirname(this.file), "execution-reopen-audit", scope); await mkdir(directory, { recursive: true });
+      const audit = path.join(directory, createHash("sha256").update(requestId).digest("hex") + ".json");
+      const original = { parent, executionId: id, requestId, text, checkpointHash, original: task };
+      try { if (await readFile(audit, "utf8") !== JSON.stringify(original) + "\n") throw Error("Reopen archive conflict"); }
+      catch (e) { if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e; await writeFileDurable(audit, JSON.stringify(original) + "\n"); }
+      saved.outcomes.pop();
+      saved.assessment = { index: saved.outcomes.length, reply: last.result, route: last.requested, session: task.recoverySession,
+        tools: 0, effectsUnknown: true, reopenedReviewOnly: true, evidence: [], attempts: 0, decisionRevision: expectedRevision };
+      delete saved.correction; delete saved.progress; delete saved.prior; delete saved.readyAdmission;
+      const checkpoint = JSON.stringify(saved); if (checkpoint.length > 64000) throw Error("Reopened evidence cannot fit without authority loss");
+      task.checkpoint = checkpoint; task.status = "ready"; delete task.result; delete task.terminalAt;
+      task.recoveryEnrollment = "current"; task.assessmentRetryAt = this.now();
+      if (task.workerRetry) task.workerRetry.nextAt = this.now();
+      task.contradictoryCompletionReopen = { requestId, text, checkpointHash, at: this.now() };
+      this.event(draft, task, "status", "Operator reopened contradictory completion: retained final worker report still says blocked. Original terminal receipt archived; read-only reassessment only, no effect replay or new writer.");
+      return structuredClone(task);
     });
   }
   /** Archive before removing active records. A crash between commits leaves an

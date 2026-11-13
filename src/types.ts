@@ -73,6 +73,7 @@ export interface Inbound {
       runtime?: { phase: "process-started"; version: string; revision?: string; startedAt: number };
       technical: { verdict?: string; diagnostic?: import("./completion-check.js").CompletionDiagnostic;
         assessment?: string; attempts?: number; nextAt?: number;
+        runtimeProvenance?: import("./dispatcher-sequential.js").WorkerRuntimeProvenance;
         retryDiagnostic?: import("./completion-check.js").CompletionDiagnostic; termination?: string };
       /** Persisted conversation messages (bounded); untrusted evidence, survives reload. */
       recentMessages?: Array<{ role: "user" | "assistant"; text: string; truncated?: true; totalChars?: number }>;
