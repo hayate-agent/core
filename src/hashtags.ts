@@ -16,8 +16,13 @@ export function parseHashtags(text: string): string[] {
   let fence: string | undefined;
   let block = 0;
   for (const line of text.split(/\r?\n/)) {
-    const marker = /^\s*(`{3,}|~{3,})/.exec(line)?.[1];
-    if (marker) { if (!fence) fence = marker[0]; else if (marker[0] === fence) fence = undefined; continue; }
+    const marker = /^\s*(`{3,}|~{3,})(.*)$/.exec(line);
+    if (marker) {
+      const run = marker[1];
+      if (!fence) fence = run;
+      else if (run[0] === fence[0] && run.length >= fence.length && !marker[2].trim()) fence = undefined;
+      continue;
+    }
     if (fence) continue;
     if (/^\s*</.test(line)) {
       for (const tag of line.matchAll(/<\/?[a-zA-Z][^>]*>/g)) {

@@ -1,7 +1,7 @@
 /** Only host-created guard denials receive a specific, model-visible reason.
  * Never forward an arbitrary exception's message, properties or string conversion.
  */
-export type ToolGuardCode = "dispatcher_required" | "review_required" | "worker_orchestration_denied" | "authority_revoked" | "deadline_expired" | "execution_cancelled" | "ownership_lost" | "parent_mandate_missing" | "dispatcher_unavailable" | "continuation_budget_exhausted";
+export type ToolGuardCode = "report_only" | "dispatcher_required" | "review_required" | "worker_orchestration_denied" | "authority_revoked" | "deadline_expired" | "execution_cancelled" | "ownership_lost" | "parent_mandate_missing" | "dispatcher_unavailable" | "continuation_budget_exhausted";
 
 const codes = new WeakMap<object, ToolGuardCode>();
 
@@ -16,6 +16,7 @@ export class ToolGuardError extends Error {
 export function toolGuardDenialReason(error: unknown): string {
   const code = error !== null && (typeof error === "object" || typeof error === "function") ? codes.get(error) : undefined;
   switch (code) {
+    case "report_only": return "report_only: Completion consistency check is tool-free. Report existing facts honestly; failed required outcomes remain blocked, never manufacture success or repeat effects.";
     case "review_required": return "review_required: Core review gate blocked this action; review the current changeset first.";
     case "worker_orchestration_denied": return "worker_orchestration_denied: Tool orchestration is not permitted in this execution context; return a result or blocker.";
     case "deadline_expired": return "deadline_expired: This execution's deadline has elapsed; stop this saved execution. This does not impose a global build or deployment ban.";

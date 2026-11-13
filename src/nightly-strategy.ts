@@ -5,7 +5,7 @@ import type { ExperimentReceipt } from "./improvement-receipt.js";
 import { PureStrategy } from "./pure-strategy.js";
 
 /** Strategy can update experiment conclusions, never host turn reservations or deadlines. */
-export type NightlyProgress = Pick<NightState, "experiments" | "recentHypotheses" | "noExperimentTurns" | "done" | "results">;
+export type NightlyProgress = Pick<NightState, "experiments" | "recentHypotheses" | "noExperimentTurns" | "done" | "results" | "deliveryBacklog">;
 export interface NightlyStrategy {
   apiVersion: 1;
   prompt(policy: ImprovementPolicy, turn: number): string;
