@@ -39,6 +39,8 @@ export interface Inbound {
   continuation?: { /** Optional existing task in this session; never grants new authority. */
     taskId?: string;
     state: "continue" | "waiting" | "blocked" | "completed"; next?: string; expiresAt?: number;
+    /** Independent validator suggestion; adopted only by the originating durable turn settlement. */
+    taskPlan?: { basisEventId: string; todos: import("./task-lifecycle.js").TaskTodo[] };
     /** Advisory preparation; host executes existing maintenance before authorized work. */
     contextPreparation?: "compact" | "handover";
     /** Independent assessor's stable substantive milestone, not working-model authority. */
@@ -58,6 +60,9 @@ export interface Inbound {
   waitCheck?: { sequence: number; productive?: boolean };
   /** Host-assigned durable task identity, never a model authorization grant. */
   taskId?: string;
+  /** Core operator authority captured at admission, not reconstructed from model text. */
+  taskRef?: import("./task-lifecycle.js").TaskRef;
+  taskRevision?: number;
   /** Trusted numeric authorization boundary inherited by generated work. */
   continuationExpiresAt?: number;
   /** Core-captured original chat input; inherited by generated follow-ups, never reply text. */
@@ -71,6 +76,7 @@ export interface Inbound {
     resolved?: import("./completion-context.js").ResolvedCompletionContext;
     /** Bounded task-local evidence. Saved plans and replies remain untrusted. */
     retained?: { original: string; savedNext?: string; priorReply?: string; parentReconciliation?: string;
+      order?: { id: string; generation: number; revision: number; operatorStatus: string; sources?: Array<{ id: string; text: string }>; plan?: import("./task-lifecycle.js").TaskTodo[] };
       /** Host's actual loaded Core, not an available release or proof of task completion. */
       runtime?: { phase: "process-started"; version: string; revision?: string; startedAt: number };
       technical: { verdict?: string; diagnostic?: import("./completion-check.js").CompletionDiagnostic;

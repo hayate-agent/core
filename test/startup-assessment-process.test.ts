@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { ExecutionStore } from "../src/execution.js";
 import { test } from "node:test";
 import { spawn } from "node:child_process";
 import { mkdtemp, writeFile, access, rm } from "node:fs/promises";
@@ -12,8 +13,10 @@ for (const entry of ["dist/cli.js", "dist/launcher.js"]) test(`${entry}: real st
   await writeFile(path.join(home, "hayate-agent.yaml"), JSON.stringify({ agent: "startup-judge-fixture", softwareUpdates: { enabled: false },
     lifecycle: { restartTimeoutSeconds: 2 }, loop: { drainSeconds: 1 }, completionCheck: { provider: "slow-fixture", timeoutMs: 120000 },
     memory: { enabled: false }, dispatcher: { enabled: false }, mcp: { enabled: false }, plugins: ["slow-provider.mjs"] }));
+  const store = new ExecutionStore(path.join(home, "executions.json")); await store.load();
+  const taskRef = await store.enrollTask("api:retained-business-task", "original-task", "Inspect the existing isolated fixture only, no repeated effects", "original-task", "operator");
   await writeFile(path.join(home, "state.json"), JSON.stringify({ version: 1, paused: false, busyMode: "queue", sessions: [{ key: "api:retained-business-task",
-    tasks: [{ id: "original-task", original: "Inspect the existing isolated fixture only, no repeated effects", state: "active", recoveryEnrollment: "current", depth: 3, lastReply: "Retained report requiring independent judgment" }] }] }));
+    tasks: [{ id: "original-task", taskRef, original: "Inspect the existing isolated fixture only, no repeated effects", state: "active", recoveryEnrollment: "current", depth: 3, lastReply: "Retained report requiring independent judgment" }] }] }));
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(API_SERVER_|MATRIX_|SLACK_|HAYATE_AGENT_|HERMES_)/.test(key)));
   Object.assign(env, { HOME: home, HAYATE_AGENT_HOME: home, API_SERVER_HOST: "127.0.0.1", API_SERVER_PORT: "0", API_SERVER_KEY: "isolated-startup-judgment-test" });
   const child = spawn(process.execPath, ["--import", "tsx", entry, "run", "--home", home, "--console"], { env, stdio: ["pipe", "pipe", "pipe"] });

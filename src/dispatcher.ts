@@ -196,7 +196,7 @@ export class Dispatcher {
   }
   private async schedule(): Promise<void> {
     void this.flushEvents().catch(this.report);
-    const tasks = this.store.list().filter(task => !task.ownershipHold && task.recoveryEnrollment !== "held-legacy" &&
+    const tasks = this.store.list().filter(task => this.store.executionTaskAllowed(task) && !task.ownershipHold && task.recoveryEnrollment !== "held-legacy" &&
       !this.active.has(task.id) && this.parentEnabled(task.parent) && !!this.strategyFor(task) &&
       (task.status === "ready" && this.store.assessmentDue(task) ||
         ["worker-failed", "runtime-failure"].includes(task.diagnosticCode ?? "") && ["blocked", "paused", "ready"].includes(task.status) &&

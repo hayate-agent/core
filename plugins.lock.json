@@ -2,9 +2,9 @@
   "files": {
     "boundary-assessor.ts": "50673771d39126c132829704b5b2ab6172092e867245f8edca8c9b0eb71615cb",
     "compaction-strategy-plugin.ts": "8dadb434b15443524827b302af9c98c22ce40e892e0c0c2bc60e558dae33c932",
-    "completion-prompt.ts": "004a7ac8b8b7c737c4b23fc52320fca3f9c005b62681c64368ad748bcee0b96e",
+    "completion-prompt.ts": "c5644732a436726dc7086e3fab35bd85769ed3200b7a69619c9c01021b6f484f",
     "completion-strategy-plugin.ts": "5f69464b4648d9b360020eac5b967e924549236eaff92f3c5e68f79826503b6f",
-    "completion-validator-plugin.ts": "a1fbc4226719f8b583a258dada023fad5eae967c9c55b8fc06bc853641527ffb",
+    "completion-validator-plugin.ts": "02cf75e600fd1133410c5e8ae843ef28222a28e3d845cdfdcf0776c63a30f5ea",
     "context-plugin.ts": "1da424038b5f5dd8e88999d86c4b26fecca5d21ca4170b83fdba9958eef787f0",
     "context-strategy-plugin.ts": "104c0e4a9b9619d361a8089b43724986366bc3665993c2146268e5f847698643",
     "continuation-plugin.ts": "e5485881f09b871912fa5574af6fe9c7b323abe01b03b8876cd235b436595a7d",
@@ -55,6 +55,6 @@
     "wasm-tools-plugin.ts": "438c6ac8899e283e4268f51ef451275bf16a37b584db84ee8302a26200cc70de"
   },
   "repository": "https://git.vanillacore.net/harness/plugins",
-  "revision": "7d9afc4a3a72fedb466f9323903157d6d661091a",
+  "revision": "8a34ff046b11f6a4418977d13f432eec2a1225a6",
   "schema": 1
 }
