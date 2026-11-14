@@ -1,0 +1,29 @@
+# Small local working context and memory
+
+This increment separates durable authority/effect evidence from model-visible working context. It does not substitute a summary for the original mandate, resume old stopped work, change providers, waive validation/privacy/review, or replay effects.
+
+## Default prompt footprint
+
+The entire skill metadata catalog is no longer inserted on every request. The prompt contains a bounded name preview and a private content-addressed, line-pageable `skill-catalogs/<digest>.json` pointer. Exact names/paths and bounded description previews remain available for bounded read/search; full instructions remain in the referenced SKILL.md files. Read the matching skill before following it. Persona/operator restrictions are NOT cut to meet a target.
+
+Agents explicitly declaring local models in `contextMaintenance.localModels` and using the unrestricted default tool catalog get native SDK deferred plugin-tool discovery. Essential orchestration, memory and messaging tools stay available. Other schemas are loaded through the public `tool_search` API only when relevant. Recently used deferred tools are bounded to six between calls, with just-discovered tools preserved for their first model response to prevent a discovery/eviction loop. Explicit tool restrictions and tools=[] stay authoritative; no new tool permission is inferred.
+
+## Working handovers
+
+Each meaningful settled Harness turn (including a tool-free decision/preference) and settled SDK assistant/tool step gets a durable, bounded per-conversation working capsule, without an additional model generation. SDK step boundaries write only the local capsule and never await a long-term backend; normal settled Harness turns keep the existing long-term provider and its retry semantics. Capsule and long-term capture paths are independent, so corrupt local working data does not suppress long-term capture. Capsules contain reported request/result head and tail, outcome and source digest; they are NOT independently verified facts or current authority. Empty/NO_REPLY/transport-error-only outputs are not knowledge. Up to eight capsules/24KiB are retained locally. Long-term capture continues through the selected versioned MemoryOrchestrator/provider, with its own durable retry semantics. Semantic consolidation remains optional; this feature does not pretend raw reported excerpts are an independent semantic fact verifier.
+
+Recall selects a few lexically relevant handovers and bounded existing provider matches. Optional slow provider recall has a500ms caller budget, with at most two outstanding non-cancellable reads. Backend errors cannot strand the actual working turn. Main recalls before each turn; sequential Dispatcher recalls the authenticated parent scope before planning and before each step. Settled direct/sequential worker reports are captured to their host-authenticated parent scope for later planning. No model-supplied scope, cross-conversation search or authority transfer is accepted. `/new` clears only that scope's working capsules after old work drains; long-term historical evidence is not erased.
+
+## Local context pressure and tool output
+
+Local default compaction triggers are bounded by16384 tokens for Main and8192 for workers, adjustable through `localMainContextTokens`/`localWorkerContextTokens` (minimum4096). Existing configured/physical/native stricter limits still win. These are compaction targets, NOT a guarantee that irreducible system instructions or a single mandatory operator request always fit. Native public between-response compaction remains the owner of in-loop compression; normal safe archive/handover and error/hold fences are preserved.
+
+Automatic maintenance does not try to compact an irreducible persona/tool base when there are fewer than1024 estimated native history tokens. It records `irreducible-base-small-history`, rather than queueing a pointless classifier/handover on a tiny new chat. Explicit maintenance/recovery requests remain fenced and are not bypassed.
+
+Runtime status separately labels host working-budget estimates (`contextEstimateTokens`, `contextBudgetTokens`, `contextBudgetPercent`) instead of misreporting an endpoint's zero/unknown token usage as free context. Maintenance records mark `working-estimate` versus `provider-context` and reminders explicitly say estimated. The estimate conservatively uses UTF-8 bytes/3 including system context and exposed schemas. Physical model capacity and provider counters are not changed.
+
+Top-level all-text local tool outputs over4000 characters are retained canonically in private scoped artifacts BEFORE model-history insertion, then replaced with a bounded head/tail/reference/digest. A separately labelled line-readable view permits offset/limit retrieval even for giant one-line JSON. Structured machine output is preserved; nested codemode calls and images are not rewritten. Artifact-write failure preserves the original result rather than discarding evidence. Existing historical tool-result projection uses a smaller2048-token trigger,1024-character older excerpts and two recent results. Original effects, call IDs, error flags, machine schemas and complete retained originals remain intact. Read exact evidence before an uncertain effect; never re-execute an effect merely to retrieve output.
+
+## Verification scope
+
+Use the offline real SDK tests to verify deferred discovery, restricted/no-tools mode, canonical artifact retention and small native compaction thresholds without model/network calls. Production verification must separately measure prompt tokens and observed response/first-token times on Minerva and Che under actual load. Filesystem benchmark results are not model latency claims. Do not invent a small local model from stale catalogs or silently use a cloud fallback: configure only an actually available model, using the separate Hashtag -> Dispatcher -> Main metadata chain.

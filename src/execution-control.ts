@@ -11,7 +11,8 @@ import type { PluginModule } from "./plugins.js";
 /** Local host-owner control, deliberately NOT an inference API or model tool.
  * Same-UID filesystem authority is required, as for native lifecycle control.
  * It never edits a ledger or bypasses Dispatcher decision/admission checks. */
-export function executionControlPlugin(get: () => Dispatcher | undefined, directory: string): PluginModule {
+export function executionControlPlugin(get: () => Dispatcher | undefined, directory: string,
+  resetConversation?: (parent: string) => Promise<void>): PluginModule {
   return { apiVersion: 1, async activate(api) {
     if (!process.getuid) return;
     try { await mkdir(directory, { mode: 0o700 }); } catch (e) { if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e; }
@@ -43,7 +44,8 @@ export function executionControlPlugin(get: () => Dispatcher | undefined, direct
           try {
             if (buffer.slice(end + 1).length) throw Error("One request per connection");
             const frame = JSON.parse(buffer.slice(0, end));
-            const result = await executionControlRequest(get(), frame);
+            if (frame?.op === "reset-conversation") socket.setTimeout(0); // owned script drain may take its full deadline
+            const result = await executionControlRequest(get(), frame, resetConversation);
             if (!closed && !socket.destroyed) socket.end(JSON.stringify({ ok: true, result }) + "\n");
           } catch { if (!socket.destroyed) socket.end('{"ok":false,"error":"request rejected; inspect exact execution and ownership before retry"}\n'); }
         })();
@@ -69,10 +71,17 @@ export function executionControlPlugin(get: () => Dispatcher | undefined, direct
 /** Bounded exact request; idempotent receipt retries precede the revision fence.
  * Explicit consolidation reuses existing audited same-owner follow-up admission.
  * No resume/cancel, deadline extension, original-scope replacement or new job. */
-export async function executionControlRequest(dispatcher: Dispatcher | undefined, input: unknown): Promise<unknown> {
+export async function executionControlRequest(dispatcher: Dispatcher | undefined, input: unknown,
+  resetConversation?: (parent: string) => Promise<void>): Promise<unknown> {
   if (!dispatcher || !input || typeof input !== "object") throw Error("Dispatcher control unavailable");
   const frame = input as Record<string, unknown>;
-  if (typeof frame.id !== "string" || !/^[a-f0-9-]{36}$/.test(frame.id) || typeof frame.parent !== "string" || frame.parent.length > 1000 || /^(dispatch|subagent):/.test(frame.parent)) throw Error("Invalid exact execution scope");
+  if (typeof frame.parent !== "string" || !frame.parent.trim() || frame.parent.length > 1000 || /^(dispatch|subagent):/.test(frame.parent)) throw Error("Invalid exact parent scope");
+  if (frame.op === "reset-conversation") {
+    if (!resetConversation || Object.keys(frame).length !== 2) throw Error("Conversation reset unavailable or invalid");
+    await resetConversation(frame.parent);
+    return { parent: frame.parent, reset: true, previousWorkRevoked: true };
+  }
+  if (typeof frame.id !== "string" || !/^[a-f0-9-]{36}$/.test(frame.id)) throw Error("Invalid exact execution scope");
   const task = dispatcher.store.list(frame.parent).find(t => t.id === frame.id);
   if (!task) throw Error("Execution not in exact parent scope");
   if (frame.op === "status" && Object.keys(frame).length === 3) return {

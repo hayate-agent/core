@@ -35,12 +35,14 @@ import { compactionStrategyPlugin } from "./builtin-plugins/compaction-strategy-
 import { FilesystemSessionProvider, type SessionProvider } from "./sessions.js";
 import { SessionProviderLifecycle } from "./session-provider-lifecycle.js";
 import { memoryConfig } from "./memory.js";
-import { ParallelAdmission, bindParallelAdmission } from "./parallel-admission.js";
+import { ParallelAdmission, bindParallelAdmission, auxiliaryAdmission } from "./parallel-admission.js";
 import { memoryConsolidationHost } from "./memory-consolidation-host.js";
 import { LocalMemory } from "./memory-local.js";
 import { MemoryService } from "./builtin-plugins/memory-service.js";
 import { MemoryProviderLifecycle } from "./memory-provider-lifecycle.js";
 import { memoryPlugin } from "./builtin-plugins/memory-plugin.js";
+import { WorkingMemory } from "./working-memory.js";
+import { compactSkillCatalog, materializeSkillCatalog } from "./local-context.js";
 import { memoryOrchestrationPlugin } from "./builtin-plugins/memory-orchestration-plugin.js";
 import { maintenanceClient } from "./builtin-plugins/maintenance-client.js";
 import { maintenanceControlPlugin } from "./builtin-plugins/maintenance-control-plugin.js";
@@ -55,7 +57,7 @@ import { ShutdownDeadline } from "./shutdown-deadline.js";
 import { requestSoftwareUpdate, softwareLifecyclePlugin } from "./software-update-client.js";
 import { containerRuntime } from "./software-updates.js";
 import { DispatcherRuntime } from "./dispatcher-runtime.js";
-import { attentionRequired } from "./notification-routing.js";
+import { dispatcherEventPresentation } from "./notification-routing.js";
 import { dispatcherConfig } from "./dispatcher-config.js";
 import { dispatcherPlugin } from "./builtin-plugins/dispatcher-plugin.js";
 import { workerTasksPlugin } from "./worker-tasks-plugin.js";
@@ -114,14 +116,16 @@ import { conversationPolicyPlugin } from "./conversation-policy-plugin.js";
 import { roleAwareReviewer, resolveModelRole } from "./model-roles.js";
 import { runtimeReviewer } from "./runtime/reviewer.js";
 import { validatorRole } from "./dispatcher-sequential.js";
+import { createTypeSafeAPIPlugin } from "./builtin-plugins/typesafe-api-plugin.js";
+import { typeSafeDecisionPlugin } from "./builtin-plugins/typesafe-decision-plugin.js";
 import { boundaryAssessor } from "./builtin-plugins/boundary-assessor.js";
 import { pruneToolResults } from "./builtin-plugins/tool-result-projector.js";
 import { contextStrategyHolder, disabledContextStrategies, diagnosedBoundaryAssessor } from "./context-strategies.js";
 import { contextStrategyPlugin } from "./builtin-plugins/context-strategy-plugin.js";
 import { guardResultOrchestration } from "./result-orchestration.js";
-import { assessCompletion } from "./completion-check.js";
+import { assessCompletion, assessmentPolicyStamp, completionTimeout } from "./completion-check.js";
 import { validatorPlugin } from "./builtin-plugins/completion-validator-plugin.js";
-import { semanticTopicLabeler } from "./topic-labels.js";
+import { createHashtagStartup } from "./hashtag-startup.js";
 import { completionPrompt } from "./builtin-plugins/completion-prompt.js";
 import { completionStrategyHolder } from "./completion-strategy.js";
 import { completionStrategyPlugin } from "./builtin-plugins/completion-strategy-plugin.js";
@@ -266,6 +270,8 @@ async function main(argv: string[]): Promise<void> {
   // One persistence foundation in both modes, also covering managed child turns.
   const executions = new ExecutionStore(path.join(config.home, "executions.json"), {
     protectedExecutions: () => new Set(harness?.pendingInputs().flatMap(input => input.hostEvent ? [input.hostEvent.executionId] : []) ?? []),
+    // Live overlay read: an operator can lower the retry budget without a restart.
+    workerRetryMax: () => dispatcherConfig(settings.effective().dispatcher).workerRetryMax,
   });
   await executions.load();
   const maintenanceJournal = new MaintenanceJournal(path.join(config.home, "update-maintenance.json"));
@@ -281,6 +287,7 @@ async function main(argv: string[]): Promise<void> {
     mcp: config.mcp,
     dispatcher: config.dispatcher,
     modelRoles: config.modelRoles,
+    hashtag: config.hashtag,
     reasoningEffortNoneModels: config.reasoningEffortNoneModels,
     gateways: config.gateways,
     memory: config.memory,
@@ -304,10 +311,13 @@ async function main(argv: string[]): Promise<void> {
   const completion = await completionStrategyHolder(config.home, config.completionStrategy,
     { apiVersion: 1, prompt: completionPrompt }, settings.snapshot().completionStrategy);
   const dispatchPolicy = dispatcherConfig(settings.effective().dispatcher);
+  plugins.dispatchDecisions.select(dispatchPolicy.decisionProvider ?? (completionProviderForProfile(config) === "legacy-llm" ? "legacy-llm" : false));
   const parallelAdmission = dispatchPolicy.countAuxiliaryRuns ? new ParallelAdmission(dispatchPolicy.capacity) : undefined;
   config.memory = memoryConfig(settings.effective().memory);
   memory = new MemoryService(config.memory, log, config.home);
   plugins.memoryOrchestration.register("default", memory);
+  const workingMemory = new WorkingMemory(config.home, plugins.memoryOrchestration,
+    () => ({ ...config.memory, enabled: config.memory.enabled && plugins.memoryOrchestration.active !== "none" }), log);
   const strategies = await contextStrategyHolder(config.home, config.contextStrategy, {
     apiVersion: 1, create: ({ backend, model }) => ({ assess: diagnosedBoundaryAssessor(backend, model, boundaryAssessor), project: pruneToolResults }),
   }, { backend: { review: (...args) => runtimeReviewer(runtime).review(...args) }, model: () => effectiveModels().reviewModel }, settings.snapshot().contextStrategy);
@@ -321,7 +331,7 @@ async function main(argv: string[]): Promise<void> {
     });
   const effectiveModels = () => {
     const values = settings.effective();
-    return { model: values.model, thinking: values.thinking, reviewModel: values.review?.model ?? values.model, reviewThinking: values.review?.thinking ?? "medium" };
+    return { model: values.model, thinking: values.thinking, reviewModel: values.review?.model ?? values.model, reviewThinking: values.review?.thinking ?? "medium", hashtagModel: values.hashtag?.model ?? values.model };
   };
   const updateReviewDefaults = () => {
     reviewSettings.model = effectiveModels().reviewModel;
@@ -340,7 +350,7 @@ async function main(argv: string[]): Promise<void> {
   const validatorSettings = () => ({ config: settings.effective().modelRoles,
     defaults: { model: effectiveModels().model, thinking: "low" },
     review: settings.effective().review?.model ? { model: settings.effective().review!.model, thinking: settings.effective().review?.thinking ?? "low" } : undefined });
-  const supervisorReviewer = () => ({ review: async (prompt: string, _model: string | undefined, _thinking: string, signal: AbortSignal) => {
+  const supervisorReviewer = () => ({ admit: <T>(work: () => Promise<T>, signal: AbortSignal) => auxiliaryAdmission(runtime, work, signal), review: async (prompt: string, _model: string | undefined, _thinking: string, signal: AbortSignal) => {
     const pair = await validatorRole(runtime, validatorSettings());
     if (typeof pair === "string") throw Error(pair);
     return runtimeReviewer(runtime, "supervisor").review(prompt, pair.model, pair.thinking ?? "low", signal);
@@ -382,6 +392,13 @@ async function main(argv: string[]): Promise<void> {
       const tools = workflow?.length ? [...new Set([...workflow, ...(reviewModule?.modelTools ?? [])])] : workflow;
       return dispatchPolicy.enabled && tools?.length ? [...new Set([...tools, "plugin_dispatch", "plugin_dispatch_decisions", "plugin_dispatch_plan_history", "plugin_dispatch_recovery", "plugin_worker_tasks"])] : tools;
     })(),
+    recallStep: key => workingMemory.recallWorking(key, harness.sessions.get(key)?.current?.text ?? ""),
+    captureStep: async (key, step) => {
+      const state = harness.sessions.get(key), input = state?.current;
+      if (!input || state?.stopPending || state?.resetPending || state?.cancelling === input) return;
+      await workingMemory.captureWorking({ sessionKey: key, id: `step:${step.id}`, text: input.text, reply: step.reply,
+        tools: step.tools, outcome: step.failed ? "failed" : "completed" });
+    },
     pluginTools: () => composeToolCatalog(plugins.tools, initialReloadableTools, reloadableTools?.tools ?? new Map()),
     sessionProvider: () => sessionProvider,
     legacySessionProvider: new FilesystemSessionProvider(path.join(config.home, "session-store")),
@@ -398,7 +415,9 @@ async function main(argv: string[]): Promise<void> {
       // Skill metadata is computed once per session and reused, so the leading prompt
       // prefix stays byte-stable across turns (prefix-cache friendly) and skill dirs are
       // not re-scanned every turn; invalidated whenever skills reload.
-      return skillContextCache ??= `Available skills (metadata only; read the named SKILL.md when relevant):\n${JSON.stringify(skills)}`;
+      if (skillContextCache) return skillContextCache;
+      const file = await materializeSkillCatalog(config.home, skills);
+      return skillContextCache = compactSkillCatalog(skills, file);
     },
     toolGuard: async (key, tool, input) => {
       if (tool === "plugin_review") await reloadRuntimeSettings();
@@ -467,6 +486,7 @@ async function main(argv: string[]): Promise<void> {
       blockers.push(...(gatewayManager?.updateBlockers() ?? ["gateway startup"]));
       return blockers;
   };
+  const hashtag = createHashtagStartup(runtime, settings, plugins);
   harness = new Harness({
     attachmentRoot: path.join(config.home, "attachments"),
     updateBlockers: () => [...updateOwnerBlockers(), ...(dispatcher?.updateBlockers() ?? [])],
@@ -481,8 +501,9 @@ async function main(argv: string[]): Promise<void> {
     progressEvidence: input => workingTreeEvidence(cwdFor(input.sessionKey)),
     executionStore: executions,
     contextMaintenance: maintenance,
-    memory: plugins.memoryOrchestration,
+    memory: workingMemory,
     approvalTarget: key => dispatchRuntime?.isWorker(key) ? dispatchRuntime.approvalTarget(key) : subagents.approvalTarget(key),
+    conversationSourcesReset: async (key, reset) => { await scheduler.resetConversation(key, reset); },
     conversationStopping: async key => {
       await executions.cancelParent(key);
       await subagents.revokeChildren(key);
@@ -531,11 +552,12 @@ async function main(argv: string[]): Promise<void> {
     reportContext: input => plugins.reportProcessing.context(input),
     turnCommitted: async (input) => { await improvement?.committed(input); },
     continuationDeadline: input => config.completionCheck?.authorizations?.[input.sessionKey]?.expiresAt,
-    topicLabeler: semanticTopicLabeler(runtimeReviewer(runtime), () => effectiveModels().reviewModel),
+    topicLabeler: hashtag.topicLabeler,
+    assessmentPolicy: () => assessmentPolicyStamp(plugins.validators, validatorSettings(), completionTimeout(config.completionCheck?.timeoutMs)),
     completionCheck: async (input, reply, signal, diagnostic) => {
       const grant = config.completionCheck?.authorizations?.[input.sessionKey] ??
         (input.completionAnchor ? { task: input.completionAnchor.task } : undefined);
-      return assessCompletion(supervisorReviewer(), input, reply, grant, signal, effectiveModels().reviewModel, Date.now, completion.current, diagnostic, config.completionCheck?.timeoutMs ?? 30000, plugins.validators);
+      return assessCompletion(supervisorReviewer(), input, reply, grant, signal, effectiveModels().reviewModel, Date.now, completion.current, diagnostic, completionTimeout(config.completionCheck?.timeoutMs), plugins.validators);
     },
     afterTurn: async (input, reply, session, options, signal) => {
       await reloadRuntimeSettings();
@@ -576,7 +598,7 @@ async function main(argv: string[]): Promise<void> {
         expiresAt: request.expiresAt, experiments: request.experiments });
     return assessCompletion(supervisorReviewer(), request.input, request.reply,
       { task, purpose: "nightly-closure", expiresAt: request.expiresAt }, request.signal, effectiveModels().reviewModel,
-      Date.now, completion.current, undefined, config.completionCheck?.timeoutMs ?? 30000, plugins.validators);
+      Date.now, completion.current, undefined, completionTimeout(config.completionCheck?.timeoutMs), plugins.validators);
   }, () => executions.list("improvement:nightly"));
   await improvement.initializeStrategy(nightly, settings.snapshot().nightlyStrategy);
   let nextLedgerCompact = 0;
@@ -634,6 +656,7 @@ async function main(argv: string[]): Promise<void> {
         return { running: !!state?.running, queued: state?.queue.length ?? 0 };
       },
       remainingWorkNotice: () => harness.remainingWorkNotice(localSessions!.current!.key),
+      resetConversation: () => harness.resetSession(localSessions!.current!.key),
       canSwitchSession: () => {
         const key = localSessions?.current?.key;
         const state = key ? harness.sessions.get(key) : undefined;
@@ -699,8 +722,10 @@ async function main(argv: string[]): Promise<void> {
   // streams. Legacy histories inherit their pre-upgrade host/worker context.
   for (const session of saved?.sessions ?? []) await executionContexts.capture(session.key);
   harness.addChannel(subagents.channel);
-  const persist = (pending: Inbound[] = harness.pendingInputs()) =>
-    store.save({
+  const persist = (pending?: Inbound[]) =>
+    store.capture(() => {
+      const inputs = pending ?? harness.pendingInputs();
+      return {
       version: 1,
       paused: harness.paused,
       busyMode: harness.busyMode,
@@ -708,12 +733,13 @@ async function main(argv: string[]): Promise<void> {
       approvals: { ...approvals },
       personality,
       cronOverrides: Object.fromEntries(scheduler.overrides),
-      sessions: harness.snapshotSessions(),
+      sessions: harness.snapshotSessions(false),
       subagents: subagents.snapshot(),
       subagentOverrides: subagents.overrides(),
-      pending: pending.length ? pending : undefined,
+      pending: inputs.length ? inputs : undefined,
       outbox: harness.outboxEntries().length ? harness.outboxEntries() : undefined,
       seen: harness.seenIds(),
+      };
     });
   // Restore before scheduler execution, persistence callbacks, or channel startup can write state.
   // Historical permits/timers are not evidence of ongoing execution. Establish
@@ -750,7 +776,7 @@ async function main(argv: string[]): Promise<void> {
     },
   });
   let requestRestart: () => Promise<void> = async () => { throw Error("Lifecycle startup not complete; retry restart"); };
-  await plugins.load(config.plugins ?? [], { agent: config.agent, home: config.home, cwd: config.cwd, executionContexts: executionContextCapability, foregroundWork: work => harness.withForegroundWork(work) }, [...builtinCommandNames, "sessions", "resume", ...skills.map((s) => s.name)], ["console", "api", "dispatch", ...Object.keys(bundledGatewayModules()), ...harness.channels.keys()], [languageService(() => settings.effective().language ?? {}), taskPriorityPlugin(harness, async (key, taskId, priority, signal) => {
+  await plugins.load(config.plugins ?? [], { agent: config.agent, home: config.home, cwd: config.cwd, executionContexts: executionContextCapability, foregroundWork: work => harness.withForegroundWork(work) }, [...builtinCommandNames, "sessions", "resume", ...skills.map((s) => s.name)], ["console", "api", "dispatch", ...Object.keys(bundledGatewayModules()), ...harness.channels.keys()], [...(config.typeSafeDecisions ? [typeSafeDecisionPlugin, createTypeSafeAPIPlugin(config.typeSafeDecisions)] : []), languageService(() => settings.effective().language ?? {}), hashtag.plugin, taskPriorityPlugin(harness, async (key, taskId, priority, signal) => {
     const session = harness.sessions.get(key), input = session?.current;
     const task = (session?.tasks ?? (session?.task ? [session.task] : [])).find(task => task.id === taskId);
     if (!task || input?.source !== "channel" || !(input.replyTo?.channel === "console" || !!input.sender && admins.includes(input.sender))) return false;
@@ -767,7 +793,7 @@ async function main(argv: string[]): Promise<void> {
     admit: (id: string, request: import("./context-maintenance.js").MaintenanceRequest, version: number) => maintenance.admit(values["--maintenance-session"]!, id, request, version),
     cancel: (id: string, version: number) => maintenance.cancelAdmission(values["--maintenance-session"]!, id, version),
     maintain: () => harness.maintainIdle(values["--maintenance-session"]!),
-  }), path.resolve(values["--maintenance-directory"]))] : []), ...(values["--observe-directory"] ? [sessionObserverPlugin(Object.freeze({ observeSession: (key: string) => harness.observeSession(key) }), path.resolve(values["--observe-directory"]), values["--observe-session"]!)] : []), validatorPlugin, memoryOrchestrationPlugin(plugins.memoryOrchestration, settings, harness, config.memory.enabled), completionStrategyPlugin(completion, settings, harness), contextStrategyPlugin(strategies, settings, harness, maintenance), compactionStrategyPlugin(selectedCompaction, settings, harness, maintenance), nightlyStrategyPlugin(nightly, settings, improvement), reportPlugin, dispatcherPlugin(() => dispatcher), dispatchDecisionsPlugin(() => dispatcher), dispatchPlanHistoryPlugin(() => dispatcher), dispatchRecoveryPlugin(() => dispatcher, key => runtime.retainedSessionHistory?.(key) ?? Promise.resolve(undefined)), ...(dispatchPolicy.enabled ? [executionControlPlugin(() => dispatcher, path.join(config.home, "operator-control"))] : []), workerTasksPlugin(config.home, () => dispatcher, async (parent, requestId, input) => {
+  }), path.resolve(values["--maintenance-directory"]))] : []), ...(values["--observe-directory"] ? [sessionObserverPlugin(Object.freeze({ observeSession: (key: string) => harness.observeSession(key) }), path.resolve(values["--observe-directory"]), values["--observe-session"]!)] : []), validatorPlugin, memoryOrchestrationPlugin(plugins.memoryOrchestration, settings, harness, config.memory.enabled), completionStrategyPlugin(completion, settings, harness), contextStrategyPlugin(strategies, settings, harness, maintenance), compactionStrategyPlugin(selectedCompaction, settings, harness, maintenance), nightlyStrategyPlugin(nightly, settings, improvement), reportPlugin, dispatcherPlugin(() => dispatcher), dispatchDecisionsPlugin(() => dispatcher), dispatchPlanHistoryPlugin(() => dispatcher), dispatchRecoveryPlugin(() => dispatcher, key => runtime.retainedSessionHistory?.(key) ?? Promise.resolve(undefined)), ...(dispatchPolicy.enabled ? [executionControlPlugin(() => dispatcher, path.join(config.home, "operator-control"), key => harness.resetSession(key))] : []), workerTasksPlugin(config.home, () => dispatcher, async (parent, requestId, input) => {
       if (!dispatcher || harness.paused) throw Error("Dispatcher unavailable or Harness paused");
       const existing = await executions.findRequest(parent, requestId);
       if (existing) {
@@ -779,13 +805,14 @@ async function main(argv: string[]): Promise<void> {
     }), subagentPlugin(subagents,async()=>{await persist();}), ...(reloadableTools ? [reloadableToolsPlugin(reloadableTools)] : []), wasmToolsPlugin(config.home, config.wasmTools ?? []), continuationPlugin(harness), loopPlugin(harness), improvementPlugin(improvement!), protectedContentPlugin(protectedContent), gatewayManagerPlugin(gatewayManager, settings), messagePlugin(config.home, gatewayManager), conversationPolicyPlugin(settings, harness), policyManagerPlugin(policyManager, settings), extensionManagerPlugin(extensionManager, settings), gatewayPlugin(settings, harness), contextPlugin(maintenance, settings), ...(config.memory.enabled ? [memoryPlugin(memory), ...(config.memory.consolidation ? [memoryConsolidationHost(config.memory.consolidation, runtime, memory, log)] : [])] : []), skillSearchPlugin(skillCatalog), ...(adaptiveSkills ? [adaptiveSkills.plugin()] : []), ...reviewEngine.plugins], [settings.desired().gatewayPlugins?.webui?.module].filter((value): value is string => typeof value === "string"));
   // Registration may happen during plugin activation; reject an unresolved name before admitting work.
   void plugins.validators.current;
+  void plugins.dispatchDecisions.current;
   if (dispatchPolicy.enabled) {
     dispatchRuntime = new DispatcherRuntime(harness, executions, async () => {
       await reloadRuntimeSettings();
       return settings.effective().dispatcher?.rules;
     }, () => ({ config: settings.effective().modelRoles,
       defaults: { model: effectiveModels().model, thinking: effectiveModels().thinking },
-      review: settings.effective().review?.model ? { model: settings.effective().review!.model, thinking: settings.effective().review?.thinking ?? "medium" } : undefined }), plugins.validators, () => ({
+      review: settings.effective().review?.model ? { model: settings.effective().review!.model, thinking: settings.effective().review?.thinking ?? "medium" } : undefined }), plugins.dispatchDecisions, () => ({
       coreRevision: readSoftwareVersions(BUILD_INFO).revision,
       moduleDirectory: fileURLToPath(new URL("./", import.meta.url)),
       documentationDirectory: fileURLToPath(new URL("../docs/", import.meta.url)),
@@ -805,17 +832,15 @@ async function main(argv: string[]): Promise<void> {
         if (!task || task.parentStopped) return;
         if ((event.type === "question" || event.type === "status") && !event.parent.startsWith("cron-followup:")) {
           const to = target;
+          const presentation = dispatcherEventPresentation(event, task.status, to?.channel);
+          if (!presentation) return; // Internal plans/routing/validator rounds are not chat replies.
           const text = dispatchRuntime!.eventText(event);
-          // Questions and recovery blockers require attention. Routine lifecycle
-          // belongs to one update row, never a succession of final answers.
-          if (to?.channel === "api") {
+          if (presentation === "progress") {
             // The API run belongs to the parent turn, not its child's status or
             // question. Preserve stop/final-answer ownership while exposing SSE.
             await harness.deliver(to, text, { deliveryId: `dispatch-event:${event.id}`, presentation: "progress" });
-          } else if (attentionRequired(event, task.status)) {
+          } else {
             await harness.deliver(to, text, { deliveryId: `dispatch-event:${event.id}` });
-          } else if (event.parent !== "improvement:nightly") {
-            await harness.deliver(to, text, { deliveryId: `dispatch-event:${event.id}`, statusKey: `dispatch:${event.executionId}` });
           }
         }
         return;
@@ -1002,12 +1027,13 @@ async function main(argv: string[]): Promise<void> {
     modelSettings: {
       get: effectiveModels,
       source: (key) => {
-        const paths = { model: "model", thinking: "thinking", reviewModel: "review.model", reviewThinking: "review.thinking" } as const;
-        return settings.source(key === "reviewModel" && settings.effective().review?.model === undefined ? "model" : paths[key]);
+        const paths = { model: "model", thinking: "thinking", reviewModel: "review.model", reviewThinking: "review.thinking", hashtagModel: "hashtag.model" } as const;
+        const inherited = (key === "reviewModel" && settings.effective().review?.model === undefined) || (key === "hashtagModel" && settings.effective().hashtag?.model === undefined);
+        return settings.source(inherited ? "model" : paths[key]);
       },
       set: async (key, value) => {
-        if (value !== undefined && (key === "model" || key === "reviewModel") && !(await runtime.models()).includes(value)) throw new Error("Model is not available; configure provider credentials and model first");
-        const paths: Record<keyof ModelSettings, SettingPath> = { model: "model", thinking: "thinking", reviewModel: "review.model", reviewThinking: "review.thinking" };
+        if (value !== undefined && (key === "model" || key === "reviewModel" || key === "hashtagModel") && !(await runtime.models()).includes(value)) throw new Error("Model is not available; configure provider credentials and model first");
+        const paths: Record<keyof ModelSettings, SettingPath> = { model: "model", thinking: "thinking", reviewModel: "review.model", reviewThinking: "review.thinking", hashtagModel: "hashtag.model" };
         await settings.set(paths[key], value);
         updateReviewDefaults();
       },
@@ -1085,7 +1111,8 @@ async function main(argv: string[]): Promise<void> {
     await subagents.revokeChildren(session.key);
   }
   for (const session of harness.snapshotSessions()) {
-    if (session.stopPending) await harness.stopConversation(session.key);
+    if (session.resetPending) await harness.resetSession(session.key);
+    else if (session.stopPending) await harness.stopConversation(session.key);
   }
   if (apiKey) await harness.reconcileCancelledApiTasks((key, inputId) => {
     const receipt = runs.get(inputId.slice("api:".length));
@@ -1094,7 +1121,6 @@ async function main(argv: string[]): Promise<void> {
   await harness.reconcileStoppedTasks();
   await subagents.reconcile(sessionEnabled);
   await dispatcher?.start();
-  await harness.recoverTasks();
   if (saved?.pending?.length || saved?.outbox?.length || harness.pendingInputs().length) {
     const pending = (saved?.pending ?? []).filter(input => sessionEnabled(input.sessionKey)).length;
     const replies = (saved?.outbox ?? []).filter(entry => sessionEnabled(entry.sessionKey)).length;
@@ -1106,8 +1132,9 @@ async function main(argv: string[]): Promise<void> {
   await persist(); // Complete failure-capable startup work before claiming readiness.
   if (stopping) return;
   hostAdmissionReady = true;
-  // Never acknowledge from the old process or before startup recovery and
-  // channel authentication succeed. Delivery remains independent of work.
+  // Never acknowledge from the old process or before structural recovery,
+  // revocation reconciliation and channel authentication succeed. Read-only
+  // semantic reassessments remain independently pending, never effect grants.
   const startupNotice = new StartupNotice({ agent: config.agent,
     build: readSoftwareVersions(BUILD_INFO), restarted: !!saved, language: resolveLanguage(settings.effective().language, { kind: "system" }),
     post: (input, text) => harness.post(input, text), log });
@@ -1122,6 +1149,15 @@ async function main(argv: string[]): Promise<void> {
   };
   announceStartup();
   if (process.send && process.connected) process.send({ type: "hayate-runtime-ready" }, () => {});
+  // Structural recovery, revocations and durable inbox publication above are
+  // readiness fences. External semantic judgments are NOT: a large backlog of
+  // slow/unavailable reviewers must not withhold launcher readiness for minutes
+  // (or make an otherwise healthy Kubernetes agent fail startup probes).
+  // Each retained task still independently persists/rechecks its admission.
+  void harness.recoverTasks(true).catch(() => {
+    log("retained task recovery scan failed; shutting down without bypassing admission");
+    void shutdown(1);
+  });
 }
 
 main(process.argv.slice(2)).catch(async (err) => {

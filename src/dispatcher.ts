@@ -1,6 +1,6 @@
 import { recoveryBlock, type ExecutionRecoveryPolicy } from "./execution-recovery.js";
 import { validateWorkerPin } from "./model-roles.js";
-import { executionDecisionRevision, ExecutionClaimConflict, ExecutionDecisionConflict, ExecutionDeadlineExpired, ExecutionWorkerFailure, ExecutionAssessmentHold, type Execution, type ExecutionEvent, type ExecutionStore } from "./execution.js";
+import { executionDecisionRevision, ExecutionClaimConflict, ExecutionDecisionConflict, ExecutionDeadlineExpired, ExecutionWorkerFailure, ExecutionAssessmentHold, ExecutionAssessmentStalled, type Execution, type ExecutionEvent, type ExecutionStore } from "./execution.js";
 import { toolGuardDenialReason } from "./tool-guard-error.js";
 import { PriorityScheduler, type TaskPriority } from "./task-priority.js";
 
@@ -39,8 +39,10 @@ export interface DispatcherStrategy {
 
 /** Parent revocation belongs to persistence even when scheduling is disabled. */
 export async function stopDispatcherParent(store: ExecutionStore, parent: string, dispatcher?: Dispatcher): Promise<void> {
-  if (dispatcher) await dispatcher.cancelParent(parent);
-  else await store.cancelParent(parent);
+  if (dispatcher) {
+    await dispatcher.cancelParent(parent);
+    await Promise.all(store.list(parent).map(task => dispatcher.drainRevokedExecution(task.id)));
+  } else await store.cancelParent(parent);
 }
 
 /** Event-driven host scheduler. Number of durable tasks is independent of active
@@ -170,13 +172,14 @@ export class Dispatcher {
     // is also rejected by the Harness execution-time authority check.
     await this.store.cancelParent(parent);
     for (const task of this.store.list(parent)) this.active.get(task.id)?.abort.abort();
-    await this.kick();
+    // A scoped stop must not wait for unrelated scheduling or event delivery.
+    void this.kick().catch(this.report);
   }
   async cancelTask(parent: string, taskId: string, preexistingUnscoped: readonly string[] = []): Promise<void> {
     await this.store.cancelTask(parent, taskId, preexistingUnscoped);
     for (const task of this.store.list(parent))
       if (task.dependency?.taskId === taskId || task.ownershipHold) this.active.get(task.id)?.abort.abort();
-    await this.kick();
+    void this.kick().catch(this.report);
   }
   /** Also called by host retry ticks; no model calls are used to poll task status. */
   kick(): Promise<void> {
@@ -328,7 +331,8 @@ export class Dispatcher {
       // Preserve partial state, but do not automatically spin on a failing plugin.
       if (!this.stopped && this.store.list().find(item => item.id === task.id)?.status === "running") {
         await this.store.fail(task.id, token, error instanceof ExecutionDeadlineExpired || toolGuardDenialReason(error).startsWith("deadline_expired:")
-          ? "deadline-expired" : error instanceof ExecutionWorkerFailure ? error.diagnosticCode : "runtime-failure",
+          ? "deadline-expired" : error instanceof ExecutionAssessmentStalled ? "assessment-stalled"
+          : error instanceof ExecutionWorkerFailure ? error.diagnosticCode : "runtime-failure",
           { strategy, policy: this.recoveryPolicy,
             ...(error instanceof ExecutionAssessmentHold ? { assessmentHold: { state: error.state, step: error.step } } : {}) }).catch(this.report);
       }
@@ -394,6 +398,14 @@ export class Dispatcher {
   /** Host fence: durable cancellation alone does not mean execution has drained. */
   async waitForExecution(id: string): Promise<void> {
     await this.scheduling;
+    await this.active.get(id)?.done;
+  }
+  /** Exact stopped scope only: never wait on another parent's scheduling. */
+  async drainRevokedExecution(id: string): Promise<void> {
+    const task = this.store.list().find(task => task.id === id);
+    if (!task || task.status !== "cancelled" && !task.parentStopped)
+      throw Error("Scoped drain requires durable execution revocation");
+    // Late claims recheck live ownership before publishing/executing a worker.
     await this.active.get(id)?.done;
   }
   flushEvents(): Promise<void> {

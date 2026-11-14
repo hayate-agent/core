@@ -1,3 +1,4 @@
+import { validateHashtagConfig, type HashtagConfig } from "./hashtag-config.js";
 import { validateLanguagePolicy } from "./language.js";
 import { readFile } from "node:fs/promises";
 import { agentHome, configurationFile } from "./product-paths.js";
@@ -58,11 +59,14 @@ export interface HarnessConfig {
   wasmTools?: import("./wasm-tools.js").WasmToolConfig[];
   protectedContent?: import("./protected-content.js").ProtectedContentConfig;
   skillUpdateSource?: import("./skill-updates.js").SkillUpdateSource;
+  /** Trusted plugin binding; reference only, never inline credentials. */
+  typeSafeDecisions?: import("./builtin-plugins/typesafe-api-plugin.js").TypeSafeAPIConfig;
   /** Infrastructure-owned semantic continuation grants, keyed by exact conversation. */
   completionCheck?: { provider?: string | false; authorizations?: Record<string, import("./completion-check.js").CompletionAuthorization>; timeoutMs?: number };
   /** Explicit installation review selections, before normalization adds defaults. */
   reviewOverrides?: { model?: string; thinking?: string };
   modelRoles?: ModelRoles;
+  hashtag?: HashtagConfig;
   dispatcher?: Partial<import("./dispatcher-config.js").DispatcherConfig>;
   sessions?: { provider: string; options?: unknown };
   compaction?: { strategy: string };
@@ -141,6 +145,7 @@ export function defaultConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
   if (overrides.completionCheck?.timeoutMs !== undefined && (!Number.isSafeInteger(overrides.completionCheck.timeoutMs) ||
       overrides.completionCheck.timeoutMs < 1000 || overrides.completionCheck.timeoutMs > 120000)) throw Error("completionCheck.timeoutMs must be between 1000 and 120000 milliseconds");
   if (overrides.modelRoles !== undefined) validateModelRoles(overrides.modelRoles);
+  validateHashtagConfig(overrides.hashtag);
   dispatcherConfig(overrides.dispatcher);
   validateWasmTools(overrides.wasmTools ?? []);
   if (overrides.mcp !== undefined && (overrides.mcp === null || typeof overrides.mcp !== "object" || typeof overrides.mcp.enabled !== "boolean")) {
@@ -198,7 +203,9 @@ export function defaultConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
     protectedContent: overrides.protectedContent,
     skillUpdateSource: overrides.skillUpdateSource,
     completionCheck: overrides.completionCheck,
+    typeSafeDecisions: overrides.typeSafeDecisions,
     modelRoles: overrides.modelRoles,
+    hashtag: overrides.hashtag,
     dispatcher: dispatcherConfig(overrides.dispatcher),
     sessions: overrides.sessions ?? { provider: "native" },
     compaction: overrides.compaction ?? { strategy: "native" },

@@ -4,6 +4,7 @@ import { MemoryProviderLifecycle } from "../src/memory-provider-lifecycle.js";
 import { memoryConfig, type MemoryProvider } from "../src/memory.js";
 import { MemoryService } from "../src/builtin-plugins/memory-service.js";
 import { LocalMemory } from "../src/memory-local.js";
+import { FileMemoryStore } from "../src/memory-worker.js";
 import { mkdtemp, readdir, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -24,8 +25,11 @@ const tick = () => new Promise(r => setImmediate(r));
 test("real capture backlog flush retains facade lease while reconnect drains", async () => {
   const home = await mkdtemp(path.join(os.tmpdir(), "memory-facade-flush-"));
   const first = fixture(), second = fixture(), gate = deferred(), entered = deferred();
+  const store = new FileMemoryStore(path.join(home, "store"), memoryConfig());
+  await store.start();
   let writes = 0, opens = 0;
-  first.provider.put = async () => { writes++; entered.resolve(); await gate.promise; return {} as any; };
+  // Capture must receive a valid provider-authoritative entry, including its ID.
+  first.provider.put = async (context, entry) => { writes++; entered.resolve(); await gate.promise; return store.put(context, entry); };
   const lifecycle = new MemoryProviderLifecycle(async () => ++opens === 1 ? first.provider : second.provider);
   try {
     const service = new MemoryService(memoryConfig(), () => {}, home);
@@ -37,7 +41,9 @@ test("real capture backlog flush retains facade lease while reconnect drains", a
     gate.resolve(); await flush; await reconnect;
     assert.equal(service.provider, lifecycle); assert.equal(writes, 1);
     assert.deepEqual(await readdir(path.join(home, "memory-pending")), []);
-  } finally { gate.resolve(); await lifecycle.close(); await rm(home, { recursive: true, force: true }); }
+    assert.equal(first.closes, 1); assert.equal(opens, 2);
+    assert.equal((await store.status()).entries, 1);
+  } finally { gate.resolve(); await lifecycle.close(); await store.close(); await rm(home, { recursive: true, force: true }); }
 });
 
 test("real LocalMemory reconnect releases exclusive store lock and retains data", async () => {

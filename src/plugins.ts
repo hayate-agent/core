@@ -139,6 +139,8 @@ export interface PluginAPI {
   registerTool(tool: PluginTool): void;
   registerSessionProvider(name: string, factory: SessionProviderFactory): void;
   registerValidatorProvider(provider: ValidatorProvider): void;
+  /** Separate advisory consumer; validator registration never selects Dispatcher. */
+  registerDispatchDecisionProvider(provider: ValidatorProvider): void;
   registerMemoryProvider(name: string, factory: MemoryProviderFactory): void;
   registerMemoryOrchestrator(name: string, implementation: MemoryOrchestrator): void;
   registerReportProcessing(name: string, implementation: ReportProcessing): void;
@@ -172,6 +174,7 @@ export class PluginHost {
   readonly tools = new Map<string, PluginTool>();
   readonly compactions = new Map<string, CompactionStrategy>();
   readonly validators = new ValidatorRegistry();
+  readonly dispatchDecisions = new ValidatorRegistry();
   readonly memoryOrchestration = new MemoryOrchestrationRegistry();
   readonly reportProcessing = new ReportProcessingRegistry();
   readonly memoryProviders = new Map<string, MemoryProviderFactory>();
@@ -261,6 +264,10 @@ export class PluginHost {
             registerValidatorProvider: (provider: ValidatorProvider) => {
               if (!registering) throw Error("Validator registration closed");
               this.validators.register(provider);
+            },
+            registerDispatchDecisionProvider: (provider: ValidatorProvider) => {
+              if (!registering) throw Error("Dispatcher decision registration closed");
+              this.dispatchDecisions.register(provider);
             },
             registerMemoryProvider: (name: string, factory: MemoryProviderFactory) => {
               if (!registering) throw new Error("Plugin registration is closed");

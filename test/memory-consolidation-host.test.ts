@@ -23,7 +23,7 @@ test("host uses ephemeral isolated session, explicit model, delegates provider a
   const plugin = memoryConsolidationHost({ tier: "local", model: "cheap/local" }, runtime, memory as any, () => {});
   await plugin.activate({ registerService(name: string, version: number, impl: unknown) { assert.equal(name, "memory-consolidation"); assert.equal(version, 1); service = impl; }, onStop(fn: unknown) { cleanup = fn; } } as unknown as PluginAPI);
   assert.equal(await service.summarize({ sessionKey: "private", requestId: "one", instruction: "Summarize", sources: [{ reply: "untrusted" }] }), "Reported lesson");
-  assert.deepEqual(calls[0].options, { ephemeral: true });
+  assert.deepEqual(calls[0].options, { ephemeral: true, assessmentPurpose: "handover" });
   assert.ok(!calls[0].key.includes("private"));
   assert.deepEqual(calls[1].options, { model: "cheap/local", thinking: "off" });
   assert.equal(calls[2], "disposed");

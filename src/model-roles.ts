@@ -1,7 +1,7 @@
 import type { AgentRuntime } from "./types.js";
 import { DISPATCH_COMPLEXITY_POLICY } from "./dispatch-complexity-policy.js";
 
-export const modelRoleNames = ["dispatcher", "simple", "medium", "high", "reviewer", "validator"] as const;
+export const modelRoleNames = ["dispatcher", "simple", "medium", "high", "reviewer", "validator", "hashtag"] as const;
 export type ModelRole = typeof modelRoleNames[number];
 export interface ModelPair { model?: string; thinking?: string }
 export interface ModelRoles { enabled: boolean; roles?: Partial<Record<ModelRole, ModelPair>> }

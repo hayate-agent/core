@@ -3,7 +3,11 @@ import cp from 'node:child_process';import {syncBuiltinESMExports} from 'node:mo
 import {mkdtemp,writeFile,chmod,readFile,rm} from 'node:fs/promises';import os from 'node:os';import path from 'node:path';
 const original=cp.execFile;let child:ReturnType<typeof cp.execFile>|undefined;let options:any;let spawnedAt=0;const TIMEOUT=4000;
 const forwarding=(file:any,args:any,opts:any,cb:any)=>{options={...opts};assert.equal(opts.timeout,600000);spawnedAt=Date.now();return child=original(file,args,{...opts,timeout:TIMEOUT},cb);};
-Object.defineProperty(forwarding,promisify.custom,{value:(file:any,args:any,opts:any)=>new Promise((resolve,reject)=>forwarding(file,args,opts,(err:any,stdout:any,stderr:any)=>err?reject(err):resolve({stdout,stderr})))});
+Object.defineProperty(forwarding,promisify.custom,{value:(file:any,args:any,opts:any)=>{
+ let spawned:any;
+ const result=new Promise((resolve,reject)=>{spawned=forwarding(file,args,opts,(err:any,stdout:any,stderr:any)=>err?reject(err):resolve({stdout,stderr}));});
+ return Object.assign(result,{child:spawned});
+}});
 (cp as any).execFile=forwarding;syncBuiltinESMExports();
 const {Scheduler}=await import('../../src/scheduler.js');
 const dir=await mkdtemp(path.join(os.tmpdir(),'scheduler-forward-'));

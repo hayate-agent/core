@@ -13,6 +13,8 @@ export interface DispatchModelRule {
 export interface DispatcherConfig {
   enabled: boolean;
   strategy: string;
+  /** Independent decision provider; omission preserves legacy configurations. */
+  decisionProvider?: string | false;
   /** Explicit operator declaration: the configured runtime/backend supports concurrency. */
   concurrentRequests: boolean;
   /** Active slots, not a limit on the number of persistent workers/tasks. */
@@ -21,15 +23,19 @@ export interface DispatcherConfig {
   countAuxiliaryRuns: boolean;
   /** Automatic archive age for delivered terminal task records. */
   retentionDays: number;
+  /** Maximum total worker attempts (initial run + retries) per task before a manual-intervention hold. */
+  workerRetryMax: number;
   /** Per-task model routing rules (first match wins; at most one empty-match fallback, last). */
   rules?: DispatchModelRule[];
 }
 export function dispatcherConfig(value?: Partial<DispatcherConfig>): DispatcherConfig {
   if (value !== undefined && (!value || typeof value !== "object" || Array.isArray(value))) throw Error("Invalid dispatcher configuration");
-  const config = { enabled: false, strategy: "direct", concurrentRequests: false, capacity: 4, countAuxiliaryRuns: false, retentionDays: 7, ...value };
+  const config = { enabled: false, strategy: "direct", concurrentRequests: false, capacity: 4, countAuxiliaryRuns: false, retentionDays: 7, workerRetryMax: 12, ...value };
+  if (config.decisionProvider !== undefined && config.decisionProvider !== false && (typeof config.decisionProvider !== "string" || !/^[a-z][a-z0-9-]{0,63}$/.test(config.decisionProvider))) throw Error("Invalid dispatcher.decisionProvider");
   if (typeof config.countAuxiliaryRuns !== "boolean" || typeof config.enabled !== "boolean" || typeof config.concurrentRequests !== "boolean" ||
       typeof config.strategy !== "string" || !/^[a-z][a-z0-9_-]*$/.test(config.strategy) ||
       !Number.isSafeInteger(config.capacity) || config.capacity < 1 ||
+      !Number.isSafeInteger(config.workerRetryMax) || config.workerRetryMax < 1 ||
       !Number.isSafeInteger(config.retentionDays) || config.retentionDays < 1 || config.retentionDays > 3650) throw Error("Invalid dispatcher configuration");
   if (config.enabled && !config.concurrentRequests) throw Error("Dispatcher requires explicit concurrentRequests support");
   if (config.rules !== undefined) {

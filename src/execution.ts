@@ -2,7 +2,8 @@ import { executionMetadata, type ExecutionMetadata } from "./builtin-plugins/exe
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
-import { writeFileDurable } from "./durable.js";
+import { writeFileDurable, syncDirStrict } from "./durable.js";
+import { ExecutionDependencyStorage, freezeExecutionDependency } from "./execution-dependency-storage.js";
 import { recoveryBlock, type RecoveryStrategy, type ExecutionRecoveryPolicy } from "./execution-recovery.js";
 
 /** Exact host state fence for evidence-backed parent continuation. */
@@ -57,12 +58,17 @@ function nextDecisionRevision(receipts: readonly ExecutionDecision[]): number {
 }
 
 /** Closed host-owned causes; exception/worker text is never persisted here. */
-export type ExecutionDiagnosticCode = "runtime-failure" | "worker-failed" | "worker-cancelled" | "maintenance-blocked" | "manual-pause" | "deadline-expired";
+export type ExecutionDiagnosticCode = "runtime-failure" | "worker-failed" | "worker-cancelled" | "maintenance-blocked" | "manual-pause" | "deadline-expired" | "retry-exhausted" | "empty-result" | "assessment-blocked" | "assessment-waiting" | "assessment-stalled";
 export class ExecutionDeadlineExpired extends Error {
   constructor() { super("deadline-expired: saved execution deadline has elapsed"); }
 }
 export class ExecutionAssessmentHold extends Error {
   constructor(readonly state: "blocked" | "waiting", readonly step: number, reason: string) { super(reason); }
+}
+
+/** Retained work made no observed progress; automatic transport retries cannot release it. */
+export class ExecutionAssessmentStalled extends Error {
+  constructor() { super("Prüfung ohne neue Nachweise angehalten. Neue Informationen oder eine ausdrückliche Fortsetzung sind erforderlich; bisherige Ergebnisse bleiben erhalten."); }
 }
 
 export class ExecutionWorkerFailure extends Error {
@@ -173,11 +179,22 @@ export class ExecutionStore {
   private data: Ledger = { version: 1, executions: [], events: [] };
   private queue: Promise<unknown> = Promise.resolve();
   private loaded = false;
+  private legacy?: string;
+  private publicationFailed = false;
+  private readonly dependencies: ExecutionDependencyStorage;
   constructor(private readonly file: string, private readonly retention: {
     now?: () => number;
     protectedExecutions?: () => ReadonlySet<string>;
-  } = {}) {}
+    /** Maximum total worker attempts (initial run + retries) per task before a manual-intervention hold. */
+    workerRetryMax?: number | (() => number);
+  } = {}) { this.dependencies = new ExecutionDependencyStorage(file); }
   private now(): number { return this.retention.now?.() ?? Date.now(); }
+  /** Configured automatic worker retry budget; invalid or missing values fall back to the default. */
+  private retryCap(): number {
+    const value = this.retention.workerRetryMax;
+    const resolved = typeof value === "function" ? value() : value;
+    return typeof resolved === "number" && Number.isSafeInteger(resolved) && resolved >= 1 ? resolved : 12;
+  }
   private archiveFile(parent: string, requestId: string): string {
     const key = createHash("sha256").update(JSON.stringify([parent, requestId])).digest("hex");
     return path.join(`${this.file}.archive`, `${key}.json`);
@@ -197,7 +214,11 @@ export class ExecutionStore {
     if (this.loaded) throw Error("Execution store already loaded");
     try {
       if ((await stat(this.file)).size > 32 * 1024 * 1024) throw Error("Execution ledger size limit exceeded");
-      const data = JSON.parse(await readFile(this.file, "utf8")) as Ledger;
+      const raw = await readFile(this.file, "utf8");
+      const stored = JSON.parse(raw);
+      if (stored.version !== 1 && stored.version !== 2) throw Error("Unsupported execution ledger");
+      this.legacy = stored.version === 1 ? raw : undefined;
+      const data = (stored.version === 2 ? { ...stored, version: 1, executions: await this.dependencies.hydrate(stored.executions) } : stored) as Ledger;
       if (data.version !== 1 || !Array.isArray(data.executions) || !Array.isArray(data.events)) throw Error("Unsupported execution ledger");
       if (data.waitAuthorityDenials !== undefined && (!Array.isArray(data.waitAuthorityDenials) ||
           data.waitAuthorityDenials.length > 100 || data.waitAuthorityDenials.some(r =>
@@ -296,6 +317,7 @@ export class ExecutionStore {
           else if (turn.settlement !== undefined) throw Error("Unexpected turn settlement");
         }
       }
+      for (const task of data.executions) freezeExecutionDependency(task.dependency);
       this.data = data;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
@@ -305,12 +327,29 @@ export class ExecutionStore {
   private mutate<T>(fn: (draft: Ledger) => T | Promise<T>): Promise<T> {
     const next = this.queue.catch(() => {}).then(async () => {
       if (!this.loaded) throw Error("Execution store not loaded");
-      const draft = structuredClone(this.data);
+      if (this.publicationFailed) throw Error("Execution ledger publication uncertain; restart and reload committed authority before further mutations");
+      // Dependency snapshots are immutable host-owned evidence. Clone mutable
+      // ledger state, but share frozen dependencies rather than copying tens of
+      // MB on every status/turn barrier. Preserve exact key order for fences.
+      const draft = structuredClone({ ...this.data, executions: this.data.executions.map(({ dependency, ...task }) => task) }) as Ledger;
+      draft.executions = draft.executions.map((task, index) => Object.fromEntries(Object.keys(this.data.executions[index]!).map(key =>
+        [key, key === "dependency" ? this.data.executions[index]!.dependency : task[key as keyof Execution]])) as unknown as Execution);
       const result = await fn(draft);
       await mkdir(path.dirname(this.file), { recursive: true });
-      const serialized = `${JSON.stringify(draft)}\n`;
+      if (this.legacy !== undefined) await this.dependencies.preserveLegacy(this.legacy);
+      const executions = await this.dependencies.stage(draft.executions);
+      const serialized = `${JSON.stringify({ ...draft, version: 2, executions })}\n`;
       if (Buffer.byteLength(serialized, "utf8") > 32 * 1024 * 1024) throw Error("Execution ledger size limit reached; reconcile retained records");
-      await writeFileDurable(this.file, serialized);
+      let published = false;
+      try { await writeFileDurable(this.file, serialized, 0o600, undefined, syncDirStrict, () => { published = true; }); }
+      catch (error) {
+        // Atomic rename can succeed before the directory fsync reports failure.
+        // Never allow a later draft from stale memory to overwrite that possible
+        // commit. A fresh owner must reload the authoritative on-disk ledger.
+        if (published) this.publicationFailed = true;
+        throw error;
+      }
+      this.legacy = undefined;
       this.data = draft;
       return structuredClone(result);
     });
@@ -424,6 +463,8 @@ export class ExecutionStore {
       ?? await this.archived(parent, requestId);
     return task ? structuredClone(task) : undefined;
   }
+  /** Read-only logical snapshot for diagnostics; disk format may contain refs. */
+  snapshot(): Ledger { if (!this.loaded) throw Error("Execution store not loaded"); return structuredClone(this.data); }
   list(parent?: string): Execution[] {
     return structuredClone(this.data.executions.filter(item => parent === undefined || item.parent === parent));
   }
@@ -456,6 +497,13 @@ export class ExecutionStore {
             JSON.stringify(old.pinned ?? null) !== JSON.stringify(pinned ?? null)) throw Error("Conflicting execution request ID");
         return old;
       }
+      // A fresh request ID is not new authority to escape a stagnant execution.
+      // Preserve independent work on other mandates and idempotent request retries.
+      const held = dependency?.taskId && draft.executions.find(item => item.parent === parent &&
+        item.dependency?.taskId === dependency.taskId && !item.parentStopped &&
+        ["paused", "blocked"].includes(item.status) && (item.diagnosticCode === "assessment-stalled" ||
+          item.input === input && !!item.assessmentHold));
+      if (held) throw Error(`execution-held: reconcile or explicitly resume existing execution ${held.id}; a new request ID cannot bypass its hold`);
       if (draft.executions.length >= 2000) throw Error("Retained execution limit reached; archive only after reconciliation");
       if (origin !== undefined && !validAddress(origin)) throw Error("Invalid execution origin");
       const task: Execution = { recoveryEnrollment: "current", dependency: structuredClone(dependency), ...(origin ? { origin: structuredClone(origin) } : {}), pinned: structuredClone(pinned), id: randomUUID(), parent, requestId, input, strategy, strategyVersion, status: "ready", restarts: 0 };
@@ -850,6 +898,10 @@ export class ExecutionStore {
       task.terminalAt = this.now();
       task.result = result;
       delete task.token;
+      if (result.length === 0) {
+        task.diagnosticCode = "empty-result";
+        this.event(draft, task, "status", "empty-result: Worker abgeschlossen ohne Ergebnis-Text; leeres Ergebnis ist markiert, kein Fehler. Ergebnis prüfen und bei Bedarf neu einreichen oder explizit auflösen.");
+      }
       this.event(draft, task, "result", result);
     });
   }
@@ -892,11 +944,19 @@ export class ExecutionStore {
       if (code === "worker-failed" || code === "worker-cancelled") task.recoverySession = `dispatch:${task.id}:${token}`;
       else task.recoverySession ??= `dispatch:${task.id}:${token}`;
       delete task.token;
-      const scheduled = recovery && this.scheduleWorkerRetry(task, recovery.strategy, recovery.policy);
+      if (task.assessmentHold) {
+        task.diagnosticCode = task.assessmentHold.state === "waiting" ? "assessment-waiting" : "assessment-blocked";
+        delete task.workerRetry;
+      }
+      if (task.assessmentHold || code === "assessment-stalled") delete task.assessmentRetryAt;
+      const scheduled = recovery && !task.assessmentHold && this.scheduleWorkerRetry(task, recovery.strategy, recovery.policy);
       this.event(draft, task, "status", scheduled
-        ? task.assessmentHold ? "Unabhängige Prüfung meldet weiter eine Blockade oder externe Wartebedingung. Ursache prüfen; Dispatcher bewertet automatisch erneut, ohne abgeschlossene Effekte zu wiederholen."
-          : "Interne Ausführungsunterbrechung; automatischer Wiederanlauf nach Backoff, keine Nutzeraktion erforderlich."
-        : code === "deadline-expired" ? `${task.status}: deadline-expired` : task.status,
+        ? "Interne Ausführungsunterbrechung; automatischer Wiederanlauf nach Backoff, keine Nutzeraktion erforderlich."
+        : task.assessmentHold ? "Aufgabe wartet auf eine externe Voraussetzung. Ohne neue Informationen keine weiteren automatischen Prüfungen; bisherige Ergebnisse bleiben erhalten."
+        : code === "assessment-stalled" ? new ExecutionAssessmentStalled().message
+        : code === "deadline-expired" ? `${task.status}: deadline-expired`
+        : task.diagnosticCode === "retry-exhausted" ? `${task.status}: retry-exhausted; automatische Wiederanläufe beendet nach ${this.retryCap()} Versuchen. Manuelle Intervention erforderlich: Aufgabe explizit fortsetzen oder abbrechen.`
+        : task.status,
         !!task.assessmentHold && (priorHold?.state !== task.assessmentHold.state || priorHold?.step !== task.assessmentHold.step));
     });
   }
@@ -910,6 +970,8 @@ export class ExecutionStore {
       const reason = task.recoveryReason;
       if (this.scheduleWorkerRetry(task, strategy, policy, false))
         this.event(draft, task, "status", "Interne Pause mit dauerhaftem automatischem Wiederanlauf und Backoff; keine Nutzeraktion erforderlich.");
+      else if (task.diagnosticCode === "retry-exhausted")
+        this.event(draft, task, "status", "retry-exhausted: automatisches Retry-Budget erschöpft; manuelle Intervention erforderlich: Aufgabe explizit fortsetzen oder abbrechen.");
       else if (task.recoveryReason && task.recoveryReason !== reason)
         this.event(draft, task, "status", task.diagnosticCode === "deadline-expired"
           ? "Auftragsfrist abgelaufen; automatische Wiederaufnahme beendet."
@@ -917,7 +979,7 @@ export class ExecutionStore {
     });
   }
   private scheduleWorkerRetry(task: Execution, strategy: RecoveryStrategy, policy?: ExecutionRecoveryPolicy, newFailure = true): boolean {
-    if (task.recoveryEnrollment === "held-legacy" || !["blocked", "paused", "ready"].includes(task.status) ||
+    if (task.assessmentHold || task.recoveryEnrollment === "held-legacy" || !["blocked", "paused", "ready"].includes(task.status) ||
         !["worker-failed", "runtime-failure"].includes(task.diagnosticCode ?? "") ||
         task.parentStopped || task.question && !task.question.answer) return false;
     if (task.dependency?.expiresAt !== undefined && task.dependency.expiresAt <= this.now()) {
@@ -952,7 +1014,16 @@ export class ExecutionStore {
       task.status = "ready";
       return true;
     }
-    const attempts = Math.min(Number.MAX_SAFE_INTEGER, (task.workerRetry?.attempts ?? 0) + 1);
+    const prior = task.workerRetry?.attempts ?? 0;
+    // Cap bounds total worker attempts (initial run + retries): once the next
+    // attempt would exceed the budget, hold the task for manual intervention.
+    if (prior + 1 >= this.retryCap()) {
+      task.status = task.intent ? "blocked" : "paused";
+      task.diagnosticCode = "retry-exhausted";
+      delete task.workerRetry;
+      return false;
+    }
+    const attempts = prior + 1;
     task.workerRetry = { attempts, nextAt: this.now() + Math.min(300000, 15000 * 2 ** Math.min(attempts - 1, 5)) };
     // Runtime/validator holds stay observable during backoff, but unlike manual
     // pauses have a durable wake-up owner. Worker transport retries keep ready.
@@ -992,6 +1063,16 @@ export class ExecutionStore {
     if (restartLimit !== undefined && (!Number.isSafeInteger(restartLimit) || restartLimit < 0)) throw Error("Invalid recovery restart limit");
     return this.mutate(draft => {
       for (const task of draft.executions) {
+        // Older cores enrolled semantic holds into the transport retry budget.
+        // Preserve their evidence without waking them or replaying effects.
+        if (enabled(task) && task.assessmentHold && !task.parentStopped && !task.ownershipHold &&
+            task.recoveryEnrollment === "current" && ["ready", "paused", "blocked"].includes(task.status) &&
+            ["runtime-failure", "retry-exhausted"].includes(task.diagnosticCode ?? "")) {
+          task.status = task.intent ? "blocked" : "paused";
+          task.diagnosticCode = task.assessmentHold.state === "waiting" ? "assessment-waiting" : "assessment-blocked";
+          delete task.workerRetry;
+          delete task.assessmentRetryAt;
+        }
         if (!enabled(task) || !["ready", "running"].includes(task.status)) continue;
         const strategy = strategies.get(task.strategy);
         const interrupted = task.status === "running";

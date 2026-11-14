@@ -1,3 +1,4 @@
+import { validateHashtagConfig, type HashtagConfig } from "./hashtag-config.js";
 import { validateLanguagePolicy, type LanguagePolicy } from "./language.js";
 import { validatePolicyOverlay, type PolicyOverlay, type PolicyOverride } from "./policy-modules.js";
 import { dispatcherConfig, type DispatcherConfig } from "./dispatcher-config.js";
@@ -23,6 +24,7 @@ export interface LocalSettings {
   /** Explicit operator MCP management choice; not an LLM setting tool. */
   mcp?: { enabled: boolean };
   modelRoles?: ModelRoles;
+  hashtag?: HashtagConfig;
   dispatcher?: Partial<DispatcherConfig>;
   benchmark?: Partial<BenchmarkConfig>;
   reasoningEffortNoneModels?: string[];
@@ -43,8 +45,8 @@ export interface LocalSettings {
   toolResultPruning?: Partial<PruningPolicy>;
   skills?: { paths?: string[]; context?: "auto" | "lazy" | "off" };
 }
-export type SettingPath = "model" | "thinking" | "review.model" | "review.thinking";
-const keys: Record<SettingPath, ModelSetting> = { model: "model", thinking: "thinking", "review.model": "reviewModel", "review.thinking": "reviewThinking" };
+export type SettingPath = "model" | "thinking" | "review.model" | "review.thinking" | "hashtag.model";
+const keys: Record<SettingPath, ModelSetting> = { model: "model", thinking: "thinking", "review.model": "reviewModel", "review.thinking": "reviewThinking", "hashtag.model": "hashtagModel" };
 function validate(value: unknown, defaults: Partial<ContextPolicy> = {}, pruningDefaults: Partial<PruningPolicy> = {}, dispatcherDefaults: Partial<DispatcherConfig> = {}, benchmarkDefaults: Partial<BenchmarkConfig> = {}): asserts value is LocalSettings {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid local settings overlay");
   const data = value as Record<string, unknown>;
@@ -53,6 +55,8 @@ function validate(value: unknown, defaults: Partial<ContextPolicy> = {}, pruning
       validateLanguagePolicy(item);
     } else if (key === "mcp") {
       if (!item || typeof item !== "object" || Array.isArray(item) || Object.keys(item).length !== 1 || typeof (item as { enabled?: unknown }).enabled !== "boolean") throw Error("Invalid MCP settings");
+    } else if (key === "hashtag") {
+      validateHashtagConfig(item);
     } else if (key === "modelRoles") {
       validateModelRoles(item);
     } else if (key === "reasoningEffortNoneModels") {
@@ -62,7 +66,7 @@ function validate(value: unknown, defaults: Partial<ContextPolicy> = {}, pruning
     } else if (key === "completionStrategy" || key === "nightlyStrategy" || key === "contextStrategy") {
       if (item !== null && (typeof item !== "string" || !item.trim())) throw Error(`Invalid ${key === "nightlyStrategy" ? "nightly" : key === "contextStrategy" ? "context" : "completion"} strategy selection`);
     } else if (key === "dispatcher") {
-      if (!item || typeof item !== "object" || Array.isArray(item) || Object.keys(item).some(key => !["enabled", "strategy", "concurrentRequests", "capacity", "countAuxiliaryRuns", "retentionDays", "rules"].includes(key))) throw Error("Invalid dispatcher overlay");
+      if (!item || typeof item !== "object" || Array.isArray(item) || Object.keys(item).some(key => !["enabled", "strategy", "decisionProvider", "concurrentRequests", "capacity", "countAuxiliaryRuns", "retentionDays", "workerRetryMax", "rules"].includes(key))) throw Error("Invalid dispatcher overlay");
       dispatcherConfig({ ...dispatcherDefaults, ...item });
     } else if (key === "benchmark") {
       if (!item || typeof item !== "object" || Array.isArray(item) || Object.keys(item).some(key => !["enabled", "capacity", "repeats", "caseTimeoutMs", "runsDir"].includes(key))) throw Error("Invalid benchmark overlay");
@@ -82,7 +86,7 @@ function validate(value: unknown, defaults: Partial<ContextPolicy> = {}, pruning
       pruningPolicy({ ...pruningDefaults, ...item });
     } else if (key === "contextMaintenance") {
       if (!item || typeof item !== "object" || Array.isArray(item)) throw new Error("Invalid context policy overlay");
-      const allowed = ["compactionOwner", "enabled", "workerContextTokens", "mainContextTokens", "localModels", "checkEveryTurns", "assessPercent", "compactPercent", "cooldownTurns", "autoHandover"];
+      const allowed = ["compactionOwner", "enabled", "workerContextTokens", "mainContextTokens", "localModels", "localMainContextTokens", "localWorkerContextTokens", "checkEveryTurns", "assessPercent", "compactPercent", "cooldownTurns", "autoHandover"];
       if (Object.keys(item).some((k) => !allowed.includes(k))) throw new Error("Unsupported context setting");
       contextPolicy({ ...defaults, ...item });
     } else if (key === "skills") {
@@ -115,7 +119,7 @@ export function validateReasoningEffortNoneModels(value: unknown): asserts value
 /** Category-specific layering: arrays replace; only documented maps merge. */
 function mergeSettings(base: LocalSettings, layer: LocalSettings): LocalSettings {
   const result = { ...base, ...layer };
-  for (const key of ["dispatcher", "memory", "review", "skills", "contextMaintenance", "toolResultPruning", "benchmark"] as const) {
+  for (const key of ["dispatcher", "memory", "review", "hashtag", "skills", "contextMaintenance", "toolResultPruning", "benchmark"] as const) {
     if (base[key] !== undefined || layer[key] !== undefined) (result as Record<string, unknown>)[key] = { ...base[key], ...layer[key] };
   }
   for (const key of ["gatewayPlugins", "policyPlugins", "extensionPlugins"] as const) {
@@ -179,13 +183,13 @@ export class SettingsService {
     const result: Record<string, any> = Object.assign(Object.create(null), live ? structuredClone(previous) : {});
     const check = (value: unknown) => validate(value, this.defaults.contextMaintenance, this.defaults.toolResultPruning, this.defaults.dispatcher, this.defaults.benchmark);
     const object = (v: unknown): v is Record<string, any> => !!v && typeof v === "object" && !Array.isArray(v);
-    const livePath = (parts: string[]) => parts[0] === "language" || parts[0] === "modelRoles" || parts[0] === "reasoningEffortNoneModels" || ["model", "thinking", "review.model", "review.thinking", "dispatcher.rules"].includes(parts.join("."));
+    const livePath = (parts: string[]) => parts[0] === "language" || parts[0] === "modelRoles" || parts[0] === "reasoningEffortNoneModels" || ["model", "thinking", "review.model", "review.thinking", "hashtag.model", "dispatcher.rules"].includes(parts.join("."));
     if (live) {
       try { check(raw); } catch { this.diagnose("Ignored invalid local settings overlay; retaining previous settings."); return; }
     }
     const accept = (value: any, old: any, parts: string[], wrap: (v: any) => unknown): any => {
       const label = parts.map(p => p.replace(/[^a-zA-Z0-9_-]/g, "?").slice(0, 48)).join(".");
-      if (live && !livePath(parts) && !["dispatcher", "review"].includes(parts.join("."))) {
+      if (live && !livePath(parts) && !["dispatcher", "review", "hashtag"].includes(parts.join("."))) {
         if (!isDeepStrictEqual(value, old)) this.diagnose(`Ignored ${label}: not live-editable; restart required.`);
         return old;
       }
@@ -199,9 +203,9 @@ export class SettingsService {
         if (!value.length && (raw as Record<string, any>).reasoningEffortNoneModels.length) return old;
       }
       try {
-        if (!(live && ["dispatcher", "review"].includes(parts.join(".")))) { check(wrap(value)); return structuredClone(value); }
+        if (!(live && ["dispatcher", "review", "hashtag"].includes(parts.join(".")))) { check(wrap(value)); return structuredClone(value); }
       } catch { /* salvage independent fields below */ }
-      if (object(value) && ((parts.length === 1 && ["dispatcher", "review", "skills", "contextMaintenance", "toolResultPruning", "memory", "gateways", "gatewayPlugins", "policyPlugins", "extensionPlugins"].includes(parts[0])) ||
+      if (object(value) && ((parts.length === 1 && ["dispatcher", "review", "hashtag", "skills", "contextMaintenance", "toolResultPruning", "memory", "gateways", "gatewayPlugins", "policyPlugins", "extensionPlugins"].includes(parts[0])) ||
           (parts[0] === "gateways" && parts[1] === "overrides" && parts.length <= 3))) {
         const merged: Record<string, any> = Object.create(null);
         // Missing fields restore inheritance, except non-live fields on reload.
@@ -236,6 +240,10 @@ export class SettingsService {
         if (!live || livePath([key])) delete result[key];
         else if (key === "dispatcher" && result.dispatcher) delete result.dispatcher.rules;
         else if (key === "review") delete result.review;
+        else if (key === "hashtag" && result.hashtag) {
+          delete result.hashtag.model;
+          if (!Object.keys(result.hashtag).length) delete result.hashtag;
+        }
         else this.diagnose(`Ignored removal of ${key.slice(0, 48)}: not live-editable; restart required.`);
         continue;
       }
@@ -311,7 +319,9 @@ export class SettingsService {
     const after = mergeSettings(this.defaults, candidate);
     for (const key of new Set([...Object.keys(before), ...Object.keys(after)]) as Set<keyof LocalSettings>) {
       if (["language", "modelRoles", "model", "thinking", "review", "reasoningEffortNoneModels"].includes(key)) continue;
-      if (key === "dispatcher") {
+      if (key === "hashtag") {
+        if (before.hashtag?.provider !== after.hashtag?.provider) this.restartPending.push(key);
+      } else if (key === "dispatcher") {
         const { rules: _a, ...a } = before.dispatcher ?? {};
         const { rules: _b, ...b } = after.dispatcher ?? {};
         if (!isDeepStrictEqual(a, b)) this.restartPending.push(key);
@@ -328,6 +338,9 @@ export class SettingsService {
       if (candidate.dispatcher?.rules === undefined) delete active.dispatcher.rules;
       else active.dispatcher.rules = candidate.dispatcher.rules;
     }
+    if (candidate.hashtag?.model === undefined) {
+      if (active.hashtag) delete active.hashtag.model;
+    } else active.hashtag = { ...active.hashtag, model: candidate.hashtag.model };
     for (const key of ["model", "thinking", "review"] as const) {
       if (!isDeepStrictEqual(active[key], candidate[key])) this.revision++;
       if (candidate[key] === undefined) delete active[key];
@@ -354,6 +367,11 @@ export class SettingsService {
           try {
             const candidate = await this.candidate();
             const desired = this.snapshot();
+            // Keep the requested provider for restart without changing the live
+            // model snapshot salvaged above.
+            if (candidate.hashtag?.provider === undefined) {
+              if (desired.hashtag) delete desired.hashtag.provider;
+            } else desired.hashtag = { ...desired.hashtag, provider: candidate.hashtag.provider };
             for (const key of ["gatewayPlugins", "policyPlugins", "extensionPlugins"] as const) {
               if (candidate[key] === undefined) delete desired[key]; else desired[key] = candidate[key];
             }
@@ -420,7 +438,7 @@ export class SettingsService {
     return result;
   }
   source(key: SettingPath): string {
-    const value = key.startsWith("review.") ? this.overlay.review?.[key.slice(7) as "model" | "thinking"] : this.overlay[key as "model" | "thinking"];
+    const value = key === "hashtag.model" ? this.overlay.hashtag?.model : key.startsWith("review.") ? this.overlay.review?.[key.slice(7) as "model" | "thinking"] : this.overlay[key as "model" | "thinking"];
     return value === undefined ? "installation/default" : "local overlay";
   }
   setExtensionPlugin(name: string, spec?: PolicyOverride): Promise<void> {
@@ -577,7 +595,11 @@ export class SettingsService {
       if (!Object.hasOwn(keys, key)) throw new Error("Unsupported local setting");
       if (value !== undefined) validateModelSetting(keys[key], value);
       const updated = await this.localForMutation();
-      if (key.startsWith("review.")) {
+      if (key === "hashtag.model") {
+        updated.hashtag ??= {};
+        if (value === undefined) delete updated.hashtag.model; else updated.hashtag.model = value;
+        if (!Object.keys(updated.hashtag).length) delete updated.hashtag;
+      } else if (key.startsWith("review.")) {
         updated.review ??= {};
         const field = key.slice(7) as "model" | "thinking";
         if (value === undefined) delete updated.review[field]; else updated.review[field] = value;

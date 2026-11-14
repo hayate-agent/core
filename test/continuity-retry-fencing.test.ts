@@ -16,7 +16,7 @@ test("retry revalidates authority after async persistence and inference; concurr
     let calls = 0, child = false;
     const runtime = new FakeRuntime();
     const h = new Harness({ runtime, tickMs: 60000, now: () => 2000,
-      executionStore: { list: () => child ? [{ id: "child", status: "running" }] : [] } as unknown as ExecutionStore,
+      executionStore: { cancelParent: async () => {}, list: () => child ? [{ id: "child", status: "running" }] : [] } as unknown as ExecutionStore,
       completionCheck: async () => { calls++; enter(); if (boundary === "inference") await gate;
         return { state: "continue", next: "Inspect actual effects" }; } });
     h.restoreSessions([{ key, task: retained() }]);

@@ -16,8 +16,8 @@ export function decisionState(request: ValidatorRequest): string | undefined {
       /(?:authorization\s*[=:]|bearer\s+[a-z0-9._~+\/-]+|(?:api[_-]?key|password|secret|token)\s*[=:]\s*\S+|-----BEGIN [^-]*PRIVATE KEY-----)/i.test(state)) return;
   return state;
 }
-function adapter(host: PluginAPI, dispatcher: boolean): ValidatorProvider & { requiresModel: false } {
-  return { apiVersion: 1, version: 1, name: dispatcher ? TYPESAFE_DISPATCHER : TYPESAFE_VALIDATOR, requiresModel: false,
+function adapter(host: PluginAPI, dispatcher: boolean): ValidatorProvider & { requiresModel: false; maxPromptBytes: number } {
+  return { apiVersion: 1, version: 1, name: dispatcher ? TYPESAFE_DISPATCHER : TYPESAFE_VALIDATOR, requiresModel: false, maxPromptBytes: TYPESAFE_STATE_BYTES,
     async assess(request) {
       const permitted = () => !request.signal.aborted && !!request.authorization.task.trim() &&
         (request.authorization.expiresAt === undefined || (Number.isSafeInteger(request.authorization.expiresAt) && request.authorization.expiresAt > request.now()));
@@ -30,11 +30,22 @@ function adapter(host: PluginAPI, dispatcher: boolean): ValidatorProvider & { re
       // No cross-consumer bank selection from model/user prose.
       if (dispatcher && !ready && !request.input.id?.startsWith("validate:")) return;
       const bank = ready ? READY_BANK : dispatcher ? DISPATCH_BANK : COMPLETION_BANK;
-      let choice: string | undefined;
-      try { choice = await (service.implementation as TypeSafeAPI).choose(bank, state, request.signal); }
-      catch { return; }
+      let transportFailure: { cause: string; status?: number } | undefined;
+      const choice = await (service.implementation as TypeSafeAPI).choose(bank, state, request.signal, detail => {
+        if (detail?.cause === "timeout" || detail?.cause === "provider_error") transportFailure = {
+          cause: detail.cause,
+          ...(Number.isInteger(detail.status) && detail.status! >= 400 && detail.status! <= 599 ? { status: detail.status } : {}),
+        };
+      });
       if (!permitted()) return;
-      if (!choice || choice === "unknown" || choice === "none") return;
+      if (transportFailure) {
+        // Fixed public vocabulary only; no URL, response body, credential or
+        // private exception text crosses the host diagnostic boundary.
+        throw Object.assign(Error("TypeSafe transport unavailable"), transportFailure.cause === "timeout"
+          ? { code: "ETIMEDOUT" } : transportFailure.status ? { status: transportFailure.status } : {});
+      }
+      if (!choice) return;
+      if (choice === "unknown" || choice === "none") return { state: "uncertain" };
       if (ready) {
         const number = /^step_([1-6])$/.exec(choice)?.[1];
         return number ? { state: "continue", next: number } : undefined;
