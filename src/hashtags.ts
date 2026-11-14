@@ -35,7 +35,8 @@ export function parseHashtags(text: string): string[] {
     // Copied native activity envelopes are observations, not operator tag choices.
     if (/^task [a-f0-9]{16} · .* · (?:Main|Worker|Review) · /.test(line)) continue;
     // Unbalanced quoting is ambiguous; ignore the remainder rather than infer intent.
-    const plain = line.replace(/`[^`]*(?:`|$)|"[^"]*(?:"|$)|'[^']*(?:'|$)|\[[^\]]*\]\([^)]*\)/g, " ");
+    // A word-internal apostrophe (Let's, don't) neither opens nor closes a single quote.
+    const plain = line.replace(/`[^`]*(?:`|$)|"[^"]*(?:"|$)|(?<![a-zA-Z0-9])'(?:[^']|'(?=[a-zA-Z0-9]))*(?:'|$)|\[[^\]]*\]\([^)]*\)/g, " ");
     for (const match of plain.matchAll(/(?:^|\s)#([a-zA-Z][a-zA-Z0-9]*(?:-[a-zA-Z0-9]+)*)(?=$|\s|[.,!?;:])/g)) tags.add(match[1].toLowerCase());
   }
   return [...tags].sort();

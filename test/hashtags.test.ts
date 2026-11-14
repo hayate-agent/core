@@ -16,6 +16,11 @@ test("minimal hashtag parsing excludes quoted/code/linked/untrusted material", (
   assert.deepEqual(hashtagReferences('s', '#tag', [{ id: 'old', role: 'user', text: '#tag' }], 'date', new Set(['old'])), []);
 });
 
+test("word-internal apostrophes do not hide later hashtags; real single quotes still do", () => {
+  assert.deepEqual(parseHashtags("Let's discuss #release\nI don't know #ops\nWie geht's mit #deploy?"), ["deploy", "ops", "release"]);
+  assert.deepEqual(parseHashtags("say 'don't #x' #real\n'it's #y'\nopen 'quote #hidden\n'#single'"), ["real"]);
+});
+
 for (const external of [false, true]) test(`SDK Harness commands persist references and reopen (${external ? "external" : "native"})`, async () => {
   const home = await mkdtemp(path.join(os.tmpdir(), "hashtags-sdk-"));
   try {
