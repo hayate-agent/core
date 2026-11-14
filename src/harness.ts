@@ -1,4 +1,4 @@
-import { renderTask, validatePlan, type TaskRef, type TaskTodo, type TaskOutcome } from "./task-lifecycle.js";
+import { renderTask, validatePlan, commitTaskOutcome, type TaskRef, type TaskTodo, type TaskOutcome } from "./task-lifecycle.js";
 import { completionFailureDetail } from "./validator.js";
 /**
  * The agent loop. One long-running process; per conversation (session key) a FIFO
@@ -3380,8 +3380,24 @@ export class Harness {
             if (safe) this.completionFailureDetails.set(input, safe);
           }
         });
-        // Independent assessment may change the plan, never its selected scope.
-        const plan = assessed && { ...assessed, taskId: checkpoint?.taskId };
+        // A validator plan is advisory and belongs only to this completed turn.
+        // It cannot overwrite a Main proposal, steer a different task, or survive
+        // cancellation/revision changes at the serialized settlement boundary.
+        if (assessed?.taskPlan && input.executionTurnId === assessed.taskPlan.basisEventId && input.taskRef &&
+            (!checkpoint?.taskId || checkpoint.taskId === input.taskId) && !this.taskPlans.has(input) &&
+            assessmentEligible() && !this.paused && !this.stopping && !s.queue.length &&
+            !assessmentAbort.signal.aborted && s.cancelling !== input && this.opts.executionStore?.taskIsOpen(input.taskRef)) {
+          const order = this.opts.executionStore.coreTask(input.taskRef.id);
+          if (order?.plan && order.revision === input.taskRevision) {
+            try {
+              commitTaskOutcome({ tasks: [structuredClone(order)], bindings: [] }, { ref: input.taskRef, expectedRevision: order.revision,
+                eventId: input.executionTurnId!, technical: order.technical, plan: assessed.taskPlan.todos }, this.now());
+              this.taskPlans.set(input, structuredClone(assessed.taskPlan.todos));
+            } catch { this.log("validator task plan rejected"); }
+          }
+        }
+        // Independent assessment may change the continuation, never its selected scope.
+        const plan = assessed && { ...assessed, taskPlan: undefined, taskId: checkpoint?.taskId };
         // While a child owns the work, retain the nonproductive monitor rather
         // than replacing it with a productive admission that cannot be scheduled.
         // Its polling window never becomes the original mandate's lifetime.

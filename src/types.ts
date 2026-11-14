@@ -39,6 +39,8 @@ export interface Inbound {
   continuation?: { /** Optional existing task in this session; never grants new authority. */
     taskId?: string;
     state: "continue" | "waiting" | "blocked" | "completed"; next?: string; expiresAt?: number;
+    /** Independent validator suggestion; adopted only by the originating durable turn settlement. */
+    taskPlan?: { basisEventId: string; todos: import("./task-lifecycle.js").TaskTodo[] };
     /** Advisory preparation; host executes existing maintenance before authorized work. */
     contextPreparation?: "compact" | "handover";
     /** Independent assessor's stable substantive milestone, not working-model authority. */

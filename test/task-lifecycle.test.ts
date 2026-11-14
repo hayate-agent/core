@@ -165,6 +165,23 @@ test("planned Main work commits and displays research/skill todos from the same 
   assert.equal(channel.sent.filter(s => s.text.includes("Generation 1, Revision")).length, 1);
 });
 
+test("validator adds a scoped todo only from the current settled outcome", async t => {
+  const { store } = await storeFixture(t);
+  const ref = await store.enrollTask("mem:room1", "original", "Implement a multi-step fix", "original", "operator");
+  await store.beginTurn("initial", "mem:room1");
+  await store.settleTurn("initial", "mem:room1", { consumed: [], outbox: [], taskOutcome: { ref, expectedRevision: 1, eventId: "initial", technical: { state: "open" }, plan: plan("original") } });
+  let checked = false;
+  const h = new Harness({ runtime: new FakeRuntime(() => "Source inspection identified an additional required check"), executionStore: store, taskLifecycle: { enabled: true },
+    completionCheck: async input => (checked = true, { state: "waiting", taskPlan: { basisEventId: input.executionTurnId!, todos: [...plan("original"),
+      { id: "new-check", title: "Verify identified compatibility requirement", kind: "verification", status: "open", sourceId: "original" }] } }) });
+  const channel = new MemoryChannel(); h.addChannel(channel); h.onStateChange = async () => {}; t.after(() => h.stop(0));
+  h.restoreSessions([{ key: "mem:room1", tasks: [{ id: "original", taskRef: ref, original: "Implement a multi-step fix", state: "active", depth: 0,
+    anchor: { id: "original", task: "Implement a multi-step fix", receivedAt: 1, replyTo: ROOM } }] }]);
+  await h.submit({ ...msg("Continue the authorized task"), id: "original", taskId: "original", taskRef: ref, replyTo: ROOM }); await h.drained();
+  assert.equal(checked, true, "validator invoked"); assert.ok(store.coreTask(ref.id)!.plan!.some(todo => todo.id === "new-check"));
+  assert.match(channel.sent.map(item => item.text).join("\n"), /new-check/);
+});
+
 test("late child outcome for an operator-completed order is delivered as evidence without any Main or validator call", async t => {
   const { store } = await storeFixture(t);
   const ref = await store.enrollTask("mem:room1", "operator", "Existing task", "operator", "operator");
