@@ -49,12 +49,12 @@
     "subagent-plugin.ts": "5b7ae55c28e50c48ce0a3671c400245ee0fd725ce7c5ad6866a8e63f0b65cd5e",
     "tool-result-projector.ts": "69658e2adef5d5327797762886199b87fd3bff94f20beab8a199280e0d517746",
     "typesafe-api-plugin.ts": "5e229d9aca8fd26e2b00301e7e09387dba7b207a09d10a628a1215a329f4aea7",
-    "typesafe-decision-plugin.ts": "0418aee16dced5210c21055c212bf4ff7869976f847d5e729c60357d90b31f0b",
+    "typesafe-decision-plugin.ts": "da393fcd73632d0420fff21e9bee459409f051e90b547eb743ceffc04bfb5eb6",
     "typesafe-question-banks.ts": "40bfe4fa9d58c19eb80b92bd1fa15b00d58edd5b81ecfe9691f384fcc12324e6",
     "typesafe-validator-provider.ts": "5526e153f22af9055122780f1f5c9e8b08b4635869818f07e8525afc825304d5",
     "wasm-tools-plugin.ts": "438c6ac8899e283e4268f51ef451275bf16a37b584db84ee8302a26200cc70de"
   },
   "repository": "https://git.vanillacore.net/harness/plugins",
-  "revision": "b50166a8b716f0f908071565ea6e6f4784be4096",
+  "revision": "7d9afc4a3a72fedb466f9323903157d6d661091a",
   "schema": 1
 }
