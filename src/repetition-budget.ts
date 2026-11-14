@@ -25,8 +25,9 @@ export function accountRepetition(task: { depth: number; repetition?: Repetition
   if (prior >= 20) return; // malformed or exhausted persisted state cannot self-reopen
   const budget = task.repetition ??= { version: 1, repetitions: task.depth, attempts: 0, evidence: [] };
   budget.attempts++;
-  // Independent continuation is not itself a retry or a reset of earlier stalls.
-  if (assessed?.normal) return;
+  // An independent continue is permission, not progress. Tool-free analysis
+  // needs an explicit novel milestone just like any other repeated work; the
+  // absence of tools must never disable the stagnation budget.
   const receipt = assessed?.receipt ? `tool:${assessed.receipt}` : undefined;
   const needed = (before && !budget.evidence.includes(before) ? 1 : 0) +
     (after && after !== before && !budget.evidence.includes(after) ? 1 : 0);

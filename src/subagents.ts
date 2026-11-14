@@ -18,6 +18,7 @@ export interface SubagentRecord {
   parent: string;
   /** Host-captured mandate, never supplied by the model handover. */
   parentTaskId?: string;
+  taskRef?: import("./task-lifecycle.js").TaskRef;
   parentStopped?: boolean;
   /** Legacy ancestry cannot be guessed when one parent mandate is stopped. */
   ownershipHold?: "unscoped-parent-stop";
@@ -50,6 +51,8 @@ export class Subagents {
     if (!this.isChild(key)) return;
     const record = [...this.records.values()].find(r => r.sessionKey === key);
     if (!record) throw new ToolGuardError("ownership_lost", "Subagent ownership missing");
+    if (this.harness.opts.taskLifecycle?.enabled && !record.taskRef ||
+        record.taskRef && !this.harness.opts.executionStore?.taskIsOpen(record.taskRef)) throw new ToolGuardError("operator_task_closed", "Subagent operator task is closed, unresolved, missing or stale");
     const parent = record.parentTaskId ? this.harness.sessions.get(record.parent) : undefined;
     if (record.parentTaskId && (parent?.tasks ?? (parent?.task ? [parent.task] : [])).some(task => task.id === record.parentTaskId && task.state === "stopped"))
       throw new ToolGuardError("execution_cancelled", "Subagent parent mandate stopped");
@@ -151,8 +154,9 @@ export class Subagents {
     if (parentState?.current && (parentState.cancelling === parentState.current ||
         (parentState.tasks ?? (parentState.task ? [parentState.task] : [])).some(task => task.id === parentState.current?.taskId && task.state === "stopped")))
       throw new ToolGuardError("execution_cancelled", "Parent task cancelled");
-    const parentTaskId = this.harness.dependencyCheckpoint(parent)?.taskId;
-    const record:SubagentRecord={id,parent,...(parentTaskId ? { parentTaskId } : {}),sessionKey:`subagent:${id}`,handover:selected,state:"queued",expiresAt:Date.now()+this.maxDurationMs};
+    const mandate = this.harness.dependencyCheckpoint(parent);
+    const parentTaskId = mandate?.taskId;
+    const record:SubagentRecord={id,parent,...(parentTaskId ? { parentTaskId } : {}), ...(mandate?.taskRef ? { taskRef: mandate.taskRef } : {}),sessionKey:`subagent:${id}`,handover:selected,state:"queued",expiresAt:Date.now()+this.maxDurationMs};
     this.records.set(id,record);
     try { await this.save(); } catch(error) { this.records.delete(id);throw error; }
     if (record.state === "cancelled" || record.expiresAt <= Date.now()) {

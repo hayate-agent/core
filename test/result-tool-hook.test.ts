@@ -36,11 +36,11 @@ try {
  // Submit during an actual Main turn so the dispatcher captures host-owned provenance.
  working.sessions.get('main').prompt=async()=>{await call('plugin_dispatch',{requestId:'initial',task:'Implement tests'});harness.planContinuation('main',{state:'waiting'});return 'Delegated';};
  await harness.accept({source:'cron',sessionKey:'main',text:'Continue original task',taskId:task.id,completionAnchor:task.anchor});await harness.waitForSessionIdle('main');
- // A completed intermediate checkpoint and unrelated user reply happen while
- // the child is still running. Neither is an operator cancellation.
+ // An intermediate completion proposal while the child runs leaves its
+ // parent waiting, not terminal. An unrelated user reply does not cancel it.
  working.sessions.get('main').prompt=async()=>{harness.planContinuation('main',{state:'completed'});return 'Checkpoint recorded';};
  await harness.accept({source:'cron',sessionKey:'main',text:'Record intermediate checkpoint',taskId:task.id,completionAnchor:task.anchor});await harness.waitForSessionIdle('main');
- assert.equal(task.state,'completed');
+ assert.equal(task.state,'waiting');
  await harness.accept({id:'question',source:'channel',sessionKey:'main',text:'What is the current version?'});await harness.waitForSessionIdle('main');
  assert.notEqual(harness.sessions.get('main').task.id,task.id);
  assert.equal(store.list('main').find(e=>e.requestId==='initial').status,'running');
@@ -66,7 +66,8 @@ try {
  assert.equal(assessments,1);assert.equal(task.state,'completed');assert.equal(task.original,'Implement tests. No deployment.');
  const derived=store.list('main').find(e=>e.requestId==='derived');assert.equal(derived.dependency.taskId,task.id);assert.equal(derived.dependency.original,task.original);
  harness.sessions.get('main').current={source:'host',sessionKey:'main',hostEvent:{executionId:child.id},text:child.result};
- assert.notEqual((await emit('plugin_dispatch',{}))?.block,true); // Completion is not withdrawal.
+ assert.equal((await emit('plugin_dispatch',{}))?.block,true); // Terminal results cannot renew authority.
+ task.state='active'; // Explicitly reopened fixture for the separate budget checks below.
  // Queue depth alone cannot revoke a host-evidenced productive allowance.
  task.depth=40;task.repetition={version:1,repetitions:0,attempts:40,evidence:[]};
  assert.notEqual((await emit('plugin_dispatch',{action:'submit'}))?.block,true);

@@ -64,6 +64,20 @@ execution is ready. Round-robin admission lets a queued review run before the
 publisher claims its next step, including with capacity 1. An in-flight worker is
 not preempted and its work is never duplicated to free a slot.
 
+A completed parent mandate is terminal for autonomous result processing. A late
+child result can still be delivered at its original destination, but cannot grant
+new delegation, run completion validation against that closed mandate, or mint a
+Resume admission. If a turn proposes completion while owned children remain
+outstanding, the host retains the parent as waiting instead of closing it and
+later reopening it. A genuinely new operator request owns fresh authority.
+
+An independent `continue` is an admission decision, **not** observed progress.
+Tool-free continuations consume the existing 20-stall allowance unless an
+explicit novel milestone is supplied. Dispatcher/control-tool receipts do not
+reset that allowance: changing retry counters, timestamps or request IDs is not
+new deliverable evidence. Real working-tree changes, novel substantive tool
+results and explicit milestones retain their existing progress semantics.
+
 A model-selected wait deadline bounds polling, **not** the operator mandate.
 Only the task's authentic `expiresAt` limits task authority. While a child is
 running, a parent wait retains its read-only monitor even when the validator

@@ -1,3 +1,4 @@
+import { enrollTask, operatorTransition, commitTaskOutcome, expireInactiveTasks, validateTaskBook, taskOpen, type TaskBook, type TaskRef, type TaskOutcome, type CoreTask } from "./task-lifecycle.js";
 import { executionMetadata, type ExecutionMetadata } from "./builtin-plugins/execution-metadata.js";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, stat } from "node:fs/promises";
@@ -82,7 +83,7 @@ export interface Execution {
   recoveryEnrollment?: "current" | "held-legacy";
   id: string;
   /** Host-captured parent mandate; never accepted from model tool arguments. */
-  dependency?: { taskId: string; depth: number; original: string; expiresAt?: number; anchor?: import("./types.js").Inbound["completionAnchor"];
+  dependency?: { taskId: string; depth: number; original: string; expiresAt?: number; anchor?: import("./types.js").Inbound["completionAnchor"]; taskRef?: TaskRef;
     /** Scheduling snapshot; the live durable parent preference takes precedence. */
     priority?: import("./task-priority.js").TaskPriority };
   /** Host-captured address of the submitting turn (room/thread); never from model tool arguments. */
@@ -152,6 +153,7 @@ export interface ExecutionEvent {
   requiresAttention?: boolean;
 }
 export interface TurnSettlement {
+  taskOutcome?: TaskOutcome;
   repetition?: import("./repetition-budget.js").RepetitionBudget;
   cronOutput?: string;
   outbox: import("./delivery/outbox.js").OutboxEntry[];
@@ -171,7 +173,7 @@ export interface WaitAuthorityDenialReceipt {
 }
 const waitDenialReasons = ["ownership", "cancelled", "deadline", "missing-task", "stopped-task", "sequence"] as const;
 interface Ledger { version: 1; executions: Execution[]; events: ExecutionEvent[]; turns?: DurableTurn[];
-  waitAuthorityDenials?: WaitAuthorityDenialReceipt[] }
+  waitAuthorityDenials?: WaitAuthorityDenialReceipt[]; taskBook?: TaskBook }
 
 /** One host owns this ledger under the Harness home lock. Mutations become visible
  * only after atomic durable replacement; task transitions and outgoing events share
@@ -185,6 +187,7 @@ export class ExecutionStore {
   constructor(private readonly file: string, private readonly retention: {
     now?: () => number;
     protectedExecutions?: () => ReadonlySet<string>;
+    enforceTaskAuthority?: boolean;
     /** Maximum total worker attempts (initial run + retries) per task before a manual-intervention hold. */
     workerRetryMax?: number | (() => number);
   } = {}) {
@@ -229,6 +232,7 @@ export class ExecutionStore {
             [r.taskId, r.turnId].some(id => id !== undefined && (typeof id !== "string" || id.length > 128)) ||
             Object.keys(r).some(key => !["reason", "taskId", "waitSequence", "taskWaitSequence", "turnId", "at"].includes(key)))))
         throw Error("Invalid wait authority denial receipt");
+      if (data.taskBook !== undefined) validateTaskBook(data.taskBook);
       const ids = new Set<string>();
       for (const item of data.executions) {
         if (!item || typeof item.id !== "string" || ids.has(item.id) || typeof item.parent !== "string" ||
@@ -446,8 +450,60 @@ export class ExecutionStore {
       if (!turn) throw Error("Unknown durable turn");
       this.validateSettlement(sessionKey, settlement);
       if (turn.state === "settled") throw Error("Turn already settled");
+      if (settlement.taskOutcome && !turn.stopped) {
+        if (!draft.taskBook) throw Error("Task book unavailable");
+        commitTaskOutcome(draft.taskBook, settlement.taskOutcome, this.now());
+        validateTaskBook(draft.taskBook);
+      }
       turn.state = "settled";
       turn.settlement = structuredClone(turn.stopped ? this.stoppedSettlement(settlement) : settlement);
+    });
+  }
+  /** Core operator authority shares the execution/turn atomic commit, not a second scheduler. */
+  tasks(): CoreTask[] { return structuredClone(this.data.taskBook?.tasks ?? []); }
+  coreTask(id: string): CoreTask | undefined { return structuredClone(this.data.taskBook?.tasks.find(t => t.id === id)); }
+  taskBinding(sessionKey: string, taskId: string): TaskRef | undefined {
+    return structuredClone(this.data.taskBook?.bindings.find(b => b.sessionKey === sessionKey && b.taskId === taskId)?.ref);
+  }
+  taskIsOpen(ref: TaskRef): boolean { return !!this.data.taskBook && taskOpen(this.data.taskBook, ref); }
+  executionTaskAllowed(execution: Execution): boolean {
+    return execution.dependency?.taskRef ? this.taskIsOpen(execution.dependency.taskRef) : !this.retention.enforceTaskAuthority;
+  }
+  enrollTask(sessionKey: string, taskId: string, original: string, sourceId: string, kind: "operator" | "schedule" | "legacy"): Promise<TaskRef> {
+    return this.mutate(draft => {
+      const book = draft.taskBook ??= { tasks: [], bindings: [] };
+      const ref = enrollTask(book, { sessionKey, taskId }, original, sourceId, kind, this.now());
+      for (const execution of draft.executions) if (execution.parent === sessionKey && execution.dependency?.taskId === taskId && !execution.dependency.taskRef) {
+        if (execution.dependency.original !== original) throw Error("Execution/task original scope conflict");
+        execution.dependency.taskRef = structuredClone(ref);
+      }
+      validateTaskBook(book); return ref;
+    });
+  }
+  decideTask(ref: TaskRef, revision: number, eventId: string, action: "close" | "reopen" | "clarify", text: string, supersedes?: TaskRef): Promise<TaskRef> {
+    return this.mutate(draft => {
+      if (!draft.taskBook) throw Error("Task book unavailable");
+      const next = operatorTransition(draft.taskBook, ref, revision, eventId, action, text, this.now());
+      if (supersedes && supersedes.id !== ref.id && taskOpen(draft.taskBook, supersedes)) {
+        const provisional = draft.taskBook.tasks.find(t => t.id === supersedes.id)!;
+        operatorTransition(draft.taskBook, supersedes, provisional.revision, `joined:${eventId}`, "close", `Input belongs to order ${ref.id}; not a separate continuing mandate`, this.now());
+      }
+      validateTaskBook(draft.taskBook); return next;
+    });
+  }
+  bindTask(sessionKey: string, taskId: string, ref: TaskRef): Promise<void> {
+    return this.mutate(draft => {
+      if (!draft.taskBook || !taskOpen(draft.taskBook, ref)) throw Error("Open current operator task required");
+      const binding = draft.taskBook.bindings.find(b => b.sessionKey === sessionKey && b.taskId === taskId);
+      if (binding) { if (binding.ref.id !== ref.id) throw Error("Task binding identity conflict"); binding.ref = structuredClone(ref); }
+      else draft.taskBook.bindings.push({ sessionKey, taskId, ref: structuredClone(ref) });
+      validateTaskBook(draft.taskBook);
+    });
+  }
+  expireTasks(inactivityMs: number): Promise<string[]> {
+    return this.mutate(draft => {
+      if (!draft.taskBook) return [];
+      const ids = expireInactiveTasks(draft.taskBook, this.now(), inactivityMs); validateTaskBook(draft.taskBook); return ids;
     });
   }
   /** Conversation-scoped durable lookup, including compacted terminal records. */
@@ -481,6 +537,8 @@ export class ExecutionStore {
     return this.mutate(async draft => {
       if (![parent, requestId, input, strategy].every(value => typeof value === "string" && value.trim()) || input.length > 1024 * 1024 ||
           !Number.isSafeInteger(strategyVersion) || strategyVersion < 1) throw Error("Invalid execution submission");
+      if (this.retention.enforceTaskAuthority && !dependency?.taskRef) throw Error("Operator task authority required for delegation");
+      if (dependency?.taskRef && (!draft.taskBook || !taskOpen(draft.taskBook, dependency.taskRef))) throw Error("Operator task is closed, unresolved or stale");
       const old = draft.executions.find(item => item.parent === parent && item.requestId === requestId) ?? await this.archived(parent, requestId);
       if (old) {
         if (old.dependency?.taskId !== dependency?.taskId) throw Error("execution-context-mismatch: requestId belongs to another task");
@@ -525,6 +583,8 @@ export class ExecutionStore {
   claim(id: string, current?: RecoveryStrategy & { strategy: string }, policy?: ExecutionRecoveryPolicy): Promise<Execution> {
     return this.mutate(draft => {
       const task = this.find(draft, id);
+      if (this.retention.enforceTaskAuthority && !task.dependency?.taskRef) throw new ExecutionClaimConflict("Operator task authority missing");
+      if (task.dependency?.taskRef && (!draft.taskBook || !taskOpen(draft.taskBook, task.dependency.taskRef))) throw new ExecutionClaimConflict("Operator task is closed or stale");
       if (task.recoveryEnrollment === "held-legacy" || task.status !== "ready" || !this.assessmentDue(task))
         throw new ExecutionClaimConflict("Execution not ready");
       const reason = task.intent ? recoveryBlock(task, current?.strategy === task.strategy ? current : undefined, policy)
