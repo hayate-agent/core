@@ -3,7 +3,27 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm, readFile, chmod, stat, writeFile, symlink, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
+import { TaskBookStorage } from '../src/task-book-storage.js';
+import { ExecutionStore } from '../src/execution.js';
 import { PartitionedJson } from '../src/partitioned-json.js';
+
+test('task-book pages survive fsGroup remount read-only and missing committed pages never become an empty execution ledger', async t => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'task-book-fsgroup-')); t.after(() => rm(root, { recursive: true, force: true }));
+  const file = path.join(root, 'executions.json'); const book = { tasks: [], bindings: [] };
+  const storage = new TaskBookStorage(file); const ref = await storage.stage(book);
+  const page = path.join(file + '.task-book', ref.root + '.json'); const bytes = await readFile(page);
+  await chmod(page, 0o660); await chmod(file + '.task-book', 0o2770);
+  assert.deepEqual(await new TaskBookStorage(file).hydrate(ref), book);
+  assert.equal((await stat(page)).mode & 0o7777, 0o660); assert.equal((await stat(file + '.task-book')).mode & 0o7777, 0o2770);
+  await new TaskBookStorage(file).stage(book); assert.equal((await stat(page)).mode & 0o7777, 0o600); assert.deepEqual(await readFile(page), bytes);
+  await new PartitionedJson(file, { executions: 1, events: 1, turns: 1, waitAuthorityDenials: 1 }).save({ version: 2, executions: [], events: [], taskBookRef: ref });
+  await rm(page);
+  await assert.rejects(new ExecutionStore(file).load(), /Cannot load retained task book pages/);
+  assert.deepEqual(await readFile(file).then(raw => JSON.parse(raw.toString()).document.taskBookRef), ref);
+  await rm(file + '.task-book', { recursive: true });
+  await assert.rejects(new TaskBookStorage(file).hydrate(ref), /Cannot load retained task book pages/);
+  await assert.rejects(stat(file + '.task-book'), { code: 'ENOENT' });
+});
 
 for (const mode of [0o640, 0o660]) test(`partition hydration tolerates fsGroup ${mode.toString(8)} without modifying authority and durable writer reseals`, async t => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'partition-fsgroup-')); t.after(() => rm(root, { recursive: true, force: true }));
