@@ -21,14 +21,17 @@ export class TaskBookStorage {
     const s = await lstat(this.dir), mode = s.mode & 0o7777;
     if (!s.isDirectory() || s.isSymbolicLink() ||
         typeof process.getuid === "function" && s.uid !== process.getuid() ||
-        !(mode === 0o700 || [0o750, 0o770, 0o2750, 0o2770].includes(mode) && this.authorizedGroup(s.gid)))
+        !([0o500, 0o700].includes(mode) || [0o750, 0o770, 0o2750, 0o2770].includes(mode) && this.authorizedGroup(s.gid)))
       throw Error("Unsafe task book directory");
   }
   private async directory(): Promise<void> {
     await mkdir(this.dir, { recursive: true, mode: 0o700 });
     await this.validateDirectory();
     const h = await open(this.dir, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
-    try { await h.chmod(0o700); await h.sync(); } finally { await h.close(); }
+    try {
+      if (((await h.stat()).mode & 0o700) !== 0o700) throw Error("Task book directory is owner-read-only");
+      await h.chmod(0o700); await h.sync();
+    } finally { await h.close(); }
     await syncDirStrict(path.dirname(this.dir));
   }
   private async read(hash: string, durable = false): Promise<string> {
@@ -38,7 +41,7 @@ export class TaskBookStorage {
       const s = await h.stat();
       const mode = s.mode & 0o7777;
       if (!s.isFile() || s.size > this.limit ||
-          !(mode === 0o600 || [0o640, 0o660].includes(mode) && this.authorizedGroup(s.gid)) ||
+          !([0o400, 0o600].includes(mode) || [0o640, 0o660].includes(mode) && this.authorizedGroup(s.gid)) ||
           typeof process.getuid === "function" && s.uid !== process.getuid()) throw Error("Unsafe task book page");
       const raw = await h.readFile("utf8");
       if (this.hash(raw) !== hash) throw Error("Task book page checksum mismatch");

@@ -15,6 +15,11 @@ test('task-book pages survive fsGroup remount read-only and missing committed pa
   await chmod(page, 0o660); await chmod(file + '.task-book', 0o2770);
   assert.deepEqual(await new TaskBookStorage(file).hydrate(ref), book);
   assert.equal((await stat(page)).mode & 0o7777, 0o660); assert.equal((await stat(file + '.task-book')).mode & 0o7777, 0o2770);
+  await chmod(page, 0o400); await chmod(file + '.task-book', 0o500);
+  assert.deepEqual(await new TaskBookStorage(file).hydrate(ref), book, 'prior owner-read-only evidence stays readable');
+  assert.equal((await stat(page)).mode & 0o7777, 0o400); assert.equal((await stat(file + '.task-book')).mode & 0o7777, 0o500);
+  await assert.rejects(new TaskBookStorage(file).stage(book), /owner-read-only/);
+  await chmod(page, 0o660); await chmod(file + '.task-book', 0o2770);
   await new TaskBookStorage(file).stage(book); assert.equal((await stat(page)).mode & 0o7777, 0o600); assert.deepEqual(await readFile(page), bytes);
   await new PartitionedJson(file, { executions: 1, events: 1, turns: 1, waitAuthorityDenials: 1 }).save({ version: 2, executions: [], events: [], taskBookRef: ref });
   await rm(page);
