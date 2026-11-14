@@ -21,7 +21,7 @@ export class TaskBookStorage {
     const s = await lstat(this.dir), mode = s.mode & 0o7777;
     if (!s.isDirectory() || s.isSymbolicLink() ||
         typeof process.getuid === "function" && s.uid !== process.getuid() ||
-        !([0o500, 0o700].includes(mode) || [0o750, 0o770, 0o2750, 0o2770].includes(mode) && this.authorizedGroup(s.gid)))
+        !([0o500, 0o700, 0o2500, 0o2700].includes(mode) || [0o750, 0o770, 0o2750, 0o2770].includes(mode) && this.authorizedGroup(s.gid)))
       throw Error("Unsafe task book directory");
   }
   private async directory(): Promise<void> {
