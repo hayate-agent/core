@@ -185,6 +185,22 @@ test("run: 202, SSE deltas and terminal event, status with output, session from 
   }
 });
 
+test("local model scheduling hint is validated, isolated to a turn and part of idempotent input, not model/authority", async () => {
+  const { runtime, call, close } = await setup();
+  try {
+    assert.equal((await call("POST", "/v1/runs", { input: "inspect only", model_work: "privileged" })).status, 400);
+    const body = { input: "inspect only", model_work: "interactive" };
+    const response = await call("POST", "/v1/runs", body, { "Idempotency-Key": "work-class-1", "X-Hermes-Session-Key": "work-class-fixture" });
+    assert.equal(response.status, 202); const run = await response.json() as { run_id: string };
+    await untilTerminal(call, run.run_id);
+    const options = runtime.sessions.get("api:work-class-fixture")!.options[0];
+    assert.equal(options.modelWork, "interactive"); assert.equal(options.model, undefined);
+    const replay = await call("POST", "/v1/runs", body, { "Idempotency-Key": "work-class-1", "X-Hermes-Session-Key": "work-class-fixture" });
+    assert.equal((await replay.json() as { replayed: boolean }).replayed, true);
+    assert.equal((await call("POST", "/v1/runs", { ...body, model_work: "background" }, { "Idempotency-Key": "work-class-1", "X-Hermes-Session-Key": "work-class-fixture" })).status, 409);
+  } finally { await close(); }
+});
+
 test("idempotency: same key + payload replays the run, different payload conflicts", async () => {
   const { runtime, call, close } = await setup();
   try {

@@ -12,6 +12,26 @@ function setup(answer?: (t: string, k: string) => string) {
   return { runtime, harness, ch };
 }
 
+test("generated work in a human conversation cannot inherit an interactive model lane", async () => {
+  const { harness, runtime } = setup(() => "offline fixture");
+  let backgroundTurns = 0;
+  try {
+    for (const source of ["channel", "api", "host", "cron", "loop", "heartbeat", "goal"] as const) {
+      const count = runtime.sessions.get("mem:room1")?.options.length ?? 0;
+      await harness.submit({ ...msg(`offline ${source}`), source, turn: { modelWork: "interactive" } });
+      await harness.drained();
+      const options = runtime.sessions.get("mem:room1")?.options ?? [];
+      // A scheduling hint must not make an otherwise unauthorized host/timer
+      // event runnable. Inspect only turns admitted by the existing gates.
+      if (options.length === count) continue;
+      assert.equal(options.at(-1)?.modelWork,
+        source === "channel" || source === "api" ? "interactive" : "background", source);
+      if (source !== "channel" && source !== "api") backgroundTurns++;
+    }
+    assert.ok(backgroundTurns > 0, "exercise actual generated turns, not just rejected host events");
+  } finally { await harness.stop(1000); }
+});
+
 for (const source of ["channel", "api"] as const) {
   test(`stop suppresses runtime prose for ${source}, clears queue and permits a fresh turn`, async () => {
     const { harness, runtime, ch } = setup(() => "old handover");
