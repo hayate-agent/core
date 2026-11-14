@@ -57,7 +57,7 @@ import { ShutdownDeadline } from "./shutdown-deadline.js";
 import { requestSoftwareUpdate, softwareLifecyclePlugin } from "./software-update-client.js";
 import { containerRuntime } from "./software-updates.js";
 import { DispatcherRuntime } from "./dispatcher-runtime.js";
-import { attentionRequired } from "./notification-routing.js";
+import { dispatcherEventPresentation } from "./notification-routing.js";
 import { dispatcherConfig } from "./dispatcher-config.js";
 import { dispatcherPlugin } from "./builtin-plugins/dispatcher-plugin.js";
 import { workerTasksPlugin } from "./worker-tasks-plugin.js";
@@ -832,17 +832,15 @@ async function main(argv: string[]): Promise<void> {
         if (!task || task.parentStopped) return;
         if ((event.type === "question" || event.type === "status") && !event.parent.startsWith("cron-followup:")) {
           const to = target;
+          const presentation = dispatcherEventPresentation(event, task.status, to?.channel);
+          if (!presentation) return; // Internal plans/routing/validator rounds are not chat replies.
           const text = dispatchRuntime!.eventText(event);
-          // Questions and recovery blockers require attention. Routine lifecycle
-          // belongs to one update row, never a succession of final answers.
-          if (to?.channel === "api") {
+          if (presentation === "progress") {
             // The API run belongs to the parent turn, not its child's status or
             // question. Preserve stop/final-answer ownership while exposing SSE.
             await harness.deliver(to, text, { deliveryId: `dispatch-event:${event.id}`, presentation: "progress" });
-          } else if (attentionRequired(event, task.status)) {
+          } else {
             await harness.deliver(to, text, { deliveryId: `dispatch-event:${event.id}` });
-          } else if (event.parent !== "improvement:nightly") {
-            await harness.deliver(to, text, { deliveryId: `dispatch-event:${event.id}`, statusKey: `dispatch:${event.executionId}` });
           }
         }
         return;

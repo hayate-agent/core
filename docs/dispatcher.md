@@ -9,9 +9,14 @@ remain available to Main. Starting a separate subagent is not a way around this
 routing rule. Main fallback is available only when dispatcher mode is disabled or
 the dispatcher is unavailable.
 
-Both `worker-failed` (for example a provider EOF) and the broader
-`runtime-failure` strategy/validator interruption have a durable automatic
-recovery owner. An internal `paused` or `blocked` state is not a terminal
+Both `worker-failed` (for example a provider EOF) and technical
+`runtime-failure` strategy/validator interruptions have a durable automatic
+recovery owner. A valid independent `blocked` or `waiting` verdict is instead
+stored as `assessment-blocked` / `assessment-waiting`: no timed worker retry,
+no transport-budget consumption and no repeated unchanged chat notification.
+New parent evidence or explicit authenticated continuation can reassess the same
+retained execution. Startup converts historical semantic holds incorrectly marked
+`runtime-failure` or `retry-exhausted` without replaying their workers. An internal `paused` or `blocked` state is not a terminal
 lifecycle state: its stored `workerRetry.nextAt` is consumed by the existing
 scheduler, including after host restart and for diagnosed legacy internal pauses.
 Cheap ticks never renew that due time.
@@ -126,6 +131,13 @@ wait for an unrelated publisher before starting an independent review if worker
 capacity is available. A genuinely dependent review must still wait for its input.
 Pending tasks are bounded by the ledger's storage limits, not by worker capacity.
 
+Internal dispatcher plans, role/model choices, validator correction rounds and
+step lifecycle notices remain inspectable through `/dispatch` and API progress;
+they are not delivered as ordinary chat messages or chat status edits. This also
+applies to automated/cron continuations whose parent is a Matrix conversation,
+not just sessions named `cron-followup:`. Actual results retain their durable
+parent inbox path; new actionable blockers and real questions retain chat delivery.
+
 Main answers short questions, known facts and simple status requests directly and
 uses its available tools for bounded lookups, local inspection and short research.
 Enabling the dispatcher does not make delegation mandatory or remove Main's tools.
@@ -194,10 +206,18 @@ scheduler, ledger and worker bridge. It requires enabled [model roles](model-rol
    persisting completion or admitting a successor. Missing/empty/malformed worker
    reports are assessed too, never silently accepted or excluded from validation.
    A step-specific tool-free reviewer requests concrete read-only evidence or a
-   missing final report from the same retained worker (at most two corrections).
-   Failed/inconclusive inference is attempted at most twice per worker result,
+   missing final report from the same retained worker. Corrections with new
+   host-observed successful tool-result receipts can continue; three consecutive
+   corrections without a new receipt stop as `assessment-stalled`, retaining the
+   settled report and unsafe intent rather than inventing completion. Reworded
+   prose, call arguments and validator requests are not progress. New parent
+   decision evidence or explicit authenticated resolution can release the hold;
+   timer ticks and restarts cannot. A fresh child request ID under the same parent
+   mandate cannot bypass a stagnant execution. Independent mandates remain
+   available, and independently admitted later steps can still run.
+   Failed/inconclusive inference backs off from one minute up to one hour,
    without re-running the worker, replanning or upgrading its model. Genuine
-   external holds still stop immediately; exhausted inference pauses visibly.
+   external holds stop immediately.
 2. Plan, step index and outcomes are persisted in the execution checkpoint before
    any worker turn; each step saves an unsafe intent with its exact route first.
 3. Steps run sequentially as ordinary worker turns in the task-bound session with

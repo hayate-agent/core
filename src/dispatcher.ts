@@ -1,6 +1,6 @@
 import { recoveryBlock, type ExecutionRecoveryPolicy } from "./execution-recovery.js";
 import { validateWorkerPin } from "./model-roles.js";
-import { executionDecisionRevision, ExecutionClaimConflict, ExecutionDecisionConflict, ExecutionDeadlineExpired, ExecutionWorkerFailure, ExecutionAssessmentHold, type Execution, type ExecutionEvent, type ExecutionStore } from "./execution.js";
+import { executionDecisionRevision, ExecutionClaimConflict, ExecutionDecisionConflict, ExecutionDeadlineExpired, ExecutionWorkerFailure, ExecutionAssessmentHold, ExecutionAssessmentStalled, type Execution, type ExecutionEvent, type ExecutionStore } from "./execution.js";
 import { toolGuardDenialReason } from "./tool-guard-error.js";
 import { PriorityScheduler, type TaskPriority } from "./task-priority.js";
 
@@ -331,7 +331,8 @@ export class Dispatcher {
       // Preserve partial state, but do not automatically spin on a failing plugin.
       if (!this.stopped && this.store.list().find(item => item.id === task.id)?.status === "running") {
         await this.store.fail(task.id, token, error instanceof ExecutionDeadlineExpired || toolGuardDenialReason(error).startsWith("deadline_expired:")
-          ? "deadline-expired" : error instanceof ExecutionWorkerFailure ? error.diagnosticCode : "runtime-failure",
+          ? "deadline-expired" : error instanceof ExecutionAssessmentStalled ? "assessment-stalled"
+          : error instanceof ExecutionWorkerFailure ? error.diagnosticCode : "runtime-failure",
           { strategy, policy: this.recoveryPolicy,
             ...(error instanceof ExecutionAssessmentHold ? { assessmentHold: { state: error.state, step: error.step } } : {}) }).catch(this.report);
       }
