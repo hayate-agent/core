@@ -4,6 +4,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { legacyValidatorRegistry } from "./completion-selected.js";
+import { readExecutionLedgerFixture } from "./execution-ledger-fixture.js";
 import { DispatcherRuntime } from "../src/dispatcher-runtime.js";
 import { Dispatcher } from "../src/dispatcher.js";
 import type { SequentialState } from "../src/dispatcher-sequential.js";
@@ -94,7 +95,7 @@ test("d2494ffb: technical validator failure after five continuations keeps a dur
   t.after(() => rm(home, { recursive: true, force: true }));
   const phase1 = await pausedLikeD2494ffb(home);
   // Exact live diagnostic shape of d2494ffb.
-  const raw = JSON.parse(await readFile(phase1.file, "utf8")) as { executions: Array<Record<string, unknown>> };
+  const raw = await readExecutionLedgerFixture(phase1.file) as { executions: Array<Record<string, unknown>> };
   const child = raw.executions.find(e => e.id === phase1.id)!;
   assert.equal(child.status, "ready");
   assert.ok(child.assessmentRetryAt);
