@@ -131,7 +131,8 @@ export class ApiChannel implements Channel {
   private async route(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const url = new URL(req.url ?? "/", "http://localhost");
     const p = url.pathname.replace(/\/+$/, "") || "/";
-    if (req.method === "GET" && (p === "/health" || p === "/v1/health")) return this.json(res, 200, { status: "ok", platform: "hayate-agent" });
+    // HEAD is the usual uptime/load-balancer probe; Node omits the body for HEAD responses.
+    if ((req.method === "GET" || req.method === "HEAD") && (p === "/health" || p === "/v1/health")) return this.json(res, 200, { status: "ok", platform: "hayate-agent" });
     if (!this.authorized(req)) throw new HttpError(401, "Invalid API key", "invalid_api_key");
     if (p === "/v1/update-admission") {
       const owner = this.opts.updateAdmission;

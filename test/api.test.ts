@@ -135,6 +135,13 @@ test("health is public; everything else needs the bearer key", async () => {
   const { base, call, close } = await setup();
   try {
     assert.equal((await fetch(`${base}/health`)).status, 200);
+    for (const p of ["/health", "/v1/health"]) {
+      const head = await fetch(base + p, { method: "HEAD" });
+      assert.equal(head.status, 200, `HEAD ${p}`);
+      assert.equal(await head.text(), "");
+    }
+    assert.equal((await fetch(`${base}/v1/capabilities`, { method: "HEAD" })).status, 401);
+    assert.equal((await fetch(`${base}/health`, { method: "POST" })).status, 401);
     const denied = await fetch(`${base}/v1/capabilities`, { headers: { Authorization: "Bearer wrong" } });
     assert.equal(denied.status, 401);
     assert.equal(((await denied.json()) as { error: { code: string } }).error.code, "invalid_api_key");
