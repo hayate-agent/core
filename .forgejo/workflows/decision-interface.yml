@@ -18,6 +18,8 @@ on:
       - 'src/plugins.ts'
       - 'src/cli.ts'
       - 'src/launcher.ts'
+      - 'src/runtime/*.ts'
+      - 'test/local-*.test.ts'
       - 'src/commands.ts'
       - 'src/config.ts'
       - 'src/shutdown-deadline.ts'
