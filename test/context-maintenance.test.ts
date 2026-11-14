@@ -42,6 +42,20 @@ test("local tiny history never queues model maintenance just to compact irreduci
  history=2048;await maintenance.boundary('chat',session,rotate);assert.equal(calls,1);
 });
 
+test("critical admission pressure triggers archive-backed handover despite stale provider usage", async t => {
+  const home = await mkdtemp(path.join(os.tmpdir(), "critical-handover-"));
+  t.after(() => rm(home, { recursive: true, force: true }));
+  let assessments = 0, rotations = 0;
+  const maintenance = new ContextMaintenance(home, () => contextPolicy(), async () => { assessments++; return "unknown"; });
+  const old = { status: () => ({ sessionId: "old", contextPercent: 5, contextBudgetPercent: 110, contextHistoryTokens: 140000 }),
+    archiveEntries: () => [{ id: "u1", role: "user", text: "Retain the original mandate" }],
+    summarize: async () => { throw Error("over-budget session must not summarize itself"); } } as unknown as RuntimeSession;
+  const next = { status: () => ({ sessionId: "new" }) } as RuntimeSession;
+  const notice = await maintenance.boundary("chat", old, async () => { rotations++; return next; }, undefined, "before");
+  assert.equal(rotations, 1); assert.equal(assessments, 0); assert.match(notice!, /Neue Sitzung/);
+  assert.equal((await maintenance.status("chat")).sessionId, "new");
+});
+
 test("context policy validates ordered thresholds", () => {
   assert.equal(contextPolicy().autoHandover, true);
   assert.equal(contextPolicy({ compactionOwner: "agent" }).compactionOwner, "agent");

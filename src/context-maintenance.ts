@@ -683,11 +683,17 @@ export class ContextMaintenance {
       const pressure = percent !== undefined && percent >= (phase === "before" ? policy.assessPercent : policy.compactPercent);
       const failedAt = state.assessmentFailures?.[phase];
       const assessmentDue = failedAt === undefined || state.turns - failedAt >= policy.cooldownTurns;
-      const eligible = !request && due && assessmentDue && policy.enabled && this.compressibleLocalHistory(status) && percent !== undefined &&
+      // A final-input admission failure cannot be fixed by another ordinary turn.
+      // At critical byte pressure, use the existing archive-linked handover
+      // without asking an already-overflowed conversation to approve it.
+      const critical = phase === "before" && !request && policy.enabled && policy.autoHandover &&
+        status.contextBudgetPercent !== undefined && status.contextBudgetPercent >= 90 && this.compressibleLocalHistory(status);
+      const eligible = !critical && !request && due && assessmentDue && policy.enabled && this.compressibleLocalHistory(status) && percent !== undefined &&
         (phase === "before" || policy.compactionOwner !== "agent") &&
         (phase === "before" ? policy.autoHandover && (pressure || state.pressureSinceCompaction === true) : pressure);
       let decision = percent === undefined ? "usage-unknown" : !this.compressibleLocalHistory(status) ? "irreducible-base-small-history" : !due ? "cooldown" : !assessmentDue ? "assessment-backoff" : "below-threshold";
-      let automatic = false;
+      let automatic = critical;
+      if (critical) decision = "critical-budget-handover";
       if (eligible) {
         const recent = (session.archiveEntries?.() ?? []).slice(-8).map(e => `${e.role}: ${e.text}`).join("\n").slice(-16000);
         let action: Awaited<ReturnType<BoundaryAssessment>> = "unknown";
@@ -733,7 +739,7 @@ export class ContextMaintenance {
         const handover = phase === "before";
         if (handover) {
           // Tool-free summary, or an archive-backed checkpoint if unavailable.
-          const prepared = await this.prepareArchive(key, session, instructions, true, state.handoverAfterFailure);
+          const prepared = await this.prepareArchive(key, session, instructions, true, critical || state.handoverAfterFailure);
           state.handover = { phase: "prepared", from: id, ...prepared };
           await this.save(key, state);
           if (independentHandover) await this.startRecovery(key, state); // reserve rotation, not summarization
