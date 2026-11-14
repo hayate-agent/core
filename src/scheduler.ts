@@ -51,6 +51,7 @@ export function parseJobs(text: string): CronJob[] {
     // /cron trims its argument; blank or padded names could never be addressed exactly.
     if (!j.name.trim() || j.name !== j.name.trim()) throw Error(`Invalid cron job name ${JSON.stringify(j.name)}: must be non-empty without surrounding whitespace`);
     if (!j.absent && typeof j.schedule !== "string") throw new Error(`cron job "${j.name}" has no schedule`);
+    if (j.enabled !== undefined && typeof j.enabled !== "boolean") throw Error("Invalid cron enabled");
     if (j.language !== undefined) languageTag(j.language);
     if (j.audience !== undefined && !["agent", "user"].includes(j.audience)) throw Error("Invalid cron audience");
     if (j.audience === "agent" && j.no_agent) throw Error("Agent-only cron requires agent processing");
