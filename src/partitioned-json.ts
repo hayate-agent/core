@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { lstat } from "node:fs/promises";
 import path from "node:path";
-import { mkdirDurable, writeFileDurable, writeFileDurableExclusive } from "./durable.js";
+import { mkdirDurable, writeFileDurable, writeFileDurableExclusive, syncDirStrict } from "./durable.js";
 import { readRegular } from "./session-state-storage.js";
 
 interface Reference { hash: string; key?: string; id?: string; sessionKey?: string; parent?: string; status?: string }
@@ -23,13 +23,21 @@ const encode = (value: unknown) => `${JSON.stringify(value)}\n`;
 export class PartitionedJson {
   private previous?: string;
   private legacy?: string;
+  private legacySuffix = "v1";
   private known = new Set<string>();
+  private durable = new Map<string, string>();
   private fenced = false;
   private initialized = false;
   constructor(readonly file: string, private readonly arrays: Readonly<Record<string, number>>,
     private readonly write: typeof writeFileDurable = writeFileDurable) {}
 
   private blob(hash: string): string { return path.join(`${this.file}.parts`, `${hash}.json`); }
+  private async identity(hash: string): Promise<string> {
+    const info = await lstat(this.blob(hash));
+    if (!info.isFile() || info.isSymbolicLink() || (info.mode & 0o777) !== 0o600 ||
+        typeof process.getuid === "function" && info.uid !== process.getuid()) throw Error("Unsafe partition file");
+    return JSON.stringify([info.dev, info.ino, info.size, info.mtimeMs, info.ctimeMs, info.mode, info.uid]);
+  }
 
   private async validateDirectory(): Promise<void> {
     const info = await lstat(`${this.file}.parts`);
@@ -44,10 +52,15 @@ export class PartitionedJson {
     const parsed = JSON.parse(raw);
     if (parsed.format !== "hayate-partitioned-json") {
       this.legacy = raw;
+      this.legacySuffix = parsed.version === 2 ? "v2" : "v1";
       this.initialized = true;
       return parsed;
     }
-    await this.validateDirectory();
+    try { await this.validateDirectory(); }
+    catch (cause) {
+      if ((cause as NodeJS.ErrnoException).code !== "ENOENT") throw cause;
+      throw new Error("Missing partition directory", { cause });
+    }
     if (parsed.version !== 1 || !parsed.document || typeof parsed.document !== "object" || Array.isArray(parsed.document) ||
         !parsed.collections || typeof parsed.collections !== "object" || Array.isArray(parsed.collections)) throw Error("Invalid partition index");
     const index = parsed as Index;
@@ -74,13 +87,34 @@ export class PartitionedJson {
     // Only adopt a fully verified generation. A missing shard must never look
     // like a missing ledger and silently start empty.
     this.previous = raw;
+    if (document.version === 1) {
+      this.legacy = raw;
+      this.legacySuffix = "partition-v1";
+    }
     this.known = known;
     this.initialized = true;
     return document;
   }
 
-  async save(document: Record<string, unknown>): Promise<void> {
+  assertWritable(): void {
     if (this.fenced) throw Error("Partition publication uncertain; restart required");
+  }
+
+  /** Byte-exact migration evidence must precede staging dependency or row shards. */
+  async preserveLegacy(): Promise<void> {
+    this.assertWritable();
+    if (!this.initialized) await this.load();
+    if (this.legacy === undefined) return;
+    const backup = `${this.file}.legacy-${this.legacySuffix}`;
+    try { await writeFileDurableExclusive(backup, this.legacy, undefined, syncDirStrict); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST" || await readRegular(backup, true, true) !== this.legacy) throw error;
+      await syncDirStrict(path.dirname(backup));
+    }
+  }
+
+  async save(document: Record<string, unknown>, publishUnchanged = false): Promise<void> {
+    this.assertWritable();
     // Build synchronously before any await: capture live state once, not mutable
     // references that can change while payload writes are in flight.
     const header = { ...document };
@@ -102,41 +136,59 @@ export class PartitionedJson {
           }
         }
         refs.push(ref);
-        if (!this.known.has(hash)) payloads.set(hash, raw);
+        payloads.set(hash, raw);
       }
       collections[name] = refs;
     }
     const index = encode({ format: "hayate-partitioned-json", version: 1, document: header, collections } satisfies Index);
     if (!this.initialized) await this.load();
-    if (index === this.previous) return;
-    await mkdirDurable(path.dirname(this.file));
-    await mkdirDurable(`${this.file}.parts`);
-    await this.validateDirectory();
+    if (index === this.previous && !publishUnchanged) return;
+    try { await lstat(path.dirname(this.file)); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      await mkdirDurable(path.dirname(this.file));
+    }
+    try { await this.validateDirectory(); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      await mkdirDurable(`${this.file}.parts`);
+      await this.validateDirectory();
+    }
     for (const [hash, raw] of payloads) {
+      if (this.known.has(hash)) {
+        try {
+          const identity = await this.identity(hash);
+          if (this.durable.get(hash) !== identity) {
+            if (await readRegular(this.blob(hash), true, true) !== raw) throw Error("Existing partition checksum mismatch");
+            await syncDirStrict(`${this.file}.parts`);
+            this.durable.set(hash, await this.identity(hash));
+          }
+          continue;
+        } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+      }
       if (this.write !== writeFileDurable) { await this.write(this.blob(hash), raw); continue; }
-      try { await writeFileDurableExclusive(this.blob(hash), raw); }
+      try { await writeFileDurableExclusive(this.blob(hash), raw, undefined, syncDirStrict); }
       catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
         // Re-establish durability after a possible prior link/fsync failure.
         if (await readRegular(this.blob(hash), true, true) !== raw) throw Error("Existing partition checksum mismatch");
+        await syncDirStrict(`${this.file}.parts`);
       }
+      this.durable.set(hash, await this.identity(hash));
     }
-    if (this.legacy !== undefined) {
-      // A durable byte-exact backup precedes replacing the only legacy authority.
-      const backup = `${this.file}.legacy-v1`;
-      try { await writeFileDurableExclusive(backup, this.legacy); }
-      catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "EEXIST" || await readRegular(backup, true, true) !== this.legacy) throw error;
-      }
-    }
-    try { await this.write(this.file, index); }
+    await this.preserveLegacy();
+    let published = false;
+    try { await this.write(this.file, index, 0o600, undefined, syncDirStrict, () => { published = true; }); }
     catch (error) {
       // rename may have committed even if directory fsync subsequently failed.
       // Never let a stale in-memory generation overwrite that uncertain commit.
-      let current: string | undefined;
-      try { current = await readRegular(this.file); }
-      catch (readError) { if ((readError as NodeJS.ErrnoException).code !== "ENOENT") this.fenced = true; }
-      if (current !== (this.previous ?? this.legacy)) this.fenced = true;
+      if (published) this.fenced = true;
+      if (this.write !== writeFileDurable) {
+        let current: string | undefined;
+        try { current = await readRegular(this.file); }
+        catch (readError) { if ((readError as NodeJS.ErrnoException).code !== "ENOENT") this.fenced = true; }
+        if (current !== (this.previous ?? this.legacy)) this.fenced = true;
+      }
       throw error;
     }
     this.previous = index;

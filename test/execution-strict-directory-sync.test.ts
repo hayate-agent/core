@@ -1,0 +1,7 @@
+import test from'node:test';import assert from'node:assert/strict';import fs from'node:fs/promises';import{syncBuiltinESMExports}from'node:module';import os from'node:os';import path from'node:path';import{ExecutionStore}from'../src/execution.js';
+for(const code of['EINVAL','EPERM','ENOTSUP','EISDIR'])test(`execution publication never acknowledges directory fsync ${code}`,async t=>{
+ const dir=await fs.mkdtemp(path.join(os.tmpdir(),'execution-strict-sync-'));t.after(()=>fs.rm(dir,{recursive:true,force:true}));const file=path.join(dir,'ledger.json'),store=new ExecutionStore(file);await store.load();await store.submit('p','old','preserved','direct');const realOpen=fs.open;let injected=false;
+ t.mock.method(fs,'open',async(...args:Parameters<typeof fs.open>)=>{const h=await realOpen(...args);if(String(args[0])===dir){h.sync=async()=>{injected=true;throw Object.assign(Error('Unsupported directory fsync '+code),{code});};}return h;});syncBuiltinESMExports();
+ try{await assert.rejects(store.submit('p','new','same request','direct'),new RegExp(code));assert.equal(injected,true);await assert.rejects(store.ack('barrier'),/publication uncertain/);}finally{t.mock.restoreAll();syncBuiltinESMExports();}
+ const cold=new ExecutionStore(file);await cold.load();assert.equal(cold.list().length,2);assert.equal((await cold.submit('p','new','same request','direct')).requestId,'new');assert.equal(cold.list().length,2);
+});

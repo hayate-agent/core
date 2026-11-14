@@ -40,6 +40,8 @@ export interface ValidatorRequest {
   now: () => number;
   prompt: CompletionPrompt;
   promptText: string;
+  /** Optional bounded technical failure projection; never a semantic verdict. */
+  reportFailure?: (detail: CompletionFailureDetail) => void;
 }
 /** Providers return a semantic answer, not host directives. The validator plugin validates it. */
 export interface ValidatorProvider {

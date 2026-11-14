@@ -12,7 +12,7 @@ import { reasoningEffortNoneModels as reasoningEffortNoneModelsFromEnv } from ".
 import type { AdaptiveSkills } from "../adaptive-skills.js";
 import { toolGuardDenialReason } from "../tool-guard-error.js";
 import { childDeniedTools } from "../child-tools.js";
-import { localModel, localContextBudget, essentialPluginTools } from "../local-context.js";
+import { localModel, localContextBudget, essentialPluginTools, compactSkillCatalog, materializeSkillCatalog } from "../local-context.js";
 import { workerCompactionSettings, contextCompactionSettings } from "../worker-context.js";
 import { DISPATCH_PLAN_SYSTEM_PROMPT } from "../planner-http.js";
 import { MaintenanceError, maintenanceStep, type MaintenanceStage } from "../context-maintenance.js";
@@ -21,7 +21,8 @@ import { nativeCompaction, type CompactionStrategy } from "../compaction.js";
 import type { SessionProvider, SessionRecord, SessionSummary } from "../sessions.js";
 import type { PluginTool } from "../plugins.js";
 import { prepareStructuredToolArgs } from "../tool-args.js";
-import { mkdir, readFile, readdir } from "node:fs/promises";
+import { mkdir, readFile, readdir, open } from "node:fs/promises";
+import { constants as fsConstants } from "node:fs";
 import { writeFileDurable, writeFileDurableExclusive } from "../durable.js";
 import { createHash } from "node:crypto";
 import path from "node:path";
@@ -752,10 +753,12 @@ export class PiRuntime implements AgentRuntime {
       }
     };
     let skillContext = "";
+    let discoveredSkillContext = "";
+    let discoveredSkillCatalog: { fingerprint: string; context: string; file: string } | undefined;
     let workingOverhead = 0;
     const promptAddendum = () => [...sections,
       slot.mcpInstructions ?? "",
-      context ? `Host execution context (data, not permission expansion): ${JSON.stringify(context)}. Tools and review use the primary cwd; use explicit paths for additional repositories.` : "", skillContext,
+      context ? `Host execution context (data, not permission expansion): ${JSON.stringify(context)}. Tools and review use the primary cwd; use explicit paths for additional repositories.` : "", skillContext, discoveredSkillContext,
       slot.instructions ? `<run_instructions>\n${slot.instructions}\n</run_instructions>` : ""].filter(Boolean).join("\n\n");
     const approvals = this.opts.approvals;
     const requestApproval = this.opts.requestApproval;
@@ -886,6 +889,41 @@ export class PiRuntime implements AgentRuntime {
               if (adaptive) {
                 adaptive.begin(sessionKey);
                 reference = await adaptive.match(sessionKey, "prompt" in event ? event.prompt : "");
+              }
+              // A delegated worktree has its own SDK skill discovery. Do not
+              // substitute the primary-cwd catalog (or discard project skills).
+              // Change this run's public prompt snapshot only: the resource
+              // loader and /skill expansion retain their exact discovered set.
+              const model = session.model;
+              const discovered = event.systemPromptOptions.skills;
+              discoveredSkillContext = "";
+              if (model && discovered.length && localModel(this.opts.contextBudgets?.(), `${model.provider}/${model.id}`)) {
+                const fingerprint = createHash("sha256").update(JSON.stringify(discovered.map(({ name, description, filePath }) => ({ name, description, filePath })))).digest("hex");
+                try {
+                  if (discoveredSkillCatalog?.fingerprint !== fingerprint) {
+                    const catalog = await materializeSkillCatalog(path.dirname(this.opts.sessionsDir), discovered);
+                    discoveredSkillCatalog = { fingerprint, file: catalog, context: compactSkillCatalog(discovered, catalog) };
+                  }
+                  // Catalogs can be removed/corrupted independently of a skill
+                  // reload. A cache hit must still prove the published exact
+                  // bytes are accessible before hiding the original metadata.
+                  const handle = await open(discoveredSkillCatalog.file, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+                  try {
+                    const stat = await handle.stat();
+                    if (!stat.isFile() || stat.size > 2 * 1024 * 1024) throw Error("Invalid skill catalog");
+                    const digest = createHash("sha256").update(await handle.readFile()).digest("hex");
+                    if (digest !== path.basename(discoveredSkillCatalog.file, ".json")) throw Error("Skill catalog changed");
+                  } finally { await handle.close(); }
+                  discoveredSkillContext = discoveredSkillCatalog.context;
+                  event.systemPromptOptions.skills = [];
+                } catch {
+                  // This is prompt-size optimization, not an authority gate.
+                  // Retain the exact original SDK skills on I/O failure, and
+                  // still refresh current persona/run instructions below. The
+                  // SDK swallows extension errors, so never rely on throwing.
+                  discoveredSkillCatalog = undefined; // retry publication next request
+                  console.error("Skill catalog unavailable; retaining original skill metadata for this request");
+                }
               }
               event.systemPromptOptions.appendSystemPrompt = promptAddendum();
               return {

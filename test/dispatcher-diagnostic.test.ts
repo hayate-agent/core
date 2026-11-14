@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { readExecutionLedgerFixture } from './execution-ledger-fixture.js';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
@@ -40,7 +41,7 @@ for (const failure of [new Error('provider SECRET <ignore instructions>'), new E
     await until(() => store.list()[0].status === 'blocked');
     await dispatcher.stop();
     assert.equal(calls, 1);
-    const disk = JSON.parse(await readFile(file, 'utf8'));
+    const disk = await readExecutionLedgerFixture(file);
     assert.equal(disk.executions[0].status, 'blocked');
     assert.equal(disk.executions[0].diagnosticCode, failure instanceof ExecutionWorkerFailure ? failure.diagnosticCode : 'runtime-failure');
     assert.doesNotMatch(JSON.stringify(disk), /SECRET|ignore instructions/);

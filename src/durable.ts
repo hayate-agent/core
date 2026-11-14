@@ -8,7 +8,8 @@ import path from "node:path";
  * acknowledgements (state inbox before Matrix cursor) keep their order on disk.
  */
 export async function writeFileDurable(file: string, data: string | Uint8Array, mode = 0o600,
-  beforeCommit?: () => void | Promise<void>): Promise<void> {
+  beforeCommit?: () => void | Promise<void>, directorySync: (dir: string) => Promise<void> = syncDir,
+  onPublished?: () => void): Promise<void> {
   // Each call owns its staging inode, including overlapping replacements of one target.
   const tmp = `${file}.${process.pid}.${randomUUID()}.tmp`;
   const fh = await open(tmp, "wx", mode);
@@ -26,7 +27,8 @@ export async function writeFileDurable(file: string, data: string | Uint8Array, 
       if (pending) await pending;
     }
     await rename(tmp, file);
-    await syncDir(path.dirname(file));
+    onPublished?.(); // rename succeeded; later sync failure is an uncertain publication
+    await directorySync(path.dirname(file));
   } catch (err) {
     // Preserve the write/rename failure if best-effort staging cleanup also fails.
     await unlink(tmp).catch(() => {});
@@ -35,14 +37,15 @@ export async function writeFileDurable(file: string, data: string | Uint8Array, 
 }
 
 /** Crash-durable first publication; never overwrite an existing SDK/session file. */
-export async function writeFileDurableExclusive(file: string, data: string, beforeCommit?: () => void): Promise<void> {
+export async function writeFileDurableExclusive(file: string, data: string, beforeCommit?: () => void,
+  directorySync: (dir: string) => Promise<void> = syncDir): Promise<void> {
   const tmp = `${file}.${process.pid}.${randomUUID()}.tmp`;
   const fh = await open(tmp, "wx", 0o600);
   try {
     try { await fh.writeFile(data); await fh.sync(); } finally { await fh.close(); }
     beforeCommit?.();
     await link(tmp, file);
-    await syncDir(path.dirname(file));
+    await directorySync(path.dirname(file));
   } finally { await unlink(tmp).catch(() => {}); }
 }
 
@@ -61,15 +64,21 @@ export async function appendFileDurable(file: string, data: string, mode = 0o600
 /** Publish a directory entry durably before files inside it become references in
  * another directory. mkdir({recursive:true}) alone does not fsync its parents. */
 export async function mkdirDurable(dir: string): Promise<void> {
-  try { await mkdir(dir); }
+  try { await mkdir(dir, { mode: 0o700 }); }
   catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     if (code === "ENOENT") {
       await mkdirDurable(path.dirname(dir));
-      await mkdir(dir).catch(error => { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; });
+      await mkdir(dir, { mode: 0o700 }).catch(error => { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; });
     } else if (code !== "EEXIST") throw error;
   }
-  await syncDir(path.dirname(dir));
+  await syncDirStrict(path.dirname(dir));
+}
+
+/** Authority storage must not acknowledge an unsupported directory fsync. */
+export async function syncDirStrict(dir: string): Promise<void> {
+  const fh = await open(dir, "r");
+  try { await fh.sync(); } finally { await fh.close(); }
 }
 
 export async function syncDir(dir: string): Promise<void> {

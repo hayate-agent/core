@@ -959,14 +959,15 @@ export class Harness {
     const scheduledRetry = e.workerRetry && !e.recoveryReason &&
       ["runtime-failure", "worker-failed"].includes(e.diagnosticCode ?? "");
     // A settled independent blocked/waiting verdict is not a running writer.
-    // Its read-only retry remains owned by Dispatcher, but must not suppress
-    // every independent parent step for hundreds of assessment retries. Child
-    // effects/holds are neither released nor retried by parent supervision.
+    // Its semantic hold must not suppress independent parent work. Older cores
+    // attached a transport retry; current cores wait for explicit new evidence.
+    // Parent supervision never releases or replays held child effects.
     const settledAssessment = e.recoveryEnrollment === "current" && !e.ownershipHold &&
       !!e.assessmentHold && !!e.settledEffect &&
       ["ready", "paused", "blocked"].includes(e.status) &&
       !e.intent && !e.question && !e.parentStopped && !e.recoveryReason &&
-      e.diagnosticCode === "runtime-failure" && !!e.workerRetry;
+      (["assessment-blocked", "assessment-waiting"].includes(e.diagnosticCode ?? "") ||
+        e.diagnosticCode === "runtime-failure" && !!e.workerRetry);
     return settledAssessment || !scheduledRetry && (e.status === "blocked" ||
       (e.status === "paused" && e.diagnosticCode === "runtime-failure" && !e.intent && !e.question && !e.parentStopped));
   }

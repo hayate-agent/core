@@ -2,7 +2,7 @@
  * Run: node --import tsx scripts/partition-io-evidence.ts
  * Uses real StateStore/ExecutionStore; immutable filenames identify new payloads.
  * Initial migration is explicitly excluded from the incremental measurement. */
-import { mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, stat } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -10,6 +10,7 @@ import os from "node:os";
 import path from "node:path";
 import { StateStore, type PersistedState } from "../src/state.js";
 import { ExecutionStore } from "../src/execution.js";
+import { PartitionedJson } from "../src/partitioned-json.js";
 
 const home = await mkdtemp(path.join(os.tmpdir(), "partition-io-"));
 const rows: object[] = [];
@@ -45,7 +46,10 @@ try {
           id: `execution-${String(i).padStart(4, "0")}`, parent: `session-${String(i).padStart(4, "0")}`, requestId: `request-${i}`,
           input: text, strategy: "direct", strategyVersion: 1, status: "ready", restarts: 0, recoveryEnrollment: "current",
         })), events: [] };
-        await writeFile(file, JSON.stringify(ledger));
+        // Seed the supported previous partition-v1 format. The largest fixture
+        // exceeds main's legitimate 32MiB WHOLE-file admission limit; never raise
+        // or bypass that production limit to manufacture a legacy migration.
+        await new PartitionedJson(file, { executions: 1, events: 1, turns: 1, waitAuthorityDenials: 1 }).save(ledger);
         const store = new ExecutionStore(file); await store.load(); await store.holdLegacyRecovery();
         change = () => store.control("execution-0000", "pause");
         legacyAfter = () => ({ version: 1, executions: store.list(), events: store.events() });
@@ -67,7 +71,7 @@ try {
   }
   const root = fileURLToPath(new URL("../", import.meta.url));
   const sourceSha256 = Object.fromEntries(await Promise.all([
-    "scripts/partition-io-evidence.ts", "src/state.ts", "src/session-state-storage.ts", "src/partitioned-json.ts", "src/execution.ts", "src/durable.ts",
+    "scripts/partition-io-evidence.ts", "src/state.ts", "src/session-state-storage.ts", "src/partitioned-json.ts", "src/execution.ts", "src/execution-dependency-storage.ts", "src/durable.ts",
   ].map(async file => [file, createHash("sha256").update(await readFile(path.join(root, file))).digest("hex")])));
   console.log(JSON.stringify({ measurement: "logical changed-payload + authoritative-index bytes; initial migration excluded; no timing claim",
     gitHead: execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim(), sourceSha256,
