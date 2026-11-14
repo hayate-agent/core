@@ -557,6 +557,12 @@ Correctable vs blocked: a worker "blocked" claim or evidence shortfall that rest
           validation = state.assessment?.diagnostic;
           // One read-only assessment per due claim; failures yield their slot.
           const priorAssessment = state.assessment;
+          // Explicitly reopened contradictory reports may be restated ONCE
+          // after fresh parent facts. This is reporting only (host disables ALL
+          // tools), never permission to replay effects or waive final judgment.
+          const freshReopenedClarification = priorAssessment?.reopenedReviewOnly === true &&
+            decisionRevision > (priorAssessment.decisionRevision ?? 0) && !state.correction?.reportOnly;
+          let clarifyReopenedReport = false;
           if (priorAssessment?.nextAt !== undefined && priorAssessment.nextAt > Date.now() && decisionRevision <= (priorAssessment.decisionRevision ?? 0)) {
             if (!context.deferAssessment) return block("Assessment retry scheduler unavailable; retained evidence requires reconciliation.");
             await context.deferAssessment(priorAssessment.nextAt);
@@ -589,14 +595,18 @@ Correctable vs blocked: a worker "blocked" claim or evidence shortfall that rest
               key: `step-assessment:${index}`,
               text: "Technische Schrittprüfung ausstehend; erneute Prüfung mit Backoff, ohne Worker-Wiederholung.",
             } : undefined, failure);
+            clarifyReopenedReport = freshReopenedClarification &&
+              (verdict?.state === "continue" || !verdict && validation === "inconclusive");
             if (!verdict) {
               // An inconclusive/technical CURRENT report is not a global veto
               // over an explicit scoped follow-up. Its separate readiness judge
               // must still authorize an exact candidate; never infer permission
               // from the missing verdict or replay this retained worker.
               if (state.appliedFollowUps?.length && await selectReadyStep()) continue work;
-              if (!context.deferAssessment) return block("Assessment retry scheduler unavailable; retained evidence requires reconciliation.");
-              await context.deferAssessment(nextAt);
+              if (!clarifyReopenedReport) {
+                if (!context.deferAssessment) return block("Assessment retry scheduler unavailable; retained evidence requires reconciliation.");
+                await context.deferAssessment(nextAt);
+              }
             }
           }
           await authorize();
@@ -612,8 +622,8 @@ Correctable vs blocked: a worker "blocked" claim or evidence shortfall that rest
           if (claimed === "complete") status = undefined;
           // An empty report still needs a final report; a nonempty blocked report
           // can be independently verified as completed without a working replay.
-          const reportOnly = verdict?.state === "completed" && (claimed === undefined || claimed === "blocked");
-          if (state.assessment?.reopenedReviewOnly && verdict?.state === "continue") {
+          const reportOnly = clarifyReopenedReport || verdict?.state === "completed" && (claimed === undefined || claimed === "blocked");
+          if (!clarifyReopenedReport && state.assessment?.reopenedReviewOnly && verdict?.state === "continue") {
             // Operator review-only reopening never grants a working replay.
             // Explicit same-owner follow-up admission or a later scoped parent
             // correction must resolve this; do not invent fresh productive authority.
@@ -634,7 +644,7 @@ Correctable vs blocked: a worker "blocked" claim or evidence shortfall that rest
             throw new ExecutionAssessmentStalled();
           }
           const note = reportOnly
-            ? "A reviewer proposed completion, but your previous report is missing a final status or says blocked. This proposal is NOT proof of success or permission. Using EXISTING facts ONLY, no tools, reconcile the contradiction: return STEP-STATUS complete only if every required outcome is actually satisfied. Reporting a failed required test is not passing it. If required outcomes still fail or approval is absent, state that explicitly and keep STEP-STATUS blocked. Never manufacture success, weaken the requirement or repeat effects."
+            ? "Fresh parent facts or a reviewer have raised a consistency question; your previous report is missing a final status or says blocked. This proposal is NOT proof of success or permission. Using EXISTING facts ONLY, no tools, reconcile the contradiction: return STEP-STATUS complete only if every required outcome is actually satisfied. Reporting a failed required test is not passing it. If required outcomes still fail or approval is absent, state that explicitly and keep STEP-STATUS blocked. Never manufacture success, weaken the requirement or repeat effects."
             : (verdict?.next ?? "").slice(0, 1500);
           const correction: SequentialState = structuredClone(state!);
           const settledReport = state.assessment?.reply ?? reply;

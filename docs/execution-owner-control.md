@@ -80,6 +80,15 @@ It cannot replay the old worker. Remaining authorized source work still needs an
 explicit same-owner follow-up and independent admission, not an arbitrary terminal
 reset. Neither inference credentials nor model tools acquire this local owner power.
 
+If fresh parent decisions arrive for such an explicitly reopened report, an
+inconclusive semantic judgment (or a request to continue) may trigger **one
+host-enforced tool-free report clarification**. This only restates existing facts;
+it is not a working replay or a completion waiver. Technical transport failures,
+real `blocked`/`waiting` judgments, stops, questions and expiry do not gain this
+path. The correction checkpoint records `reportOnly`; repeated ticks/restarts
+cannot multiply it. The restated result still requires an independent positive
+completion judgment. A second blocked report remains blocked.
+
 ## Step evidence and phase scope
 
 Parent decisions retain their revision and typed follow-up metadata in both
