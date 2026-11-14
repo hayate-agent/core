@@ -590,6 +590,11 @@ Correctable vs blocked: a worker "blocked" claim or evidence shortfall that rest
               text: "Technische Schrittprüfung ausstehend; erneute Prüfung mit Backoff, ohne Worker-Wiederholung.",
             } : undefined, failure);
             if (!verdict) {
+              // An inconclusive/technical CURRENT report is not a global veto
+              // over an explicit scoped follow-up. Its separate readiness judge
+              // must still authorize an exact candidate; never infer permission
+              // from the missing verdict or replay this retained worker.
+              if (state.appliedFollowUps?.length && await selectReadyStep()) continue work;
               if (!context.deferAssessment) return block("Assessment retry scheduler unavailable; retained evidence requires reconciliation.");
               await context.deferAssessment(nextAt);
             }

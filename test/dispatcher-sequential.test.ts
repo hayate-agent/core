@@ -374,6 +374,36 @@ for (const admitted of [true, false]) test(`old-step validator continuations ${a
   else { assert.equal(current.status, "ready"); assert.ok(current.assessmentRetryAt, "unadmitted same-step correction retains durable pacing"); }
 });
 
+for (const missing of ['{"state":"uncertain"}', 'not json']) for (const admitted of [true, false])
+test(`missing current verdict ${missing} cannot veto or implicitly admit an independent follow-up (${admitted})`, async t => {
+  let amended = false, repairs = 0;
+  const env = await setup(t, { plan: steps(["publication", "simple"], ["live verification", "simple"]),
+    ready: admitted ? '{"state":"continue","next":"3"}' : '{"state":"blocked"}',
+    worker: text => {
+      if (text.includes("STEP 1/2:\npublication")) return "source published\nSTEP-STATUS: complete";
+      if (text.includes("fresh read-only report\nREQUIRED EVIDENCE")) { repairs++; return "fresh receipts read\nSTEP-STATUS: complete"; }
+      return "retained live report\nSTEP-STATUS: blocked: external";
+    },
+    verdict: text => {
+      const data = JSON.parse(text.slice(text.lastIndexOf("DATA: ") + 6));
+      return data.reply.includes("retained live report") ? amended ? missing : '{"state":"blocked"}' : '{"state":"completed"}';
+    },
+  });
+  const task = await env.run("Original scoped publication and verification; read-only reporting remains authorized, no repeated effects");
+  await env.dispatcher.decide("parent", task.id, "old-context", "Keep original authority and existing effects");
+  await env.dispatcher.waitForExecution(task.id); amended = true;
+  await env.dispatcher.consolidateDecisions("parent", task.id, "current-readonly-followup", "Only the new read-only report is independently available; old live work remains held", ["old-context"], {
+    task: "fresh read-only report", role: "simple", reason: "Read current receipts within original authority", evidence: "Actual current receipts, no effect replay",
+  });
+  await env.dispatcher.waitForExecution(task.id);
+  const current = env.store.list()[0]!, saved = state(current.checkpoint);
+  assert.equal(current.id, task.id); assert.equal(repairs, admitted ? 1 : 0);
+  assert.equal(env.calls.worker.length, admitted ? 3 : 2, "Only independently admitted follow-up may run, no old worker replay");
+  assert.equal(current.status, "ready", "Missing current verdict never completes or semantically blocks original work");
+  assert.ok(current.assessmentRetryAt); assert.equal(saved.outcomes.length, admitted ? 2 : 1);
+  if (admitted) assert.deepEqual(saved.stepIds, [0, 2, 1]);
+});
+
 test("forty parent follow-ups roll completed evidence instead of exhausting six lifetime plan slots", async t => {
   let env!: Awaited<ReturnType<typeof setup>>;
   env = await setup(t, { plan: steps(["source zero", "medium"], ["source one", "simple"], ["source two", "high"], ["source three", "simple"], ["source four", "medium"], ["live verification", "simple"]),
