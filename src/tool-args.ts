@@ -13,8 +13,11 @@
  * property's declared type is left alone so validation reports the real
  * failure.
  */
+// JSON.parse itself accepts leading JSON whitespace (space, tab, LF, CR).
+const STRUCTURED_PREFIX = /^[ \t\r\n]*[[{]/;
+
 export function prepareStructuredToolArgs(parameters: unknown, args: unknown): unknown {
-  if (typeof args === "string" && (args[0] === "{" || args[0] === "[")) {
+  if (typeof args === "string" && STRUCTURED_PREFIX.test(args)) {
     try {
       const parsed = JSON.parse(args);
       if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return args;
@@ -30,7 +33,7 @@ export function prepareStructuredToolArgs(parameters: unknown, args: unknown): u
   let changed = false;
   for (const [key, property] of Object.entries(properties)) {
     const value = out[key];
-    if (typeof value !== "string" || (value[0] !== "[" && value[0] !== "{")) continue;
+    if (typeof value !== "string" || !STRUCTURED_PREFIX.test(value)) continue;
     const type = (property as { type?: unknown } | undefined)?.type;
     if (type !== "array" && type !== "object") continue;
     let parsed: unknown;

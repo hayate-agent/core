@@ -35,6 +35,15 @@ test("prepareStructuredToolArgs keeps non-JSON and shape-mismatched values untou
   assert.equal(out4.items, "[{broken");
 });
 
+test("prepareStructuredToolArgs tolerates leading JSON whitespace without weakening shape checks", () => {
+  const out = prepareStructuredToolArgs(itemsSchema, { action: " [1]", items: " \n[1]", meta: "\t\r\n{\"d\":1}" }) as Record<string, unknown>;
+  assert.deepEqual(out, { action: " [1]", items: [1], meta: { d: 1 } });
+  const kept = prepareStructuredToolArgs(itemsSchema, { action: "run", items: ' {"a":1}', meta: " [broken" }) as Record<string, unknown>;
+  assert.deepEqual(kept, { action: "run", items: ' {"a":1}', meta: " [broken" });
+  assert.deepEqual(prepareStructuredToolArgs(itemsSchema, ' \n{"action":"run"}'), { action: "run" });
+  assert.equal(prepareStructuredToolArgs(itemsSchema, " [1]"), " [1]");
+});
+
 test("prepareStructuredToolArgs parses whole-arguments strings and passes through plain args", () => {
   const parsed = prepareStructuredToolArgs(itemsSchema, '{"action":"run","items":[{"a":1}]}') as Record<string, unknown>;
   assert.deepEqual(parsed.items, [{ a: 1 }]);
@@ -68,6 +77,8 @@ try {
   assert.ok(def, "plugin_items definition");
   const prepared = def.prepareArguments({ action: "run", items: '[{"a":1}]', meta: '{"deep":true}' });
   assert.deepEqual(prepared, { action: "run", items: [{ a: 1 }], meta: { deep: true } });
+  const spaced = def.prepareArguments({ action: "run", items: ' \\n[{"a":1}]', meta: '\\t{"deep":true}' });
+  assert.deepEqual(spaced, { action: "run", items: [{ a: 1 }], meta: { deep: true } });
   const kept = def.prepareArguments({ action: "run", items: "not-json" });
   assert.deepEqual(kept, { action: "run", items: "not-json" });
   const result = await def.execute("call", prepared, undefined, undefined, {});
