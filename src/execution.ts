@@ -356,6 +356,9 @@ export class ExecutionStore {
       const { taskBook: _taskBook, ...root } = draft;
       await this.storage.save({ ...root, version: 2, executions, ...(taskBookRef ? { taskBookRef } : {}) }, true);
       this.data = draft;
+      // Cleanup is not part of the authority transaction. A failure leaves
+      // harmless orphan pages for a later successful transaction to collect.
+      if (taskBookRef) try { await this.taskBooks.collect(taskBookRef); } catch { /* retry later */ }
       return structuredClone(result);
     });
     this.queue = next;

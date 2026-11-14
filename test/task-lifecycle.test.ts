@@ -311,6 +311,17 @@ test("long original operator request is retained exactly across durable restart"
   assert.equal(loaded.coreTask(ref.id)!.original, original); assert.equal(loaded.coreTask(ref.id)!.sources[0].text, original);
 });
 
+test("multiple near-limit escaped requests remain separately readable without oversized pages", async t => {
+  const { store, file } = await storeFixture(t);
+  const original = "\u0001".repeat(16 * 1024 * 1024);
+  const first = await store.enrollTask("room", "large-1", original, "large-1", "operator");
+  const second = await store.enrollTask("room", "large-2", original, "large-2", "operator");
+  await store.decideTask(first, 1, "close-large", "close", "done");
+  const loaded = new ExecutionStore(file); await loaded.load();
+  assert.equal(loaded.coreTask(first.id)!.original, original); assert.equal(loaded.coreTask(second.id)!.original, original);
+  assert.equal(loaded.coreTask(first.id)!.operatorStatus, "done");
+});
+
 test("receipt capacity archives exact originals and cannot block operator closure", async t => {
   const { store, file } = await storeFixture(t);
   const ref = await store.enrollTask("room", "operator", "Original", "operator", "operator");
