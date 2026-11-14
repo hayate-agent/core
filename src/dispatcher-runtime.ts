@@ -66,6 +66,7 @@ export class DispatcherRuntime {
     if (!this.isWorker(key)) return;
     const task = this.taskForSession(key);
     if (!task) throw new ToolGuardError("ownership_lost", "Dispatcher worker no longer authorized: ownership missing");
+    if (!this.store.executionTaskAllowed(task)) throw new ToolGuardError("operator_task_closed", "Operator task is done, unresolved, missing or belongs to an older generation");
     if (task.ownershipHold) throw new ToolGuardError("ownership_lost", "Legacy execution ancestry held after scoped stop");
     if (task.parentStopped || task.status === "cancelled") throw new ToolGuardError("execution_cancelled", "Dispatcher worker no longer authorized: stopped");
     if (task.status !== "running") throw new ToolGuardError("ownership_lost", "Dispatcher worker no longer authorized: not running");

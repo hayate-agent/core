@@ -63,6 +63,8 @@ export interface HarnessConfig {
   typeSafeDecisions?: import("./builtin-plugins/typesafe-api-plugin.js").TypeSafeAPIConfig;
   /** Infrastructure-owned semantic continuation grants, keyed by exact conversation. */
   completionCheck?: { provider?: string | false; authorizations?: Record<string, import("./completion-check.js").CompletionAuthorization>; timeoutMs?: number };
+  /** No invented default inactivity period; explicit operator policy only. */
+  taskLifecycle?: { inactivityMs?: number };
   /** Explicit installation review selections, before normalization adds defaults. */
   reviewOverrides?: { model?: string; thinking?: string };
   modelRoles?: ModelRoles;
@@ -140,6 +142,7 @@ export function defaultConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
   }
   if (overrides.reportProcessing !== undefined && (typeof overrides.reportProcessing !== "string" || !/^[a-z][a-z0-9_-]*$/.test(overrides.reportProcessing))) throw Error("Invalid reportProcessing");
   if (overrides.autoReloadToolPlugins !== undefined && typeof overrides.autoReloadToolPlugins !== "boolean") throw Error("autoReloadToolPlugins must be a boolean");
+  if (overrides.taskLifecycle?.inactivityMs !== undefined && (!Number.isSafeInteger(overrides.taskLifecycle.inactivityMs) || overrides.taskLifecycle.inactivityMs < 60000)) throw Error("taskLifecycle.inactivityMs must be an integer >= 60000");
   if (overrides.completionCheck?.provider !== undefined && overrides.completionCheck.provider !== false &&
       (typeof overrides.completionCheck.provider !== "string" || !/^[a-z][a-z0-9-]{0,79}$/.test(overrides.completionCheck.provider))) throw Error("Invalid completionCheck.provider");
   if (overrides.completionCheck?.timeoutMs !== undefined && (!Number.isSafeInteger(overrides.completionCheck.timeoutMs) ||
@@ -203,6 +206,7 @@ export function defaultConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
     protectedContent: overrides.protectedContent,
     skillUpdateSource: overrides.skillUpdateSource,
     completionCheck: overrides.completionCheck,
+    taskLifecycle: overrides.taskLifecycle,
     typeSafeDecisions: overrides.typeSafeDecisions,
     modelRoles: overrides.modelRoles,
     hashtag: overrides.hashtag,
