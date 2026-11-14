@@ -3,7 +3,10 @@
 `modelRoles` is an optional object in installation settings or the existing durable
 local settings overlay. Absence/`enabled: false` preserves historical routing.
 The object has only `enabled` and optional `roles`; the allowed roles are
-`dispatcher`, `simple`, `medium`, `high`, `reviewer`, `validator`. Each pair accepts a full
+`dispatcher`, `simple`, `medium`, `high`, `reviewer`, `validator`, plus the parseable
+legacy `hashtag` entry. Hashtag classification now ignores roles: migrate that
+entry's model to `hashtag.model`, or remove it to inherit Main only (see
+[topic labels](topic-labels.md)). Each pair accepts a full
 `provider/model` reference and optional thinking level (`off`, `minimal`, `low`,
 `medium`, `high`, `xhigh`, `max`). This does not grant tools, authority or budget.
 
