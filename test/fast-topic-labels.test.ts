@@ -4,12 +4,13 @@ import { boundedTopicInput, fastTopicLabeler, topicModelChain } from '../src/top
 import { validateModelRoles } from '../src/model-roles.js';
 
 const valid='{"topic":null,"inherit":false,"tags":["local-performance"]}';
-test('configured small hashtag -> dispatcher -> Main, exact unique references, never reviewer',()=>{
+test('explicit hashtag model or Main only, legacy roles never silently select metadata',()=>{
  const roles={enabled:true,roles:{hashtag:{model:'local/small'},dispatcher:{model:'local/dispatch'},reviewer:{model:'cloud/large'}}};
- validateModelRoles(roles);assert.deepEqual(topicModelChain(roles,'local/main'),['local/small','local/dispatch','local/main']);
+ validateModelRoles(roles);assert.deepEqual(topicModelChain(roles,'local/main'),['local/main']);
+ assert.deepEqual(topicModelChain(roles,'local/main','local/explicit'),['local/explicit']);
  assert.deepEqual(topicModelChain({...roles,roles:{hashtag:{model:'local/main'},dispatcher:{model:'local/main'}}},'local/main'),['local/main']);
  assert.deepEqual(topicModelChain({enabled:false,roles:roles.roles},'local/main'),['local/main']);
- assert.deepEqual(topicModelChain(undefined,undefined),[]);
+ assert.deepEqual(topicModelChain(undefined,undefined),[undefined]);
 });
 test('failed/malformed candidates fall through in order; successful tags cached; business input never sent for execution',async()=>{
  const calls:string[]=[];const label=fastTopicLabeler({review:async(prompt,model,thinking)=>{
@@ -37,7 +38,8 @@ test('plugin failure falls back to exact chain; no unknown provider or output ex
 });
 test('classifier context stays small and does not inherit hidden bundles',()=>{
  const data=boundedTopicInput('x'.repeat(100000),Array.from({length:100},(_,i)=>({id:'topic-'+i,text:'x'.repeat(100000),tags:Array.from({length:20},(_,j)=>'topic-'+i+'-'+j)})),Array.from({length:50},()=>({role:'assistant' as const,text:'r'.repeat(100000)})));
- assert.ok(JSON.stringify(data).length<8500);assert.ok(data.candidates.length>0);assert.ok(data.recent.length===8);
+ assert.ok(JSON.stringify(data).length<=3000);assert.ok(data.candidates.length<=16);assert.ok(data.recent.length<=8);
+ // The tighter total budget may omit a large candidate bundle; never inherit it implicitly.
  const hidden=boundedTopicInput('new',[{id:'oversized',text:'topic',tags:Array(25).fill('prior-tag')}],[]);assert.deepEqual(hidden.candidates,[]);
 });
 

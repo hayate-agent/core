@@ -125,7 +125,7 @@ import { contextStrategyPlugin } from "./builtin-plugins/context-strategy-plugin
 import { guardResultOrchestration } from "./result-orchestration.js";
 import { assessCompletion, assessmentPolicyStamp, completionTimeout } from "./completion-check.js";
 import { validatorPlugin } from "./builtin-plugins/completion-validator-plugin.js";
-import { fastTopicLabeler, topicModelChain } from "./topic-labels.js";
+import { createHashtagStartup } from "./hashtag-startup.js";
 import { completionPrompt } from "./builtin-plugins/completion-prompt.js";
 import { completionStrategyHolder } from "./completion-strategy.js";
 import { completionStrategyPlugin } from "./builtin-plugins/completion-strategy-plugin.js";
@@ -287,6 +287,7 @@ async function main(argv: string[]): Promise<void> {
     mcp: config.mcp,
     dispatcher: config.dispatcher,
     modelRoles: config.modelRoles,
+    hashtag: config.hashtag,
     reasoningEffortNoneModels: config.reasoningEffortNoneModels,
     gateways: config.gateways,
     memory: config.memory,
@@ -330,7 +331,7 @@ async function main(argv: string[]): Promise<void> {
     });
   const effectiveModels = () => {
     const values = settings.effective();
-    return { model: values.model, thinking: values.thinking, reviewModel: values.review?.model ?? values.model, reviewThinking: values.review?.thinking ?? "medium" };
+    return { model: values.model, thinking: values.thinking, reviewModel: values.review?.model ?? values.model, reviewThinking: values.review?.thinking ?? "medium", hashtagModel: values.hashtag?.model ?? values.model };
   };
   const updateReviewDefaults = () => {
     reviewSettings.model = effectiveModels().reviewModel;
@@ -485,6 +486,7 @@ async function main(argv: string[]): Promise<void> {
       blockers.push(...(gatewayManager?.updateBlockers() ?? ["gateway startup"]));
       return blockers;
   };
+  const hashtag = createHashtagStartup(runtime, settings, plugins);
   harness = new Harness({
     attachmentRoot: path.join(config.home, "attachments"),
     updateBlockers: () => [...updateOwnerBlockers(), ...(dispatcher?.updateBlockers() ?? [])],
@@ -550,7 +552,7 @@ async function main(argv: string[]): Promise<void> {
     reportContext: input => plugins.reportProcessing.context(input),
     turnCommitted: async (input) => { await improvement?.committed(input); },
     continuationDeadline: input => config.completionCheck?.authorizations?.[input.sessionKey]?.expiresAt,
-    topicLabeler: fastTopicLabeler(runtimeReviewer(runtime), () => topicModelChain(settings.effective().modelRoles, effectiveModels().model), plugins.services),
+    topicLabeler: hashtag.topicLabeler,
     assessmentPolicy: () => assessmentPolicyStamp(plugins.validators, validatorSettings(), completionTimeout(config.completionCheck?.timeoutMs)),
     completionCheck: async (input, reply, signal, diagnostic) => {
       const grant = config.completionCheck?.authorizations?.[input.sessionKey] ??
@@ -774,7 +776,7 @@ async function main(argv: string[]): Promise<void> {
     },
   });
   let requestRestart: () => Promise<void> = async () => { throw Error("Lifecycle startup not complete; retry restart"); };
-  await plugins.load(config.plugins ?? [], { agent: config.agent, home: config.home, cwd: config.cwd, executionContexts: executionContextCapability, foregroundWork: work => harness.withForegroundWork(work) }, [...builtinCommandNames, "sessions", "resume", ...skills.map((s) => s.name)], ["console", "api", "dispatch", ...Object.keys(bundledGatewayModules()), ...harness.channels.keys()], [...(config.typeSafeDecisions ? [typeSafeDecisionPlugin, createTypeSafeAPIPlugin(config.typeSafeDecisions)] : []), languageService(() => settings.effective().language ?? {}), taskPriorityPlugin(harness, async (key, taskId, priority, signal) => {
+  await plugins.load(config.plugins ?? [], { agent: config.agent, home: config.home, cwd: config.cwd, executionContexts: executionContextCapability, foregroundWork: work => harness.withForegroundWork(work) }, [...builtinCommandNames, "sessions", "resume", ...skills.map((s) => s.name)], ["console", "api", "dispatch", ...Object.keys(bundledGatewayModules()), ...harness.channels.keys()], [...(config.typeSafeDecisions ? [typeSafeDecisionPlugin, createTypeSafeAPIPlugin(config.typeSafeDecisions)] : []), languageService(() => settings.effective().language ?? {}), hashtag.plugin, taskPriorityPlugin(harness, async (key, taskId, priority, signal) => {
     const session = harness.sessions.get(key), input = session?.current;
     const task = (session?.tasks ?? (session?.task ? [session.task] : [])).find(task => task.id === taskId);
     if (!task || input?.source !== "channel" || !(input.replyTo?.channel === "console" || !!input.sender && admins.includes(input.sender))) return false;
@@ -1027,12 +1029,13 @@ async function main(argv: string[]): Promise<void> {
     modelSettings: {
       get: effectiveModels,
       source: (key) => {
-        const paths = { model: "model", thinking: "thinking", reviewModel: "review.model", reviewThinking: "review.thinking" } as const;
-        return settings.source(key === "reviewModel" && settings.effective().review?.model === undefined ? "model" : paths[key]);
+        const paths = { model: "model", thinking: "thinking", reviewModel: "review.model", reviewThinking: "review.thinking", hashtagModel: "hashtag.model" } as const;
+        const inherited = (key === "reviewModel" && settings.effective().review?.model === undefined) || (key === "hashtagModel" && settings.effective().hashtag?.model === undefined);
+        return settings.source(inherited ? "model" : paths[key]);
       },
       set: async (key, value) => {
-        if (value !== undefined && (key === "model" || key === "reviewModel") && !(await runtime.models()).includes(value)) throw new Error("Model is not available; configure provider credentials and model first");
-        const paths: Record<keyof ModelSettings, SettingPath> = { model: "model", thinking: "thinking", reviewModel: "review.model", reviewThinking: "review.thinking" };
+        if (value !== undefined && (key === "model" || key === "reviewModel" || key === "hashtagModel") && !(await runtime.models()).includes(value)) throw new Error("Model is not available; configure provider credentials and model first");
+        const paths: Record<keyof ModelSettings, SettingPath> = { model: "model", thinking: "thinking", reviewModel: "review.model", reviewThinking: "review.thinking", hashtagModel: "hashtag.model" };
         await settings.set(paths[key], value);
         updateReviewDefaults();
       },

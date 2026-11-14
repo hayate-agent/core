@@ -198,6 +198,16 @@ permission state, arbitrary size/count cap or automatic repository Markdown scan
 is introduced. The model's context limit still applies. This is trusted local
 operator configuration, not a sandbox against an operator replacing parent paths.
 
+## Hashtag metadata model
+
+Use `hashtag.model: provider/model` for an explicit metadata model; when unset,
+classification uses the effective Main `model` only, never reviewer/dispatcher
+roles. `/hashtag-model reset` removes the local override. Overlay model changes
+are live; `hashtag.provider` (`default`, `tags-only`, or a trusted service suffix)
+is restart-bound. Legacy `modelRoles.roles.hashtag` no longer selects the model.
+See [topic label configuration and provider contracts](topic-labels.md) for YAML,
+plugin service selection, neutral fallback and tags-only inheritance limits.
+
 ## Dispatcher model routing rules
 
 The dispatcher executes operator-authorized worker tasks. With the built-in `direct`

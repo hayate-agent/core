@@ -537,6 +537,10 @@ export const COMMANDS: Command[] = [
     run: (args, input, ctx) => globalSetting("reviewModel", args.trim(), input, ctx),
   },
   {
+    name: "hashtag-model", help: "Instance metadata model: <provider/model|reset> (otherwise Main; thinking off)",
+    run: (args, input, ctx) => globalSetting("hashtagModel", args.trim(), input, ctx),
+  },
+  {
     name: "review-reasoning", help: "Instance reviewer reasoning: <level|reset>",
     run: (args, input, ctx) => globalSetting("reviewThinking", args.trim(), input, ctx),
   },
