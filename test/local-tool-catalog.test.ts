@@ -10,7 +10,8 @@ test('real SDK local tool schemas are deferred/discoverable, restrictions preser
  const home=await mkdtemp(path.join(os.tmpdir(),'local-tool-catalog-'));t.after(()=>rm(home,{recursive:true,force:true}));
  const models=await ModelRuntime.create();models.registerProvider('local-fixture',{api:'openai-completions',baseUrl:'https://offline.invalid',apiKey:'offline',models:['model','frontier'].map(id=>({id,name:'Fixture',api:'openai-completions',reasoning:false,input:['text'],contextWindow:262144,maxTokens:4096,cost:{input:0,output:0,cacheRead:0,cacheWrite:0}}))});
  const pluginTools=()=>Array.from({length:30},(_,i)=>({name:'plugin_large_'+i,description:'Large fixture '+i,parameters:{type:'object',properties:{input:{type:'string',description:'metadata'.repeat(1000)}}},execute:async()=> 'no effects'}));
- const options={cwd:home,sessionsDir:path.join(home,'sessions'),skillPaths:[],model:'local-fixture/model',personaSections:async()=>[],pluginTools,
+ const steps:Array<{key:string;id:string;reply:string;tools:number;failed:boolean}>=[];
+ const options={captureStep:async(key:string,step:any)=>{steps.push({key,...step});},cwd:home,sessionsDir:path.join(home,'sessions'),skillPaths:[],model:'local-fixture/model',personaSections:async()=>[],pluginTools,
   contextBudgets:()=>({mainContextTokens:262144,workerContextTokens:131072,localModels:['local-fixture/model']}),approvals:{mode:'off' as const,tools:[]}};
  const runtime=new PiRuntime(options);(runtime as any).modelRuntime=async()=>models;
  const wrapped:any=await runtime.open('matrix:fixture');const session=wrapped.session;
@@ -25,6 +26,10 @@ test('real SDK local tool schemas are deferred/discoverable, restrictions preser
   await writeFile(path.join(home,'sessions','tool-results'),'blocked directory');
   const failedRetention=await session.extensionRunner.emitToolResult({type:'tool_result',toolCallId:'completed-effect',toolName:'write',input:{path:'fixture'},content:[{type:'text',text:'completed write '+ 'e'.repeat(5000)}],isError:false});
   assert.equal(failedRetention,undefined);await rm(path.join(home,'sessions','tool-results'));
+  await session.extensionRunner.emit({type:'turn_end',turnIndex:0,messageEntryId:'native-step',toolResultEntryIds:['native-result'],
+    message:{role:'assistant',content:[{type:'text',text:'Reported prior result; verify before next effect'}],stopReason:'toolUse'},
+    toolResults:[{role:'toolResult',toolCallId:'native-call',toolName:'read',isError:false,content:[{type:'text',text:'untrusted evidence'}]}]});
+  assert.equal(steps.length,1);assert.equal(steps[0]!.key,'matrix:fixture');assert.equal(steps[0]!.tools,1);assert.match(steps[0]!.reply,/native-step/);assert.match(steps[0]!.reply,/not independent verification/);
   const original='tool data '+ '🙂 evidence '.repeat(2000);
   const projected=await session.extensionRunner.emitToolResult({type:'tool_result',toolCallId:'large-read',toolName:'read',input:{path:'fixture'},content:[{type:'text',text:original}],isError:false,structuredContent:{receipt:'unchanged'}});
   assert.ok(projected.content[0].text.length<4000);assert.deepEqual(projected.structuredContent,{receipt:'unchanged'});

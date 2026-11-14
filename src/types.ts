@@ -163,6 +163,7 @@ export interface RuntimeSessionStatus {
   /** Separately labelled host estimate for an explicitly configured local working budget. */
   contextBudgetTokens?: number;
   contextEstimateTokens?: number;
+  contextHistoryTokens?: number;
   contextBudgetPercent?: number;
   contextWindow?: number;
   /** Effective runtime system prompt size; excludes conversation history and tool schemas. */

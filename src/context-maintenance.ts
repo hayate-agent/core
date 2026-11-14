@@ -490,6 +490,10 @@ export class ContextMaintenance {
         ...(this.recoveryHold(state) ? { recovery: this.recoveryHold(state) } : {}) };
     });
   }
+  /** A tiny conversation cannot compact away its irreducible persona/tool base. */
+  private compressibleLocalHistory(status: ReturnType<RuntimeSession["status"]>): boolean {
+    return status.contextBudgetPercent === undefined || status.contextHistoryTokens === undefined || status.contextHistoryTokens >= 1024;
+  }
   /** A lightweight reminder, not an additional model call. Unknown usage never triggers automatic compaction. */
   async guidance(key: string, session: RuntimeSession): Promise<string> {
     await this.serial(this.file(key), async () => {
@@ -544,7 +548,7 @@ export class ContextMaintenance {
     });
     const state = await this.status(key); const policy = this.policy();
     const status = session.status(), percent = status.contextBudgetPercent ?? status.contextPercent;
-    if (!policy.enabled || state.turns % policy.checkEveryTurns !== 0) return "";
+    if (!policy.enabled || !this.compressibleLocalHistory(status) || state.turns % policy.checkEveryTurns !== 0) return "";
     if (percent === undefined || !Number.isFinite(percent)) return "Context usage is unknown; no percentage was inferred. Assess useful boundaries explicitly with plugin_context_maintenance.";
     if (percent < policy.assessPercent) return "";
     return `${status.contextBudgetPercent !== undefined ? "Estimated local working-budget pressure (not provider-reported usage)" : "Context usage"} is ${Math.round(percent)}%. Assess whether compaction is useful at this task boundary. If needed request plugin_context_maintenance with what to preserve and how to resume. Continue normally if continuity is more important. ${preserve}`;
@@ -679,10 +683,10 @@ export class ContextMaintenance {
       const pressure = percent !== undefined && percent >= (phase === "before" ? policy.assessPercent : policy.compactPercent);
       const failedAt = state.assessmentFailures?.[phase];
       const assessmentDue = failedAt === undefined || state.turns - failedAt >= policy.cooldownTurns;
-      const eligible = !request && due && assessmentDue && policy.enabled && percent !== undefined &&
+      const eligible = !request && due && assessmentDue && policy.enabled && this.compressibleLocalHistory(status) && percent !== undefined &&
         (phase === "before" || policy.compactionOwner !== "agent") &&
         (phase === "before" ? policy.autoHandover && (pressure || state.pressureSinceCompaction === true) : pressure);
-      let decision = percent === undefined ? "usage-unknown" : !due ? "cooldown" : !assessmentDue ? "assessment-backoff" : "below-threshold";
+      let decision = percent === undefined ? "usage-unknown" : !this.compressibleLocalHistory(status) ? "irreducible-base-small-history" : !due ? "cooldown" : !assessmentDue ? "assessment-backoff" : "below-threshold";
       let automatic = false;
       if (eligible) {
         const recent = (session.archiveEntries?.() ?? []).slice(-8).map(e => `${e.role}: ${e.text}`).join("\n").slice(-16000);

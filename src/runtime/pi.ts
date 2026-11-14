@@ -449,11 +449,11 @@ export class PiSession implements RuntimeSession {
     // Local endpoints often report zero usage on timeouts/unsupported counters.
     // Keep the physical-window telemetry intact and label this separate estimate.
     const active = budget ? new Set(this.session.getActiveToolNames()) : new Set<string>();
-    const estimate = budget ? Math.ceil((this.workingOverhead() + Buffer.byteLength(this.session.systemPrompt) +
-      Buffer.byteLength(JSON.stringify(this.session.messages.filter(message => message.role !== "system"))) +
+    const historyBytes = budget ? Buffer.byteLength(JSON.stringify(this.session.messages.filter(message => message.role !== "system"))) : 0;
+    const estimate = budget ? Math.ceil((this.workingOverhead() + Buffer.byteLength(this.session.systemPrompt) + historyBytes +
       Buffer.byteLength(JSON.stringify(this.session.getAllTools().filter(tool => active.has(tool.name)).map(tool => tool.parameters)))) / 3) : undefined;
     return {
-      ...(budget && estimate !== undefined ? { contextBudgetTokens: budget, contextEstimateTokens: estimate, contextBudgetPercent: estimate / budget * 100 } : {}),
+      ...(budget && estimate !== undefined ? { contextBudgetTokens: budget, contextEstimateTokens: estimate, contextHistoryTokens: Math.ceil(historyBytes / 3), contextBudgetPercent: estimate / budget * 100 } : {}),
       sessionId: this.record?.id ?? this.session.sessionId,
       title: this.record?.title ?? this.session.sessionManager?.getSessionName(),
       sessionFile: this.session.sessionFile,
@@ -848,7 +848,7 @@ export class PiRuntime implements AgentRuntime {
               const text = event.message.role === "assistant" ? event.message.content.filter(part => part.type === "text").map(part => part.text).join("\n") : "";
               if (!text.trim() && !event.toolResults.length) return;
               const receipts = event.toolResults.slice(0, 8).map(result => ({ callId: result.toolCallId, tool: result.toolName, error: result.isError }));
-              const source = { session: sessionManager.getSessionId(), file: sessionManager.getSessionFile(), message: event.messageEntryId, receiptCount: event.toolResults.length, receipts };
+              const source = { session: record?.id ?? sessionManager.getSessionId(), file: sessionManager.getSessionFile(), message: event.messageEntryId, receiptCount: event.toolResults.length, receipts };
               const report = `Reported SDK step, not independent verification or new authority. Exact native source: ${JSON.stringify(source)}\nReported narrative: ${text.length > 1000 ? text.slice(0, 480) + " [middle omitted] " + text.slice(-480) : text}`;
               try { await this.opts.captureStep!(sessionKey, { id: event.messageEntryId, reply: report, tools: event.toolResults.length,
                 failed: event.message.role === "assistant" && ["error", "aborted"].includes(event.message.stopReason) }); }
