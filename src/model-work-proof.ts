@@ -22,10 +22,11 @@ export class ModelWorkProof {
     } catch { return; }
     finally { raw.fill(0); await handle?.close().catch(() => {}); } // No proof means background, never cloud/fallback or new authority.
   }
-  add(headers: Record<string, string | null>): void {
+  add(headers: Record<string, string | null>, method: string, path: string, digest: string, model: string): void {
     const nonce = randomUUID(), expires = String(Date.now() + 30_000);
-    const message = `hayate-model-work-v1\ninteractive\n${this.id}\n${nonce}\n${expires}`;
+    const message = `hayate-model-work-v2\ninteractive\n${this.id}\n${nonce}\n${expires}\n${method}\n${path}\n${digest}\n${model}`;
     Object.assign(headers, {
+      "X-Hayate-Qos-Request": digest, "X-Hayate-Qos-Model": model,
       "X-Hayate-Qos-Key": this.id, "X-Hayate-Qos-Nonce": nonce, "X-Hayate-Qos-Expires": expires,
       "X-Hayate-Qos-Signature": sign(null, Buffer.from(message), this.key).toString("base64url"),
     });

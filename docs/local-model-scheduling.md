@@ -13,13 +13,27 @@ identity, permissions, task priority/authority, deadlines, budgets or replay
 consent. Cron/delegated/maintenance work cannot override its background class.
 
 An optional, separate Ed25519 key at `<home>/model-work-key.pem` signs short-lived,
-nonce-bound foreground metadata. This is **not a provider credential** and cannot
+nonce- and request-bound foreground metadata at the supported final HTTP fetch
+boundary, after SDK serialization and payload extensions. V2 includes the actual
+method, exact path, original model and canonical full JSON body identity; it
+never substitutes a guessed transcript for actual wire data. This is **not a provider credential** and cannot
 authorize a task or effect. No key is created by this source change. It must be
 provisioned through the owning lifecycle with private, owned regular-file mode
 0600; symlinks, nonregular, oversized or incorrectly protected files are refused.
 Only public verification keys belong at the shared admission service. Unsigned,
 unknown-key or replayed claims must be treated as background by that service.
 Existing provider credentials and the explicit local-model list remain unchanged.
+Only the existing `/v1/chat/completions`, `/v1/completions` and `/v1/responses`
+POST endpoints are supported for signed scheduling. Custom prefixes, query
+strings and unknown streaming Request bodies stay unsigned/background; this is
+not a universal custom-provider optimization. The local OpenAI adapters retain
+existing custom fetch/auth/body/signal behavior. A fresh proof is generated on
+each actual HTTP retry, never reused as permission to replay business effects.
+
+Native summary calls have a separate SDK request session ID, so they cannot
+inherit foreground even inside an active human turn. No sticky tree/compaction
+maintenance flag is needed; cancellation/failure cannot leave one behind. SDK
+one-token cache-warming calls are conservatively background as well.
 
 ## Provisioning and rotation lifecycle
 
