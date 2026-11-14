@@ -75,7 +75,11 @@ export function semanticTopicLabeler(backend: AssessmentBackend, model: () => st
       const prompt = `${instructions}\n${JSON.stringify(bounded)}`;
       const raw = await boundedCall(inner => backend.review(prompt, model(), "off", inner), timeoutMs, signal);
       if (raw.length > 2000) throw Error("invalid response");
-      const result = JSON.parse(raw);
+      // Compatibility is limited to one complete JSON code block in tags-only
+      // mode. Anchoring rejects prose, extra blocks and truncated fences; JSON
+      // parsing and the existing tag validation still apply to the entire body.
+      const fenced = tagsOnly ? /^\s*```(?:json)?[ \t]*\r?\n([^`]*?)\r?\n```\s*$/i.exec(raw) : null;
+      const result = JSON.parse(fenced ? fenced[1]! : raw);
       if (tagsOnly) {
         if (!validTags(result) || result.length > 3) throw Error("invalid tags");
         return [...new Set(result)];
