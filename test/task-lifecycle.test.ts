@@ -8,6 +8,9 @@ import { Harness } from "../src/harness.js";
 import { renderCompletionPrompt } from "../src/completion-budget.js";
 import { PluginHost } from "../src/plugins.js";
 import { installCommands } from "../src/commands.js";
+import { reclaimTaskBookOffline } from "../src/task-book-maintenance.js";
+import { SessionLock } from "../src/session-lock.js";
+import { mkdir } from "node:fs/promises";
 import { taskLifecyclePlugin } from "../src/task-lifecycle-plugin.js";
 import { DispatcherRuntime } from "../src/dispatcher-runtime.js";
 import { FakeRuntime, MemoryChannel, msg, ROOM } from "./fakes.js";
@@ -309,6 +312,17 @@ test("long original operator request is retained exactly across durable restart"
   const ref = await store.enrollTask("room", "long", original, "long", "operator");
   const loaded = new ExecutionStore(file); await loaded.load();
   assert.equal(loaded.coreTask(ref.id)!.original, original); assert.equal(loaded.coreTask(ref.id)!.sources[0].text, original);
+});
+
+test("offline page reclamation requires the home lock and preserves the committed task", async t => {
+  const { store, file } = await storeFixture(t); const home = path.dirname(file);
+  await mkdir(path.join(home, "local-sessions"), { recursive: true });
+  const ref = await store.enrollTask("room", "task", "Original", "task", "operator");
+  await store.decideTask(ref, 1, "done", "close", "finished");
+  const lock = await SessionLock.acquire(path.join(home, "local-sessions", "home.lock"));
+  await assert.rejects(reclaimTaskBookOffline(home), /already open/); await lock.release();
+  assert.ok(await reclaimTaskBookOffline(home) >= 1);
+  const reload = new ExecutionStore(file); await reload.load(); assert.equal(reload.coreTask(ref.id)!.operatorStatus, "done");
 });
 
 test("multiple near-limit escaped requests remain separately readable without oversized pages", async t => {

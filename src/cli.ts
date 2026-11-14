@@ -143,6 +143,7 @@ Usage:
   hayate-agent run --maintenance-directory <private-dir> --maintenance-session <exact-key> [--home <dir>]
   hayate-agent attach <local-socket-path>  Read-only JSON status; Ctrl+C detaches
   hayate-agent doctor [--home <dir>]
+  hayate-agent compact-task-book --home <dir>  Offline: agent and diagnostic readers must be stopped
   hayate-agent maintenance <socket> status | admit <id> <version> <request.json> | cancel <id> <version>
   hayate-agent version
 
@@ -173,6 +174,11 @@ async function main(argv: string[]): Promise<void> {
     return;
   }
   if (cmd === "version" || cmd === "--version") return void console.log(VERSION);
+  if (cmd === "compact-task-book") {
+    if (rest.length !== 2 || rest[0] !== "--home" || !rest[1]) throw Error("Usage: compact-task-book --home <dir>; stop all agents and diagnostic readers first");
+    const { reclaimTaskBookOffline } = await import("./task-book-maintenance.js");
+    console.log(`Removed ${await reclaimTaskBookOffline(path.resolve(rest[1]))} obsolete task-book pages.`); return;
+  }
   if (!["run", "init", "doctor"].includes(cmd ?? "")) return void console.log(USAGE);
   const allowed = cmd === "init" ? ["--home", "--cwd", "--agent", "--model"] : ["--home", ...(cmd === "run" ? ["--console", "--observe-directory", "--observe-session", "--maintenance-directory", "--maintenance-session"] : [])];
   const values: Record<string, string> = {};
