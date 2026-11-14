@@ -12,7 +12,7 @@ export class ModelWorkProof {
     try {
       handle = await open(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
       const info = await handle.stat();
-      if (!info.isFile() || info.size > 8192 || (info.mode & 0o077) !== 0 || (process.getuid && info.uid !== process.getuid())) return;
+      if (!info.isFile() || info.size > 8192 || (info.mode & 0o7777) !== 0o600 || (process.getuid && info.uid !== process.getuid())) return;
       const { bytesRead } = await handle.read(raw, 0, raw.length, 0);
       if (bytesRead > 8192) return;
       const key = createPrivateKey(raw.subarray(0, bytesRead));
