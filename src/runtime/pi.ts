@@ -461,11 +461,11 @@ export class PiSession implements RuntimeSession {
     // Local endpoints often report zero usage on timeouts/unsupported counters.
     // Keep the physical-window telemetry intact and label this separate estimate.
     const active = budget ? new Set(this.session.getActiveToolNames()) : new Set<string>();
-    const historyBytes = budget ? Buffer.byteLength(JSON.stringify(this.session.messages.filter(message => message.role !== "system"))) : 0;
-    const estimate = budget ? Math.ceil((this.workingOverhead() + Buffer.byteLength(this.session.systemPrompt) + historyBytes +
-      Buffer.byteLength(JSON.stringify(this.session.getAllTools().filter(tool => active.has(tool.name)).map(tool => tool.parameters)))) / 3) : undefined;
+    const historyBytes = budget ? modelInputEstimate(this.session.messages.filter(message => message.role !== "system")) : 0;
+    const estimate = budget ? this.workingOverhead() + Buffer.byteLength(this.session.systemPrompt) + historyBytes +
+      Buffer.byteLength(JSON.stringify(this.session.getAllTools().filter(tool => active.has(tool.name)).map(tool => tool.parameters))) : undefined;
     return {
-      ...(budget && estimate !== undefined ? { contextBudgetTokens: budget, contextEstimateTokens: estimate, contextHistoryTokens: Math.ceil(historyBytes / 3), contextBudgetPercent: estimate / budget * 100 } : {}),
+      ...(budget && estimate !== undefined ? { contextBudgetTokens: budget, contextEstimateTokens: estimate, contextHistoryTokens: historyBytes, contextBudgetPercent: estimate / budget * 100 } : {}),
       sessionId: this.record?.id ?? this.session.sessionId,
       title: this.record?.title ?? this.session.sessionManager?.getSessionName(),
       sessionFile: this.session.sessionFile,
@@ -1195,9 +1195,11 @@ export class PiRuntime implements AgentRuntime {
       () => !options.ephemeral && this.opts.mcp?.enabled ? this.opts.language?.() : undefined,
       () => {
         const model = session.model, policy = this.opts.contextBudgets?.();
-        if (!model || !localModel(policy, `${model.provider}/${model.id}`)) return undefined;
+        if (!model) return undefined;
         const child = options.ephemeral || sessionKey.startsWith("cron:") || sessionKey.startsWith("api:cron-") || childDeniedTools(sessionKey).length > 0;
-        return localContextBudget(child ? policy?.workerContextTokens ?? 131072 : policy?.mainContextTokens ?? 131072, child, true, policy);
+        const local = localModel(policy, `${model.provider}/${model.id}`);
+        const configured = localContextBudget(child ? policy?.workerContextTokens ?? 131072 : policy?.mainContextTokens ?? 131072, child, local, policy);
+        return modelInputLimit(configured, model.contextWindow, model.maxTokens);
       }, () => workingOverhead);
     // From here the wrapper owns SDK shutdown and final checkpoint cleanup.
     unownedSession = undefined;
