@@ -33,7 +33,7 @@ test("child wait and child dependency do not suppress independent parent assessm
     else h.planContinuation(key, { state: "waiting", next: "verify child image", wait: { reason: "image pending", retryAfterMs: 60000, deadline: 301000 } });
     return "step settled";
   };
-  const store = { turn: () => undefined, beginTurn: async () => {}, settleTurn: async () => {}, acknowledgeTurn: async () => {}, list: () => [{ id: "child", status: "running", dependency: { taskId: "child-task" } }] } as unknown as ExecutionStore;
+  const store = { turn: () => undefined, beginTurn: async () => {}, settleTurn: async (_id: string, _key: string, settlement: import("../src/execution.js").TurnSettlement) => settlement, acknowledgeTurn: async () => {}, list: () => [{ id: "child", status: "running", dependency: { taskId: "child-task" } }] } as unknown as ExecutionStore;
   h = new Harness({ runtime, executionStore: store, tickMs: 60000, now: () => 1000,
     completionCheck: async input => {
       checks++;

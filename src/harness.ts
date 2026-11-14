@@ -1,4 +1,4 @@
-import { renderTask, validatePlan, commitTaskOutcome, type TaskRef, type TaskTodo, type TaskOutcome } from "./task-lifecycle.js";
+import { renderTask, validatePlan, type TaskRef, type TaskTodo, type TaskOutcome } from "./task-lifecycle.js";
 import { completionFailureDetail } from "./validator.js";
 /**
  * The agent loop. One long-running process; per conversation (session key) a FIFO
@@ -750,10 +750,11 @@ export class Harness {
     }
     if (changed) await this.onStateChange?.();
   }
-  async operatorTaskDecision(id: string, action: "close" | "reopen" | "clarify", sourceId: string, text: string, key: string): Promise<string> {
+  async operatorTaskDecision(id: string, action: "close" | "reopen" | "clarify", sourceId: string, text: string, key: string, origin?: Inbound): Promise<string> {
     const store = this.opts.executionStore; const record = store?.coreTask(id);
     if (!this.opts.taskLifecycle?.enabled || !store || !record) throw Error("Unknown operator task");
-    const currentInput = this.sessions.get(key)?.current;
+    if (origin && this.sessions.get(key)?.current !== origin) throw Error("Originating operator turn changed");
+    const currentInput = origin;
     const ref = await store.decideTask({ id, generation: record.generation }, record.revision, sourceId, action, text,
       action !== "close" ? currentInput?.taskRef : undefined);
     if (action !== "close") {
@@ -762,9 +763,10 @@ export class Harness {
       const task: DurableTask = { id: taskId, taskRef: ref, original: record.original, depth: 0, state: "active", recoveryEnrollment: "current",
         anchor: { id: sourceId, task: record.original, receivedAt: this.now() } };
       const existing = this.tasks(s).find(t => t.id === taskId);
-      if (!existing) s.tasks = [...this.tasks(s), task]; s.task = existing ?? task;
-      const input = s.current;
-      if (input && (input.source === "channel" || input.source === "api")) {
+      if (!existing) s.tasks = [...this.tasks(s), task];
+      if (!s.current || origin && s.current === origin) s.task = existing ?? task;
+      const input = origin;
+      if (input && s.current === input && (input.source === "channel" || input.source === "api")) {
         input.taskId = taskId; input.taskRef = ref; input.taskRevision = store.coreTask(id)!.revision;
         input.completionAnchor = structuredClone(task.anchor); input.continuationDepth = (existing ?? task).depth;
       }
@@ -2879,21 +2881,18 @@ export class Harness {
               ? { ref: input.taskRef, expectedRevision: input.taskRevision, eventId: input.executionTurnId,
                 technical: { state: turnOutcome === "failed" || turnOutcome === "cancelled" ? "failed" : input.continuation?.state === "completed" ? "completed" : input.continuation?.state === "blocked" ? "blocked"
                   : input.continuation?.state === "waiting" ? "waiting" : "open", ...(this.settledReplies.get(input) ? { evidence: this.settledReplies.get(input)! } : {}) }, ...(plan ? { plan } : {}) } : undefined;
-            if (plan && taskOutcome && ledger) {
-              const current = ledger.coreTask(taskOutcome.ref.id);
-              if (current && current.revision === taskOutcome.expectedRevision && ledger.taskIsOpen(taskOutcome.ref)) {
-                const preview = structuredClone(current);
-                commitTaskOutcome({ tasks: [preview], bindings: [] }, taskOutcome, this.now());
-                if (JSON.stringify(current.plan) !== JSON.stringify(preview.plan) && input.replyTo)
-                  s.outbox.push(this.outbox.create(s.key, input.replyTo, renderTask(preview)));
+            if (ledger && input.executionTurnId) {
+              const committed = await ledger.settleTurn(input.executionTurnId, s.key, {
+                taskOutcome, ...(plan && input.replyTo ? { taskPresentation: { to: input.replyTo } } : {}),
+                cronOutput: input.cronReport?.completedOutput, repetition: structuredClone(task?.repetition),
+                outbox: s.outbox.slice(outboxStart), continuation: input.continuation, goal: s.goal,
+                consumed: (s.steered ?? []).map(item => item.executionTurnId).filter((id): id is string => !!id),
+              });
+              for (const entry of structuredClone(committed.outbox)) {
+                const index = s.outbox.findIndex(current => current.id === entry.id);
+                if (index < 0) s.outbox.push(entry); else s.outbox[index] = entry;
               }
             }
-            if (ledger && input.executionTurnId) await ledger.settleTurn(input.executionTurnId, s.key, {
-              taskOutcome,
-              cronOutput: input.cronReport?.completedOutput, repetition: structuredClone(task?.repetition),
-              outbox: s.outbox.slice(outboxStart), continuation: input.continuation, goal: s.goal,
-              consumed: (s.steered ?? []).map(item => item.executionTurnId).filter((id): id is string => !!id),
-            });
           }
           // Settlement precedes external report archival. On archive failure the
           // settled turn is restored next time without another model/tool run.

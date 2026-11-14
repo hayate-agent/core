@@ -1,9 +1,9 @@
-import { enrollTask, operatorTransition, commitTaskOutcome, expireInactiveTasks, validateTaskBook, taskOpen, type TaskBook, type TaskRef, type TaskOutcome, type CoreTask } from "./task-lifecycle.js";
+import { enrollTask, operatorTransition, commitTaskOutcome, expireInactiveTasks, validateTaskBook, taskOpen, type TaskBook, type TaskRef, type TaskOutcome, type CoreTask, type TaskReceipt, taskDigest, renderTask } from "./task-lifecycle.js";
 import { executionMetadata, type ExecutionMetadata } from "./builtin-plugins/execution-metadata.js";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
-import { writeFileDurable } from "./durable.js";
+import { writeFileDurable, writeFileDurableExclusive, syncDirStrict } from "./durable.js";
 import { PartitionedJson } from "./partitioned-json.js";
 import { ExecutionDependencyStorage, freezeExecutionDependency } from "./execution-dependency-storage.js";
 import { recoveryBlock, type RecoveryStrategy, type ExecutionRecoveryPolicy } from "./execution-recovery.js";
@@ -154,6 +154,7 @@ export interface ExecutionEvent {
 }
 export interface TurnSettlement {
   taskOutcome?: TaskOutcome;
+  taskPresentation?: { to: import("./types.js").Address };
   repetition?: import("./repetition-budget.js").RepetitionBudget;
   cronOutput?: string;
   outbox: import("./delivery/outbox.js").OutboxEntry[];
@@ -444,20 +445,55 @@ export class ExecutionStore {
       if (turn.settlement) turn.settlement = this.stoppedSettlement(turn.settlement);
     });
   }
-  settleTurn(id: string, sessionKey: string, settlement: TurnSettlement): Promise<void> {
-    return this.mutate(draft => {
+  settleTurn(id: string, sessionKey: string, settlement: TurnSettlement): Promise<TurnSettlement> {
+    return this.mutate(async draft => {
       const turn = draft.turns?.find(item => item.id === id && item.sessionKey === sessionKey);
       if (!turn) throw Error("Unknown durable turn");
       this.validateSettlement(sessionKey, settlement);
       if (turn.state === "settled") throw Error("Turn already settled");
+      const committed = structuredClone(turn.stopped ? this.stoppedSettlement(settlement) : settlement);
       if (settlement.taskOutcome && !turn.stopped) {
-        if (!draft.taskBook) throw Error("Task book unavailable");
-        commitTaskOutcome(draft.taskBook, settlement.taskOutcome, this.now());
+        if (!draft.taskBook || settlement.taskOutcome.eventId !== id) throw Error("Task book or outcome identity unavailable");
+        const order = draft.taskBook.tasks.find(t => t.id === settlement.taskOutcome!.ref.id);
+        const priorPlan = JSON.stringify(order?.plan), priorRevision = order?.revision;
+        if (order) await this.archiveTaskReceipts(order);
+        const archived = order && await this.archivedTaskReceipt(order.id, settlement.taskOutcome.eventId);
+        if (archived && archived.digest !== taskDigest(settlement.taskOutcome)) throw Error("Archived outcome identity conflict");
+        if (!archived) commitTaskOutcome(draft.taskBook, settlement.taskOutcome, this.now());
+        if (order && order.revision !== priorRevision && priorPlan !== JSON.stringify(order.plan) && settlement.taskPresentation) {
+          if (!validAddress(settlement.taskPresentation.to)) throw Error("Invalid task presentation target");
+          committed.outbox.push({ id: `${id}:task-plan`, sessionKey, to: structuredClone(settlement.taskPresentation.to), text: renderTask(order) });
+        }
         validateTaskBook(draft.taskBook);
       }
       turn.state = "settled";
-      turn.settlement = structuredClone(turn.stopped ? this.stoppedSettlement(settlement) : settlement);
+      turn.settlement = committed;
+      return committed;
     });
+  }
+  private taskReceiptDirectory(id: string): string { return path.join(`${this.file}.tasks`, createHash("sha256").update(id).digest("hex")); }
+  private async archivedTaskReceipt(id: string, eventId: string): Promise<TaskReceipt | undefined> {
+    try {
+      const value = JSON.parse(await readFile(path.join(this.taskReceiptDirectory(id), `${createHash("sha256").update(eventId).digest("hex")}.json`), "utf8"));
+      if (value.taskId !== id || value.receipt?.id !== eventId) throw Error("Invalid task receipt archive identity");
+      return value.receipt;
+    } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return; throw error; }
+  }
+  private async archiveTaskReceipts(task: CoreTask): Promise<void> {
+    if (task.receipts.length < 480) return;
+    const records = task.receipts.slice(0, -128);
+    const directory = this.taskReceiptDirectory(task.id); await mkdir(directory, { recursive: true, mode: 0o700 });
+    const save = async (name: string, value: unknown) => {
+      const file = path.join(directory, name), raw = JSON.stringify(value);
+      try { await writeFileDurableExclusive(file, raw); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST" || await readFile(file, "utf8") !== raw) throw error; }
+    };
+    for (const record of records) await save(`${createHash("sha256").update(record.id).digest("hex")}.json`, { taskId: task.id, receipt: record });
+    const segment = { taskId: task.id, previous: task.receiptArchive ?? null, receipts: records };
+    const head = taskDigest(segment); await save(`segment-${head}.json`, segment);
+    await syncDirStrict(directory); await syncDirStrict(path.dirname(directory)); await syncDirStrict(path.dirname(path.dirname(directory)));
+    task.receiptArchive = { head, count: (task.receiptArchive?.count ?? 0) + records.length };
+    task.receipts = task.receipts.slice(-128);
   }
   /** Core operator authority shares the execution/turn atomic commit, not a second scheduler. */
   tasks(): CoreTask[] { return structuredClone(this.data.taskBook?.tasks ?? []); }
@@ -475,17 +511,25 @@ export class ExecutionStore {
       const ref = enrollTask(book, { sessionKey, taskId }, original, sourceId, kind, this.now());
       for (const execution of draft.executions) if (execution.parent === sessionKey && execution.dependency?.taskId === taskId && !execution.dependency.taskRef) {
         if (execution.dependency.original !== original) throw Error("Execution/task original scope conflict");
-        execution.dependency.taskRef = structuredClone(ref);
+        execution.dependency = { ...execution.dependency, taskRef: structuredClone(ref) };
       }
       validateTaskBook(book); return ref;
     });
   }
   decideTask(ref: TaskRef, revision: number, eventId: string, action: "close" | "reopen" | "clarify", text: string, supersedes?: TaskRef): Promise<TaskRef> {
-    return this.mutate(draft => {
+    return this.mutate(async draft => {
       if (!draft.taskBook) throw Error("Task book unavailable");
+      const order = draft.taskBook.tasks.find(t => t.id === ref.id);
+      const archived = order && await this.archivedTaskReceipt(order.id, eventId);
+      if (archived) {
+        if (archived.digest !== taskDigest([ref.id, action, text])) throw Error("Archived operator receipt identity conflict");
+        return { id: ref.id, generation: archived.generation };
+      }
+      if (order) await this.archiveTaskReceipts(order);
       const next = operatorTransition(draft.taskBook, ref, revision, eventId, action, text, this.now());
       if (supersedes && supersedes.id !== ref.id && taskOpen(draft.taskBook, supersedes)) {
         const provisional = draft.taskBook.tasks.find(t => t.id === supersedes.id)!;
+        await this.archiveTaskReceipts(provisional);
         operatorTransition(draft.taskBook, supersedes, provisional.revision, `joined:${eventId}`, "close", `Input belongs to order ${ref.id}; not a separate continuing mandate`, this.now());
       }
       validateTaskBook(draft.taskBook); return next;
@@ -501,8 +545,9 @@ export class ExecutionStore {
     });
   }
   expireTasks(inactivityMs: number): Promise<string[]> {
-    return this.mutate(draft => {
+    return this.mutate(async draft => {
       if (!draft.taskBook) return [];
+      for (const task of draft.taskBook.tasks) await this.archiveTaskReceipts(task);
       const ids = expireInactiveTasks(draft.taskBook, this.now(), inactivityMs); validateTaskBook(draft.taskBook); return ids;
     });
   }

@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { ExecutionStore } from "../src/execution.js";
 import { Harness } from "../src/harness.js";
+import { renderCompletionPrompt } from "../src/completion-budget.js";
 import { PluginHost } from "../src/plugins.js";
+import { installCommands } from "../src/commands.js";
 import { taskLifecyclePlugin } from "../src/task-lifecycle-plugin.js";
 import { DispatcherRuntime } from "../src/dispatcher-runtime.js";
 import { FakeRuntime, MemoryChannel, msg, ROOM } from "./fakes.js";
@@ -211,12 +213,85 @@ test("explicit order commands are idempotent and independent of Dispatcher or mo
   const plugins = new PluginHost(); await plugins.load([], { agent: "fixture", home: "/tmp", cwd: "/tmp" }, [], [],
     [taskLifecyclePlugin(h, async () => { assert.fail("command must not need model review"); })]);
   const command = plugins.commands.get("orders")!;
-  await command.run(`done ${ref.id}`, { sessionKey: "second-room", inputId: "close-request" });
-  await command.run(`done ${ref.id}`, { sessionKey: "second-room", inputId: "close-request" });
+  await command.run(`done ${ref.id}`, { sessionKey: "second-room", inputId: "close-request", source: "channel", operatorAuthorized: true });
+  await command.run(`done ${ref.id}`, { sessionKey: "second-room", inputId: "close-request", source: "channel", operatorAuthorized: true });
   assert.equal(store.coreTask(ref.id)!.revision, 2);
-  await command.run(`reopen ${ref.id}`, { sessionKey: "second-room", inputId: "reopen-request" });
-  await command.run(`reopen ${ref.id}`, { sessionKey: "second-room", inputId: "reopen-request" });
+  await command.run(`reopen ${ref.id}`, { sessionKey: "second-room", inputId: "reopen-request", source: "channel", operatorAuthorized: true });
+  await command.run(`reopen ${ref.id}`, { sessionKey: "second-room", inputId: "reopen-request", source: "channel", operatorAuthorized: true });
   assert.equal(store.coreTask(ref.id)!.generation, 2); assert.equal(h.state("second-room").tasks!.length, 1);
+});
+
+test("order command cannot rebind or close an unrelated running operator input", async t => {
+  const { store } = await storeFixture(t);
+  const a = await store.enrollTask("room", "a", "Work A", "a", "operator");
+  const b = await store.enrollTask("room", "b", "Work B", "b", "operator");
+  await store.decideTask(b, 1, "close-b", "close", "done");
+  const h = new Harness({ runtime: new FakeRuntime(), executionStore: store, taskLifecycle: { enabled: true } });
+  h.onStateChange = async () => {}; t.after(() => h.stop(0));
+  const originalInput = { ...msg("Work A"), sessionKey: "room", taskId: "a", taskRef: a };
+  h.state("room").current = originalInput;
+  await h.operatorTaskDecision(b.id, "reopen", "command-reopen-b", "reopen B", "room");
+  assert.equal(h.state("room").current, originalInput); assert.equal(originalInput.taskRef.id, a.id);
+  assert.equal(store.coreTask(a.id)!.operatorStatus, "open"); assert.equal(store.coreTask(b.id)!.generation, 2);
+});
+
+test("background input cannot invoke order commands, even if generic command admin configuration is open", async t => {
+  const { store } = await storeFixture(t);
+  const ref = await store.enrollTask("room", "task", "Original", "task", "operator");
+  const h = new Harness({ runtime: new FakeRuntime(), executionStore: store, taskLifecycle: { enabled: true } });
+  t.after(() => h.stop(0)); const plugins = new PluginHost();
+  await plugins.load([], { agent: "fixture", home: "/tmp", cwd: "/tmp" }, [], [], [taskLifecyclePlugin(h, async () => true)]);
+  for (const source of ["cron", "loop", "heartbeat", "host"] as const)
+    await assert.rejects(plugins.commands.get("orders")!.run(`done ${ref.id}`, { sessionKey: "room", source }), /Authentic operator/);
+  await assert.rejects(plugins.commands.get("orders")!.run(`done ${ref.id}`, { sessionKey: "room", source: "channel" }), /Authentic operator/);
+  assert.equal(store.coreTask(ref.id)!.operatorStatus, "open");
+});
+
+test("order command dispatch rejects synthetic channel labels under open-admin but accepts real admin ingress", async t => {
+  const { store } = await storeFixture(t);
+  const ref = await store.enrollTask("mem:room1", "task", "Original", "task", "operator");
+  const h = new Harness({ runtime: new FakeRuntime(), executionStore: store, taskLifecycle: { enabled: true } });
+  h.onStateChange = async () => {}; h.addChannel(new MemoryChannel()); t.after(() => h.stop(0));
+  const plugins = new PluginHost(); await plugins.load([], { agent: "test", home: "/tmp", cwd: "/tmp" }, [], [], [taskLifecyclePlugin(h, async () => true)]);
+  installCommands({ harness: h, admins: ["owner"], openAdmin: true, approvals: { mode: "off", tools: [] }, agent: "test", skills: () => [], reloadSkills: async () => {}, restart: async () => {}, pluginCommands: plugins.commands });
+  await h.commandHandler!({ ...msg(`/orders done ${ref.id}`, "owner"), id: "synthetic" });
+  assert.equal(store.coreTask(ref.id)!.operatorStatus, "open");
+  await h.accept({ ...msg(`/orders done ${ref.id}`, "owner"), id: "real-ingress" }); await h.drained();
+  assert.equal(store.coreTask(ref.id)!.operatorStatus, "done");
+});
+
+test("oversized order constraints fail assessment packaging closed, never fall back to a planless prompt", () => {
+  const input = { ...msg("Original"), completionContext: { recent: [], tasks: [], retained: { original: "Original", technical: {},
+    order: { id: "order", generation: 1, revision: 1, operatorStatus: "open", sources: [{ id: "clarification", text: "Private-only no-deploy ".repeat(10000) }] } } } };
+  const rendered = renderCompletionPrompt((i, reply, auth) => JSON.stringify({ auth, context: i.completionContext, reply }), input, "Done", { task: "Original" }, () => 1000);
+  assert.equal(rendered, undefined);
+});
+
+test("receipt capacity archives exact originals and cannot block operator closure", async t => {
+  const { store, file } = await storeFixture(t);
+  const ref = await store.enrollTask("room", "operator", "Original", "operator", "operator");
+  const data = JSON.parse(await readFile(file, "utf8"));
+  for (let i = 1; i <= 511; i++) commitTaskOutcome(data.taskBook, { ref, expectedRevision: i, eventId: `progress-${i}`, technical: { state: "open" } }, 1000 + i);
+  assert.equal(data.taskBook.tasks[0].receipts.length, 512); await writeFile(file, JSON.stringify(data));
+  const reload = new ExecutionStore(file); await reload.load();
+  await reload.decideTask(ref, 512, "operator-final", "close", "This is done");
+  assert.equal(reload.coreTask(ref.id)!.operatorStatus, "done");
+  assert.ok(reload.coreTask(ref.id)!.receiptArchive!.count > 0); assert.ok(reload.coreTask(ref.id)!.receipts.length < 480);
+  await reload.beginTurn("progress-1", "room");
+  await reload.settleTurn("progress-1", "room", { consumed: [], outbox: [], taskOutcome: { ref, expectedRevision: 1, eventId: "progress-1", technical: { state: "open" } } });
+  assert.equal(reload.coreTask(ref.id)!.operatorStatus, "done"); assert.equal(reload.coreTask(ref.id)!.revision, 513);
+});
+
+test("a queued operator decision wins over settlement and its checklist presentation", async t => {
+  const { store } = await storeFixture(t);
+  const ref = await store.enrollTask("room", "operator", "Original", "operator", "operator");
+  await store.beginTurn("turn", "room");
+  const close = store.decideTask(ref, 1, "done", "close", "Done");
+  const settlement = store.settleTurn("turn", "room", { consumed: [], outbox: [], taskPresentation: { to: ROOM },
+    taskOutcome: { ref, expectedRevision: 1, eventId: "turn", technical: { state: "open" }, plan: plan() } });
+  await close; const result = await settlement;
+  assert.deepEqual(result.outbox, []); assert.equal(store.coreTask(ref.id)!.plan, undefined);
+  assert.equal(store.coreTask(ref.id)!.operatorStatus, "done");
 });
 
 test("current Dispatcher worker tools are fenced immediately by operator closure", async t => {

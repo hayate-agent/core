@@ -821,7 +821,8 @@ export function installCommands(ctx: CommandContext): void {
         if (plugin.admin && !isAdmin(ctx, input)) reply(ctx, input, message(resolveLanguage(ctx.language?.get(), { kind: "system" }), "command.adminOnly"));
         else {
           try {
-            const text = await plugin.run(parsed.args, { sessionKey: input.sessionKey, sender: input.sender, inputId: input.id, cwd: ctx.cwdFor?.(input.sessionKey),
+            const text = await plugin.run(parsed.args, { sessionKey: input.sessionKey, sender: input.sender, inputId: input.id, source: input.source,
+              operatorAuthorized: ctx.harness.isAcceptingChannelInput(input) && (input.replyTo?.channel === "console" || !!input.sender && ctx.admins.includes(input.sender)), cwd: ctx.cwdFor?.(input.sessionKey),
               ui: input.replyTo?.channel === "console" && input.sessionKey === (ctx.localSessionKey?.() ?? "console:local") ? ctx.pluginUI?.() : undefined });
             if (text) reply(ctx, input, text);
           } catch { reply(ctx, input, `⚠️ /${plugin.name}: plugin command failed (details withheld)`); }

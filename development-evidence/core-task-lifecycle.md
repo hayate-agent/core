@@ -20,7 +20,9 @@ No Pi-extension repository is modified and no installed agent/tasks are changed.
 
 - Three baseline regression tests failed on unchanged Core: tool-free repeated validation, changing Dispatcher metadata counted as progress, late results reopening a formally completed current parent.
 - Final candidate typecheck PASS, build PASS, `git diff --check` PASS.
-- Full suite: 2,504 tests; 2,503 passed, 0 failed, 1 skipped. Command: `HAYATE_TEST_CONCURRENCY=4 node scripts/test.mjs`. Log: `/tmp/task-ledger-full-final.log`.
+- Final rebased/reviewed full suite: 2,534 tests; 2,533 passed, 0 failed, 1 skipped. Command: `HAYATE_TEST_CONCURRENCY=4 node scripts/test.mjs`. Log: `/tmp/task-ledger-final-full.log`.
+- Separate child Pi review ran without extensions, session persistence, mutations or execution tools. Five specific findings were fixed: command versus in-turn identity, authentic accepting-input provenance, oversized authority fallback, receipt-capacity archival, and presentation inside serialized outcome commit. Targeted rereview resolved four immediately and the remaining ingress finding after the real command-dispatch fix. Review files: `/tmp/hayate-core-task-lifecycle-independent-review.txt`, `/tmp/hayate-core-task-lifecycle-rereview.txt`, `/tmp/task-ledger-command-review.txt`. This is a separate model review, not human or cross-provider approval.
+- Added regressions for all five findings, including real command dispatch rejecting synthetic channel-labelled calls, 512-receipt closure with durable original archival, and a queued close winning over plan settlement. An intermediate unchanged Peter fixture hit its known ENOTEMPTY cleanup race; its isolated rerun and final full run passed.
 - Added focused tests for done-but-blocked operator disposition, exact new generation, old binding retention, immutable request/clarifications, outcome-justified research/skill todos, inactivity not renewed by tool work, scheduled exemption, held legacy migration, session-independent close/reopen, atomic task/turn settlement, late outcomes, Main-thread plan rendering, no plan adoption on failed work, command idempotence without any model, child tools fenced on closure and simple direct work without Dispatcher/plan.
 - Existing process-level CLI/restart tests verify production startup remains usable; genuinely open persisted orders have explicit Core bindings, unbound historical tasks no longer launch their validator during startup.
 
@@ -35,7 +37,7 @@ This is a review candidate, not installed acceptance or full fulfillment of ever
 - automatic validator-originated plan-patch protocol, beyond the current plan-aware validation and Main-submitted checked proposal;
 - registered recurring-series reopen contracts and exact operator-configured inactivity policy; there is intentionally no invented default timeout;
 - operator-visible migration inventory/disposition review for Odo/Peter before adopting held legacy tasks; no bulk re-enrollment;
-- separate independent review of authority, cross-session disclosure, crash/replay semantics and plan/provenance boundaries;
+- hosted CI and normal protected-branch integration of the reviewed candidate; no live installed acceptance yet;
 - coordination of a versioned host-independent contract with the parallel Pi-extension session, without coupling Hayate's mandatory Core gates to an optional Pi extension.
 
 The passing tests prove the stated candidate behaviors, not that all model-generated semantic associations will be correct or that any live provider has adopted these changes.

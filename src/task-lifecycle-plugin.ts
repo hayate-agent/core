@@ -12,6 +12,7 @@ export function taskLifecyclePlugin(harness: Harness, authorize: (key: string, p
     api.registerCommand({ name: "orders", admin: true,
       help: "Agent-wide orders: /orders [show <id>|done <id>|reopen <id>]. Operator completion overrides technical validation.",
       async run(args, ctx) {
+        if (!ctx.operatorAuthorized || ctx.source !== "channel") throw Error("Authentic operator command ingress required");
         const [action, id, ...extra] = args.trim().split(/\s+/);
         if (!args.trim()) return store.tasks().slice(-20).map(t => `${t.id} · ${t.operatorStatus} · ${t.original.slice(0, 140)}`).join("\n") || "Keine gespeicherten Aufträge.";
         const task = store.coreTask(id);
@@ -53,7 +54,7 @@ export function taskLifecyclePlugin(harness: Harness, authorize: (key: string, p
           return "Planvorschlag vorgemerkt; wird erst mit dem Turn-Ergebnis dauerhaft übernommen und im Main-Thread angezeigt.";
         }
         if (!["close", "reopen", "clarify"].includes(String(args.action))) throw Error("Invalid task lifecycle action");
-        return harness.operatorTaskDecision(task.id, args.action as "close" | "reopen" | "clarify", input.id ?? `operator:${randomUUID()}`, input.text, ctx.sessionKey);
+        return harness.operatorTaskDecision(task.id, args.action as "close" | "reopen" | "clarify", input.id ?? `operator:${randomUUID()}`, input.text, ctx.sessionKey, input);
       },
     });
   } };

@@ -111,7 +111,7 @@ export interface PluginCommand {
   help: string;
   /** Default true. Explicit false permits ordinary channel users. */
   admin?: boolean;
-  run(args: string, context: { sessionKey: string; sender?: string; inputId?: string; ui?: PluginUI; cwd?: string }): Promise<string | void>;
+  run(args: string, context: { sessionKey: string; sender?: string; inputId?: string; source?: Inbound["source"]; operatorAuthorized?: boolean; ui?: PluginUI; cwd?: string }): Promise<string | void>;
 }
 
 import { ReportProcessingRegistry, type ReportProcessing } from "./report-processing.js";
