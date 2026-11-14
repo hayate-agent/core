@@ -31,6 +31,7 @@ on:
       - 'test/plugin-materialization.test.ts'
       - 'test/dispatcher*.test.ts'
       - 'test/execution*.test.ts'
+      - 'test/scoped-stop-drain.test.ts'
 concurrency:
   group: decision-interface-${{ github.sha }}
   cancel-in-progress: false
