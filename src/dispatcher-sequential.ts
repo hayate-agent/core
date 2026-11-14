@@ -5,7 +5,7 @@ import type { AgentRuntime } from "./types.js";
 import { assessCompletion, assessmentPolicyStamp, type CompletionDiagnostic } from "./completion-check.js";
 import type { CompletionFailureDetail } from "./validator.js";
 import { runtimeReviewer } from "./runtime/reviewer.js";
-import { validExecutionFollowUp, executionDecisionRevision, ExecutionDeadlineExpired, ExecutionAssessmentHold } from "./execution.js";
+import { validExecutionFollowUp, executionDecisionRevision, ExecutionDeadlineExpired, ExecutionAssessmentHold, ExecutionAssessmentStalled } from "./execution.js";
 import { derivedPlanBoundary, stepCompletionPrompt, parentDecisionContext, readyStepPrompt } from "./dispatcher-step-prompt.js";
 import type { DispatchContext, DispatcherStrategy } from "./dispatcher.js";
 import type { Execution, ExecutionStore } from "./execution.js";
@@ -47,7 +47,7 @@ export interface SequentialState {
   /** Bounded validator correction of the CURRENT step's retained worker; survives restart, binds the continuation budget. */
   correction?: { index: number; rounds: number; note: string; previousReport?: string; reportOnly?: boolean };
   /** Host-observed successful tool-result receipts, not prose or validator notes.
-   * No-progress corrections are paced, never terminalized by their count. */
+   * Three consecutive no-progress corrections hold the step, never mark it complete. */
   progress?: { index: number; stalls: number; receipts: string[] };
   prior?: { index: number; result: string; validation?: { diagnostic: CompletionDiagnostic; timeoutMs: number; failure?: CompletionFailureDetail } };
   /** Settled worker result and bounded inference budget; restart revalidates, never replays its effects. */
@@ -55,6 +55,7 @@ export interface SequentialState {
 }
 export const MAX_STEPS = 6;
 const STEP_RESULT_LIMIT = 8000;
+export const MAX_STALLED_CORRECTIONS = 3;
 /** Retry only tool-free inference, never the worker. Persist before each attempt. */
 const STEP_EVIDENCE_LIMIT = 36;
 /** Step validation judges a full worker report; observed reviewer latency for
@@ -289,6 +290,10 @@ export function sequentialStrategy(deps: SequentialDeps): DispatcherStrategy {
       await authorize();
       let state = readState(task);
       if (state === "invalid") return block("Persistierter Plan ist ungültig; nicht neu geplant. Prüfen und abbrechen oder explizit neu einreichen.");
+      // An authenticated explicit resolution may try the retained step again.
+      // The claim-only grant is consumed once, so timed assessment claims cannot
+      // reset stagnation counters or turn a manual release into an infinite loop.
+      if (state?.progress && task.diagnosticCode === "assessment-stalled" && task.claimedRecoveryAction) state.progress.stalls = 0;
       if (!state) {
         if (task.intent) return block("Unsichere Absicht ohne persistierten Plan; kein Neuplanen.");
         const snapshot = deps.roles();
@@ -615,6 +620,14 @@ Correctable vs blocked: a worker "blocked" claim or evidence shortfall that rest
             verdictState = "blocked"; status = "blocked"; break;
           }
           if (!reportOnly && verdict?.state !== "continue") break;
+          // New parent evidence may justify a new correction, not an automatic
+          // timer or a reworded validator request. Keep the settled assessment
+          // and original intent intact when the same step stops making progress.
+          if (state.progress && decisionRevision > (priorAssessment?.decisionRevision ?? 0)) state.progress.stalls = 0;
+          if (!reportOnly && (state.progress?.stalls ?? 0) >= MAX_STALLED_CORRECTIONS) {
+            if (await selectReadyStep()) continue work;
+            throw new ExecutionAssessmentStalled();
+          }
           const note = reportOnly
             ? "A reviewer proposed completion, but your previous report is missing a final status or says blocked. This proposal is NOT proof of success or permission. Using EXISTING facts ONLY, no tools, reconcile the contradiction: return STEP-STATUS complete only if every required outcome is actually satisfied. Reporting a failed required test is not passing it. If required outcomes still fail or approval is absent, state that explicitly and keep STEP-STATUS blocked. Never manufacture success, weaken the requirement or repeat effects."
             : (verdict?.next ?? "").slice(0, 1500);

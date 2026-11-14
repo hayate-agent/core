@@ -571,22 +571,25 @@ test("reviewer completion cannot silently turn a reported failed positive case i
   assert.equal(env.calls.review.length, 2);
 });
 
-test("semantic hold is automatically re-assessed after reload without rerunning settled worker effects", async t => {
+test("semantic hold survives reload without timed rechecks; explicit resume reassesses retained evidence only", async t => {
   const first = await setup(t, { worker: () => "publication evidence retained\nSTEP-STATUS: blocked: missing fact",
     verdict: '{"state":"blocked"}' });
   const held = await first.run("Publish only when verified; reconcile existing effects");
   assert.equal(held.status, "paused");
-  assert.equal(held.diagnosticCode, "runtime-failure");
-  assert.ok(held.workerRetry);
+  assert.equal(held.diagnosticCode, "assessment-blocked");
+  assert.equal(held.workerRetry, undefined);
   assert.deepEqual(held.assessmentHold, { state: "blocked", step: 0 });
-  assert.equal(first.events.filter(e => e.requiresAttention).length, 1, "real blocker remains actionable despite automatic rechecks");
+  assert.equal(first.events.filter(e => e.requiresAttention).length, 1, "new blocker is reported once");
   assert.ok(state(held.checkpoint).assessment);
   await first.dispatcher.stop(); await first.harness.stop(0);
   const second = await setup(t, { worker: text => { assert.match(text, /Using EXISTING facts ONLY, no tools/); return "Existing publication evidence now verified; no effects repeated\nSTEP-STATUS: complete"; }, verdict: '{"state":"completed"}' },
     { home: first.home, file: first.file });
   await second.dispatcher.start();
   assert.equal(second.calls.review.length, 0);
-  await second.tickAt(held.workerRetry!.nextAt);
+  await second.tickAt(Date.now() + 86400000);
+  assert.equal(second.calls.review.length, 0, "clock ticks cannot remove an external prerequisite");
+  assert.equal(second.store.list()[0].status, "paused");
+  await second.dispatcher.control("parent", held.id, "resume");
   await second.dispatcher.waitForExecution(held.id);
   assert.equal(second.store.list()[0].status, "completed");
   assert.equal(second.store.list()[0].id, held.id);
@@ -748,7 +751,10 @@ test("worker STEP-STATUS cannot admit a successor without independent completion
 
 test("five independent validator continuations resume the SAME step before any successor", async t => {
   const verdicts = [...Array.from({ length: 5 }, (_, i) => JSON.stringify({ state: "continue", next: `inspect PR ${265 + i}` })), '{"state":"completed"}'];
-  const env = await setup(t, { plan: steps(["reconcile", "simple"], ["report", "simple"]), verdict: () => verdicts.shift() ?? '{"state":"completed"}' });
+  let receipts = 0;
+  const env = await setup(t, { plan: steps(["reconcile", "simple"], ["report", "simple"]),
+    toolEvents: () => [{ name: "read", detail: "inspect next PR", result: `verified PR receipt ${++receipts}` }],
+    verdict: () => verdicts.shift() ?? '{"state":"completed"}' });
   const task = await env.run("two steps");
   assert.equal(task.status, "completed");
   assert.equal(env.calls.worker.length, 7);
@@ -769,6 +775,7 @@ test("five continuations stop on semantic block but defer technical validator fa
   for (const finalVerdict of ['{"state":"blocked"}', 'invalid']) {
     let reviews = 0;
     const env = await setup(t, { plan: steps(["first", "simple"], ["second", "simple"]),
+      toolEvents: () => [{ name: "read", detail: "next receipt", result: `verified receipt ${reviews}` }],
       verdict: () => ++reviews <= 5 ? JSON.stringify({ state: "continue", next: `more ${reviews}` }) : finalVerdict });
     const task = await env.run("two steps");
     assert.equal(task.status, finalVerdict === 'invalid' ? "ready" : "paused");
@@ -819,9 +826,10 @@ test("true external blocked holds: no continuation, no successor; invalid/uncert
   }
 });
 
-test("blocked claim survives five corrections but never completes without independent completion", async t => {
+test("blocked claim with new observed evidence survives five corrections but never completes without independent completion", async t => {
   let reviews = 0;
   const env = await setup(t, { plan: steps(["first", "simple"], ["second", "simple"]), worker: () => "still stuck\nSTEP-STATUS: blocked: stuck",
+    toolEvents: () => [{ name: "read", detail: "next receipt", result: `verified receipt ${reviews}` }],
     verdict: () => ++reviews <= 5 ? JSON.stringify({ state: "continue", next: `more ${reviews}` }) : '{"state":"blocked"}' });
   const task = await env.run("two steps");
   assert.equal(task.status, "paused");
@@ -935,7 +943,8 @@ test("final result requires complete step evidence", async t => {
   const env = await setup(t, { worker: () => "I think it worked",
     verdict: () => ++assessments <= 5 ? '{"state":"continue","next":"report actual evidence"}' : '{"state":"blocked"}' });
   const task = await env.run("read");
-  assert.equal(task.status, "paused");
+  assert.equal(task.status, "blocked");
+  assert.equal(task.diagnosticCode, "assessment-stalled");
   assert.equal(task.result, undefined);
   assert.equal(state(task.checkpoint).outcomes.length, 0);
   assert.equal(stepStatus("x\nSTEP-STATUS: blocked: no creds"), "blocked");
@@ -1176,10 +1185,11 @@ test("correction is persisted before the corrected worker turn (restart-safe) an
   assert.ok(!again.calls.worker[0]!.prompt.includes("STEP 1/2:"));
 });
 
-test("identical correction wording does not override five independent continuation decisions", async t => {
+test("identical correction wording permits five continuations with distinct observed batch receipts", async t => {
   let assessments = 0;
   let turns = 0;
   const env = await setup(t, { plan: steps(["only", "simple"]),
+    toolEvents: () => [{ name: "read", detail: "next batch", result: `batch ${turns} read` }],
     worker: () => ++turns < 6 ? `batch ${turns} read\nSTEP-STATUS: blocked: remaining batches` : "all batches read\nSTEP-STATUS: complete",
     verdict: () => ++assessments <= 5
       ? '{"state":"continue","next":"read the next batch"}'
@@ -1266,12 +1276,12 @@ test("uncertain or invalid assessment retries only inference, never the worker e
   }
 });
 
-test("identical no-tool continues are durably paced without terminalizing or repeated early inference", async t => {
+test("identical no-tool continues stop after three stalled corrections and cannot spin on ticks or restart", async t => {
   let checks = 0;
   const env = await setup(t, { worker: () => "Still working\nSTEP-STATUS: blocked: inspecting",
-    verdict: () => ++checks < 13 ? '{"state":"continue","next":"Inspect the receipt"}' : '{"state":"blocked"}' }, { manualProgress: true });
+    verdict: () => { checks++; return '{"state":"continue","next":"Inspect the receipt"}'; } }, { manualProgress: true });
   let task = await env.run("inspect only");
-  for (let stalled = 1; stalled <= 12; stalled++) {
+  for (let stalled = 1; stalled <= 3; stalled++) {
     assert.equal(task.status, "ready");
     assert.equal(state(task.checkpoint).progress?.stalls, stalled);
     assert.equal(task.assessmentRetryAt! - Date.now(), Math.min(3600000, 60000 * 2 ** (stalled - 1)));
@@ -1281,8 +1291,38 @@ test("identical no-tool continues are durably paced without terminalizing or rep
     assert.equal(disk.list()[0]!.assessmentRetryAt, task.assessmentRetryAt);
     task = await env.retry(task.id);
   }
-  assert.equal(task.status, "paused", "only the genuine blocked verdict stops work, not repetition count");
-  assert.equal(checks, 13);
+  assert.equal(task.status, "blocked", "settled assessment and original effect intent are preserved");
+  assert.equal(task.diagnosticCode, "assessment-stalled");
+  assert.equal(task.workerRetry, undefined); assert.equal(task.assessmentRetryAt, undefined);
+  assert.equal(checks, 4); assert.equal(env.calls.worker.length, 4);
+  const checkpoint = task.checkpoint;
+  await env.tickAt(Date.now() + 86400000);
+  assert.equal(checks, 4);
+  await env.dispatcher.stop(); await env.harness.stop(1000);
+  const restored = await setup(t, { verdict: () => { assert.fail("stalled assessment must not run on restart"); } },
+    { home: env.home, file: env.file, manualProgress: true });
+  await restored.dispatcher.start(); await restored.tickAt(Date.now() + 86400000);
+  assert.equal(restored.store.list()[0].diagnosticCode, "assessment-stalled");
+  assert.equal(restored.store.list()[0].checkpoint, checkpoint);
+  assert.equal(restored.calls.worker.length, 0);
+});
+
+for (const release of ["decision", "resolution"] as const) test(`stalled step accepts explicit ${release} without replanning or replaying its initial worker`, async t => {
+  let checks = 0, released = false;
+  const env = await setup(t, {
+    worker: () => "retained facts\nSTEP-STATUS: complete",
+    verdict: () => { checks++; return released && checks > 5 ? '{"state":"completed"}' : '{"state":"continue","next":"Report the verified receipt"}'; },
+  });
+  const held = await env.run("reconcile existing evidence only");
+  assert.equal(held.diagnosticCode, "assessment-stalled"); assert.equal(env.calls.worker.length, 4);
+  released = true;
+  if (release === "decision") await env.dispatcher.decide("parent", held.id, "new-evidence", "Fresh host evidence is available; report it without repeating effects");
+  else await env.dispatcher.resolve("parent", held.id, "operator", "continue", "Explicitly reconcile the retained facts, without repeating effects");
+  await env.dispatcher.waitForExecution(held.id);
+  await env.retry(held.id);
+  assert.equal(env.store.list()[0].status, "completed");
+  assert.equal(env.calls.plan.length, 1); assert.equal(env.calls.worker.length, 5);
+  assert.match(env.calls.worker[4].prompt, /^CONTINUE STEP/);
 });
 
 test("more than 64 novel successful tool receipts keep legitimate continuations unthrottled", async t => {

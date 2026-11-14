@@ -57,12 +57,17 @@ function nextDecisionRevision(receipts: readonly ExecutionDecision[]): number {
 }
 
 /** Closed host-owned causes; exception/worker text is never persisted here. */
-export type ExecutionDiagnosticCode = "runtime-failure" | "worker-failed" | "worker-cancelled" | "maintenance-blocked" | "manual-pause" | "deadline-expired" | "retry-exhausted" | "empty-result";
+export type ExecutionDiagnosticCode = "runtime-failure" | "worker-failed" | "worker-cancelled" | "maintenance-blocked" | "manual-pause" | "deadline-expired" | "retry-exhausted" | "empty-result" | "assessment-blocked" | "assessment-waiting" | "assessment-stalled";
 export class ExecutionDeadlineExpired extends Error {
   constructor() { super("deadline-expired: saved execution deadline has elapsed"); }
 }
 export class ExecutionAssessmentHold extends Error {
   constructor(readonly state: "blocked" | "waiting", readonly step: number, reason: string) { super(reason); }
+}
+
+/** Retained work made no observed progress; automatic transport retries cannot release it. */
+export class ExecutionAssessmentStalled extends Error {
+  constructor() { super("Prüfung ohne neue Nachweise angehalten. Neue Informationen oder eine ausdrückliche Fortsetzung sind erforderlich; bisherige Ergebnisse bleiben erhalten."); }
 }
 
 export class ExecutionWorkerFailure extends Error {
@@ -464,6 +469,13 @@ export class ExecutionStore {
             JSON.stringify(old.pinned ?? null) !== JSON.stringify(pinned ?? null)) throw Error("Conflicting execution request ID");
         return old;
       }
+      // A fresh request ID is not new authority to escape a stagnant execution.
+      // Preserve independent work on other mandates and idempotent request retries.
+      const held = dependency?.taskId && draft.executions.find(item => item.parent === parent &&
+        item.dependency?.taskId === dependency.taskId && !item.parentStopped &&
+        ["paused", "blocked"].includes(item.status) && (item.diagnosticCode === "assessment-stalled" ||
+          item.input === input && !!item.assessmentHold));
+      if (held) throw Error(`execution-held: reconcile or explicitly resume existing execution ${held.id}; a new request ID cannot bypass its hold`);
       if (draft.executions.length >= 2000) throw Error("Retained execution limit reached; archive only after reconciliation");
       if (origin !== undefined && !validAddress(origin)) throw Error("Invalid execution origin");
       const task: Execution = { recoveryEnrollment: "current", dependency: structuredClone(dependency), ...(origin ? { origin: structuredClone(origin) } : {}), pinned: structuredClone(pinned), id: randomUUID(), parent, requestId, input, strategy, strategyVersion, status: "ready", restarts: 0 };
@@ -904,10 +916,16 @@ export class ExecutionStore {
       if (code === "worker-failed" || code === "worker-cancelled") task.recoverySession = `dispatch:${task.id}:${token}`;
       else task.recoverySession ??= `dispatch:${task.id}:${token}`;
       delete task.token;
-      const scheduled = recovery && this.scheduleWorkerRetry(task, recovery.strategy, recovery.policy);
+      if (task.assessmentHold) {
+        task.diagnosticCode = task.assessmentHold.state === "waiting" ? "assessment-waiting" : "assessment-blocked";
+        delete task.workerRetry;
+      }
+      if (task.assessmentHold || code === "assessment-stalled") delete task.assessmentRetryAt;
+      const scheduled = recovery && !task.assessmentHold && this.scheduleWorkerRetry(task, recovery.strategy, recovery.policy);
       this.event(draft, task, "status", scheduled
-        ? task.assessmentHold ? "Unabhängige Prüfung meldet weiter eine Blockade oder externe Wartebedingung. Ursache prüfen; Dispatcher bewertet automatisch erneut, ohne abgeschlossene Effekte zu wiederholen."
-          : "Interne Ausführungsunterbrechung; automatischer Wiederanlauf nach Backoff, keine Nutzeraktion erforderlich."
+        ? "Interne Ausführungsunterbrechung; automatischer Wiederanlauf nach Backoff, keine Nutzeraktion erforderlich."
+        : task.assessmentHold ? "Aufgabe wartet auf eine externe Voraussetzung. Ohne neue Informationen keine weiteren automatischen Prüfungen; bisherige Ergebnisse bleiben erhalten."
+        : code === "assessment-stalled" ? new ExecutionAssessmentStalled().message
         : code === "deadline-expired" ? `${task.status}: deadline-expired`
         : task.diagnosticCode === "retry-exhausted" ? `${task.status}: retry-exhausted; automatische Wiederanläufe beendet nach ${this.retryCap()} Versuchen. Manuelle Intervention erforderlich: Aufgabe explizit fortsetzen oder abbrechen.`
         : task.status,
@@ -933,7 +951,7 @@ export class ExecutionStore {
     });
   }
   private scheduleWorkerRetry(task: Execution, strategy: RecoveryStrategy, policy?: ExecutionRecoveryPolicy, newFailure = true): boolean {
-    if (task.recoveryEnrollment === "held-legacy" || !["blocked", "paused", "ready"].includes(task.status) ||
+    if (task.assessmentHold || task.recoveryEnrollment === "held-legacy" || !["blocked", "paused", "ready"].includes(task.status) ||
         !["worker-failed", "runtime-failure"].includes(task.diagnosticCode ?? "") ||
         task.parentStopped || task.question && !task.question.answer) return false;
     if (task.dependency?.expiresAt !== undefined && task.dependency.expiresAt <= this.now()) {
@@ -1017,6 +1035,16 @@ export class ExecutionStore {
     if (restartLimit !== undefined && (!Number.isSafeInteger(restartLimit) || restartLimit < 0)) throw Error("Invalid recovery restart limit");
     return this.mutate(draft => {
       for (const task of draft.executions) {
+        // Older cores enrolled semantic holds into the transport retry budget.
+        // Preserve their evidence without waking them or replaying effects.
+        if (enabled(task) && task.assessmentHold && !task.parentStopped && !task.ownershipHold &&
+            task.recoveryEnrollment === "current" && ["ready", "paused", "blocked"].includes(task.status) &&
+            ["runtime-failure", "retry-exhausted"].includes(task.diagnosticCode ?? "")) {
+          task.status = task.intent ? "blocked" : "paused";
+          task.diagnosticCode = task.assessmentHold.state === "waiting" ? "assessment-waiting" : "assessment-blocked";
+          delete task.workerRetry;
+          delete task.assessmentRetryAt;
+        }
         if (!enabled(task) || !["ready", "running"].includes(task.status)) continue;
         const strategy = strategies.get(task.strategy);
         const interrupted = task.status === "running";
