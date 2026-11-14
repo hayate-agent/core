@@ -160,6 +160,11 @@ export interface RuntimeSessionStatus {
   /** Provider/model price estimate for this runtime session, not a billing statement. */
   costUsd?: number;
   contextPercent?: number;
+  /** Separately labelled host estimate for an explicitly configured local working budget. */
+  contextBudgetTokens?: number;
+  contextEstimateTokens?: number;
+  contextHistoryTokens?: number;
+  contextBudgetPercent?: number;
   contextWindow?: number;
   /** Effective runtime system prompt size; excludes conversation history and tool schemas. */
   systemPrompt?: { characters: number; bytes: number };
@@ -191,7 +196,7 @@ export interface OpenSessionOptions {
   /** Ephemeral reviewer session: no persisted transcript or third-party resources. */
   ephemeral?: boolean;
   /** Host enum only, never task-supplied instructions. Requires ephemeral. */
-  assessmentPurpose?: "code-review" | "supervisor" | "dispatch-complexity" | "dispatch-plan" | "handover";
+  assessmentPurpose?: "code-review" | "supervisor" | "dispatch-complexity" | "dispatch-plan" | "handover" | "hashtag";
   /** Start a fresh conversation instead of resuming the stored one. */
   fresh?: boolean;
   sessionId?: string;

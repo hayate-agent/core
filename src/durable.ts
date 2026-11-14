@@ -72,7 +72,7 @@ export async function mkdirDurable(dir: string): Promise<void> {
   await syncDir(path.dirname(dir));
 }
 
-async function syncDir(dir: string): Promise<void> {
+export async function syncDir(dir: string): Promise<void> {
   let fh;
   try {
     fh = await open(dir, "r");

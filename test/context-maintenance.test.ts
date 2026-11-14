@@ -33,6 +33,15 @@ test("slow maintenance serializes its conversation without blocking another conv
   assert.equal(sameFinished, true);
 });
 
+test("local tiny history never queues model maintenance just to compact irreducible persona/schema base", async t => {
+ const home=await mkdtemp(path.join(os.tmpdir(),'local-base-pressure-'));t.after(()=>rm(home,{recursive:true,force:true}));let calls=0,history=10;
+ const maintenance=new ContextMaintenance(home,()=>contextPolicy({autoHandover:false}),async()=>{calls++;return 'compact';});
+ const session={status:()=>({sessionId:'local',contextPercent:1,contextBudgetPercent:99,contextHistoryTokens:history}),compact:async()=>{}} as unknown as RuntimeSession;
+ const rotate=async()=>{throw Error('unexpected rotation');};await maintenance.boundary('chat',session,rotate);assert.equal(calls,0);
+ assert.equal((await maintenance.status('chat')).observation?.decision,'irreducible-base-small-history');
+ history=2048;await maintenance.boundary('chat',session,rotate);assert.equal(calls,1);
+});
+
 test("context policy validates ordered thresholds", () => {
   assert.equal(contextPolicy().autoHandover, true);
   assert.equal(contextPolicy({ compactionOwner: "agent" }).compactionOwner, "agent");

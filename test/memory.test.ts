@@ -235,10 +235,25 @@ test("recall honors recallLimit instead of hardcoded three", async (t) => {
   await service.capture({ sessionKey: ctx.sessionKey, id: "turn1", text: "Diagnose deployment", reply: "artifact mismatch", outcome: "failed" });
   await service.capture({ sessionKey: ctx.sessionKey, id: "turn2", text: "Second lesson", reply: "second", outcome: "completed", tools: ["x"] });
   await service.capture({ sessionKey: ctx.sessionKey, id: "turn3", text: "Third lesson", reply: "third", outcome: "completed", tools: ["x"] });
+  const foreign = await store.put({ sessionKey: "matrix:other" }, { key: "foreign-lesson", title: "Foreign lesson", text: "Private lesson from another session." });
+  const eligible = await store.search(ctx, "lesson", { limit: 10 });
+  assert.ok(eligible.length > 1, "multiple same-session matches must compete for the single recall slot");
   const recalled = await service.recall(ctx.sessionKey, "lesson");
-  const hits = (recalled.match(/"id":"/g) || []).length;
-  assert.equal(hits, 1);
-  assert.ok(!recalled.includes("Third lesson"));
+  const hits = JSON.parse(recalled.slice(recalled.indexOf("\n[") + 1));
+  assert.equal(hits.length, 1);
+  // Ranking may favor search relevance or the latest handoff. Either must
+  // return real, same-session provider data within the configured limit.
+  const hit = hits[0];
+  assert.ok(eligible.some(({ entry }) => entry.id === hit.id));
+  const stored = await store.get(ctx, hit.id);
+  assert.ok(stored);
+  assert.equal(stored.sessionKey, ctx.sessionKey);
+  assert.equal(stored.state, "active");
+  assert.equal(hit.title, stored.title);
+  assert.equal(hit.text, stored.text);
+  assert.equal(hit.verification, stored.verification);
+  assert.notEqual(hit.id, foreign.id);
+  assert.ok(!recalled.includes(foreign.text));
 });
 
 test("memory put defaults source to session key and names the failing field", async (t) => {

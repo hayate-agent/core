@@ -27,8 +27,8 @@
     "matrix-gateway.ts": "cab666ab5d2675d9b459102f119598b4444dcbbdecb3a5d16d473a676a131be3",
     "matrix-sync.ts": "32a217a65dc5f05f0c0940e2f52426c1ab2044688513befb282af7376943b5c1",
     "memory-orchestration-plugin.ts": "c796ff18def036016ac47095d18a490fab0d15ff8eaff342e463babc16bf78ea",
-    "memory-plugin.ts": "d253236ebdda0f6914532afcef299939e98d0f4dab17dcfa178ce39628e1eee5",
-    "memory-service.ts": "9c6ee6c2a052e4e366bef8d7972d154df3e60d2942fb8fde0f7a239429cbe48b",
+    "memory-plugin.ts": "a73c9c479e9665472732db1648059991430386fe5d764ad5417dbc553acdb104",
+    "memory-service.ts": "83e0202810ddb172976caba9fbff2df9131c12e245746c33e0a3622b79d173db",
     "native-activity.ts": "b9878941092065a395c9333f0533080a258dbb8a0c28e2c901a60fb8ac20a6cc",
     "nightly-default.ts": "e2669a2947bc9060d68f1dd8d4f903c4646b37ea91ca96ff492ecfb0c012b79f",
     "nightly-strategy-plugin.ts": "f2307c66003387167318055b7e49ce84e115ffd5d8e7d1a21ae8106318dbc0a8",
@@ -48,13 +48,13 @@
     "session-observer-plugin.ts": "53de3d2a70d69f6a37ed8abfedd44ec234486a31ddfd36ee63757bb69d2d8a38",
     "subagent-plugin.ts": "5b7ae55c28e50c48ce0a3671c400245ee0fd725ce7c5ad6866a8e63f0b65cd5e",
     "tool-result-projector.ts": "69658e2adef5d5327797762886199b87fd3bff94f20beab8a199280e0d517746",
-    "typesafe-api-plugin.ts": "214034f786b51f38fda685f48f8c860a3e4620c4decee1916717532a9b5120f4",
-    "typesafe-decision-plugin.ts": "d284c5607b543452b519459690872c4aef66fc829a3465a70a4a18e6bbe47312",
+    "typesafe-api-plugin.ts": "b1531eae217124a7074b4ce5ac98736ca4a1a873b151cc4662090312a75dd537",
+    "typesafe-decision-plugin.ts": "37e7404684082744ff42752a7331c7732915509d0eee9dde410e77aef10cc5f4",
     "typesafe-question-banks.ts": "40bfe4fa9d58c19eb80b92bd1fa15b00d58edd5b81ecfe9691f384fcc12324e6",
     "typesafe-validator-provider.ts": "08316fb1da8ac351a5fc6602204cac3aa3fd8c4c1ff5c3ced5acd26c9693dddd",
     "wasm-tools-plugin.ts": "438c6ac8899e283e4268f51ef451275bf16a37b584db84ee8302a26200cc70de"
   },
   "repository": "https://git.vanillacore.net/harness/plugins",
-  "revision": "e2bb89f3e2a9b2cfd2714dbbe776ec3ffbbe1b0e",
+  "revision": "79d5ee78404d8360c5824f15dc80a12e34c202a6",
   "schema": 1
 }

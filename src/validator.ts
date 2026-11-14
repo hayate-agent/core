@@ -48,6 +48,8 @@ export interface ValidatorProvider {
   version: number;
   /** False for non-LLM transports; skip unrelated runtime model qualification. */
   requiresModel?: boolean;
+  /** Trusted transport input budget, never a permission to truncate authority. */
+  maxPromptBytes?: number;
   assess(request: ValidatorRequest): Promise<unknown>;
 }
 
@@ -58,7 +60,8 @@ export class ValidatorRegistry {
   register(provider: ValidatorProvider): void {
     if (!provider || provider.apiVersion !== 1 || typeof provider.name !== "string" || !/^[a-z][a-z0-9-]{0,79}$/.test(provider.name) ||
         !Number.isSafeInteger(provider.version) || provider.version < 1 || typeof provider.assess !== "function" ||
-        (provider.requiresModel !== undefined && typeof provider.requiresModel !== "boolean")) {
+        (provider.requiresModel !== undefined && typeof provider.requiresModel !== "boolean") ||
+        (provider.maxPromptBytes !== undefined && (!Number.isSafeInteger(provider.maxPromptBytes) || provider.maxPromptBytes < 1024 || provider.maxPromptBytes > 56000))) {
       throw Error("Invalid validator provider");
     }
     if (this.providers.has(provider.name)) throw Error("Duplicate validator provider");
