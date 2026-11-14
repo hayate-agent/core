@@ -30,6 +30,16 @@ test('task-book pages survive fsGroup remount read-only and missing committed pa
   await assert.rejects(stat(file + '.task-book'), { code: 'ENOENT' });
 });
 
+for (const mode of [0o2500, 0o2700]) test(`task-book private setgid directory ${mode.toString(8)} preserves retained pages`, async t => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'task-book-private-setgid-')); t.after(() => rm(root, { recursive: true, force: true }));
+  const file = path.join(root, 'executions.json'); const book = { tasks: [], bindings: [] };
+  const ref = await new TaskBookStorage(file).stage(book);
+  await chmod(file + '.task-book', mode);
+  assert.deepEqual(await new TaskBookStorage(file).hydrate(ref), book);
+  if (mode === 0o2500) { await assert.rejects(new TaskBookStorage(file).stage(book), /owner-read-only/); await chmod(file + '.task-book', 0o700); }
+  else { await new TaskBookStorage(file).stage(book); assert.equal((await stat(file + '.task-book')).mode & 0o7777, 0o700); }
+});
+
 for (const mode of [0o640, 0o660]) test(`partition hydration tolerates fsGroup ${mode.toString(8)} without modifying authority and durable writer reseals`, async t => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'partition-fsgroup-')); t.after(() => rm(root, { recursive: true, force: true }));
   const file = path.join(root, 'executions.json');
