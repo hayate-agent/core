@@ -6,8 +6,8 @@ import { executionMetadata } from "../builtin-plugins/execution-metadata.js";
 /**
  * PI runtime adapter. The only module that imports the PI SDK.
  */
-import { getSupportedThinkingLevels, createAssistantMessageEventStream } from "@earendil-works/pi-ai/compat";
-import { MAX_MODEL_INPUT_TOKENS, modelInputAdmission, modelInputEstimate, modelInputLimit } from "../model-input-budget.js";
+import { getSupportedThinkingLevels } from "@earendil-works/pi-ai/compat";
+import { MAX_MODEL_INPUT_TOKENS, modelInputEstimate, modelInputLimit } from "../model-input-budget.js";
 import { reasoningEffortNoneModels as reasoningEffortNoneModelsFromEnv } from "../product-paths.js";
 import type { AdaptiveSkills } from "../adaptive-skills.js";
 import { toolGuardDenialReason } from "../tool-guard-error.js";
@@ -982,31 +982,17 @@ export class PiRuntime implements AgentRuntime {
     // Remember operator/native baseline, not our last managed override; increasing
     // an approved budget must not retain the previous managed smaller threshold.
     const nativeCompaction = new Map<string, { reserveTokens: number; keepRecentTokens: number }>();
-    // Last PI message boundary before provider serialization, after extension
-    // projection and tool declarations (routing/serialization remain SDK-owned).
-    // Also covers summary requests. Never
-    // let a failed compaction or a newly huge system/tool payload bypass the cap.
+    // JSON byte size is not a token count. Use it only as a maintenance
+    // pressure signal below; let the provider/SDK enforce the actual model limit.
+    // In particular, summary requests must not be blocked by the same estimate
+    // that triggers compaction. No history or tool result is truncated here.
     const stream = session.agent.streamFunction;
     session.agent.streamFunction = (model, context, requestOptions) => {
-      // Local/worker budgets are early compaction triggers, not permission to
-      // discard a larger recent tool pair. All working AND summary calls share
-      // this absolute cap and physical window/output headroom.
-      const admission = modelInputAdmission(context.messages, modelInputLimit(MAX_MODEL_INPUT_TOKENS,
-        model.contextWindow, requestOptions?.maxTokens ?? model.maxTokens));
-      if (admission.admitted) {
-        const local = localModel(this.opts.contextBudgets?.(), `${model.provider}/${model.id}`);
-        return stream(model, context, local && (model.api === "openai-completions" || model.api === "openai-responses")
-          ? { ...requestOptions, fetch: modelWorkFetch(requestOptions?.fetch ?? globalThis.fetch, this.workProof,
-            sessionKey, !!options.ephemeral || !slot.active || requestOptions?.sessionId !== session.sessionManager.getSessionId(), slot.modelWork) }
-          : requestOptions);
-      }
-      const message = { role: "assistant" as const, api: model.api, provider: model.provider, model: model.id, content: [],
-        usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
-        stopReason: "error" as const, timestamp: Date.now(),
-        errorMessage: `Model input budget exceeded (${admission.estimate} conservative units > ${admission.limit}). History retained; no provider request sent. Request context maintenance (compact or handover) with preserved authority and unfinished effects; do not replay tools. If summary admission also fails, use a verified archive-linked handover, not repeated retries.` };
-      const events = createAssistantMessageEventStream();
-      queueMicrotask(() => { events.push({ type: "error", reason: "error", error: message }); events.end(); });
-      return events;
+      const local = localModel(this.opts.contextBudgets?.(), `${model.provider}/${model.id}`);
+      return stream(model, context, local && (model.api === "openai-completions" || model.api === "openai-responses")
+        ? { ...requestOptions, fetch: modelWorkFetch(requestOptions?.fetch ?? globalThis.fetch, this.workProof,
+          sessionKey, !!options.ephemeral || !slot.active || requestOptions?.sessionId !== session.sessionManager.getSessionId(), slot.modelWork) }
+        : requestOptions);
     };
     const prepareWorkerCompaction = () => {
       const model = session.model;
