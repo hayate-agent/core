@@ -79,7 +79,7 @@ taskLifecycle:
 
 The minimum is 60,000 ms. Only genuine operator lifecycle input updates the order's
 operator-activity clock; worker/validator outcomes do not. Explicit schedule-created
-orders are exempt from this chat-inactivity disposition. A close due to inactivity
+orders are exempt from this chat-inactivity disposition. Each scheduler occurrence is a separate scoped order: closing one occurrence does not disable the registered cron job or reopen the old order. Pause or disable the cron job explicitly to stop future occurrences. A close due to inactivity
 preserves technical evidence and records its separate reason; it does not claim
 successful work. Detailed recurring-series generation policy remains separate
 from individual schedule occurrences.
