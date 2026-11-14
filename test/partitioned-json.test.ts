@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, readdir, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import path from "node:path";
 import os from "node:os";
 import { PartitionedJson } from "../src/partitioned-json.js";
 import { writeFileDurable } from "../src/durable.js";
-import { StateStore, type PersistedState } from "../src/state.js";
+import { StateStore as IntegratedStateStore, type PersistedState } from "../src/state.js";
 import { ExecutionStore } from "../src/execution.js";
 
 async function fixture(t: { after(fn: () => Promise<void>): void }) {
@@ -14,6 +15,13 @@ async function fixture(t: { after(fn: () => Promise<void>): void }) {
   return path.join(dir, "state.json");
 }
 const arrays = { sessions: 1, pending: 1, outbox: 1, seen: 256 };
+// Generic partition-document fixture; production StateStore uses main's v2 session manifest.
+class StateStore extends PartitionedJson {
+  constructor(file: string) { super(file, arrays); }
+  override save(state: PersistedState | Record<string, unknown>): Promise<void> {
+    return super.save(state as Record<string, unknown>);
+  }
+}
 const snapshot = (value = "before"): PersistedState => ({ version: 1, paused: false, busyMode: "queue",
   sessions: [{ key: "a/../../sensitive", stopPending: true, resetPending: true, resetSources: ["user"],
     sourceOwner: "owner", heldRecoveryInputs: [{ sessionKey: "a", text: "unknown effect", source: "channel" }] },
@@ -128,6 +136,43 @@ test("unreferenced payloads are ignored; missing/corrupt referenced shards never
   await assert.rejects(new StateStore(file).load(), /Missing\/unreadable partition/);
 });
 
+test("partition reads refuse symlink authorities and payloads without changing their targets", async t => {
+  const file = await fixture(t); await new StateStore(file).save(snapshot());
+  const raw = await readFile(file, "utf8"), target = `${file}.target`;
+  await writeFile(target, raw); await rm(file); await symlink(target, file);
+  await assert.rejects(new StateStore(file).load());
+  assert.equal(await readFile(target, "utf8"), raw);
+  await rm(file); await writeFile(file, raw);
+  const index = JSON.parse(raw), shard = path.join(`${file}.parts`, `${index.collections.sessions[0].hash}.json`);
+  const payload = await readFile(shard, "utf8"), payloadTarget = `${shard}.target`;
+  await writeFile(payloadTarget, payload, { mode: 0o600 }); await rm(shard); await symlink(payloadTarget, shard);
+  await assert.rejects(new StateStore(file).load(), /Missing\/unreadable partition/);
+  assert.equal(await readFile(payloadTarget, "utf8"), payload);
+});
+
+test("partition directory symlinks are rejected on load and publication", async t => {
+  const file = await fixture(t), disk = new StateStore(file); await disk.save(snapshot());
+  const index = await readFile(file, "utf8"), target = `${file}.elsewhere`;
+  await rename(`${file}.parts`, target); await symlink(target, `${file}.parts`);
+  await assert.rejects(new StateStore(file).load(), /Unsafe partition directory/);
+  await assert.rejects(disk.save(snapshot("after")), /Unsafe partition directory/);
+  assert.equal(await readFile(file, "utf8"), index);
+});
+
+test("existing immutable candidates are checked, never overwritten, before index publication", async t => {
+  const file = await fixture(t), disk = new StateStore(file); await disk.save(snapshot());
+  const index = await readFile(file, "utf8"), changed = snapshot("after");
+  const raw = `${JSON.stringify(changed.sessions[1])}\n`;
+  const candidate = path.join(`${file}.parts`, `${createHash("sha256").update(raw).digest("hex")}.json`);
+  await writeFile(candidate, "corrupted evidence\n", { mode: 0o600 });
+  await assert.rejects(disk.save(changed), /Existing partition checksum mismatch/);
+  assert.equal(await readFile(candidate, "utf8"), "corrupted evidence\n");
+  assert.equal(await readFile(file, "utf8"), index);
+  await writeFile(candidate, raw); await chmod(candidate, 0o600);
+  await disk.save(changed); // exact orphan can be re-fsynced and referenced
+  assert.deepEqual(await new StateStore(file).load(), changed);
+});
+
 test("session isolation: an update rewrites only that session payload and the index", async t => {
   const file = await fixture(t); const writes: string[] = [];
   const disk = new PartitionedJson(file, arrays, async (target, ...args) => { writes.push(target); await writeFileDurable(target, ...args); });
@@ -142,13 +187,13 @@ test("session isolation: an update rewrites only that session payload and the in
 });
 
 test("serialized overlapping session captures retain every barrier without losing independent updates", async t => {
-  const file = await fixture(t), store = new StateStore(file), live = snapshot();
+  const file = await fixture(t), store = new IntegratedStateStore(file), live = snapshot();
   const barriers = Array.from({ length: 30 }, (_, i) => store.capture(() => {
     live.sessions[i % 2]!.sourceOwner = `owner-${i}`;
     return live;
   }));
   await Promise.all(barriers);
-  const reopened = await new StateStore(file).load();
+  const reopened = await new IntegratedStateStore(file).load();
   assert.equal(reopened?.sessions[0]?.sourceOwner, "owner-28");
   assert.equal(reopened?.sessions[1]?.sourceOwner, "owner-29");
   assert.deepEqual(reopened?.pending, live.pending); assert.deepEqual(reopened?.outbox, live.outbox);
@@ -173,7 +218,7 @@ test("execution migration preserves unknown effects, budgets, task linkage, dedu
   assert.equal((await reopened.submit("parent", "unsafe", "work", "direct", 1, { taskId: "mandate", expiresAt: 9999999999999 })).id, a.id);
   await reopened.recover(new Map([["direct", { version: 1, replaySafe: false }]]), 2);
   assert.equal(reopened.list("parent")[0]?.status, "blocked");
-  await assert.rejects(reopened.claim(a.id), /not claimable/);
+  await assert.rejects(reopened.claim(a.id), /not ready/);
   assert.equal(reopened.list("parent")[0]?.intent?.key, "external-effect");
 });
 

@@ -87,7 +87,7 @@ contextMaintenance:
   checkEveryTurns: 5
   cooldownTurns: 5
   autoHandover: true
-  mainContextTokens: 262144
+  mainContextTokens: 131072
   workerContextTokens: 131072
   # Explicit inventory; location is not inferred from vendor/name/window size.
   localModels: [my-provider/my-local-model]
@@ -98,10 +98,11 @@ contextMaintenance:
 A dispatcher/subagent worker may make many assistant/tool exchanges before its
 single Harness turn finishes. Harness before/after-turn maintenance cannot bound
 that inner loop. The PI adapter therefore enables **native between-response
-compaction at explicit role budgets**. Frontier Main receives up to262,144 input
-tokens; workers, dispatcher assessments and validators receive131,072. Models
-explicitly listed in `localModels` receive half:131,072 for Main and65,536 for
-workers/assessments. Library callers without the composed policy retain legacy
+compaction at explicit role budgets**. Main, workers, dispatcher assessments and
+validators default to 131,072 input-budget units. Models
+explicitly listed in `localModels` default to earlier triggers of 16,384 for Main
+and 8,192 for workers/assessments; those configured triggers are separate from
+the absolute final PI-message admission cap below. Library callers without the composed policy retain legacy
 Main ownership; the CLI supplies the complete policy. Values are safe integers
 >=8,192 and cannot enlarge actual model capacity or remove native output headroom.
 The reserve is calculated from the **actually selected model** after per-turn
@@ -157,6 +158,36 @@ PI overflow compaction is independent and can bypass Harness completion notices.
 A native JSONL `type=compaction` entry is evidence of a real compaction; absence of a
 Harness notice does not prove no compaction occurred. This service does not yet
 persist or announce every SDK-native compaction event.
+
+### Final PI-input admission (separate from disk partitioning)
+
+The PI adapter checks **every working and native summary stream**, after message
+projection (including system context, recall, tool declarations and results).
+UTF-8 JSON bytes plus framing are counted conservatively, with an absolute limit
+of 131,072 units and output headroom within the declared physical model window.
+This is a message-size admission guard, **not an exact provider tokenizer**:
+provider templates, image-token expansion and later payload-hook rewrites are not
+accounted exactly. Existing model metadata/windows are not enlarged or invented.
+
+Byte-aware pressure at 75% of the role budget also triggers native compaction at
+a settled tool boundary, even when a provider reports zero usage. Native summary
+entries reduce the active projection; original transcript entries and call/result
+pairs remain on disk and conversation identity is retained. No new concurrency
+limit or history deletion is introduced.
+
+If final admission fails, no working/summary provider stream is opened by that
+call. The error explicitly retains history and requires maintenance; an oversized
+recent tool result is never silently truncated or replayed. Request
+`plugin_context_maintenance` with `compact` or `handover` and exact authority,
+unfinished work and effect receipts. If the summary itself exceeds admission,
+retrying it cannot help: use the existing verified archive-linked handover path
+with a bounded preserve/resume checkpoint; reconcile unknown effects before
+continuing. This guard does not claim to summarize an arbitrarily large pending
+turn safely. Direct assessment HTTP paths outside PiRuntime are not covered.
+
+Storage partitioning only reduces changed-payload durable writes. Global load,
+snapshot/hash work and linear index publication remain; it is not evidence of
+smaller model input, startup memory or CPU cost.
 
 The bundled `plugin_context_maintenance` tool requests `compact` (after the current
 turn) or `handover` (before the next queued turn) with

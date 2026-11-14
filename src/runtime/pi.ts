@@ -6,7 +6,8 @@ import { executionMetadata } from "../builtin-plugins/execution-metadata.js";
 /**
  * PI runtime adapter. The only module that imports the PI SDK.
  */
-import { getSupportedThinkingLevels } from "@earendil-works/pi-ai/compat";
+import { getSupportedThinkingLevels, createAssistantMessageEventStream } from "@earendil-works/pi-ai/compat";
+import { MAX_MODEL_INPUT_TOKENS, modelInputAdmission, modelInputEstimate, modelInputLimit } from "../model-input-budget.js";
 import { reasoningEffortNoneModels as reasoningEffortNoneModelsFromEnv } from "../product-paths.js";
 import type { AdaptiveSkills } from "../adaptive-skills.js";
 import { toolGuardDenialReason } from "../tool-guard-error.js";
@@ -930,6 +931,26 @@ export class PiRuntime implements AgentRuntime {
     // Remember operator/native baseline, not our last managed override; increasing
     // an approved budget must not retain the previous managed smaller threshold.
     const nativeCompaction = new Map<string, { reserveTokens: number; keepRecentTokens: number }>();
+    // Last PI message boundary before provider serialization, after extension
+    // projection and tool declarations (routing/serialization remain SDK-owned).
+    // Also covers summary requests. Never
+    // let a failed compaction or a newly huge system/tool payload bypass the cap.
+    const stream = session.agent.streamFunction;
+    session.agent.streamFunction = (model, context, requestOptions) => {
+      // Local/worker budgets are early compaction triggers, not permission to
+      // discard a larger recent tool pair. All working AND summary calls share
+      // this absolute cap and physical window/output headroom.
+      const admission = modelInputAdmission(context.messages, modelInputLimit(MAX_MODEL_INPUT_TOKENS,
+        model.contextWindow, requestOptions?.maxTokens ?? model.maxTokens));
+      if (admission.admitted) return stream(model, context, requestOptions);
+      const message = { role: "assistant" as const, api: model.api, provider: model.provider, model: model.id, content: [],
+        usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+        stopReason: "error" as const, timestamp: Date.now(),
+        errorMessage: `Model input budget exceeded (${admission.estimate} conservative units > ${admission.limit}). History retained; no provider request sent. Request context maintenance (compact or handover) with preserved authority and unfinished effects; do not replay tools. If summary admission also fails, use a verified archive-linked handover, not repeated retries.` };
+      const events = createAssistantMessageEventStream();
+      queueMicrotask(() => { events.push({ type: "error", reason: "error", error: message }); events.end(); });
+      return events;
+    };
     const prepareWorkerCompaction = () => {
       const model = session.model;
       if (!model || !Number.isSafeInteger(model.contextWindow) || model.contextWindow <= 0) return;
@@ -939,12 +960,22 @@ export class PiRuntime implements AgentRuntime {
       const policy = this.opts.contextBudgets?.();
       const child = options.ephemeral || sessionKey.startsWith("cron:") || sessionKey.startsWith("api:cron-") || childDeniedTools(sessionKey).length > 0;
       const local = localModel(policy, key);
-      const configured = child ? policy?.workerContextTokens ?? this.opts.workerContextTokens?.() ?? 131072 : policy?.mainContextTokens ?? 262144;
-      const budget = localContextBudget(configured, child, local, policy);
+      const configured = child ? policy?.workerContextTokens ?? this.opts.workerContextTokens?.() ?? 131072 : policy?.mainContextTokens ?? 131072;
+      const budget = Math.min(MAX_MODEL_INPUT_TOKENS, localContextBudget(configured, child, local, policy));
       const bounded = policy ? contextCompactionSettings(model.contextWindow, baseline, budget)
         : options.ephemeral ? undefined : workerCompactionSettings(sessionKey, model.contextWindow, baseline, this.opts.workerContextTokens?.());
-      if (bounded) settingsManager.applyOverrides({ compaction: { enabled: true,
-        modelOverrides: { [`${model.provider}/${model.id}`]: { reserveTokens: bounded.reserveTokens, keepRecentTokens: bounded.keepRecentTokens } } } });
+      // Byte-aware early history maintenance supplements native usage counters
+      // (local providers can report zero). Native compaction runs only after all
+      // tools settle and retains original entries; never truncate tool pairs.
+      const limit = modelInputLimit(budget, model.contextWindow, model.maxTokens);
+      const pressure = modelInputEstimate(session.sessionManager.buildSessionProjection().messages) > limit * 0.75;
+      if (bounded || pressure) settingsManager.applyOverrides({ compaction: { enabled: true,
+        modelOverrides: { [`${model.provider}/${model.id}`]: {
+          reserveTokens: pressure ? model.contextWindow : bounded!.reserveTokens,
+          keepRecentTokens: pressure ? Math.min(baseline.keepRecentTokens, Math.floor(limit / 16)) : bounded!.keepRecentTokens,
+        } } } });
+      else settingsManager.applyOverrides({ compaction: { enabled: this.opts.compactionOwner?.() === "agent",
+        modelOverrides: { [key]: baseline } } });
     };
     const toolUse = new Map<string, number>(); let toolClock = 0;
     let previousActive = new Set(session.getActiveToolNames());
@@ -1109,7 +1140,7 @@ export class PiRuntime implements AgentRuntime {
         const model = session.model, policy = this.opts.contextBudgets?.();
         if (!model || !localModel(policy, `${model.provider}/${model.id}`)) return undefined;
         const child = options.ephemeral || sessionKey.startsWith("cron:") || sessionKey.startsWith("api:cron-") || childDeniedTools(sessionKey).length > 0;
-        return localContextBudget(child ? policy?.workerContextTokens ?? 131072 : policy?.mainContextTokens ?? 262144, child, true, policy);
+        return localContextBudget(child ? policy?.workerContextTokens ?? 131072 : policy?.mainContextTokens ?? 131072, child, true, policy);
       }, () => workingOverhead);
     // From here the wrapper owns SDK shutdown and final checkpoint cleanup.
     unownedSession = undefined;

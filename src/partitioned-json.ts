@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { lstat } from "node:fs/promises";
 import path from "node:path";
 import { mkdirDurable, writeFileDurable, writeFileDurableExclusive } from "./durable.js";
+import { readRegular } from "./session-state-storage.js";
 
 interface Reference { hash: string; key?: string; id?: string; sessionKey?: string; parent?: string; status?: string }
 interface Index {
@@ -30,9 +31,15 @@ export class PartitionedJson {
 
   private blob(hash: string): string { return path.join(`${this.file}.parts`, `${hash}.json`); }
 
+  private async validateDirectory(): Promise<void> {
+    const info = await lstat(`${this.file}.parts`);
+    if (!info.isDirectory() || info.isSymbolicLink() || typeof process.getuid === "function" && info.uid !== process.getuid())
+      throw Error("Unsafe partition directory");
+  }
+
   async load(): Promise<Record<string, unknown> | undefined> {
     let raw: string;
-    try { raw = await readFile(this.file, "utf8"); }
+    try { raw = await readRegular(this.file); }
     catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") { this.initialized = true; return undefined; } throw error; }
     const parsed = JSON.parse(raw);
     if (parsed.format !== "hayate-partitioned-json") {
@@ -40,6 +47,7 @@ export class PartitionedJson {
       this.initialized = true;
       return parsed;
     }
+    await this.validateDirectory();
     if (parsed.version !== 1 || !parsed.document || typeof parsed.document !== "object" || Array.isArray(parsed.document) ||
         !parsed.collections || typeof parsed.collections !== "object" || Array.isArray(parsed.collections)) throw Error("Invalid partition index");
     const index = parsed as Index;
@@ -51,7 +59,7 @@ export class PartitionedJson {
       for (const ref of refs) {
         if (!ref || !/^[a-f0-9]{64}$/.test(ref.hash)) throw Error("Invalid partition reference");
         let content: string;
-        try { content = await readFile(this.blob(ref.hash), "utf8"); }
+        try { content = await readRegular(this.blob(ref.hash), true); }
         catch (cause) { throw new Error(`Missing/unreadable partition ${ref.hash}`, { cause }); }
         if (hashOf(content) !== ref.hash) throw Error(`Partition checksum mismatch ${ref.hash}`);
         const value = JSON.parse(content);
@@ -103,13 +111,22 @@ export class PartitionedJson {
     if (index === this.previous) return;
     await mkdirDurable(path.dirname(this.file));
     await mkdirDurable(`${this.file}.parts`);
-    for (const [hash, raw] of payloads) await this.write(this.blob(hash), raw);
+    await this.validateDirectory();
+    for (const [hash, raw] of payloads) {
+      if (this.write !== writeFileDurable) { await this.write(this.blob(hash), raw); continue; }
+      try { await writeFileDurableExclusive(this.blob(hash), raw); }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+        // Re-establish durability after a possible prior link/fsync failure.
+        if (await readRegular(this.blob(hash), true, true) !== raw) throw Error("Existing partition checksum mismatch");
+      }
+    }
     if (this.legacy !== undefined) {
       // A durable byte-exact backup precedes replacing the only legacy authority.
       const backup = `${this.file}.legacy-v1`;
       try { await writeFileDurableExclusive(backup, this.legacy); }
       catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "EEXIST" || await readFile(backup, "utf8") !== this.legacy) throw error;
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST" || await readRegular(backup, true, true) !== this.legacy) throw error;
       }
     }
     try { await this.write(this.file, index); }
@@ -117,7 +134,7 @@ export class PartitionedJson {
       // rename may have committed even if directory fsync subsequently failed.
       // Never let a stale in-memory generation overwrite that uncertain commit.
       let current: string | undefined;
-      try { current = await readFile(this.file, "utf8"); }
+      try { current = await readRegular(this.file); }
       catch (readError) { if ((readError as NodeJS.ErrnoException).code !== "ENOENT") this.fenced = true; }
       if (current !== (this.previous ?? this.legacy)) this.fenced = true;
       throw error;
