@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import { lstat } from "node:fs/promises";
+import { lstat, open } from "node:fs/promises";
+import { constants } from "node:fs";
 import path from "node:path";
 import { mkdirDurable, writeFileDurable, writeFileDurableExclusive, syncDirStrict } from "./durable.js";
 import { readRegular } from "./session-state-storage.js";
@@ -32,10 +33,35 @@ export class PartitionedJson {
     private readonly write: typeof writeFileDurable = writeFileDurable) {}
 
   private blob(hash: string): string { return path.join(`${this.file}.parts`, `${hash}.json`); }
+  private safePrivate(info: import("node:fs").Stats): boolean {
+    const mode = info.mode & 0o7777;
+    return info.isFile() && !info.isSymbolicLink() &&
+      (typeof process.getuid !== "function" || info.uid === process.getuid()) &&
+      (mode === 0o600 || (mode === 0o640 || mode === 0o660) &&
+        typeof process.getgid === "function" &&
+        [process.getgid(), ...(typeof process.getgroups === "function" ? process.getgroups() : [])].includes(info.gid));
+  }
+
+  /** fsGroup may broaden same-owner/authorized-group files on remount.
+   * Hydration remains read-only; only the normal durable writer reseals them.
+   */
+  private async readPrivate(file: string, durable = false): Promise<string> {
+    const handle = await open(file, (durable ? constants.O_RDWR : constants.O_RDONLY) | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    try {
+      const info = await handle.stat();
+      if (!this.safePrivate(info)) throw Error("Unsafe partition file");
+      const raw = await handle.readFile("utf8");
+      if (durable) {
+        if ((info.mode & 0o7777) !== 0o600) await handle.chmod(0o600);
+        await handle.sync(); await syncDirStrict(path.dirname(file));
+      }
+      return raw;
+    } finally { await handle.close(); }
+  }
+
   private async identity(hash: string): Promise<string> {
     const info = await lstat(this.blob(hash));
-    if (!info.isFile() || info.isSymbolicLink() || (info.mode & 0o777) !== 0o600 ||
-        typeof process.getuid === "function" && info.uid !== process.getuid()) throw Error("Unsafe partition file");
+    if (!this.safePrivate(info)) throw Error("Unsafe partition file");
     return JSON.stringify([info.dev, info.ino, info.size, info.mtimeMs, info.ctimeMs, info.mode, info.uid]);
   }
 
@@ -72,7 +98,7 @@ export class PartitionedJson {
       for (const ref of refs) {
         if (!ref || !/^[a-f0-9]{64}$/.test(ref.hash)) throw Error("Invalid partition reference");
         let content: string;
-        try { content = await readRegular(this.blob(ref.hash), true); }
+        try { content = await this.readPrivate(this.blob(ref.hash)); }
         catch (cause) { throw new Error(`Missing/unreadable partition ${ref.hash}`, { cause }); }
         if (hashOf(content) !== ref.hash) throw Error(`Partition checksum mismatch ${ref.hash}`);
         const value = JSON.parse(content);
@@ -108,7 +134,7 @@ export class PartitionedJson {
     const backup = `${this.file}.legacy-${this.legacySuffix}`;
     try { await writeFileDurableExclusive(backup, this.legacy, undefined, syncDirStrict); }
     catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST" || await readRegular(backup, true, true) !== this.legacy) throw error;
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST" || await this.readPrivate(backup, true) !== this.legacy) throw error;
       await syncDirStrict(path.dirname(backup));
     }
   }
@@ -159,7 +185,7 @@ export class PartitionedJson {
         try {
           const identity = await this.identity(hash);
           if (this.durable.get(hash) !== identity) {
-            if (await readRegular(this.blob(hash), true, true) !== raw) throw Error("Existing partition checksum mismatch");
+            if (await this.readPrivate(this.blob(hash), true) !== raw) throw Error("Existing partition checksum mismatch");
             await syncDirStrict(`${this.file}.parts`);
             this.durable.set(hash, await this.identity(hash));
           }
@@ -171,7 +197,7 @@ export class PartitionedJson {
       catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
         // Re-establish durability after a possible prior link/fsync failure.
-        if (await readRegular(this.blob(hash), true, true) !== raw) throw Error("Existing partition checksum mismatch");
+        if (await this.readPrivate(this.blob(hash), true) !== raw) throw Error("Existing partition checksum mismatch");
         await syncDirStrict(`${this.file}.parts`);
       }
       this.durable.set(hash, await this.identity(hash));
