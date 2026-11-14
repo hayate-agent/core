@@ -3,9 +3,7 @@
  * and agent-wide settings changed via slash commands. Conversation history itself is
  * persisted by the runtime.
  */
-import { mkdir, readFile } from "node:fs/promises";
-import { writeFileDurable } from "./durable.js";
-import path from "node:path";
+import { PartitionedJson } from "./partitioned-json.js";
 import type { Goal, OutboxEntry, Recurring } from "./harness.js";
 import type { Address, BusyMode, Inbound } from "./types.js";
 
@@ -52,44 +50,36 @@ export interface PersistedState {
 }
 
 export class StateStore {
-  private last = "";
   private writing: Promise<void> = Promise.resolve();
+  private readonly storage: PartitionedJson;
 
-  constructor(readonly file: string) {}
+  constructor(readonly file: string) {
+    this.storage = new PartitionedJson(file, {
+      sessions: 1, subagents: 1, pending: 1, outbox: 1, seen: 256,
+    });
+  }
 
   async load(): Promise<PersistedState | undefined> {
-    let raw: string;
-    try {
-      raw = await readFile(this.file, "utf8");
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === "ENOENT") return undefined;
-      throw err;
-    }
-    const data = JSON.parse(raw) as PersistedState;
-    if (data.version !== 1) throw new Error(`${this.file}: unsupported state version ${String(data.version)}`);
-    this.last = raw;
+    const data = await this.storage.load() as unknown as PersistedState | undefined;
+    if (data && data.version !== 1) throw new Error(`${this.file}: unsupported state version ${String(data.version)}`);
     return data;
   }
 
   /** Write atomically if content changed. Writes are serialized; a failed write does not block later ones. */
   save(state: PersistedState): Promise<void> {
-    const raw = `${JSON.stringify(state, null, 2)}\n`;
-    return this.write(() => raw);
+    const captured = JSON.parse(JSON.stringify(state)) as PersistedState;
+    return this.write(() => captured);
   }
 
   /** Capture live host state only inside the serialized write barrier. Queued
    * callers retain a factory, not another full snapshot/string of every task. */
   capture(snapshot: () => PersistedState): Promise<void> {
-    return this.write(() => `${JSON.stringify(snapshot(), null, 2)}\n`);
+    return this.write(snapshot);
   }
 
-  private write(snapshot: () => string): Promise<void> {
+  private write(snapshot: () => PersistedState): Promise<void> {
     const run = this.writing.catch(() => undefined).then(async () => {
-      const raw = snapshot();
-      if (raw === this.last) return;
-      await mkdir(path.dirname(this.file), { recursive: true });
-      await writeFileDurable(this.file, raw);
-      this.last = raw;
+      await this.storage.save(snapshot() as unknown as Record<string, unknown>);
     });
     this.writing = run;
     return run;

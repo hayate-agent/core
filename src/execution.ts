@@ -1,6 +1,7 @@
 import { executionMetadata, type ExecutionMetadata } from "./builtin-plugins/execution-metadata.js";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, stat } from "node:fs/promises";
+import { PartitionedJson } from "./partitioned-json.js";
 import path from "node:path";
 import { writeFileDurable } from "./durable.js";
 import { recoveryBlock, type RecoveryStrategy, type ExecutionRecoveryPolicy } from "./execution-recovery.js";
@@ -173,12 +174,15 @@ export class ExecutionStore {
   private data: Ledger = { version: 1, executions: [], events: [] };
   private queue: Promise<unknown> = Promise.resolve();
   private loaded = false;
+  private readonly storage: PartitionedJson;
   constructor(private readonly file: string, private readonly retention: {
     now?: () => number;
     protectedExecutions?: () => ReadonlySet<string>;
     /** Maximum total worker attempts (initial run + retries) per task before a manual-intervention hold. */
     workerRetryMax?: number | (() => number);
-  } = {}) {}
+  } = {}) {
+    this.storage = new PartitionedJson(file, { executions: 1, events: 1, turns: 1, waitAuthorityDenials: 1 });
+  }
   private now(): number { return this.retention.now?.() ?? Date.now(); }
   /** Configured automatic worker retry budget; invalid or missing values fall back to the default. */
   private retryCap(): number {
@@ -204,8 +208,8 @@ export class ExecutionStore {
   async load(): Promise<void> {
     if (this.loaded) throw Error("Execution store already loaded");
     try {
-      if ((await stat(this.file)).size > 32 * 1024 * 1024) throw Error("Execution ledger size limit exceeded");
-      const data = JSON.parse(await readFile(this.file, "utf8")) as Ledger;
+      const data = await this.storage.load() as unknown as Ledger | undefined;
+      if (!data) { this.loaded = true; return; }
       if (data.version !== 1 || !Array.isArray(data.executions) || !Array.isArray(data.events)) throw Error("Unsupported execution ledger");
       if (data.waitAuthorityDenials !== undefined && (!Array.isArray(data.waitAuthorityDenials) ||
           data.waitAuthorityDenials.length > 100 || data.waitAuthorityDenials.some(r =>
@@ -315,10 +319,7 @@ export class ExecutionStore {
       if (!this.loaded) throw Error("Execution store not loaded");
       const draft = structuredClone(this.data);
       const result = await fn(draft);
-      await mkdir(path.dirname(this.file), { recursive: true });
-      const serialized = `${JSON.stringify(draft)}\n`;
-      if (Buffer.byteLength(serialized, "utf8") > 32 * 1024 * 1024) throw Error("Execution ledger size limit reached; reconcile retained records");
-      await writeFileDurable(this.file, serialized);
+      await this.storage.save(draft as unknown as Record<string, unknown>);
       this.data = draft;
       return structuredClone(result);
     });
