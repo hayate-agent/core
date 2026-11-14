@@ -1,5 +1,5 @@
 {
-  "contentDigest": "dfe6b211ae529a75a0511c8de10e65dc9e562e7c1fb14e1f6bd7463e0235e3af",
+  "contentDigest": "84812190e5eb961947e1f0e0d1ee3e273bafdff5aab8ef46024d2181c6871116",
   "files": [
     {
       "mode": "100644",
@@ -159,7 +159,7 @@
     {
       "mode": "100644",
       "path": "docs/execution-owner-control.md",
-      "sha256": "de7224fe5fcbc27ced13bdf462e39cfd3f0265e7444eb511948465f45ab1d773"
+      "sha256": "b7abfd2725bcf0abe714777f6ca824c202019eafdabaac6239f1802693002bf3"
     },
     {
       "mode": "100644",
@@ -819,7 +819,7 @@
     {
       "mode": "100644",
       "path": "src/dispatcher-sequential.ts",
-      "sha256": "992176743ef70b0cf978a16b00111e2a0f45da4522ca2b32d04dfbd8b4757b7a"
+      "sha256": "a693fdbcae8dca16b73f1d40a0a52d4a71368104f74a4f9ea7790fee3611aeac"
     },
     {
       "mode": "100644",
@@ -1894,7 +1894,7 @@
     {
       "mode": "100644",
       "path": "test/contradictory-completion.test.ts",
-      "sha256": "22d10b7ce5d5e02f141f5c09fc29ff09076536c93c508c06130dae2dd81a0807"
+      "sha256": "723e2c004b118f8f0045c3a0d66f25e1f052cf0b8c20c8538042f061fc96268f"
     },
     {
       "mode": "100644",
@@ -3990,5 +3990,5 @@
   "historyPolicy": "fresh-root; no source commits, tags, refs or deleted blobs",
   "pluginSHA": "b50166a8b716f0f908071565ea6e6f4784be4096",
   "schema": 1,
-  "sourceSHA": "d90cc329a9df455d92bef8c8d62749717ede4583"
+  "sourceSHA": "a3e18d8257c6cfbbc6e0fe732b7bb375e274afef"
 }
