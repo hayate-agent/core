@@ -4,7 +4,7 @@
     "compaction-strategy-plugin.ts": "8dadb434b15443524827b302af9c98c22ce40e892e0c0c2bc60e558dae33c932",
     "completion-prompt.ts": "004a7ac8b8b7c737c4b23fc52320fca3f9c005b62681c64368ad748bcee0b96e",
     "completion-strategy-plugin.ts": "5f69464b4648d9b360020eac5b967e924549236eaff92f3c5e68f79826503b6f",
-    "completion-validator-plugin.ts": "5616c4f2e54fe76336cde860459b2290069a774f597dc485e1f5311721842b91",
+    "completion-validator-plugin.ts": "a1fbc4226719f8b583a258dada023fad5eae967c9c55b8fc06bc853641527ffb",
     "context-plugin.ts": "1da424038b5f5dd8e88999d86c4b26fecca5d21ca4170b83fdba9958eef787f0",
     "context-strategy-plugin.ts": "104c0e4a9b9619d361a8089b43724986366bc3665993c2146268e5f847698643",
     "continuation-plugin.ts": "e5485881f09b871912fa5574af6fe9c7b323abe01b03b8876cd235b436595a7d",
@@ -51,10 +51,10 @@
     "typesafe-api-plugin.ts": "5e229d9aca8fd26e2b00301e7e09387dba7b207a09d10a628a1215a329f4aea7",
     "typesafe-decision-plugin.ts": "0418aee16dced5210c21055c212bf4ff7869976f847d5e729c60357d90b31f0b",
     "typesafe-question-banks.ts": "40bfe4fa9d58c19eb80b92bd1fa15b00d58edd5b81ecfe9691f384fcc12324e6",
-    "typesafe-validator-provider.ts": "08316fb1da8ac351a5fc6602204cac3aa3fd8c4c1ff5c3ced5acd26c9693dddd",
+    "typesafe-validator-provider.ts": "5526e153f22af9055122780f1f5c9e8b08b4635869818f07e8525afc825304d5",
     "wasm-tools-plugin.ts": "438c6ac8899e283e4268f51ef451275bf16a37b584db84ee8302a26200cc70de"
   },
   "repository": "https://git.vanillacore.net/harness/plugins",
-  "revision": "8e7cff407a42d6276ae0aa4658214056cb50081a",
+  "revision": "b50166a8b716f0f908071565ea6e6f4784be4096",
   "schema": 1
 }
