@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, open, lstat, readdir, unlink } from "node:fs/promises";
+import { mkdir, open, lstat } from "node:fs/promises";
 import { constants } from "node:fs";
 import path from "node:path";
 import { syncDirStrict, writeFileDurableExclusive } from "./durable.js";
@@ -61,18 +61,6 @@ export class TaskBookStorage {
     const root = await this.put({ version: 1, tasks, bindings });
     await syncDirStrict(this.dir);
     return { version: 1, root };
-  }
-  /** Called only after the new root is durably published, inside the store's
-   * serialized transaction. A crash may leave garbage, never remove authority. */
-  async collect(ref: { version: 1; root: string }): Promise<void> {
-    const manifest = JSON.parse(await this.read(ref.root));
-    if (manifest.version !== 1 || !Array.isArray(manifest.tasks) || !Array.isArray(manifest.bindings)) throw Error("Invalid task book manifest");
-    const keep = new Set([ref.root, ...manifest.tasks, ...manifest.bindings]);
-    for (const name of await readdir(this.dir)) {
-      const match = /^([a-f0-9]{64})\.json$/.exec(name);
-      if (match && !keep.has(match[1])) { await unlink(path.join(this.dir, name)); this.known.delete(match[1]); }
-    }
-    await syncDirStrict(this.dir);
   }
   async hydrate(ref: unknown): Promise<TaskBook> {
     const r = ref as { version?: unknown; root?: unknown };
