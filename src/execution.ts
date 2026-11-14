@@ -2,7 +2,8 @@ import { executionMetadata, type ExecutionMetadata } from "./builtin-plugins/exe
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
-import { writeFileDurable } from "./durable.js";
+import { writeFileDurable, syncDirStrict } from "./durable.js";
+import { ExecutionDependencyStorage, freezeExecutionDependency } from "./execution-dependency-storage.js";
 import { recoveryBlock, type RecoveryStrategy, type ExecutionRecoveryPolicy } from "./execution-recovery.js";
 
 /** Exact host state fence for evidence-backed parent continuation. */
@@ -178,12 +179,15 @@ export class ExecutionStore {
   private data: Ledger = { version: 1, executions: [], events: [] };
   private queue: Promise<unknown> = Promise.resolve();
   private loaded = false;
+  private legacy?: string;
+  private publicationFailed = false;
+  private readonly dependencies: ExecutionDependencyStorage;
   constructor(private readonly file: string, private readonly retention: {
     now?: () => number;
     protectedExecutions?: () => ReadonlySet<string>;
     /** Maximum total worker attempts (initial run + retries) per task before a manual-intervention hold. */
     workerRetryMax?: number | (() => number);
-  } = {}) {}
+  } = {}) { this.dependencies = new ExecutionDependencyStorage(file); }
   private now(): number { return this.retention.now?.() ?? Date.now(); }
   /** Configured automatic worker retry budget; invalid or missing values fall back to the default. */
   private retryCap(): number {
@@ -210,7 +214,11 @@ export class ExecutionStore {
     if (this.loaded) throw Error("Execution store already loaded");
     try {
       if ((await stat(this.file)).size > 32 * 1024 * 1024) throw Error("Execution ledger size limit exceeded");
-      const data = JSON.parse(await readFile(this.file, "utf8")) as Ledger;
+      const raw = await readFile(this.file, "utf8");
+      const stored = JSON.parse(raw);
+      if (stored.version !== 1 && stored.version !== 2) throw Error("Unsupported execution ledger");
+      this.legacy = stored.version === 1 ? raw : undefined;
+      const data = (stored.version === 2 ? { ...stored, version: 1, executions: await this.dependencies.hydrate(stored.executions) } : stored) as Ledger;
       if (data.version !== 1 || !Array.isArray(data.executions) || !Array.isArray(data.events)) throw Error("Unsupported execution ledger");
       if (data.waitAuthorityDenials !== undefined && (!Array.isArray(data.waitAuthorityDenials) ||
           data.waitAuthorityDenials.length > 100 || data.waitAuthorityDenials.some(r =>
@@ -309,6 +317,7 @@ export class ExecutionStore {
           else if (turn.settlement !== undefined) throw Error("Unexpected turn settlement");
         }
       }
+      for (const task of data.executions) freezeExecutionDependency(task.dependency);
       this.data = data;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
@@ -318,12 +327,29 @@ export class ExecutionStore {
   private mutate<T>(fn: (draft: Ledger) => T | Promise<T>): Promise<T> {
     const next = this.queue.catch(() => {}).then(async () => {
       if (!this.loaded) throw Error("Execution store not loaded");
-      const draft = structuredClone(this.data);
+      if (this.publicationFailed) throw Error("Execution ledger publication uncertain; restart and reload committed authority before further mutations");
+      // Dependency snapshots are immutable host-owned evidence. Clone mutable
+      // ledger state, but share frozen dependencies rather than copying tens of
+      // MB on every status/turn barrier. Preserve exact key order for fences.
+      const draft = structuredClone({ ...this.data, executions: this.data.executions.map(({ dependency, ...task }) => task) }) as Ledger;
+      draft.executions = draft.executions.map((task, index) => Object.fromEntries(Object.keys(this.data.executions[index]!).map(key =>
+        [key, key === "dependency" ? this.data.executions[index]!.dependency : task[key as keyof Execution]])) as unknown as Execution);
       const result = await fn(draft);
       await mkdir(path.dirname(this.file), { recursive: true });
-      const serialized = `${JSON.stringify(draft)}\n`;
+      if (this.legacy !== undefined) await this.dependencies.preserveLegacy(this.legacy);
+      const executions = await this.dependencies.stage(draft.executions);
+      const serialized = `${JSON.stringify({ ...draft, version: 2, executions })}\n`;
       if (Buffer.byteLength(serialized, "utf8") > 32 * 1024 * 1024) throw Error("Execution ledger size limit reached; reconcile retained records");
-      await writeFileDurable(this.file, serialized);
+      let published = false;
+      try { await writeFileDurable(this.file, serialized, 0o600, undefined, syncDirStrict, () => { published = true; }); }
+      catch (error) {
+        // Atomic rename can succeed before the directory fsync reports failure.
+        // Never allow a later draft from stale memory to overwrite that possible
+        // commit. A fresh owner must reload the authoritative on-disk ledger.
+        if (published) this.publicationFailed = true;
+        throw error;
+      }
+      this.legacy = undefined;
       this.data = draft;
       return structuredClone(result);
     });
@@ -437,6 +463,8 @@ export class ExecutionStore {
       ?? await this.archived(parent, requestId);
     return task ? structuredClone(task) : undefined;
   }
+  /** Read-only logical snapshot for diagnostics; disk format may contain refs. */
+  snapshot(): Ledger { if (!this.loaded) throw Error("Execution store not loaded"); return structuredClone(this.data); }
   list(parent?: string): Execution[] {
     return structuredClone(this.data.executions.filter(item => parent === undefined || item.parent === parent));
   }
