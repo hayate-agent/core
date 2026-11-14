@@ -14,6 +14,8 @@ import { toolGuardDenialReason } from "../tool-guard-error.js";
 import { childDeniedTools } from "../child-tools.js";
 import { localModel, localContextBudget, essentialPluginTools, compactSkillCatalog, materializeSkillCatalog } from "../local-context.js";
 import { workerCompactionSettings, contextCompactionSettings } from "../worker-context.js";
+import { ModelWorkProof } from "../model-work-proof.js";
+import { modelWorkFetch } from "../model-work-fetch.js";
 import { DISPATCH_PLAN_SYSTEM_PROMPT } from "../planner-http.js";
 import { MaintenanceError, maintenanceStep, type MaintenanceStage } from "../context-maintenance.js";
 import type { PruningPolicy, ToolResultProjector } from "../tool-result-pruning.js";
@@ -73,6 +75,8 @@ export function installAdaptiveSkillHooks(pi: ExtensionAPI, adaptive: AdaptiveSk
 }
 
 export interface PiRuntimeOptions {
+  /** Optional private Ed25519 key, dedicated exclusively to local scheduling metadata. */
+  modelWorkKeyFile?: string;
   cwd: string;
   /** Immutable host-owned per-stream context; never process-global chdir. */
   executionContext?: (sessionKey: string) => { cwd: string; directories: string[] } | Promise<{ cwd: string; directories: string[] }>;
@@ -129,6 +133,8 @@ function safeKey(key: string): string {
 
 /** Per-turn system instructions, read by the session's inline extension (one turn at a time). */
 interface TurnSlot {
+  active?: boolean;
+  modelWork?: "interactive" | "background";
   instructions?: string;
   mcpInstructions?: string;
 }
@@ -311,6 +317,8 @@ export class PiSession implements RuntimeSession {
         });
         await this.setThinking("off");
       }
+      this.slot.active = true;
+      this.slot.modelWork = options.modelWork;
       this.slot.instructions = instructions?.trim() || undefined;
       const mcpPolicy = this.mcpLanguage?.();
       this.slot.mcpInstructions = mcpPolicy ? mcpLanguageInstructions(structuredClone(options.languagePolicy ?? mcpPolicy)) : undefined;
@@ -327,6 +335,8 @@ export class PiSession implements RuntimeSession {
       await this.session.prompt(text, { source: "rpc", images: options.images });
       await this.session.waitForIdle();
     } finally {
+      this.slot.active = false;
+      this.slot.modelWork = undefined;
       this.slot.instructions = undefined;
       this.slot.mcpInstructions = undefined;
       unsubscribe?.();
@@ -498,7 +508,10 @@ export class PiRuntime implements AgentRuntime {
   private readonly activeSessions = new Set<PiSession>();
   private modelReload?: Promise<void>;
 
-  constructor(private readonly opts: PiRuntimeOptions) {}
+  private readonly workProof: Promise<ModelWorkProof | undefined>;
+  constructor(private readonly opts: PiRuntimeOptions) {
+    this.workProof = ModelWorkProof.load(opts.modelWorkKeyFile);
+  }
 
   forReviewWorktree(cwd: string): AgentRuntime {
     return new PiRuntime({ ...this.opts, cwd, executionContext: undefined, tools: [], skillPaths: [],
@@ -980,7 +993,13 @@ export class PiRuntime implements AgentRuntime {
       // this absolute cap and physical window/output headroom.
       const admission = modelInputAdmission(context.messages, modelInputLimit(MAX_MODEL_INPUT_TOKENS,
         model.contextWindow, requestOptions?.maxTokens ?? model.maxTokens));
-      if (admission.admitted) return stream(model, context, requestOptions);
+      if (admission.admitted) {
+        const local = localModel(this.opts.contextBudgets?.(), `${model.provider}/${model.id}`);
+        return stream(model, context, local && (model.api === "openai-completions" || model.api === "openai-responses")
+          ? { ...requestOptions, fetch: modelWorkFetch(requestOptions?.fetch ?? globalThis.fetch, this.workProof,
+            sessionKey, !!options.ephemeral || !slot.active || requestOptions?.sessionId !== session.sessionManager.getSessionId(), slot.modelWork) }
+          : requestOptions);
+      }
       const message = { role: "assistant" as const, api: model.api, provider: model.provider, model: model.id, content: [],
         usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
         stopReason: "error" as const, timestamp: Date.now(),

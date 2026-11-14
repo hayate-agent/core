@@ -115,6 +115,8 @@ export interface Inbound {
 
 /** Overrides for a single turn; the session's own settings are restored afterwards. */
 export interface TurnOptions {
+  /** Local inference scheduling hint, never execution authority or permission. */
+  modelWork?: "interactive" | "background";
   /** Extra system instructions for this turn only. */
   instructions?: string;
   /** "provider/model". */

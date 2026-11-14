@@ -380,6 +380,7 @@ async function main(argv: string[]): Promise<void> {
   });
   const adaptiveSkills = config.skills.adaptive === true ? new AdaptiveSkills(config.home, config.cwd, skillCatalog) : undefined;
   const runtime = new PiRuntime({
+    modelWorkKeyFile: path.join(config.home, "model-work-key.pem"),
     adaptiveSkills,
     language: () => settings.effective().language ?? {},
     // Capture worker ancestry before token ownership changes; a reopened worker
