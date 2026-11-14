@@ -48,13 +48,13 @@
     "session-observer-plugin.ts": "53de3d2a70d69f6a37ed8abfedd44ec234486a31ddfd36ee63757bb69d2d8a38",
     "subagent-plugin.ts": "5b7ae55c28e50c48ce0a3671c400245ee0fd725ce7c5ad6866a8e63f0b65cd5e",
     "tool-result-projector.ts": "69658e2adef5d5327797762886199b87fd3bff94f20beab8a199280e0d517746",
-    "typesafe-api-plugin.ts": "5e229d9aca8fd26e2b00301e7e09387dba7b207a09d10a628a1215a329f4aea7",
+    "typesafe-api-plugin.ts": "c14ee2afbb0968c01c84e156940e59251587980af84c199234ee0209b9eff2b4",
     "typesafe-decision-plugin.ts": "da393fcd73632d0420fff21e9bee459409f051e90b547eb743ceffc04bfb5eb6",
     "typesafe-question-banks.ts": "40bfe4fa9d58c19eb80b92bd1fa15b00d58edd5b81ecfe9691f384fcc12324e6",
     "typesafe-validator-provider.ts": "5526e153f22af9055122780f1f5c9e8b08b4635869818f07e8525afc825304d5",
     "wasm-tools-plugin.ts": "438c6ac8899e283e4268f51ef451275bf16a37b584db84ee8302a26200cc70de"
   },
   "repository": "https://git.vanillacore.net/harness/plugins",
-  "revision": "8a34ff046b11f6a4418977d13f432eec2a1225a6",
+  "revision": "876be02b1e33ca6431695d3f12e1ff3576bb4e4e",
   "schema": 1
 }
