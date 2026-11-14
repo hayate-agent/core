@@ -290,16 +290,16 @@ test("oversized order constraints fail assessment packaging closed, never fall b
 test("large historical book is paged durably; later enrollments, lookup, restart and closure remain functional", async t => {
   const { store, file } = await storeFixture(t);
   const initial = await store.enrollTask("room", "seed", "Original", "seed", "operator");
-  const ledger = JSON.parse(await readFile(file, "utf8")); const book = store.snapshot().taskBook!;
+  const ledger = store.snapshot(); const book = ledger.taskBook!;
   for (let i = 0; i < 10050; i++) {
     const seed = structuredClone(book.tasks[0]); seed.id = `historic-${i}`; seed.operatorStatus = "done";
     book.tasks.push(seed); book.bindings.push({ sessionKey: "history", taskId: `input-${i}`, ref: { id: seed.id, generation: 1 } });
   }
-  ledger.taskBook = book; delete ledger.taskBookRef; await writeFile(file, JSON.stringify(ledger));
+  ledger.taskBook = book; await writeFile(file, JSON.stringify(ledger));
   const loaded = new ExecutionStore(file); await loaded.load();
   const next = await loaded.enrollTask("new-room", "new-request", "A new order", "new-request", "operator");
   assert.equal(loaded.taskIsOpen(initial), true); assert.equal(loaded.taskIsOpen(next), true);
-  const raw = JSON.parse(await readFile(file, "utf8")); assert.ok(raw.taskBookRef); assert.equal(raw.taskBook, undefined);
+  const raw = JSON.parse(await readFile(file, "utf8")); assert.ok(raw.document.taskBookRef); assert.equal(raw.document.taskBook, undefined);
   assert.ok((await readFile(file)).length < 20000, "history is outside the root ledger");
   const again = new ExecutionStore(file); await again.load();
   assert.equal(again.coreTask("historic-9999")!.operatorStatus, "done"); assert.equal(again.taskBinding("history", "input-9999")!.id, "historic-9999");
@@ -339,8 +339,7 @@ test("multiple near-limit escaped requests remain separately readable without ov
 test("receipt capacity archives exact originals and cannot block operator closure", async t => {
   const { store, file } = await storeFixture(t);
   const ref = await store.enrollTask("room", "operator", "Original", "operator", "operator");
-  const data = JSON.parse(await readFile(file, "utf8"));
-  data.taskBook = store.snapshot().taskBook; delete data.taskBookRef;
+  const data = store.snapshot();
   for (let i = 1; i <= 511; i++) commitTaskOutcome(data.taskBook, { ref, expectedRevision: i, eventId: `progress-${i}`, technical: { state: "open" } }, 1000 + i);
   assert.equal(data.taskBook.tasks[0].receipts.length, 512); await writeFile(file, JSON.stringify(data));
   const reload = new ExecutionStore(file); await reload.load();

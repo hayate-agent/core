@@ -10,9 +10,10 @@ export async function reclaimTaskBookOffline(home: string): Promise<number> {
   try {
     const ledger = path.join(home, "executions.json");
     const root = JSON.parse(await readFile(ledger, "utf8"));
-    if (!root.taskBookRef) return 0;
+    const ref = root.format === "hayate-partitioned-json" ? root.document?.taskBookRef : root.taskBookRef;
+    if (!ref) return 0;
     const storage = new TaskBookStorage(ledger);
-    await storage.hydrate(root.taskBookRef);
-    return await storage.collectOffline(root.taskBookRef);
+    await storage.hydrate(ref);
+    return await storage.collectOffline(ref);
   } finally { await lock.release(); }
 }
