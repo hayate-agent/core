@@ -86,7 +86,11 @@ unique, trusted process-user JavaScript, not a sandbox or a new provider registr
 `hashtag.provider: tags-only` selects the bundled `topic-labeler-tags-only` service.
 It uses the same model selection, service dispatch, metadata purpose, thinking-off
 setting and deadline, but asks the model for a JSON array such as
-`["database-repair","retry"]`. This protocol returns independently relevant tags.
+`["database-repair","retry"]`. The response may also be a single complete
+triple-backtick code block with an optional `json` language label. Prose outside
+the block, partial or multiple blocks, and other language labels are rejected;
+the entire JSON body must still contain 1–3 valid lowercase ASCII kebab-case tags
+of at most 48 characters. This protocol returns independently relevant tags.
 It **does not promise candidate selection or umbrella-tag inheritance**, and is
 not semantically equivalent to the default `{topic, inherit, tags}` protocol.
 Use `default` when preserving a selected candidate's umbrella tags is required.
