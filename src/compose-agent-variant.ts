@@ -47,7 +47,7 @@ export async function composeAgentVariant(config: unknown, output: string): Prom
   const buildInputs = "COPY tsconfig.json plugins.lock.json ./\nCOPY scripts ./scripts\nCOPY src ./src";
   if (!docker.includes(buildInputs)) throw Error("Unsupported variant source/test layout");
   const composed = docker.replace(buildInputs, "COPY . .")
-    .replace("RUN npm run build", "RUN chown -R node:node /src\nUSER node\nENV HOME=/home/node\nRUN npm run typecheck && npm run build && npm test")
+    .replace("RUN npm run build", "RUN apt-get update && apt-get install -y --no-install-recommends git python3 openssl && rm -rf /var/lib/apt/lists/*\nRUN chown -R node:node /src\nUSER node\nENV HOME=/home/node\nRUN npm run typecheck && npm run build && npm test")
     .replace("LABEL org.opencontainers.image.version=", "COPY variant-build-info.json ./build-info.json\nLABEL org.opencontainers.image.version=");
   const ignore = (await readFile(path.join(roots.core, ".dockerignore"), "utf8")).split("\n").filter(line => !["test", "test/"].includes(line.trim())).join("\n");
   await writeFile(path.join(roots.core, "Dockerfile.variant.dockerignore"), ignore);

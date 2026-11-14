@@ -41,6 +41,8 @@ import { LocalMemory } from "./memory-local.js";
 import { MemoryService } from "./builtin-plugins/memory-service.js";
 import { MemoryProviderLifecycle } from "./memory-provider-lifecycle.js";
 import { memoryPlugin } from "./builtin-plugins/memory-plugin.js";
+import { WorkingMemory } from "./working-memory.js";
+import { compactSkillCatalog, materializeSkillCatalog } from "./local-context.js";
 import { memoryOrchestrationPlugin } from "./builtin-plugins/memory-orchestration-plugin.js";
 import { maintenanceClient } from "./builtin-plugins/maintenance-client.js";
 import { maintenanceControlPlugin } from "./builtin-plugins/maintenance-control-plugin.js";
@@ -123,7 +125,7 @@ import { contextStrategyPlugin } from "./builtin-plugins/context-strategy-plugin
 import { guardResultOrchestration } from "./result-orchestration.js";
 import { assessCompletion, assessmentPolicyStamp, completionTimeout } from "./completion-check.js";
 import { validatorPlugin } from "./builtin-plugins/completion-validator-plugin.js";
-import { semanticTopicLabeler } from "./topic-labels.js";
+import { fastTopicLabeler, topicModelChain } from "./topic-labels.js";
 import { completionPrompt } from "./builtin-plugins/completion-prompt.js";
 import { completionStrategyHolder } from "./completion-strategy.js";
 import { completionStrategyPlugin } from "./builtin-plugins/completion-strategy-plugin.js";
@@ -313,6 +315,8 @@ async function main(argv: string[]): Promise<void> {
   config.memory = memoryConfig(settings.effective().memory);
   memory = new MemoryService(config.memory, log, config.home);
   plugins.memoryOrchestration.register("default", memory);
+  const workingMemory = new WorkingMemory(config.home, plugins.memoryOrchestration,
+    () => ({ ...config.memory, enabled: config.memory.enabled && plugins.memoryOrchestration.active !== "none" }), log);
   const strategies = await contextStrategyHolder(config.home, config.contextStrategy, {
     apiVersion: 1, create: ({ backend, model }) => ({ assess: diagnosedBoundaryAssessor(backend, model, boundaryAssessor), project: pruneToolResults }),
   }, { backend: { review: (...args) => runtimeReviewer(runtime).review(...args) }, model: () => effectiveModels().reviewModel }, settings.snapshot().contextStrategy);
@@ -387,6 +391,13 @@ async function main(argv: string[]): Promise<void> {
       const tools = workflow?.length ? [...new Set([...workflow, ...(reviewModule?.modelTools ?? [])])] : workflow;
       return dispatchPolicy.enabled && tools?.length ? [...new Set([...tools, "plugin_dispatch", "plugin_dispatch_decisions", "plugin_dispatch_plan_history", "plugin_dispatch_recovery", "plugin_worker_tasks"])] : tools;
     })(),
+    recallStep: key => workingMemory.recallWorking(key, harness.sessions.get(key)?.current?.text ?? ""),
+    captureStep: async (key, step) => {
+      const state = harness.sessions.get(key), input = state?.current;
+      if (!input || state?.stopPending || state?.resetPending || state?.cancelling === input) return;
+      await workingMemory.captureWorking({ sessionKey: key, id: `step:${step.id}`, text: input.text, reply: step.reply,
+        tools: step.tools, outcome: step.failed ? "failed" : "completed" });
+    },
     pluginTools: () => composeToolCatalog(plugins.tools, initialReloadableTools, reloadableTools?.tools ?? new Map()),
     sessionProvider: () => sessionProvider,
     legacySessionProvider: new FilesystemSessionProvider(path.join(config.home, "session-store")),
@@ -403,7 +414,9 @@ async function main(argv: string[]): Promise<void> {
       // Skill metadata is computed once per session and reused, so the leading prompt
       // prefix stays byte-stable across turns (prefix-cache friendly) and skill dirs are
       // not re-scanned every turn; invalidated whenever skills reload.
-      return skillContextCache ??= `Available skills (metadata only; read the named SKILL.md when relevant):\n${JSON.stringify(skills)}`;
+      if (skillContextCache) return skillContextCache;
+      const file = await materializeSkillCatalog(config.home, skills);
+      return skillContextCache = compactSkillCatalog(skills, file);
     },
     toolGuard: async (key, tool, input) => {
       if (tool === "plugin_review") await reloadRuntimeSettings();
@@ -486,7 +499,7 @@ async function main(argv: string[]): Promise<void> {
     progressEvidence: input => workingTreeEvidence(cwdFor(input.sessionKey)),
     executionStore: executions,
     contextMaintenance: maintenance,
-    memory: plugins.memoryOrchestration,
+    memory: workingMemory,
     approvalTarget: key => dispatchRuntime?.isWorker(key) ? dispatchRuntime.approvalTarget(key) : subagents.approvalTarget(key),
     conversationSourcesReset: async (key, reset) => { await scheduler.resetConversation(key, reset); },
     conversationStopping: async key => {
@@ -537,7 +550,7 @@ async function main(argv: string[]): Promise<void> {
     reportContext: input => plugins.reportProcessing.context(input),
     turnCommitted: async (input) => { await improvement?.committed(input); },
     continuationDeadline: input => config.completionCheck?.authorizations?.[input.sessionKey]?.expiresAt,
-    topicLabeler: semanticTopicLabeler(runtimeReviewer(runtime), () => effectiveModels().reviewModel),
+    topicLabeler: fastTopicLabeler(runtimeReviewer(runtime), () => topicModelChain(settings.effective().modelRoles, effectiveModels().model), plugins.services),
     assessmentPolicy: () => assessmentPolicyStamp(plugins.validators, validatorSettings(), completionTimeout(config.completionCheck?.timeoutMs)),
     completionCheck: async (input, reply, signal, diagnostic) => {
       const grant = config.completionCheck?.authorizations?.[input.sessionKey] ??
@@ -1107,7 +1120,6 @@ async function main(argv: string[]): Promise<void> {
   await harness.reconcileStoppedTasks();
   await subagents.reconcile(sessionEnabled);
   await dispatcher?.start();
-  await harness.recoverTasks(true);
   if (saved?.pending?.length || saved?.outbox?.length || harness.pendingInputs().length) {
     const pending = (saved?.pending ?? []).filter(input => sessionEnabled(input.sessionKey)).length;
     const replies = (saved?.outbox ?? []).filter(entry => sessionEnabled(entry.sessionKey)).length;
@@ -1119,8 +1131,9 @@ async function main(argv: string[]): Promise<void> {
   await persist(); // Complete failure-capable startup work before claiming readiness.
   if (stopping) return;
   hostAdmissionReady = true;
-  // Never acknowledge from the old process or before startup recovery and
-  // channel authentication succeed. Delivery remains independent of work.
+  // Never acknowledge from the old process or before structural recovery,
+  // revocation reconciliation and channel authentication succeed. Read-only
+  // semantic reassessments remain independently pending, never effect grants.
   const startupNotice = new StartupNotice({ agent: config.agent,
     build: readSoftwareVersions(BUILD_INFO), restarted: !!saved, language: resolveLanguage(settings.effective().language, { kind: "system" }),
     post: (input, text) => harness.post(input, text), log });
@@ -1135,6 +1148,15 @@ async function main(argv: string[]): Promise<void> {
   };
   announceStartup();
   if (process.send && process.connected) process.send({ type: "hayate-runtime-ready" }, () => {});
+  // Structural recovery, revocations and durable inbox publication above are
+  // readiness fences. External semantic judgments are NOT: a large backlog of
+  // slow/unavailable reviewers must not withhold launcher readiness for minutes
+  // (or make an otherwise healthy Kubernetes agent fail startup probes).
+  // Each retained task still independently persists/rechecks its admission.
+  void harness.recoverTasks(true).catch(() => {
+    log("retained task recovery scan failed; shutting down without bypassing admission");
+    void shutdown(1);
+  });
 }
 
 main(process.argv.slice(2)).catch(async (err) => {
