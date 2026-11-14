@@ -4,6 +4,7 @@ import { mkdtemp, rm, writeFile, readFile } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 import { ExecutionStore, executionRecoveryHash } from "../src/execution.js";
+import { readExecutionLedgerFixture } from "./execution-ledger-fixture.js";
 import { Dispatcher, type DispatcherStrategy } from "../src/dispatcher.js";
 import { dispatchRecoveryPlugin } from "../src/dispatch-recovery-plugin.js";
 import type { PluginAPI, PluginTool } from "../src/plugins.js";
@@ -20,7 +21,7 @@ async function fixture(t: { after(fn: () => unknown): void }, policy?: { name: s
   await store.fail(initial.id, claimed.token!, "runtime-failure");
   if (stoppedFixture) {
     // Isolated stopped fixture only, before any Dispatcher owner is created.
-    const raw = JSON.parse(await readFile(file, "utf8")); stoppedFixture(raw.executions[0]);
+    const raw = await readExecutionLedgerFixture(file); stoppedFixture(raw.executions[0]);
     await writeFile(file, JSON.stringify(raw)); store = new ExecutionStore(file); await store.load();
   }
   let runs = 0, readCalls = 0;
@@ -33,7 +34,9 @@ async function fixture(t: { after(fn: () => unknown): void }, policy?: { name: s
     return "done";
   } };
   const dispatcher = new Dispatcher(store, strategy, 1, async () => {}, () => {}, undefined, policy);
-  t.after(async () => { await dispatcher.stop(); await rm(dir, { recursive: true, force: true }); });
+  t.after(async () => { await dispatcher.stop();
+    // Several cases deliberately reject the final mutation; still await its settlement.
+    await store.drain().catch(() => {}); await rm(dir, { recursive: true, force: true }); });
   let entries: ArchiveEntry[] = [
     { id: "call", role: "assistant", text: JSON.stringify({ type: "toolCall", id: "tool1", name: "write", arguments: { path: "original-effect" } }) },
     { id: "result", role: "toolResult", text: JSON.stringify({ type: "toolResult", toolCallId: "tool1", toolName: "write", text: "committed" }) },

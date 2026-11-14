@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { mkdtemp, rm, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { readExecutionLedgerFixture } from "./execution-ledger-fixture.js";
 import os from "node:os";
 import path from "node:path";
 import { DispatcherRuntime } from "../src/dispatcher-runtime.js";
@@ -282,7 +283,7 @@ for (const gate of ["current", "manual-pause", "held-legacy", "expired", "opaque
   const first = await old.run("Verify live service only with credentials; independently publish source through required CI.");
   await old.dispatcher.stop(); await old.harness.stop(1000);
   // A stopped fixture models an old persisted release, never a live production ledger edit.
-  const saved = JSON.parse(await readFile(old.file, "utf8"));
+  const saved = await readExecutionLedgerFixture(old.file);
   const task = saved.executions[0], checkpoint = state(task.checkpoint);
   delete checkpoint.readyStepPolicy;
   checkpoint.assessment!.attempts = 15; checkpoint.assessment!.nextAt = Date.now() + 3600_000;

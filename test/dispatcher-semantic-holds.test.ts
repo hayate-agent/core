@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { mkdtemp, rm, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { readExecutionLedgerFixture } from "./execution-ledger-fixture.js";
 import os from "node:os";
 import path from "node:path";
 import { ExecutionStore, ExecutionAssessmentHold } from "../src/execution.js";
@@ -46,7 +47,7 @@ for (const diagnostic of ["runtime-failure", "retry-exhausted"] as const) test(`
   await store.intent(task.id, claim.token!, "step:original", "unsafe");
   await store.checkpoint(task.id, claim.token!, "retained worker evidence");
   await store.fail(task.id, claim.token!, "runtime-failure");
-  const ledger = JSON.parse(await readFile(file, "utf8"));
+  const ledger = await readExecutionLedgerFixture(file);
   Object.assign(ledger.executions[0], { diagnosticCode: diagnostic, assessmentHold: { state: "blocked", step: 0 }, workerRetry: { attempts: 11, nextAt: 1001 } });
   await writeFile(file, JSON.stringify(ledger));
   const reload = new ExecutionStore(file, { now: () => 999999 }); await reload.load();

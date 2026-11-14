@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { readExecutionLedgerFixture } from "./execution-ledger-fixture.js";
 import os from "node:os";
 import path from "node:path";
 import { ExecutionStore } from "../src/execution.js";
@@ -39,7 +40,7 @@ for (const fence of ["manual", "parent-stop", "legacy", "ownership", "intent", "
   const claim = await store.claim(child.id); await store.intent(child.id, claim.token!, "settled", "unsafe");
   await store.settleIntent(child.id, claim.token!, "settled", "report", "{}");
   await store.fail(child.id, claim.token!, "runtime-failure", { strategy: { name: "direct", version: 1, reconcile: () => ({ action: "continue" }) }, assessmentHold: { state: "blocked", step: 0 } });
-  const raw = JSON.parse(await readFile(file, "utf8")), row = raw.executions[0];
+  const raw = await readExecutionLedgerFixture(file), row = raw.executions[0];
   if (fence === "manual") row.diagnosticCode = "manual-pause";
   if (fence === "parent-stop") row.parentStopped = true;
   if (fence === "legacy") row.recoveryEnrollment = "held-legacy";

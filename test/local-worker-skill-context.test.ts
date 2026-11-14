@@ -7,6 +7,13 @@ import {ModelRuntime}from'@earendil-works/pi-coding-agent';
 
 test('real SDK worktree skill discovery stays usable but local prompts page metadata, reload and frontier restore',async t=>{
  const home=await mkdtemp(path.join(os.tmpdir(),'worker-skills-'));t.after(()=>rm(home,{recursive:true,force:true}));
+ // Real SDK discovery includes ~/.agents/skills independently of agentDir.
+ // Isolate both roots so operator-installed skills/settings cannot enter this fixture.
+ const previousHome=process.env.HOME,previousAgentDir=process.env.PI_CODING_AGENT_DIR;
+ process.env.HOME=home;process.env.PI_CODING_AGENT_DIR=path.join(home,'agent');
+ t.after(()=>{for(const [key,value] of Object.entries({HOME:previousHome,PI_CODING_AGENT_DIR:previousAgentDir})){
+  if(value===undefined)delete process.env[key];else process.env[key]=value;
+ }});
  const cwd=path.join(home,'primary'),worker=path.join(home,'worktree'),skills=path.join(home,'skills');await mkdir(cwd);await mkdir(worker);
  for(let i=0;i<30;i++){const dir=path.join(skills,'fixture-'+i);await mkdir(dir,{recursive:true});await writeFile(path.join(dir,'SKILL.md'),`---\nname: fixture-${i}\ndescription: ${'Unique worker skill metadata '.repeat(15)}\n---\nPrivate fixture body ${i}\n`);}
  const models=await ModelRuntime.create();models.registerProvider('skill-fixture',{api:'openai-completions',baseUrl:'https://offline.invalid',apiKey:'offline',models:['local','frontier'].map(id=>({id,name:id,api:'openai-completions',reasoning:false,input:['text'],contextWindow:131072,maxTokens:4096,cost:{input:0,output:0,cacheRead:0,cacheWrite:0}}))});

@@ -9,7 +9,6 @@ import { FakeRuntime, MemoryChannel } from "./fakes.js";
 
 async function fixture(t: { after(fn: () => Promise<void>): void }, original = "Approved: locate the QA host; do not execute imports") {
   const dir = await mkdtemp(path.join(os.tmpdir(), "peter-recovery-"));
-  t.after(() => rm(dir, { recursive: true, force: true }));
   const store = new ExecutionStore(path.join(dir, "executions.json")); await store.load();
   const child = await store.submit("mem:room1", "child", "Inspect existing deployment evidence", "direct", 1,
     { taskId: "parent", depth: 0, original });
@@ -26,7 +25,8 @@ async function fixture(t: { after(fn: () => Promise<void>): void }, original = "
   const ch = new MemoryChannel(); h.addChannel(ch); h.onStateChange = async () => {};
   const parent: DurableTask = { id: "parent", original, state: "blocked", depth: 0, expiresAt: 500000,
     anchor: { id: "parent", task: original, receivedAt: 1, replyTo: { channel: "mem", target: "room1" } } };
-  h.restoreSessions([{ key: "mem:room1", task: parent }]); t.after(() => h.stop(0));
+  h.restoreSessions([{ key: "mem:room1", task: parent }]);
+  t.after(async () => { await h.stop(0, 10000); await store.drain(); await rm(dir, { recursive: true, force: true }); });
   return { h, store, runtime, ch, child, calls: () => calls, advance: () => { now += 60000; },
     assess: (fn: typeof assess) => { assess = fn; }, task: () => h.snapshotSessions()[0].tasks![0] };
 }
