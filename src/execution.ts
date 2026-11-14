@@ -6,6 +6,7 @@ import path from "node:path";
 import { writeFileDurable, writeFileDurableExclusive, syncDirStrict } from "./durable.js";
 import { PartitionedJson } from "./partitioned-json.js";
 import { ExecutionDependencyStorage, freezeExecutionDependency } from "./execution-dependency-storage.js";
+import { TaskBookStorage } from "./task-book-storage.js";
 import { recoveryBlock, type RecoveryStrategy, type ExecutionRecoveryPolicy } from "./execution-recovery.js";
 
 /** Exact host state fence for evidence-backed parent continuation. */
@@ -185,6 +186,7 @@ export class ExecutionStore {
   private loaded = false;
   private readonly storage: PartitionedJson;
   private readonly dependencies: ExecutionDependencyStorage;
+  private readonly taskBooks: TaskBookStorage;
   constructor(private readonly file: string, private readonly retention: {
     now?: () => number;
     protectedExecutions?: () => ReadonlySet<string>;
@@ -193,6 +195,7 @@ export class ExecutionStore {
     workerRetryMax?: number | (() => number);
   } = {}) {
     this.dependencies = new ExecutionDependencyStorage(file);
+    this.taskBooks = new TaskBookStorage(file);
     this.storage = new PartitionedJson(file, { executions: 1, events: 1, turns: 1, waitAuthorityDenials: 1 });
   }
   private now(): number { return this.retention.now?.() ?? Date.now(); }
@@ -224,7 +227,9 @@ export class ExecutionStore {
       const stored = await this.storage.load();
       if (!stored) { this.loaded = true; return; }
       if (stored.version !== 1 && stored.version !== 2) throw Error("Unsupported execution ledger");
-      const data = (stored.version === 2 ? { ...stored, version: 1, executions: await this.dependencies.hydrate(stored.executions as unknown[]) } : stored) as unknown as Ledger;
+      if (stored.taskBook !== undefined && stored.taskBookRef !== undefined) throw Error("Ambiguous task book storage");
+      const data = (stored.version === 2 ? { ...stored, version: 1, executions: await this.dependencies.hydrate(stored.executions as unknown[]) } : stored) as unknown as Ledger & { taskBookRef?: unknown };
+      if (stored.taskBookRef !== undefined) { data.taskBook = await this.taskBooks.hydrate(stored.taskBookRef); delete data.taskBookRef; }
       if (data.version !== 1 || !Array.isArray(data.executions) || !Array.isArray(data.events)) throw Error("Unsupported execution ledger");
       if (data.waitAuthorityDenials !== undefined && (!Array.isArray(data.waitAuthorityDenials) ||
           data.waitAuthorityDenials.length > 100 || data.waitAuthorityDenials.some(r =>
@@ -347,7 +352,9 @@ export class ExecutionStore {
       // only the lightweight stored rows, never duplicate full dependencies in them.
       await this.storage.preserveLegacy();
       const executions = await this.dependencies.stage(draft.executions);
-      await this.storage.save({ ...draft, version: 2, executions }, true);
+      const taskBookRef = draft.taskBook && await this.taskBooks.stage(draft.taskBook);
+      const { taskBook: _taskBook, ...root } = draft;
+      await this.storage.save({ ...root, version: 2, executions, ...(taskBookRef ? { taskBookRef } : {}) }, true);
       this.data = draft;
       return structuredClone(result);
     });

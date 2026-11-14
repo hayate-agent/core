@@ -41,14 +41,14 @@ export function validTaskRef(value: unknown): value is TaskRef {
   return !!r && nonempty(r.id, 160) && Number.isSafeInteger(r.generation) && r.generation > 0;
 }
 export function validateTaskBook(book: TaskBook): void {
-  if (!book || !Array.isArray(book.tasks) || !Array.isArray(book.bindings) || book.tasks.length > 2000 || book.bindings.length > 10000) throw Error("Invalid task book");
+  if (!book || !Array.isArray(book.tasks) || !Array.isArray(book.bindings)) throw Error("Invalid task book");
   const ids = new Set<string>();
   for (const t of book.tasks) {
     if (!validTaskRef(t) || ids.has(t.id) || !Number.isSafeInteger(t.revision) || t.revision < 1 ||
-        !["open", "done", "unresolved"].includes(t.operatorStatus) || !nonempty(t.original, 100000) ||
+        !["open", "done", "unresolved"].includes(t.operatorStatus) || !nonempty(t.original, 16 * 1024 * 1024) ||
         !Number.isSafeInteger(t.createdAt) || !Number.isSafeInteger(t.lastOperatorAt) || typeof t.scheduled !== "boolean" ||
         !Array.isArray(t.sources) || !t.sources.length || t.sources.length > 64 ||
-        t.sources.some(s => !nonempty(s.id, 256) || !nonempty(s.text, 100000) || !Number.isSafeInteger(s.at) || !["operator", "schedule"].includes(s.kind)) ||
+        t.sources.some(s => !nonempty(s.id, 256) || !nonempty(s.text, 16 * 1024 * 1024) || !Number.isSafeInteger(s.at) || !["operator", "schedule"].includes(s.kind)) ||
         !t.technical || !["unknown", "open", "running", "waiting", "blocked", "completed", "failed"].includes(t.technical.state) ||
         t.technical.evidence !== undefined && !nonempty(t.technical.evidence, 8000) ||
         !Array.isArray(t.receipts) || !t.receipts.length || t.receipts.length > 512 ||
@@ -60,11 +60,12 @@ export function validateTaskBook(book: TaskBook): void {
     if (t.receiptArchive && (!/^[a-f0-9]{64}$/.test(t.receiptArchive.head) || !Number.isSafeInteger(t.receiptArchive.count) || t.receiptArchive.count < 1)) throw Error("Invalid task receipt archive");
     ids.add(t.id); if (t.plan) validatePlan(t, t.plan);
   }
+  const byId = new Map(book.tasks.map(task => [task.id, task]));
   const bindings = new Set<string>();
   for (const b of book.bindings) {
     const key = JSON.stringify([b.sessionKey, b.taskId]);
     if (!nonempty(b.sessionKey, 512) || !nonempty(b.taskId, 256) || !validTaskRef(b.ref) ||
-        !book.tasks.some(t => t.id === b.ref.id && t.generation >= b.ref.generation) || bindings.has(key)) throw Error("Invalid task binding");
+        (!byId.has(b.ref.id) || byId.get(b.ref.id)!.generation < b.ref.generation) || bindings.has(key)) throw Error("Invalid task binding");
     bindings.add(key);
   }
 }
@@ -95,7 +96,7 @@ export function enrollTask(book: TaskBook, binding: Omit<TaskBinding, "ref">, or
     if (book.tasks.find(t => t.id === old.ref.id)?.original !== original) throw Error("Task original scope conflict");
     return old.ref;
   }
-  if (!nonempty(original, 100000) || !nonempty(sourceId, 256)) throw Error("Invalid task ingress");
+  if (!nonempty(original, 16 * 1024 * 1024) || !nonempty(sourceId, 256)) throw Error("Invalid task ingress");
   const task: CoreTask = { id: randomUUID(), generation: 1, revision: 1, operatorStatus: kind === "legacy" ? "unresolved" : "open",
     original, sources: [{ id: sourceId, text: original, at: now, kind: kind === "schedule" ? "schedule" : "operator" }],
     lastOperatorAt: now, createdAt: now, scheduled: kind === "schedule", technical: { state: "unknown" }, receipts: [] };
