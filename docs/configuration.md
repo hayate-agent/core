@@ -75,7 +75,7 @@ productive turn. Genuine semantic uncertainty grants no execution. The prompt
 strategy remains replaceable through the existing completion-strategy extension;
 no external JEV backend is required by the default LLM implementation.
 
-CLI Main validation has a 30-second default request budget. Configure 1–120 seconds:
+CLI Main validation has a 120-second default execution budget, matching Dispatcher step verification. Configure 1–120 seconds explicitly (an explicit limit is never raised). Waiting for shared host model capacity does not consume this execution budget; stop/expiry/cancellation remain enforced while queued:
 
 ```yaml
 completionCheck:
@@ -86,6 +86,8 @@ completionCheck:
 Existing explicit `completionCheck.authorizations` remain supported. The validator
 model still uses Validator → Review → Default, without silently replacing an
 explicitly selected unavailable model. Restart after changing the timeout.
+
+Providers may advertise `maxPromptBytes` (1024–56000). Host evidence projection must satisfy both this transport limit and the existing UTF-16/UTF-8 host limits; original mandate/expiry are never truncated to fit. A trusted assessment-boundary/provider/model change permits one fresh read-only assessment of a retained failed report rather than inheriting a one-hour technical backoff. It preserves the same task/execution, settled evidence, productive and assessment counters, stop/expiry/ownership gates, and records the adopted policy so repeated restarts do not bypass retry pacing. An opaque unknown-effect intent is not eligible. Independently admitted Main recovery work can start once channels/stop reconciliation are ready, without waiting for every other startup judgment. Launcher/service readiness requires completed structural restoration, stop/cancellation reconciliation, authenticated channels and durable inbox publication; external semantic judgments run afterward in the existing recovery path, with per-task admission fences unchanged. A slow/unavailable reviewer therefore cannot indefinitely withhold native runtime readiness. Unexpected recovery-scan infrastructure failures still trigger graceful shutdown, not a permission bypass.
 
 ## Reloading model configuration
 
@@ -195,6 +197,16 @@ a missing base SOUL/VOICE retains legacy optional-file semantics. No watcher, ne
 permission state, arbitrary size/count cap or automatic repository Markdown scan
 is introduced. The model's context limit still applies. This is trusted local
 operator configuration, not a sandbox against an operator replacing parent paths.
+
+## Hashtag metadata model
+
+Use `hashtag.model: provider/model` for an explicit metadata model; when unset,
+classification uses the effective Main `model` only, never reviewer/dispatcher
+roles. `/hashtag-model reset` removes the local override. Overlay model changes
+are live; `hashtag.provider` (`default`, `tags-only`, or a trusted service suffix)
+is restart-bound. Legacy `modelRoles.roles.hashtag` no longer selects the model.
+See [topic label configuration and provider contracts](topic-labels.md) for YAML,
+plugin service selection, neutral fallback and tags-only inheritance limits.
 
 ## Dispatcher model routing rules
 

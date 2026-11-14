@@ -60,7 +60,10 @@ A source build or merge does not activate a running deployment.
 
 When an execution store is configured, the actual wait tool guard writes a
 host-owned `waitAuthorityDenials` ring in the existing execution ledger
-(`executions.json`). Inspect it locally, or use the host-only
+(`executions.json`). For v2 dependency references, inspect the logical state with
+`const s = new ExecutionStore(file); await s.load(); s.snapshot()` from the deployed
+runtime; never treat a missing inline dependency as missing authority. See
+[execution dependency storage](execution-dependency-storage.md). Or use the host-only
 `ExecutionStore.waitAuthorityDenials()` accessor. These are not outgoing execution
 events, are not injected into model context and confer no authority. The newest
 100 receipts are retained globally (oldest evicted; no separate time expiry).

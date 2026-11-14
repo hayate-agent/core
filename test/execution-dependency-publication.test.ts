@@ -1,0 +1,10 @@
+import test from'node:test';import assert from'node:assert/strict';import fs from'node:fs/promises';import {syncBuiltinESMExports}from'node:module';import path from'node:path';import os from'node:os';import{ExecutionStore}from'../src/execution.js';
+test('actual post-rename directory-fsync failure never allows stale owner to overwrite possible commit',async t=>{
+ const dir=await fs.mkdtemp(path.join(os.tmpdir(),'execution-rename-fault-'));t.after(()=>fs.rm(dir,{recursive:true,force:true}));const file=path.join(dir,'ledger.json'),store=new ExecutionStore(file);await store.load();await store.submit('p','old','preserved','direct');
+ const realOpen=fs.open,realRename=fs.rename;let published=false,injected=false;
+ t.mock.method(fs,'rename',async(...args:Parameters<typeof fs.rename>)=>{await realRename(...args);if(String(args[1])===file)published=true;});
+ t.mock.method(fs,'open',async(...args:Parameters<typeof fs.open>)=>{const handle=await realOpen(...args);if(String(args[0])===dir&&published&&!injected){const original=handle.sync.bind(handle);handle.sync=async()=>{if(!injected){injected=true;throw Object.assign(Error('Injected directory fsync after rename'),{code:'EIO'});}return original();};}return handle;});syncBuiltinESMExports();
+ try{await assert.rejects(store.submit('p','new','possibly committed','direct'),/Injected directory fsync/);assert.equal(injected,true,'fault reached actual post-rename sync');assert.equal(JSON.parse(await fs.readFile(file,'utf8')).executions.length,2,'rename published new manifest despite failure');await assert.rejects(store.ack('would overwrite'),/publication uncertain/);assert.equal(JSON.parse(await fs.readFile(file,'utf8')).executions.length,2);}
+ finally{t.mock.restoreAll();syncBuiltinESMExports();}
+ const cold=new ExecutionStore(file);await cold.load();assert.equal(cold.list().length,2);const same=await cold.submit('p','new','possibly committed','direct');assert.equal(same.requestId,'new');assert.equal(cold.list().length,2,'cold retry retains same identity, no duplicate work');
+});

@@ -150,3 +150,26 @@ test("an independent summary ignoring abort cannot delay stop or rotate on a lat
   settle("CURRENT STATE AND NEXT STEPS: late summary"); await new Promise(resolve => setImmediate(resolve));
   assert.equal(rotations, 0); assert.equal((await m.status("chat")).sessionId, "old");
 });
+
+
+test('/new cancels prepared maintenance instead of seeding old work into fresh context', async t => {
+ const home = await homeFor(t);
+ const key = 'chat'; const directory = path.join(home, 'context-maintenance'); await mkdir(directory);
+ const file = path.join(directory, createHash('sha256').update(key).digest('hex') + '.json');
+ await writeFile(file, JSON.stringify({ version: 1, sessionId: 'old', turns: 4, lastMaintenance: 0,
+  pending: { action: 'handover', preserve: 'OLD WORK', resume: 'MUST NOT RESTART' },
+  continuationPreparationRequired: true, handover: { phase: 'prepared', from: 'old', text: 'OLD CONTEXT' },
+  recovery: { id: 'old-recovery', state: 'blocked', failedAttempts: 4, epochFailures: 4, sameErrorFailures: 4 },
+  admission: { id: 'old-admission', digest: 'a'.repeat(64), version: 1, execution: 'pending' } }));
+ const m = new ContextMaintenance(home, () => contextPolicy());
+ const h = new Harness({ runtime: new FakeRuntime(), contextMaintenance: m }); h.onStateChange = async () => {};
+ await h.resetSession(key);
+ const state = await m.status(key);
+ assert.equal(state.pending, undefined); assert.equal(state.handover, undefined);
+ assert.equal(state.continuationPreparationRequired, undefined);
+ assert.equal(state.admission?.execution, 'cancelled'); assert.equal(state.recovery?.state, 'cancelled');
+ assert.equal(state.recovery?.failedAttempts, 4);
+ assert.equal(state.sessionId, h.state(key).session!.status().sessionId);
+ assert.equal(await m.recoveryStatus(key), undefined);
+ await h.stop(0);
+});

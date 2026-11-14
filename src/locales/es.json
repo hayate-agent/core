@@ -94,5 +94,6 @@
   "cron.resumeResult": "{name} reanudada",
   "cron.usage": "Uso: /cron list|run|pause|resume|reload|language <name> <BCP-47 tag|reset>",
   "language.listing": "Mostrar/configurar idioma predeterminado, del sistema, segundo plano, conversación o MCP (BCP-47)",
-  "command.failure": "⚠️ /{name}: falló el comando (detalles omitidos)"
+  "command.failure": "⚠️ /{name}: falló el comando (detalles omitidos)",
+  "conversation.reset": "🆕 Nuevo contexto de conversación. Se detuvieron las tareas, continuaciones y ejecuciones subordinadas anteriores de esta conversación; se eliminaron sus bucles, heartbeat y objetivo. Las demás conversaciones y los trabajos programados independientes no cambian."
 }

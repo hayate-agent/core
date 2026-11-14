@@ -1,6 +1,6 @@
 import type { Inbound } from "./types.js";
 import type { AssessmentBackend as ReviewBackend } from "./assessment-backend.js";
-import type { CompletionAuthorization, CompletionDiagnostic, CompletionPrompt, ValidatorProvider } from "./validator.js";
+import type { CompletionAuthorization, CompletionDiagnostic, CompletionPrompt, ValidatorProvider, ValidatorRequest } from "./validator.js";
 import type { PluginModule } from "./plugins.js";
 
 /** Existing LLM judge, now a replaceable concrete provider. No endpoint or model policy. */
@@ -35,7 +35,7 @@ function providerFailure(error: unknown): FailureDetail {
     const value = error as { code?: unknown; status?: unknown } | undefined;
     const code = value?.code;
     const status = value?.status;
-    if (typeof code === "string" && ["ECONNRESET", "ECONNREFUSED", "ETIMEDOUT", "ENOTFOUND", "EAI_AGAIN", "UND_ERR_CONNECT_TIMEOUT", "UND_ERR_SOCKET"].includes(code)) detail.code = code as FailureDetail["code"];
+    if (typeof code === "string" && ["ECONNRESET", "ECONNREFUSED", "ETIMEDOUT", "ENOTFOUND", "EAI_AGAIN", "UND_ERR_CONNECT_TIMEOUT", "UND_ERR_SOCKET"].includes(code)) { detail.code = code as FailureDetail["code"]; if (code === "ETIMEDOUT" || code === "UND_ERR_CONNECT_TIMEOUT") detail.cause = "timeout"; }
     if (typeof status === "number" && Number.isInteger(status) && status >= 400 && status <= 599) detail.status = status;
   } catch { /* exception properties may be hostile getters */ }
   return detail;
@@ -70,9 +70,19 @@ export async function assessCompletion(backend: ReviewBackend, input: Inbound, r
   });
   try {
     if (prompt === undefined) { diagnostic?.("unavailable"); return; }
+    let reportedFailure: FailureDetail | undefined;
+    // Additive trusted-provider observer. Older providers ignore it; copy only
+    // the existing bounded public vocabulary and never arbitrary error text.
+    const reportFailure = (detail: unknown) => {
+      if (!detail || typeof detail !== "object") return;
+      const cause = (detail as { cause?: unknown }).cause;
+      if (cause !== "timeout" && cause !== "provider_error") return;
+      reportedFailure = { ...providerFailure(detail), cause };
+    };
     const result = await Promise.race([provider.assess({ backend, input, reply, authorization,
-      signal: controller.signal, model, now, prompt: promptStrategy, promptText: prompt }), timeout]);
+      signal: controller.signal, model, now, prompt: promptStrategy, promptText: prompt, reportFailure } as ValidatorRequest & { reportFailure(detail: unknown): void }), timeout]);
     if (signal.aborted || controller.signal.aborted || (authorization.expiresAt !== undefined && authorization.expiresAt <= now()) || input.continuation !== checkpoint) return;
+    if (reportedFailure) { diagnostic?.("technical", reportedFailure); return; }
     failure = "invalid_response";
     if (!result || typeof result !== "object" || Array.isArray(result)) { diagnostic?.(failure, { cause: "invalid_shape" }); return; }
     const answer = result as Record<string, any>;

@@ -65,6 +65,11 @@ export function createTypeSafeProvider(config: TypeSafeConfig,
     async assess(request: ValidatorRequest) {
       const controller = new AbortController();
       let reason: TypeSafeDiagnostic = "technical";
+      let transportStatus: number | undefined;
+      const reportFailure = (cause: "timeout" | "provider_error") => {
+        (request as ValidatorRequest & { reportFailure?: (detail: unknown) => void }).reportFailure?.({ cause,
+          ...(cause === "timeout" ? { code: "ETIMEDOUT" } : transportStatus !== undefined ? { status: transportStatus } : {}) });
+      };
       let rejectStop: (error: Error) => void = () => {};
       const stopped = new Promise<never>((_, reject) => { rejectStop = reject; });
       const stop = (why: TypeSafeDiagnostic) => { reason = why; controller.abort(); rejectStop(Error("TypeSafe stopped")); };
@@ -84,7 +89,7 @@ export function createTypeSafeProvider(config: TypeSafeConfig,
                 type: "choice", instructions: bank.instructions,
                 criteria: Object.fromEntries(Object.entries(bank.choices).map(([id, c]) => [id, c.description])),
               } } }) });
-            if (!response.ok) { await response.body?.cancel(); throw Error("TypeSafe transport failure"); }
+            if (!response.ok) { if (response.status >= 400 && response.status <= 599) transportStatus = response.status; await response.body?.cancel(); throw Error("TypeSafe transport failure"); }
             // Bounded streaming body; timeout applies to headers, body and fallback together.
             const reader = response.body?.getReader();
             if (!reader) throw Error("Missing response body");
@@ -105,6 +110,7 @@ export function createTypeSafeProvider(config: TypeSafeConfig,
             if (controller.signal.aborted) return;
             diagnostic?.("technical");
             if (fallback) return fallback.assess({ ...request, signal: controller.signal });
+            reportFailure("provider_error");
             return;
           }
           const result = interpret(raw);
@@ -116,7 +122,12 @@ export function createTypeSafeProvider(config: TypeSafeConfig,
         if (controller.signal.aborted || request.signal.aborted ||
             (request.authorization.expiresAt !== undefined && request.authorization.expiresAt <= request.now())) return;
         return result;
-      } catch { diagnostic?.(reason); return; }
+      } catch {
+        const stoppedReason = ((): TypeSafeDiagnostic => reason)();
+        diagnostic?.(stoppedReason);
+        if (!request.signal.aborted && stoppedReason !== "cancelled") reportFailure(stoppedReason === "timeout" ? "timeout" : "provider_error");
+        return;
+      }
       finally { clearTimeout(timer); request.signal.removeEventListener("abort", abort); }
     },
   };

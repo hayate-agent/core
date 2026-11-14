@@ -287,10 +287,10 @@ export const COMMANDS: Command[] = [
   {
     name: "new",
     aliases: ["reset"],
-    help: "Fresh context; abort parent turn/drop parent queue, not durable tasks or recurring sources",
+    help: "Stop this conversation's old work, children and local recurring sources; start fresh",
     run: async (_a, input, ctx) => {
       await ctx.harness.resetSession(input.sessionKey);
-      return `🆕 Fresh context in the same conversation; parent turn aborted if running and parent queue discarded.\n${ctx.harness.remainingWorkNotice(input.sessionKey)}`;
+      return message(resolveLanguage(ctx.language?.get(), { kind: "system" }), "conversation.reset");
     },
   },
   {
@@ -537,6 +537,10 @@ export const COMMANDS: Command[] = [
     run: (args, input, ctx) => globalSetting("reviewModel", args.trim(), input, ctx),
   },
   {
+    name: "hashtag-model", help: "Instance metadata model: <provider/model|reset> (otherwise Main; thinking off)",
+    run: (args, input, ctx) => globalSetting("hashtagModel", args.trim(), input, ctx),
+  },
+  {
     name: "review-reasoning", help: "Instance reviewer reasoning: <level|reset>",
     run: (args, input, ctx) => globalSetting("reviewThinking", args.trim(), input, ctx),
   },
@@ -725,7 +729,7 @@ export const COMMANDS: Command[] = [
       const job = ctx.scheduler.find(name);
       if (!job) return message(locale, "cron.unknown", { name });
       if (sub === "run") {
-        await ctx.scheduler.runJob(job);
+        await ctx.scheduler.runJob(job, true);
         return message(locale, "cron.triggered", { name });
       }
       if (sub === "pause" || sub === "resume") {

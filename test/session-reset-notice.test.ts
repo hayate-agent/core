@@ -19,7 +19,7 @@ async function fixture() {
   return { home, store, harness, runtime };
 }
 
-for (const command of ["new", "reset"]) test(`chat /${command} reports retained owners without cancellation or sensitive prompts`, async () => {
+for (const command of ["new", "reset"]) test(`chat /${command} revokes old scoped work and local recurring sources without exposing prompts`, async () => {
   const { home, store, harness, runtime } = await fixture();
   try {
     const channel = new MemoryChannel(); harness.addChannel(channel);
@@ -33,17 +33,18 @@ for (const command of ["new", "reset"]) test(`chat /${command} reports retained 
     s.heartbeat = { ...s.loop, paused: true };
     s.goal = { text: "SECRET goal", criteria: [], paused: false, turns: 0 };
     const snapshot = () => JSON.stringify({ tasks: s.tasks, loop: s.loop, heartbeat: s.heartbeat, goal: s.goal, executions: store.list() });
-    const before = snapshot();
+    const other = store.list("other");
     await harness.sessionFor(key);
     await harness.submit(msg(`/${command}`)); await harness.drained();
     const result = channel.texts().at(-1)!;
-    assert.match(result, /same conversation; parent turn aborted if running and parent queue discarded/);
-    assert.match(result, /conversation mem:room1/);
-    assert.ok(result.includes(child.id));
-    assert.match(result, /continuation timer: waiting; wait timer retained/);
-    assert.match(result, /loop: active/); assert.match(result, /heartbeat: paused/); assert.match(result, /goal: active/);
-    assert.doesNotMatch(result, /SECRET|other/);
-    assert.equal(snapshot(), before);
+    assert.match(result, /Previous conversation tasks, continuations and child executions were stopped/);
+    assert.doesNotMatch(result, /SECRET|Remaining work stays/);
+    assert.equal(s.tasks![0].state, "stopped");
+    assert.equal(store.list(key).find(x => x.id === child.id)!.status, "cancelled");
+    assert.deepEqual(store.list("other"), other);
+    assert.equal(s.loop, undefined); assert.equal(s.heartbeat, undefined); assert.equal(s.goal, undefined);
+    assert.equal(s.heartbeatDisabled, true);
+    assert.equal(s.resetPending, undefined);
     assert.deepEqual(runtime.opened.map(o => o.fresh), [false, true]);
   } finally { await harness.stop(100); await rm(home, { recursive: true, force: true }); }
 });
@@ -63,7 +64,7 @@ test("inventory distinguishes empty, bounded and unavailable without creating se
   } finally { await harness.stop(100); await rm(home, { recursive: true, force: true }); }
 });
 
-for (const command of ["new", "reset"]) test(`TUI /${command} retains idle old parent's child/timer and late result anchoring`, async () => {
+for (const command of ["new", "reset"]) test(`TUI /${command} revokes old owner's child/timer before opening fresh conversation`, async () => {
   const { home, store, harness } = await fixture();
   try {
     const sessions = await LocalSessions.open(home, home); await sessions.create("old");
@@ -73,19 +74,17 @@ for (const command of ["new", "reset"]) test(`TUI /${command} retains idle old p
     harness.restoreSessions([{ key: old, tasks: [{ id: "persisted", original: "SECRET", state: "waiting", depth: 0,
       wait: { reason: "SECRET", nextAt: Date.now() + 60000, deadline: Date.now() + 120000 } }] }]);
     const ui = new HarnessTuiChannel({ sessions, canSwitchSession: () => !harness.state(old).running,
-      remainingWorkNotice: () => harness.remainingWorkNotice(sessions.current!.key) });
+      remainingWorkNotice: () => harness.remainingWorkNotice(sessions.current!.key),
+      resetConversation: () => harness.resetSession(sessions.current!.key) });
     const notes: string[] = []; (ui as any).note = (text: string) => notes.push(text);
     await (ui as any).sessionCommand(`/${command} fresh`);
     assert.notEqual(sessions.current!.key, old);
     const text = notes.join("\n");
-    assert.ok(text.includes(`owned by conversation ${old}`)); assert.ok(text.includes(`/resume ${oldId}`));
-    assert.match(text, /Old work is not transferred here/); assert.doesNotMatch(text, /SECRET/);
-    assert.match(text, /persisted: waiting; wait timer retained/);
-    assert.ok(text.includes(`dispatcher ${child.id}: running`));
-    assert.equal(store.list(old)[0].status, "running");
-    assert.equal(harness.state(old).tasks?.[0].state, "waiting");
-    await store.complete(child.id, claimed.token!, "late result");
-    assert.equal(store.list(old)[0].result, "late result");
+    assert.match(text, /Previous conversation work was stopped/); assert.doesNotMatch(text, /SECRET/);
+    assert.equal(store.list(old)[0].status, "cancelled");
+    assert.equal(harness.state(old).tasks?.[0].state, "stopped");
+    await assert.rejects(store.complete(child.id, claimed.token!, "late result"));
+    assert.notEqual(store.list(old)[0].result, "late result");
     assert.equal(store.list(sessions.current!.key).length, 0);
   } finally { await harness.stop(100); await rm(home, { recursive: true, force: true }); }
 });
@@ -95,7 +94,9 @@ test("chat reset retains existing parent abort and queue-drop semantics", async 
   try {
     const s = harness.state("owner"), previous = await harness.sessionFor("owner");
     s.running = true; s.queue.push(msg("queued"));
+    const abort = previous.abort.bind(previous);
+    previous.abort = async () => { await abort(); s.running = false; };
     await harness.resetSession("owner");
-    assert.equal((previous as any).aborted, 1); assert.equal(s.queue.length, 0); s.running = false;
+    assert.equal((previous as any).aborted, 1); assert.equal(s.queue.length, 0);
   } finally { await harness.stop(100); await rm(home, { recursive: true, force: true }); }
 });

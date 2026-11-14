@@ -10,12 +10,19 @@ test("dispatcher stays off without explicit concurrency support", () => {
   assert.equal(dispatcherConfig({ capacity: 1 }).capacity, 1); // explicit backend/operator limit survives
   assert.throws(() => defaultConfig({ dispatcher: { enabled: true } }), /concurrentRequests/);
   const config = defaultConfig({ dispatcher: { enabled: true, concurrentRequests: true, capacity: 7, strategy: "custom" } });
-  assert.deepEqual(config.dispatcher, { enabled: true, concurrentRequests: true, capacity: 7, strategy: "custom", retentionDays: 7, countAuxiliaryRuns: false });
+  assert.deepEqual(config.dispatcher, { enabled: true, concurrentRequests: true, capacity: 7, strategy: "custom", retentionDays: 7, countAuxiliaryRuns: false, workerRetryMax: 12 });
 });
 test("dispatcher rejects invalid capacity and policy", () => {
   for (const capacity of [0, -1, 1.5, Infinity]) assert.throws(() => dispatcherConfig({ capacity }), /Invalid/);
   for (const retentionDays of [0, -1, 1.5, 3651, Infinity]) assert.throws(() => dispatcherConfig({ retentionDays }), /Invalid/);
   assert.throws(() => dispatcherConfig({ strategy: "../module" }), /Invalid/);
+});
+test("workerRetryMax defaults to 12 and validates like capacity", () => {
+  assert.equal(dispatcherConfig().workerRetryMax, 12);
+  for (const workerRetryMax of [0, -1, 1.5, Infinity, "12"]) assert.throws(() => dispatcherConfig({ workerRetryMax }), /Invalid/);
+  assert.equal(dispatcherConfig({ workerRetryMax: 1 }).workerRetryMax, 1);
+  assert.equal(dispatcherConfig({ workerRetryMax: 100 }).workerRetryMax, 100);
+  assert.equal(defaultConfig({ dispatcher: { enabled: true, concurrentRequests: true, workerRetryMax: 3 } }).dispatcher?.workerRetryMax, 3);
 });
 test("dispatcher rules validate model routing entries", () => {
   const rules = [

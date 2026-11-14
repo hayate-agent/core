@@ -1,0 +1,19 @@
+# Merge fragment only. NOT applied by the worker.
+# Apply only after protected publication, immutable plugin-lock materialization,
+# and parent-owned native activation/effect reconciliation. Do not replace the
+# rest of the agent configuration with this fragment.
+# Preserves existing completion authorizations, Dispatcher enabled/strategy/
+# concurrency settings, and model roles. Sequential strategy consumes step and
+# ready decisions; this fragment does not authorize or enable new work.
+typeSafeDecisions:
+  endpoint: https://gateway.example.invalid/v1/systemone
+  model: openjev-latest
+  # Absolute reference to the designated credential, never an inline value.
+  # Verify plain-token format, owner-only mode, UID and regular-file/no-final-
+  # symlink requirements read-only before application. No credential changes.
+  bearerTokenFile: /run/secrets/typesafe-bearer-token
+  timeoutMs: 5000
+completionCheck:
+  provider: typesafe-completion
+dispatcher:
+  decisionProvider: typesafe-dispatch

@@ -94,5 +94,6 @@
   "cron.resumeResult": "{name} fortgesetzt",
   "cron.usage": "Verwendung: /cron list|run|pause|resume|reload|language <name> <BCP-47 tag|reset>",
   "language.listing": "Standardsprache, System-, Hintergrund-, Gesprächs- oder MCP-Sprache anzeigen/festlegen (BCP-47)",
-  "command.failure": "⚠️ /{name}: Befehl fehlgeschlagen (Details zurückgehalten)"
+  "command.failure": "⚠️ /{name}: Befehl fehlgeschlagen (Details zurückgehalten)",
+  "conversation.reset": "🆕 Neuer Gesprächskontext. Bisherige Aufgaben, Fortsetzungen und untergeordnete Ausführungen dieser Konversation wurden gestoppt; konversationseigene Loops, Heartbeat und Ziel wurden gelöscht. Andere Konversationen und unabhängige Zeitpläne bleiben unverändert."
 }

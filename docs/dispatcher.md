@@ -9,9 +9,14 @@ remain available to Main. Starting a separate subagent is not a way around this
 routing rule. Main fallback is available only when dispatcher mode is disabled or
 the dispatcher is unavailable.
 
-Both `worker-failed` (for example a provider EOF) and the broader
-`runtime-failure` strategy/validator interruption have a durable automatic
-recovery owner. An internal `paused` or `blocked` state is not a terminal
+Both `worker-failed` (for example a provider EOF) and technical
+`runtime-failure` strategy/validator interruptions have a durable automatic
+recovery owner. A valid independent `blocked` or `waiting` verdict is instead
+stored as `assessment-blocked` / `assessment-waiting`: no timed worker retry,
+no transport-budget consumption and no repeated unchanged chat notification.
+New parent evidence or explicit authenticated continuation can reassess the same
+retained execution. Startup converts historical semantic holds incorrectly marked
+`runtime-failure` or `retry-exhausted` without replaying their workers. An internal `paused` or `blocked` state is not a terminal
 lifecycle state: its stored `workerRetry.nextAt` is consumed by the existing
 scheduler, including after host restart and for diagnosed legacy internal pauses.
 Cheap ticks never renew that due time.
@@ -44,7 +49,7 @@ ID** with durable exponential backoff (15 seconds up to 5 minutes), retaining it
 intent, original mandate and worker transcript. The matching strategy must support
 reconciliation; no opaque effect is blindly replayed. Manual pauses, cancellation,
 unanswered questions, authentic mandate expiry and trusted recovery-policy holds
-remain binding. Technical retries have no total-attempt cutoff. Generic strategy exceptions are classified as `runtime-failure`, without
+remain binding. Technical retries are bounded by `workerRetryMax` (default 12): once the budget is exhausted, the task is held as `retry-exhausted` (`blocked` with an unresolved intent, otherwise `paused`) without retry metadata, and manual intervention (explicit resume or cancel) is required. Two verified ordering details: in `scheduleWorkerRetry`, the mandate-deadline check runs before the retry cap but is only due once `expiresAt` has already passed, so with a future deadline and an exhausted budget `retry-exhausted` wins. The hold is sticky: both `schedule()` and the first guard of `scheduleWorkerRetry` accept only the `worker-failed` and `runtime-failure` diagnostic codes, so a `retry-exhausted` task is never picked up again by `kick()`; raising `dispatcher.workerRetryMax` afterwards does not make it run again (verified: cap 1 → exhaust → live-raise cap to 10 → `kick()` leaves it `paused` after a single call). Only manual intervention releases the hold: the counter is removed when the budget is exhausted (the transition into `retry-exhausted` deletes the stored `workerRetry` state), so a later resume starts at zero; `resume()` itself only resets `workerRetry.nextAt` to now and therefore leaves any counter held for another reason intact; `cancel()` terminates the task; and `resolve()` is a further manual release path for `blocked` or `paused` tasks. A `resume()` after the mandate deadline throws `ExecutionDeadlineExpired`. Generic strategy exceptions are classified as `runtime-failure`, without
 inferring permission or diagnosis from exception text. With a reconciliation-capable
 strategy, they receive the same durable backoff. A retained sequential assessment
 is rechecked independently before any new worker effects; a genuine blocked verdict
@@ -108,10 +113,12 @@ dispatcher:
   concurrentRequests: true
   capacity: 2
   retentionDays: 7
+  workerRetryMax: 12
 ```
 
 Defaults are `enabled: false`, `strategy: direct`, `concurrentRequests: false`,
-`capacity: 4`, `retentionDays: 7` (integer, 1–3650). Enabling requires the operator's explicit declaration that the
+`capacity: 4`, `retentionDays: 7` (integer, 1–3650), `workerRetryMax: 12`
+(safe integer, >= 1). Enabling requires the operator's explicit declaration that the
 configured runtime/backend supports concurrent requests. This declaration does
 not probe or configure the backend. Capacity limits active strategy executions,
 not the number of retained tasks or configured persistent workers. The runtime
@@ -123,6 +130,13 @@ handles independent completions while other tasks are still running. It does not
 wait for an unrelated publisher before starting an independent review if worker
 capacity is available. A genuinely dependent review must still wait for its input.
 Pending tasks are bounded by the ledger's storage limits, not by worker capacity.
+
+Internal dispatcher plans, role/model choices, validator correction rounds and
+step lifecycle notices remain inspectable through `/dispatch` and API progress;
+they are not delivered as ordinary chat messages or chat status edits. This also
+applies to automated/cron continuations whose parent is a Matrix conversation,
+not just sessions named `cron-followup:`. Actual results retain their durable
+parent inbox path; new actionable blockers and real questions retain chat delivery.
 
 Main answers short questions, known facts and simple status requests directly and
 uses its available tools for bounded lookups, local inspection and short research.
@@ -192,10 +206,18 @@ scheduler, ledger and worker bridge. It requires enabled [model roles](model-rol
    persisting completion or admitting a successor. Missing/empty/malformed worker
    reports are assessed too, never silently accepted or excluded from validation.
    A step-specific tool-free reviewer requests concrete read-only evidence or a
-   missing final report from the same retained worker (at most two corrections).
-   Failed/inconclusive inference is attempted at most twice per worker result,
+   missing final report from the same retained worker. Corrections with new
+   host-observed successful tool-result receipts can continue; three consecutive
+   corrections without a new receipt stop as `assessment-stalled`, retaining the
+   settled report and unsafe intent rather than inventing completion. Reworded
+   prose, call arguments and validator requests are not progress. New parent
+   decision evidence or explicit authenticated resolution can release the hold;
+   timer ticks and restarts cannot. A fresh child request ID under the same parent
+   mandate cannot bypass a stagnant execution. Independent mandates remain
+   available, and independently admitted later steps can still run.
+   Failed/inconclusive inference backs off from one minute up to one hour,
    without re-running the worker, replanning or upgrading its model. Genuine
-   external holds still stop immediately; exhausted inference pauses visibly.
+   external holds stop immediately.
 2. Plan, step index and outcomes are persisted in the execution checkpoint before
    any worker turn; each step saves an unsafe intent with its exact route first.
 3. Steps run sequentially as ordinary worker turns in the task-bound session with
@@ -394,7 +416,11 @@ Inbox deduplication handles redelivery. Host results are data, not slash command
 operator requests or continuation grants. They queue behind a busy turn instead
 of steering or interrupting it. Their authority is checked again before execution,
 after asynchronous setup, at runtime execution and at tool boundaries. They do
-not overwrite the parent's task checkpoint or conversation destination.
+not overwrite the parent's task checkpoint or conversation destination. A worker
+that completes without any result text still settles as `completed`; the empty
+result is marked with the `empty-result` diagnostic and a status event instead
+of failing or throwing, because empty output can be a legitimate terminal
+result and callers must keep working with the stored empty string.
 
 Before a built-in worker's first opaque intent is recorded, metadata-only
 preparation durably creates a native/provider history containing its exact
