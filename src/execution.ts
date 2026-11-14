@@ -3,7 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { writeFileDurable, syncDirStrict } from "./durable.js";
-import { ExecutionDependencyStorage } from "./execution-dependency-storage.js";
+import { ExecutionDependencyStorage, freezeExecutionDependency } from "./execution-dependency-storage.js";
 import { recoveryBlock, type RecoveryStrategy, type ExecutionRecoveryPolicy } from "./execution-recovery.js";
 
 /** Exact host state fence for evidence-backed parent continuation. */
@@ -317,6 +317,7 @@ export class ExecutionStore {
           else if (turn.settlement !== undefined) throw Error("Unexpected turn settlement");
         }
       }
+      for (const task of data.executions) freezeExecutionDependency(task.dependency);
       this.data = data;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
@@ -327,7 +328,12 @@ export class ExecutionStore {
     const next = this.queue.catch(() => {}).then(async () => {
       if (!this.loaded) throw Error("Execution store not loaded");
       if (this.publicationFailed) throw Error("Execution ledger publication uncertain; restart and reload committed authority before further mutations");
-      const draft = structuredClone(this.data);
+      // Dependency snapshots are immutable host-owned evidence. Clone mutable
+      // ledger state, but share frozen dependencies rather than copying tens of
+      // MB on every status/turn barrier. Preserve exact key order for fences.
+      const draft = structuredClone({ ...this.data, executions: this.data.executions.map(({ dependency, ...task }) => task) }) as Ledger;
+      draft.executions = draft.executions.map((task, index) => Object.fromEntries(Object.keys(this.data.executions[index]!).map(key =>
+        [key, key === "dependency" ? this.data.executions[index]!.dependency : task[key as keyof Execution]])) as unknown as Execution);
       const result = await fn(draft);
       await mkdir(path.dirname(this.file), { recursive: true });
       if (this.legacy !== undefined) await this.dependencies.preserveLegacy(this.legacy);

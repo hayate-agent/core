@@ -41,8 +41,23 @@ in-memory data. Pre-publication shard failures preserve the old commit and permi
 a subsequent queued retry.
 
 The logical expanded storage budget is64MiB, so sharding cannot bypass all host
-resource bounds; the small manifest retains its existing32MiB limit. This does
-not eliminate whole-ledger cloning, hashing or dependency serialization CPU.
+resource bounds; the small manifest retains its existing32MiB limit. This
+does not provide full dirty-execution persistence: mutable task/event data still
+clones and serializes on every barrier. Immutable dependencies are deeply frozen
+inside the owner, shared safely across drafts, and their exact encoding cached;
+caller inputs and public results remain independently cloned. Future dependency
+changes must replace a snapshot, never mutate frozen retained evidence. The
+clone reconstructs original property order for exact recovery fences.
+
+An initial prototype reduced disk bytes but regressed CPU/RSS; it was not shipped.
+With immutable sharing/cache, an isolated actual825-record SSD fixture measured12
+warm unchanged barriers: median324→189ms, max event-loop stall214→97ms, peak RSS
+755,544→617,656KiB, write bytes404,586,496→73,072,640. First migration1254ms versus
+299ms baseline: do not omit the one-time cost. The fixture manifest33,554,414→
+5,937,690bytes; all825 logical JSON records and recovery hashes match after a cold
+load; exact private v1 backup retained. These are isolated measurements, not
+production activation or model-speed proof.
+
 Measure disk bytes and event-loop/checkpoint latency separately from model
 inference. Migration is code-delivered through normal exact-head review/CI and
 owning deployment; never mutate a live production ledger with maintenance scripts.

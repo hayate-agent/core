@@ -8,11 +8,15 @@ const digest=(s:string)=>createHash('sha256').update(s).digest('hex');
 const hash=(s:unknown):s is string=>typeof s==='string'&&/^[a-f0-9]{64}$/.test(s);
 type Ref={version:1;sha256:string};
 type Stored=Omit<Execution,'dependency'>&{dependency?:Execution['dependency'];dependencyRef?:Ref};
+/** Host-owned snapshots are immutable. Never share mutable input with a draft. */
+const immutable=new WeakSet<object>();
+export function freezeExecutionDependency(value:unknown,seen=new WeakSet<object>()):void{if(value&&typeof value==='object'&&!immutable.has(value)&&!seen.has(value)){const proto=Object.getPrototypeOf(value);if(!Array.isArray(value)&&proto!==Object.prototype&&proto!==null)throw Error('Execution dependency must be JSON-shaped evidence');seen.add(value);for(const item of Object.values(value))freezeExecutionDependency(item,seen);Object.freeze(value);immutable.add(value);}}
 /** Immutable exact dependency snapshots, published before their small ledger.
  * Never prune these receipts automatically: archived execution idempotency and
  * downgrade/recovery tooling may still need them. In-memory Execution is unchanged. */
 export class ExecutionDependencyStorage{
  private known=new Map<string,string>();
+ private encoded=new WeakMap<object,Map<string,{raw:string;key:string;bytes:number}>>();
  private identity(s:Awaited<ReturnType<typeof lstat>>){return JSON.stringify([s.dev,s.ino,s.size,s.mtimeMs,s.ctimeMs,s.mode,s.uid]);}
  constructor(private readonly ledger:string){}
  private get dir(){return this.ledger+'.dependencies';}
@@ -25,8 +29,17 @@ export class ExecutionDependencyStorage{
  async stage(executions:readonly Execution[]):Promise<Stored[]>{
   const pending=new Map<string,string>();const rows=executions.map(task=>{
    if(Object.hasOwn(task,'dependencyRef'))throw Error('Unexpected in-memory execution dependency reference');
-   if(task.dependency===undefined||Buffer.byteLength(JSON.stringify(task.dependency))<4096)return task;
-   const raw=JSON.stringify({version:1,id:task.id,parent:task.parent,dependency:task.dependency})+'\n',key=digest(raw);
+   if(!task.dependency || typeof task.dependency !== 'object')return task;
+   freezeExecutionDependency(task.dependency);
+   const binding=JSON.stringify([task.id,task.parent]);let encodings=this.encoded.get(task.dependency),entry=encodings?.get(binding);
+   if(!entry){
+    const bytes=Buffer.byteLength(JSON.stringify(task.dependency));
+    const raw=JSON.stringify({version:1,id:task.id,parent:task.parent,dependency:task.dependency})+'\n';
+    entry={raw,key:digest(raw),bytes};
+    if(!encodings){encodings=new Map();this.encoded.set(task.dependency,encodings);}encodings.set(binding,entry);
+   }
+   if(entry.bytes<4096)return task;
+   const{raw,key}=entry;
    if(Buffer.byteLength(raw)>32*1024*1024)throw Error('Execution dependency snapshot exceeds reader budget');
    pending.set(key,raw);
    // Preserve JSON property order too: recovery fences hash exact task JSON.
