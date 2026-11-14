@@ -13,31 +13,48 @@ export class TaskBookStorage {
   private readonly limit = 256 * 1024 * 1024;
   constructor(ledger: string) { this.dir = `${ledger}.task-book`; }
   private hash(raw: string): string { return createHash("sha256").update(raw).digest("hex"); }
+  private authorizedGroup(gid: number): boolean {
+    return typeof process.getgid === "function" &&
+      [process.getgid(), ...(typeof process.getgroups === "function" ? process.getgroups() : [])].includes(gid);
+  }
+  private async validateDirectory(): Promise<void> {
+    const s = await lstat(this.dir), mode = s.mode & 0o7777;
+    if (!s.isDirectory() || s.isSymbolicLink() ||
+        typeof process.getuid === "function" && s.uid !== process.getuid() ||
+        !([0o500, 0o700].includes(mode) || [0o750, 0o770, 0o2750, 0o2770].includes(mode) && this.authorizedGroup(s.gid)))
+      throw Error("Unsafe task book directory");
+  }
   private async directory(): Promise<void> {
     await mkdir(this.dir, { recursive: true, mode: 0o700 });
-    const s = await lstat(this.dir);
-    if (!s.isDirectory() || s.isSymbolicLink() || (s.mode & 0o077) !== 0 ||
-        typeof process.getuid === "function" && s.uid !== process.getuid()) throw Error("Unsafe task book directory");
+    await this.validateDirectory();
+    const h = await open(this.dir, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+    try {
+      if (((await h.stat()).mode & 0o700) !== 0o700) throw Error("Task book directory is owner-read-only");
+      await h.chmod(0o700); await h.sync();
+    } finally { await h.close(); }
     await syncDirStrict(path.dirname(this.dir));
   }
-  private async read(hash: string): Promise<string> {
+  private async read(hash: string, durable = false): Promise<string> {
     if (!/^[a-f0-9]{64}$/.test(hash)) throw Error("Invalid task book page reference");
-    const h = await open(path.join(this.dir, `${hash}.json`), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    const h = await open(path.join(this.dir, `${hash}.json`), (durable ? constants.O_RDWR : constants.O_RDONLY) | constants.O_NOFOLLOW | constants.O_NONBLOCK);
     try {
       const s = await h.stat();
-      if (!s.isFile() || s.size > this.limit || (s.mode & 0o077) !== 0 ||
+      const mode = s.mode & 0o7777;
+      if (!s.isFile() || s.size > this.limit ||
+          !([0o400, 0o600].includes(mode) || [0o640, 0o660].includes(mode) && this.authorizedGroup(s.gid)) ||
           typeof process.getuid === "function" && s.uid !== process.getuid()) throw Error("Unsafe task book page");
       const raw = await h.readFile("utf8");
       if (this.hash(raw) !== hash) throw Error("Task book page checksum mismatch");
+      if (durable) { await h.chmod(0o600); await h.sync(); await syncDirStrict(this.dir); }
       return raw;
     } finally { await h.close(); }
   }
   private async put(value: unknown): Promise<string> {
     const raw = JSON.stringify(value), hash = this.hash(raw);
     if (Buffer.byteLength(raw) > this.limit) throw Error("Task book page exceeds reader budget");
-    if (this.known.has(hash)) { if (await this.read(hash) !== raw) throw Error("Task book page changed"); return hash; }
+    if (this.known.has(hash)) { if (await this.read(hash, true) !== raw) throw Error("Task book page changed"); return hash; }
     try { await writeFileDurableExclusive(path.join(this.dir, `${hash}.json`), raw); }
-    catch (e) { if ((e as NodeJS.ErrnoException).code !== "EEXIST" || await this.read(hash) !== raw) throw e; }
+    catch (e) { if ((e as NodeJS.ErrnoException).code !== "EEXIST" || await this.read(hash, true) !== raw) throw e; }
     this.known.add(hash); return hash;
   }
   async stage(book: TaskBook): Promise<{ version: 1; root: string }> {
@@ -75,9 +92,13 @@ export class TaskBookStorage {
     await syncDirStrict(this.dir); return removed;
   }
   async hydrate(ref: unknown): Promise<TaskBook> {
+    try { return await this.hydratePages(ref); }
+    catch (cause) { throw new Error("Cannot load retained task book pages", { cause }); }
+  }
+  private async hydratePages(ref: unknown): Promise<TaskBook> {
     const r = ref as { version?: unknown; root?: unknown };
     if (!r || r.version !== 1 || typeof r.root !== "string" || Object.keys(r).some(k => k !== "version" && k !== "root")) throw Error("Invalid task book root");
-    await this.directory();
+    await this.validateDirectory();
     const root = JSON.parse(await this.read(r.root));
     if (root.version !== 1 || !Array.isArray(root.tasks) || !Array.isArray(root.bindings)) throw Error("Invalid task book manifest");
     const book: TaskBook = { tasks: [], bindings: [] };
