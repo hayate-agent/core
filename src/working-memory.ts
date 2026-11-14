@@ -27,12 +27,15 @@ export class WorkingMemory implements MemoryOrchestrator {
    if(record.version!==1||record.sessionKey!==key||!Array.isArray(record.entries)||record.entries.length>8||record.entries.some(e=>typeof e.id!=='string'||!Number.isFinite(e.at)||typeof e.request!=='string'||e.request.length>480||typeof e.reported!=='string'||e.reported.length>1000||typeof e.outcome!=='string'||!Number.isFinite(e.tools)))throw Error('Invalid working memory');return record;
   }catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')return{version:1,sessionKey:key,entries:[]};throw error;}
  }
- async capture(turn:MemoryTurn):Promise<void>{
+ async captureWorking(turn:MemoryTurn):Promise<void>{return this.capture(turn,true);}
+ async capture(turn:MemoryTurn,workingOnly=false):Promise<void>{
   if(!this.policy().enabled||!this.policy().autoCapture)return;
   if (!turn.reply.trim() || turn.reply.trim()==='NO_REPLY' || (!turn.tools && turn.outcome==='failed' && /^(?:⚠️\s*)?(?:request timed out|model request failed)[.!]?\s*$/i.test(turn.reply.trim()))) return;
   // Empty/error transport output is not new knowledge. A normal tool-free
   // answer can contain a decision/preference and must not be skipped.
-  const recordedAt=await this.serial(turn.sessionKey,async()=>{
+  // Independent paths: a corrupt/full local capsule must not suppress the
+  // existing long-term provider and its durable retry queue.
+  const local=this.serial(turn.sessionKey,async()=>{
    const record=await this.read(turn.sessionKey),id=hash(JSON.stringify([turn.text,turn.reply,turn.outcome]));
    const previous=record.entries.find(e=>e.id===id);if(previous)return previous.at;
    const excerpt=turn.reply.length>1000?turn.reply.slice(0,480)+'\n[omitted middle]\n'+turn.reply.slice(-480):turn.reply;
@@ -41,7 +44,10 @@ export class WorkingMemory implements MemoryOrchestrator {
    await mkdir(path.dirname(this.file(turn.sessionKey)),{recursive:true,mode:0o700});await syncDir(this.home);await writeFileDurable(this.file(turn.sessionKey),JSON.stringify(record));
    return record.entries.at(-1)!.at;
   });
-  await this.backend.capture({...turn,recordedAt});
+  const longTerm=workingOnly?Promise.resolve():Promise.resolve().then(()=>this.backend.capture(turn));
+  const [localResult,providerResult]=await Promise.allSettled([local,longTerm]);
+  if(localResult.status==='rejected')this.log('working handover write failed; long-term capture path remains independent');
+  if(providerResult.status==='rejected')throw providerResult.reason;
  }
  async reset(key:string):Promise<void>{await this.serial(key,async()=>{try{await unlink(this.file(key));await syncDir(path.dirname(this.file(key)));}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}});}
  async recallWorking(key:string,text:string):Promise<string>{return this.recall(key,text,false);}

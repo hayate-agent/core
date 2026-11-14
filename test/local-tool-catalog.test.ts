@@ -8,7 +8,7 @@ import { ModelRuntime } from '@earendil-works/pi-coding-agent';
 
 test('real SDK local tool schemas are deferred/discoverable, restrictions preserved; native compaction uses small budget',async t=>{
  const home=await mkdtemp(path.join(os.tmpdir(),'local-tool-catalog-'));t.after(()=>rm(home,{recursive:true,force:true}));
- const models=await ModelRuntime.create();models.registerProvider('local-fixture',{api:'openai-completions',baseUrl:'https://offline.invalid',apiKey:'offline',models:[{id:'model',name:'Fixture',api:'openai-completions',reasoning:false,input:['text'],contextWindow:262144,maxTokens:4096,cost:{input:0,output:0,cacheRead:0,cacheWrite:0}}]});
+ const models=await ModelRuntime.create();models.registerProvider('local-fixture',{api:'openai-completions',baseUrl:'https://offline.invalid',apiKey:'offline',models:['model','frontier'].map(id=>({id,name:'Fixture',api:'openai-completions',reasoning:false,input:['text'],contextWindow:262144,maxTokens:4096,cost:{input:0,output:0,cacheRead:0,cacheWrite:0}}))});
  const pluginTools=()=>Array.from({length:30},(_,i)=>({name:'plugin_large_'+i,description:'Large fixture '+i,parameters:{type:'object',properties:{input:{type:'string',description:'metadata'.repeat(1000)}}},execute:async()=> 'no effects'}));
  const options={cwd:home,sessionsDir:path.join(home,'sessions'),skillPaths:[],model:'local-fixture/model',personaSections:async()=>[],pluginTools,
   contextBudgets:()=>({mainContextTokens:262144,workerContextTokens:131072,localModels:['local-fixture/model']}),approvals:{mode:'off' as const,tools:[]}};
@@ -33,6 +33,13 @@ test('real SDK local tool schemas are deferred/discoverable, restrictions preser
   session.prompt=async()=>{const settings=session.settingsManager.getCompactionSettings(session.model);assert.equal(settings.enabled,true);assert.ok(session.model.contextWindow-settings.reserveTokens<=16384);};session.waitForIdle=async()=>{};
   await wrapped.prompt('metadata-only offline fixture');const status=wrapped.status();assert.equal(status.contextBudgetTokens,16384);assert.ok(status.contextEstimateTokens>0);
  }finally{await wrapped.dispose();}
+ const mixed=new PiRuntime({...options,model:'local-fixture/frontier'});(mixed as any).modelRuntime=async()=>models;
+ const frontier:any=await mixed.open('matrix:frontier');assert.equal(frontier.session.getActiveToolNames().filter((name:string)=>name.startsWith('plugin_large_')).length,30);
+ frontier.session.waitForIdle=async()=>{};
+ frontier.session.prompt=async()=>{assert.equal(frontier.session.getActiveToolNames().filter((name:string)=>name.startsWith('plugin_large_')).length,0);};
+ await frontier.setModel('local-fixture/model');await frontier.prompt('local switch');
+ frontier.session.prompt=async()=>{assert.equal(frontier.session.getActiveToolNames().filter((name:string)=>name.startsWith('plugin_large_')).length,30);};
+ await frontier.setModel('local-fixture/frontier');await frontier.prompt('frontier switch');await frontier.dispose();
  const restricted=new PiRuntime({...options,tools:[]});(restricted as any).modelRuntime=async()=>models;
  const noTools:any=await restricted.open('matrix:restricted');assert.deepEqual(noTools.session.getActiveToolNames(),[]);await noTools.dispose();
 });

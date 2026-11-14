@@ -29,6 +29,14 @@ test('optional slow provider cannot hold a planning turn for minutes; outstandin
  const h=await home(t);let active=0;const memory=new WorkingMemory(h,{capture:backend.capture,recall:async()=>{active++;return new Promise<string>(()=>{});}},policy);
  const start=Date.now();await Promise.all(Array.from({length:10},()=>memory.recall('a','Slack')));assert.equal(active,2);assert.ok(Date.now()-start<1500);
 });
+test('SDK-step capture never waits for a slow provider; a corrupt local file does not suppress long-term capture',async t=>{
+ const h=await home(t);let captures=0;const memory=new WorkingMemory(h,{...backend,capture:async()=>{captures++;return new Promise<void>(()=>{});}},policy);
+ const start=Date.now();await memory.captureWorking({sessionKey:'step',text:'Slack',reply:'Unverified Slack step',outcome:'completed'});
+ assert.equal(captures,0);assert.ok(Date.now()-start<500);
+ const files=await readdir(path.join(h,'working-memory'));const {writeFile}=await import('node:fs/promises');await writeFile(path.join(h,'working-memory',files[0]!),'{broken');
+ const healthy=new WorkingMemory(h,{...backend,capture:async()=>{captures++;}},policy);await healthy.capture({sessionKey:'step',text:'Slack',reply:'Reported decision',outcome:'completed'});assert.equal(captures,1);
+});
+
 test('small explicit local budgets remain operator adjustable; frontier and physical model identity are not inferred',()=>{
  assert.equal(localModel({localModels:['local/exact']},'local/exact'),true);assert.equal(localModel({localModels:[]},'local/qwen'),false);
  assert.equal(localContextBudget(262144,false,true),16384);assert.equal(localContextBudget(131072,true,true),8192);

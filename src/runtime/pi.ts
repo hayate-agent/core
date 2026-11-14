@@ -946,10 +946,21 @@ export class PiRuntime implements AgentRuntime {
     };
     const toolUse = new Map<string, number>(); let toolClock = 0;
     let previousActive = new Set(session.getActiveToolNames());
+    let localToolMode: boolean | undefined;
     const trimDiscoveredTools = () => {
       if (!deferred) return;
       const active = session.getActiveToolNames();
-      const discoverable = new Set(session.getAllTools().filter(tool => tool.exposure === "deferred" && !essentialPluginTools.has(tool.name)).map(tool => tool.name));
+      const plugins = new Set(boundTools.map(tool => tool.name));
+      const discoverable = new Set(session.getAllTools().filter(tool => plugins.has(tool.name) && tool.exposure === "deferred" && !essentialPluginTools.has(tool.name)).map(tool => tool.name));
+      const model = session.model, local = !!model && localModel(this.opts.contextBudgets?.(), `${model.provider}/${model.id}`);
+      if (!local) {
+        session.setActiveToolsByName([...new Set([...active, ...discoverable])]);
+        localToolMode = false; previousActive = new Set(session.getActiveToolNames()); return;
+      }
+      if (localToolMode !== true) {
+        session.setActiveToolsByName([...active.filter(name => !discoverable.has(name)), "tool_search"]);
+        toolUse.clear(); previousActive = new Set(session.getActiveToolNames()); localToolMode = true; return;
+      }
       for (const name of active) if (discoverable.has(name) && !previousActive.has(name)) toolUse.set(name, ++toolClock);
       for (const message of session.messages.slice(-4)) if (message.role === "assistant")
         for (const part of message.content) if (part.type === "toolCall" && discoverable.has(part.name)) toolUse.set(part.name, ++toolClock);
@@ -1028,6 +1039,7 @@ export class PiRuntime implements AgentRuntime {
         if (!(THINKING as readonly string[]).includes(thinking)) throw new Error(`thinking must be one of ${THINKING.join(", ")}`);
         session.setThinkingLevel(thinking as Thinking);
       }
+      trimDiscoveredTools();
     };
     let appliedResourceRevision = this.resourceRevision;
     // Observe only MCP configuration, not arbitrary extension directory changes.

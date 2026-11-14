@@ -395,7 +395,7 @@ async function main(argv: string[]): Promise<void> {
     captureStep: async (key, step) => {
       const state = harness.sessions.get(key), input = state?.current;
       if (!input || state?.stopPending || state?.resetPending || state?.cancelling === input) return;
-      await harness.rememberMemory({ sessionKey: key, id: `step:${step.id}`, text: input.text, reply: step.reply,
+      await workingMemory.captureWorking({ sessionKey: key, id: `step:${step.id}`, text: input.text, reply: step.reply,
         tools: step.tools, outcome: step.failed ? "failed" : "completed" });
     },
     pluginTools: () => composeToolCatalog(plugins.tools, initialReloadableTools, reloadableTools?.tools ?? new Map()),
