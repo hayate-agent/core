@@ -1220,6 +1220,7 @@ export class Harness {
   private resetContinuation(input: Inbound): void { input.continuation = undefined; }
 
   private readonly settledReplies = new WeakMap<Inbound, string>();
+  private readonly scheduledSilence = new WeakSet<Inbound>();
 
   private rememberCompletion(s: SessionState, role: "user" | "assistant", text: string): void {
     s.completionRecent = [...(s.completionRecent ?? []), { role, text: text.slice(0, 2000) }].slice(-8);
@@ -2883,7 +2884,10 @@ export class Harness {
               s.cancelling = input;
               for (const task of this.tasks(s)) if (task.id === input.taskId) task.state = "stopped";
             }
-            if (ledger && input.executionTurnId) await ledger.beginTurn(input.executionTurnId, s.key);
+            if (ledger && input.executionTurnId) await ledger.beginTurn(input.executionTurnId, s.key,
+              input.source === "cron" && s.key.startsWith("cron:") && input.taskId && input.taskRef &&
+              input.continuationDepth === undefined && !input.waitCheck && !input.waitRecheck
+                ? { taskId: input.taskId, ref: input.taskRef } : undefined);
             await this.runTurn(s, input, selectedHistory);
             const task = this.tasks(s).find(t => t.id === (input.continuation?.taskId ?? input.taskId));
             const evidenceAfter = await this.opts.progressEvidence?.(input).catch(() => undefined);
@@ -2900,6 +2904,7 @@ export class Harness {
               const committed = await ledger.settleTurn(input.executionTurnId, s.key, {
                 taskOutcome, ...(plan && input.replyTo ? { taskPresentation: { to: input.replyTo } } : {}),
                 cronOutput: input.cronReport?.completedOutput, repetition: structuredClone(task?.repetition),
+                ...(this.scheduledSilence.has(input) && input.taskId && input.taskRef ? { scheduledSilence: { taskId: input.taskId, ref: input.taskRef } } : {}),
                 outbox: s.outbox.slice(outboxStart), continuation: input.continuation, goal: s.goal,
                 consumed: (s.steered ?? []).map(item => item.executionTurnId).filter((id): id is string => !!id),
               });
@@ -3526,6 +3531,14 @@ export class Harness {
         reply += `\n\n⏸️ Goal paused after ${s.goal.turns} turns. /goal resume to continue.`;
       }
     }
+    // Only the scheduler's original occurrence, never a recovery continuation or
+    // an answer to a foreground steer, can provide this observation. Silence is
+    // evidence of a turn result, not proof that the mandate is complete.
+    if (finalStatus === "completed" && reply === NO_REPLY && input.source === "cron" &&
+        s.key.startsWith("cron:") && input.taskId && input.taskRef && input.continuationDepth === undefined &&
+        !input.waitCheck && !input.waitRecheck && !s.steered?.length)
+      this.scheduledSilence.add(input);
+    else this.scheduledSilence.delete(input);
     if (finalStatus === "completed" && reply && reply !== NO_REPLY && reply.length <= 8000 &&
         !s.steered?.some(item => item.source === "channel" || item.source === "api"))
       this.settledReplies.set(input, reply);

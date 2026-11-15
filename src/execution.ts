@@ -158,12 +158,14 @@ export interface TurnSettlement {
   taskPresentation?: { to: import("./types.js").Address };
   repetition?: import("./repetition-budget.js").RepetitionBudget;
   cronOutput?: string;
+  /** Observation only; never grants completion or continuation authority. */
+  scheduledSilence?: { taskId: string; ref: TaskRef };
   outbox: import("./delivery/outbox.js").OutboxEntry[];
   continuation?: import("./types.js").Inbound["continuation"];
   goal?: import("./harness.js").Goal;
   consumed: string[];
 }
-export interface DurableTurn { id: string; sessionKey: string; state: "running" | "settled"; stopped?: boolean; settlement?: TurnSettlement }
+export interface DurableTurn { id: string; sessionKey: string; state: "running" | "settled"; stopped?: boolean; settlement?: TurnSettlement; scheduledOccurrence?: { taskId: string; ref: TaskRef } }
 export type WaitAuthorityDenialReason = "ownership" | "cancelled" | "deadline" | "missing-task" | "stopped-task" | "sequence";
 export interface WaitAuthorityDenialReceipt {
   reason: WaitAuthorityDenialReason;
@@ -422,20 +424,22 @@ export class ExecutionStore {
         draft.executions.some(task => task.token && task.intent && turn.sessionKey === `dispatch:${task.id}:${task.token}`));
     });
   }
-  beginTurn(id: string, sessionKey: string): Promise<void> {
+  beginTurn(id: string, sessionKey: string, scheduledOccurrence?: { taskId: string; ref: TaskRef }): Promise<void> {
     return this.mutate(draft => {
       if (typeof id !== "string" || !id || typeof sessionKey !== "string" || !sessionKey) throw Error("Invalid turn identity");
       const turns = draft.turns ??= [];
       const old = turns.find(item => item.id === id);
-      if (old && old.sessionKey !== sessionKey) throw Error("Turn identity conflict");
+      // A pre-upgrade running turn has no occurrence binding. Keep it runnable,
+      // but never retroactively assert provenance for its eventual result.
+      if (old && (old.sessionKey !== sessionKey || old.scheduledOccurrence && scheduledOccurrence && JSON.stringify(old.scheduledOccurrence) !== JSON.stringify(scheduledOccurrence))) throw Error("Turn identity conflict");
       if (!old) {
         if (turns.length >= 10000) throw Error("Retained turn limit reached; reconcile before executing more work");
-        turns.push({ id, sessionKey, state: "running" });
+        turns.push({ id, sessionKey, state: "running", ...(scheduledOccurrence ? { scheduledOccurrence: structuredClone(scheduledOccurrence) } : {}) });
       }
     });
   }
   private stoppedSettlement(settlement: TurnSettlement): TurnSettlement {
-    return { ...settlement, continuation: undefined, outbox: settlement.outbox.map(entry => ({
+    return { ...settlement, scheduledSilence: undefined, continuation: undefined, outbox: settlement.outbox.map(entry => ({
       ...entry, text: "⏹️ Abgebrochen. Bereits ausgeführte Seiteneffekte prüfen.", outcome: "cancelled",
     })) };
   }
@@ -472,6 +476,26 @@ export class ExecutionStore {
           committed.outbox.push({ id: `${id}:task-plan`, sessionKey, to: structuredClone(settlement.taskPresentation.to), text: renderTask(order) });
         }
         validateTaskBook(draft.taskBook);
+      }
+      // Legacy turns lack a pre-execution binding: resume them without inventing
+      // occurrence-specific evidence. The result itself may still be processed.
+      if (committed.scheduledSilence && !turn.scheduledOccurrence) committed.scheduledSilence = undefined;
+      if (committed.scheduledSilence) {
+        const { taskId, ref } = committed.scheduledSilence;
+        const book = draft.taskBook;
+        const binding = book?.bindings.find(b => b.sessionKey === sessionKey && b.taskId === taskId);
+        const order = book?.tasks.find(t => t.id === ref.id);
+        if (!turn.scheduledOccurrence || turn.scheduledOccurrence.taskId !== taskId || turn.scheduledOccurrence.ref.id !== ref.id ||
+            turn.scheduledOccurrence.ref.generation !== ref.generation || !order?.scheduled || !binding || binding.ref.id !== ref.id || binding.ref.generation !== ref.generation ||
+            ref.generation > order.generation || !sessionKey.startsWith("cron:")) throw Error("Invalid scheduled silence provenance");
+        await this.archiveTaskReceipts(order);
+        const receiptId = `silence:${id}`;
+        const digest = taskDigest({ turnId: id, sessionKey, taskId, ref, result: "NO_REPLY" });
+        const old = order.receipts.find(r => r.id === receiptId) ?? await this.archivedTaskReceipt(order.id, receiptId);
+        if (old && old.digest !== digest) throw Error("Scheduled silence identity conflict");
+        if (!old) order.receipts.push({ id: receiptId, kind: "scheduled-silence", sourceId: id, at: this.now(),
+          generation: ref.generation, revision: order.revision, digest, reason: "NO_REPLY" });
+        validateTaskBook(book!);
       }
       turn.state = "settled";
       turn.settlement = committed;

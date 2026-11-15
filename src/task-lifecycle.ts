@@ -9,7 +9,7 @@ export interface TaskTodo {
   sourceId: string; outcome?: string;
 }
 export interface TaskReceipt {
-  id: string; kind: "created" | "legacy-held" | "operator-close" | "operator-reopen" | "clarification" | "outcome" | "inactivity";
+  id: string; kind: "created" | "legacy-held" | "operator-close" | "operator-reopen" | "clarification" | "outcome" | "inactivity" | "scheduled-silence";
   at: number; sourceId: string; generation: number; revision: number; digest: string; reason?: string;
 }
 export interface CoreTask {
@@ -56,7 +56,7 @@ export function validateTaskBook(book: TaskBook): void {
         t.receipts.some(r => !nonempty(r.id, 256) || !nonempty(r.sourceId, 256) || !Number.isSafeInteger(r.at) ||
           !Number.isSafeInteger(r.generation) || r.generation < 1 || r.generation > t.generation ||
           !Number.isSafeInteger(r.revision) || r.revision < 1 || r.revision > t.revision || !/^[a-f0-9]{64}$/.test(r.digest) || r.reason !== undefined && !nonempty(r.reason, 8000) ||
-          !["created", "legacy-held", "operator-close", "operator-reopen", "clarification", "outcome", "inactivity"].includes(r.kind))) throw Error("Invalid core task");
+          !["created", "legacy-held", "operator-close", "operator-reopen", "clarification", "outcome", "inactivity", "scheduled-silence"].includes(r.kind))) throw Error("Invalid core task");
     if (t.receiptArchive && (!/^[a-f0-9]{64}$/.test(t.receiptArchive.head) || !Number.isSafeInteger(t.receiptArchive.count) || t.receiptArchive.count < 1)) throw Error("Invalid task receipt archive");
     ids.add(t.id); if (t.plan) validatePlan(t, t.plan);
   }
