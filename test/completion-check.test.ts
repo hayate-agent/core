@@ -26,6 +26,16 @@ test("uncertain, malformed, expired and cancelled assessments fail closed", asyn
   assert.deepEqual(await assessCompletion(yes, deep, "reply", auth, signal(), undefined, () => 1000),
     { state: "continue", next: "test", expiresAt: 2000 }, "the host owns the repetition budget; depth is not exhaustion");
 });
+test("uncertain assessment retains bounded advisory rationale without authorizing continuation", async () => {
+  const details: unknown[] = [];
+  const result = await assessCompletion(backend(JSON.stringify({ state: "uncertain", next: "Evidence for the receipt is missing" })), input(), "reply", auth, signal(), undefined, () => 1000, undefined, (category, detail) => details.push({ category, detail }));
+  assert.equal(result, undefined);
+  assert.deepEqual(details, [{ category: "inconclusive", detail: { cause: "uncertain", reason: "Evidence for the receipt is missing" } }]);
+  details.length = 0;
+  await assessCompletion(backend('{"state":"uncertain"}'), input(), "reply", auth, signal(), undefined, () => 1000, undefined, (category, detail) => details.push({ category, detail }));
+  assert.deepEqual(details, [{ category: "inconclusive", detail: { cause: "uncertain", reason: "Provider returned uncertainty without a rationale." } }]);
+});
+
 test("explicit completed is independently assessed without erasing its checkpoint", async () => {
   const planned = input(); planned.continuation = { state: "completed" };
   const checkpoint = planned.continuation;

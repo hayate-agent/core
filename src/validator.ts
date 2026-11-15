@@ -7,9 +7,10 @@ export interface CompletionAuthorization {
   purpose?: "nightly-closure";
 }
 export type CompletionDiagnostic = "unavailable" | "inconclusive" | "invalid_response" | "technical";
-/** Fixed vocabulary only: never retain exception text, URLs, headers or model data. */
+/** Technical errors use a fixed vocabulary. Uncertainty may carry bounded, untrusted model rationale. */
 export interface CompletionFailureDetail {
-  cause: "timeout" | "provider_error" | "invalid_shape";
+  cause: "timeout" | "provider_error" | "invalid_shape" | "uncertain";
+  reason?: string;
   code?: "ECONNRESET" | "ECONNREFUSED" | "ETIMEDOUT" | "ENOTFOUND" | "EAI_AGAIN" | "UND_ERR_CONNECT_TIMEOUT" | "UND_ERR_SOCKET";
   status?: number;
 }
@@ -19,8 +20,9 @@ export function completionFailureDetail(value: unknown): CompletionFailureDetail
     if (!value || typeof value !== "object") return;
     const raw = value as CompletionFailureDetail;
     const { cause, code, status } = raw;
-    if (!["timeout", "provider_error", "invalid_shape"].includes(cause)) return;
+    if (!["timeout", "provider_error", "invalid_shape", "uncertain"].includes(cause)) return;
     const detail: CompletionFailureDetail = { cause };
+    if (cause === "uncertain" && typeof raw.reason === "string" && raw.reason.trim()) detail.reason = raw.reason.trim().slice(0, 1500);
     if (code && ["ECONNRESET", "ECONNREFUSED", "ETIMEDOUT", "ENOTFOUND", "EAI_AGAIN", "UND_ERR_CONNECT_TIMEOUT", "UND_ERR_SOCKET"].includes(code)) detail.code = code;
     if (Number.isInteger(status) && status! >= 400 && status! <= 599) detail.status = status;
     return detail;

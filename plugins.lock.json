@@ -48,13 +48,13 @@
     "session-observer-plugin.ts": "53de3d2a70d69f6a37ed8abfedd44ec234486a31ddfd36ee63757bb69d2d8a38",
     "subagent-plugin.ts": "5b7ae55c28e50c48ce0a3671c400245ee0fd725ce7c5ad6866a8e63f0b65cd5e",
     "tool-result-projector.ts": "69658e2adef5d5327797762886199b87fd3bff94f20beab8a199280e0d517746",
-    "typesafe-api-plugin.ts": "c14ee2afbb0968c01c84e156940e59251587980af84c199234ee0209b9eff2b4",
-    "typesafe-decision-plugin.ts": "da393fcd73632d0420fff21e9bee459409f051e90b547eb743ceffc04bfb5eb6",
+    "typesafe-api-plugin.ts": "62b7d06bdd696027099a9f77af713cafa071f91144d611c1ec4d06d95769d0df",
+    "typesafe-decision-plugin.ts": "48ee419d6b5501bf3ed943c9679629c7bb107a1fbe5c9b1af7a060ec2c73c1fc",
     "typesafe-question-banks.ts": "40bfe4fa9d58c19eb80b92bd1fa15b00d58edd5b81ecfe9691f384fcc12324e6",
     "typesafe-validator-provider.ts": "5526e153f22af9055122780f1f5c9e8b08b4635869818f07e8525afc825304d5",
     "wasm-tools-plugin.ts": "438c6ac8899e283e4268f51ef451275bf16a37b584db84ee8302a26200cc70de"
   },
   "repository": "https://git.vanillacore.net/harness/plugins",
-  "revision": "508dfb5c3b81223ffbc395e51825b9f1dd1433f4",
+  "revision": "ba116a0d9b57903e2f95e15859347a75ad710fe9",
   "schema": 1
 }
