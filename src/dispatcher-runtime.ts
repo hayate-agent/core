@@ -186,7 +186,7 @@ export class DispatcherRuntime {
       let answer = rawAnswer;
       try { answer = await this.harness.runtime?.compactResult?.(sessionKey, rawAnswer) ?? rawAnswer; }
       catch { /* A retained worker result must not fail optional optimization. */ }
-      answer = answer.slice(0, 64000); // preserve the existing durable-result limit on storage failure
+      if (answer.length > 64000) answer = `${answer.slice(0, 31000)}\n[Report excerpted for durable state; full native session ${sessionKey} retained. Omitted material is not proof of success.]\n${answer.slice(-31000)}`;
       await context.settleIntent(intentKey, answer, answer);
       const current = typeof this.harness.rememberMemory === "function" && typeof this.store.list === "function" ? this.store.list(task.parent).find(item => item.id === task.id) : undefined;
       if (!context.signal.aborted && current?.status === "running" && current.token === task.token && !current.parentStopped && !current.ownershipHold)
