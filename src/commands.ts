@@ -102,6 +102,15 @@ function recurringCommand(kind: "heartbeat" | "loop"): Command["run"] {
         return current
           ? `${kind}: every ${formatInterval(current.everyMs)}${current.paused ? " (paused)" : ""}${current.remaining !== undefined ? `, ${current.remaining} left` : ""}: ${current.prompt}`
           : `no ${kind} set`;
+      case "run": {
+        if (kind !== "loop") return "unknown heartbeat action";
+        if (!ctx.harness.isAcceptingChannelInput(input) || !(input.replyTo?.channel === "console" || !!input.sender && ctx.admins.includes(input.sender))) return "⛔ authenticated admin only";
+        if (!current) return "no loop set";
+        if (current.paused) return "loop paused; not started";
+        if (!input.id) throw Error("Loop run requires a durable input ID");
+        await ctx.harness.runLoopNow(input.sessionKey, input.id);
+        return "loop occurrence accepted";
+      }
       case "pause":
       case "resume":
         if (!current) return `no ${kind} set`;
@@ -448,7 +457,7 @@ export const COMMANDS: Command[] = [
     },
   },
   { name: "heartbeat", aliases: ["hb"], help: "Recurring prompt when idle: every <interval> <prompt> | status | pause | resume | clear", run: recurringCommand("heartbeat") },
-  { name: "loop", aliases: ["proactive"], help: "Re-run a prompt: [interval] <prompt> [--times N] | status | pause | resume | stop", run: recurringCommand("loop") },
+  { name: "loop", aliases: ["proactive"], help: "Re-run a prompt: [interval] <prompt> [--times N] | status | run | pause | resume | stop", run: recurringCommand("loop") },
   {
     name: "status",
     help: "Show session, model, token and context info",

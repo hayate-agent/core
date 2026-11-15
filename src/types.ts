@@ -28,6 +28,8 @@ export interface Inbound {
   sessionKey: string;
   text: string;
   source: InputSource;
+  /** Explicitly admitted loop occurrence, durably retained independently of timer ticks. */
+  explicitLoopRun?: boolean;
   /** Host event identity for authority checks; event data never grants continuation. */
   hostEvent?: { executionId: string };
   /** Trusted scheduler metadata; output never expands the configured follow-up scope. */
