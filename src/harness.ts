@@ -1466,6 +1466,16 @@ export class Harness {
     return s.loop ? structuredClone(s.loop) : null;
   }
 
+  /** Host-owner handoff: freeze only the exact inspected loop, retaining every queued turn. */
+  async freezeLoopForMigration(key: string, expectedDigest: string): Promise<void> {
+    const s = this.state(key), loop = s.loop;
+    if (!loop || !this.onStateChange) throw Error("Loop or persistence unavailable");
+    const digest = createHash("sha256").update(JSON.stringify({ prompt: loop.prompt, everyMs: loop.everyMs })).digest("hex");
+    if (digest !== expectedDigest) throw Error("Loop changed since inspection");
+    loop.paused = true;
+    await this.onStateChange();
+  }
+
   /** Admit one additional occurrence without changing the recurring schedule or count. */
   async runLoopNow(key: string, commandId: string): Promise<void> {
     const s = this.state(key);

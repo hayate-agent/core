@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { createHash } from "node:crypto";
+import { executionControlRequest } from "../src/execution-control.js";
 import { Harness } from "../src/harness.js";
 import { FakeRuntime } from "./fakes.js";
 import { loopPlugin } from "../src/builtin-plugins/loop-plugin.js";
@@ -62,4 +64,20 @@ test("explicit loop run is durable, deduplicated and leaves schedule and held wo
   await h.runLoopNow("one", "command-1"); await h.waitForSessionIdle("one");
   assert.equal(count, 1); assert.deepEqual(s.loop, before);
   s.loop!.paused = true; await assert.rejects(h.runLoopNow("one", "command-2"), /paused/);
+});
+
+test("host-owner freeze preserves every queued occurrence and rejects an altered loop", async t => {
+  const h = setup(); t.after(() => h.stop(0)); const s = h.state("matrix:room");
+  s.loop = { prompt: "original", everyMs: 60000, nextAt: 123456, paused: false, remaining: 4 };
+  s.queue.push({ sessionKey: s.key, source: "loop", text: "already admitted" }, { sessionKey: s.key, source: "cron", text: "unrelated" });
+  const digest = createHash("sha256").update(JSON.stringify({ prompt: "original", everyMs: 60000 })).digest("hex");
+  const dispatcher = {} as any; const freeze = (key: string, hash: string) => h.freezeLoopForMigration(key, hash);
+  await assert.rejects(executionControlRequest(dispatcher, { op: "freeze-loop", parent: s.key, digest: "0".repeat(64) }, undefined, freeze));
+  assert.equal(s.loop.paused, false);
+  await executionControlRequest(dispatcher, { op: "freeze-loop", parent: s.key, digest }, undefined, freeze);
+  assert.deepEqual(s.queue.map(i => i.text), ["already admitted", "unrelated"]);
+  assert.deepEqual(s.loop, { prompt: "original", everyMs: 60000, nextAt: 123456, paused: true, remaining: 4 });
+  const restored = setup(); restored.restoreSessions(structuredClone(h.snapshotSessions()));
+  assert.equal(restored.state(s.key).loop?.paused, true); await restored.stop(0);
+  await assert.rejects(executionControlRequest(dispatcher, { op: "freeze-loop", parent: s.key, digest, unexpected: true }, undefined, freeze));
 });

@@ -57,6 +57,12 @@ graceful shutdown. Unsafe directory ownership/permissions fail closed. Unique en
 unknown socket; the private pointer is atomically replaced. Native lifecycle
 single-owner locking remains responsible for preventing two agent processes.
 
+## Freeze a loop for scheduler handoff
+
+The same private owner socket accepts `{ "op": "freeze-loop", "parent": "<exact conversation key>", "digest": "<sha256>" }`. The digest is SHA-256 of UTF-8 `JSON.stringify({prompt: loop.prompt, everyMs: loop.everyMs})`, using the exact inspected prompt and interval. The host checks this fingerprint before setting the existing loop paused and durably saving it. It does not change the schedule, remaining count, tasks, HOLDs, or any already queued turn; unlike `/loop pause`, it does not filter the queue. A retry of the same operation is safe. A lost response requires reinspection, not assumptions. Existing timer turns retain their existing crash-durability semantics; this operation does not make them newly durable.
+
+This is only a handoff primitive, **not** a migration transaction: provision and validate the intended cron job separately, freeze the verified source before enabling it, and reconcile an interruption at each boundary. Never enable both schedules at once. Check the new destination, timezone, original prompt and cadence. The host owner must explicitly authorize every handoff; this endpoint is not exposed to model tools or network clients.
+
 ## Contradictory completion
 
 A worker's final `blocked` or missing status cannot become terminal success merely
