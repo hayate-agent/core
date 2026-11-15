@@ -13,7 +13,7 @@ export interface ActivitySnapshot {
   outputTags?: string[];
   context: "operator" | "host" | "scheduled" | "worker";
   phase: "starting" | "running" | "tool" | "completed" | "failed" | "cancelled";
-  activity: "opening session" | "selecting model" | "runtime active" | "tool running" | "tool settled" | "turn settled" | "compacting context" | "compaction completed" | "compaction failed; original retained" | "compaction cancelled; original retained";
+  activity: "opening session" | "selecting model" | "runtime active" | "tool running" | "tool settled" | "turn settled" | "compacting context" | "compaction completed" | "compaction failed; original retained" | "compaction cancelled; original retained" | "model reasoning active" | "preparing tool arguments";
   tools: Array<{ callId: string; name: string }>;
   execution?: ExecutionMetadata;
   executionState?: "pending" | "observed" | "unavailable";
@@ -89,6 +89,14 @@ export class TurnActivity {
       this.phase = this.tools.size ? "tool" : "running";
       this.activity = this.tools.size ? "tool running" : "runtime active";
       this.publish("progress");
+      return;
+    }
+    if (event.type === "model_progress") {
+      const next = event.phase === "reasoning" ? "model reasoning active" : "preparing tool arguments";
+      const changed = this.activity !== next;
+      this.phase = "running"; this.activity = next;
+      if (this.executionState === "pending") this.executionState = "unavailable";
+      if (changed || this.now() - this.lastEmitted >= this.interval) this.publish("progress");
       return;
     }
     if (event.type === "compaction") {

@@ -34,6 +34,10 @@ test("Main gets direct-answer guidance independently of dispatcher state without
     if (dispatcherEnabled && dispatcherReady) {
       assert.match(text, /Delegate shell execution and implementation through the ready dispatcher/);
       assert.match(text, /A busy worker is not a broken dispatcher/);
+      assert.match(text, /requestId=<stable logical task id>/);
+      assert.match(text, /do not try blocked bash\/edit\/write calls in Main/);
+      assert.match(text, /Do not poll an unchanged task in a tool loop/);
+      assert.match(text, /without closing unfinished work/);
     } else {
       assert.match(text, /delegation is optional, not a prerequisite/);
       assert.match(text, /use your available tools yourself/);

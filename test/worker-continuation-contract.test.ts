@@ -54,7 +54,11 @@ for(const tools of [undefined,['read','bash','plugin_task_continuation','plugin_
    const s=wrapped.session;
    const check=()=>{const active=s.getActiveToolNames();
     for(const n of hidden) assert.equal(active.includes(n),false,key+' must not see '+n+' tools='+JSON.stringify(tools));
-    for(const n of visible) assert.equal(active.includes(n),true,key+' must see '+n+' tools='+JSON.stringify(tools));};
+    for(const n of visible) {
+     const definition=s.getAllTools().find(t=>t.name===n);
+     assert.ok(active.includes(n)||definition?.exposure==='deferred',key+' must retain/discover '+n+' tools='+JSON.stringify(tools));
+     if(definition?.exposure==='deferred')assert.ok(active.includes('tool_search'),key+' must expose discovery');
+    }};
    check();
    // Catalog change forces SDK reload; exclusion must survive it.
    catalog=[...catalog.slice(0,-1),{...mk('plugin_memory'),description:'changed'+key+tools?.length}];
