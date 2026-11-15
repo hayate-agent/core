@@ -158,6 +158,8 @@ export interface TurnSettlement {
   taskPresentation?: { to: import("./types.js").Address };
   repetition?: import("./repetition-budget.js").RepetitionBudget;
   cronOutput?: string;
+  /** Observation only; never grants completion or continuation authority. */
+  scheduledSilence?: { taskId: string; ref: TaskRef };
   outbox: import("./delivery/outbox.js").OutboxEntry[];
   continuation?: import("./types.js").Inbound["continuation"];
   goal?: import("./harness.js").Goal;
@@ -435,7 +437,7 @@ export class ExecutionStore {
     });
   }
   private stoppedSettlement(settlement: TurnSettlement): TurnSettlement {
-    return { ...settlement, continuation: undefined, outbox: settlement.outbox.map(entry => ({
+    return { ...settlement, scheduledSilence: undefined, continuation: undefined, outbox: settlement.outbox.map(entry => ({
       ...entry, text: "⏹️ Abgebrochen. Bereits ausgeführte Seiteneffekte prüfen.", outcome: "cancelled",
     })) };
   }
@@ -472,6 +474,22 @@ export class ExecutionStore {
           committed.outbox.push({ id: `${id}:task-plan`, sessionKey, to: structuredClone(settlement.taskPresentation.to), text: renderTask(order) });
         }
         validateTaskBook(draft.taskBook);
+      }
+      if (committed.scheduledSilence) {
+        const { taskId, ref } = committed.scheduledSilence;
+        const book = draft.taskBook;
+        const binding = book?.bindings.find(b => b.sessionKey === sessionKey && b.taskId === taskId);
+        const order = book?.tasks.find(t => t.id === ref.id);
+        if (!order?.scheduled || !binding || binding.ref.id !== ref.id || binding.ref.generation !== ref.generation ||
+            ref.generation > order.generation || !sessionKey.startsWith("cron:")) throw Error("Invalid scheduled silence provenance");
+        await this.archiveTaskReceipts(order);
+        const receiptId = `silence:${id}`;
+        const digest = taskDigest({ turnId: id, sessionKey, taskId, ref, result: "NO_REPLY" });
+        const old = order.receipts.find(r => r.id === receiptId) ?? await this.archivedTaskReceipt(order.id, receiptId);
+        if (old && old.digest !== digest) throw Error("Scheduled silence identity conflict");
+        if (!old) order.receipts.push({ id: receiptId, kind: "scheduled-silence", sourceId: id, at: this.now(),
+          generation: ref.generation, revision: order.revision, digest, reason: "NO_REPLY" });
+        validateTaskBook(book!);
       }
       turn.state = "settled";
       turn.settlement = committed;
