@@ -3319,6 +3319,16 @@ export class Harness {
           }
         } finally {
           s.prompting = false;
+          // Overflow recovery may fail before prompt() returns normally. Still
+          // adopt its durable SDK failure at the settled boundary; rotate only,
+          // never replay this input or turn its uncertain effects into success.
+          if (s.cancelling !== input && !this.stopping && !session.busy && this.opts.contextMaintenance &&
+              !this.maintenanceForeground.has(input) && session.status().nativeCompactionFailure) {
+            try {
+              await this.opts.contextMaintenance.boundary(s.key, session, rotate, input.replyTo ?? s.replyTo ?? this.home);
+              await this.flushMaintenanceNotices();
+            } catch { this.log("Automatic compaction handover incomplete; original context and task state retained"); }
+          }
           s.prompted = input;
           if (input.source === "channel" && !(input.continuationDepth ?? 0) && session.archiveEntries) {
             const { hashtagReferences } = await import("./hashtags.js");

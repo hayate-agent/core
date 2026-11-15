@@ -174,6 +174,8 @@ export interface RuntimeSessionStatus {
   contextHistoryTokens?: number;
   contextBudgetPercent?: number;
   contextWindow?: number;
+  /** Persisted SDK automatic-compaction failure, not an operator cancellation. */
+  nativeCompactionFailure?: { reason: "threshold" | "overflow"; receiptId: string };
   /** Effective runtime system prompt size; excludes conversation history and tool schemas. */
   systemPrompt?: { characters: number; bytes: number };
 }
