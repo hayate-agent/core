@@ -177,14 +177,21 @@ not sandboxed workers. Main cannot select replay policy in a tool call.
 
 Direct routing classification is tool-free and is not the delegated worker. If its
 HTTP outcome is interrupted or unknown, the host durably marks the receipt
-`abandoned` and uses the existing configured default worker model. It does not
-repeat the unknown classifier HTTP call. Startup and automatic recovery also
+`abandoned` and selects the explicitly configured `high` worker role, without
+inventing a `high` classification verdict. This keeps unclassified productive
+work off Main when a dedicated worker role is configured; configs without a
+usable high worker role retain their legacy default. A classifier HTTP rejection
+also cannot turn the selected dispatcher/off request into a second request on
+Main's model/thinking pair. It does not repeat an unknown classifier HTTP call. Startup and automatic recovery also
 adopt pre-existing classifier-only pauses, retaining the execution identity and
 receipt, provided the matching direct strategy supports reconciliation and no
 worker effect intent or settled effect exists. Manual pauses, cancellation,
 expired mandates, stopped parents and actual recovery policies remain enforced;
-productive worker effects are never made replay-safe by this fallback. This
-change does not apply to sequential planning or independent validation.
+productive worker effects are never made replay-safe by this fallback. Existing
+worker intents keep their exact stored route; a configuration/fallback change
+never rebinds an already-started execution. Actual selected routes remain visible
+in the intent and worker execution metadata. This change does not apply to
+sequential planning or independent validation.
 
 The new receipt phase requires this Core version to read the ledger. Before
 rolling back to an older version, stop the runtime and use a reviewed compatible
