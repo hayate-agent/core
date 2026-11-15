@@ -128,6 +128,7 @@ export interface TurnOptions {
 export type TurnEvent =
   | { type: "execution"; selection: import("./builtin-plugins/execution-metadata.js").ExecutionMetadata }
   | { type: "text"; delta: string }
+  | { type: "compaction"; state: "started" | "completed" | "failed" | "cancelled"; reason: "manual" | "threshold" | "overflow" }
   | { type: "tool"; phase: "start" | "end"; name: string; callId?: string; error?: boolean; detail?: string }
   /** One assistant message finished; usage is for that message only. */
   | {
@@ -171,6 +172,8 @@ export interface RuntimeSessionStatus {
   /** Separately labelled host estimate for an explicitly configured local working budget. */
   contextBudgetTokens?: number;
   contextEstimateTokens?: number;
+  /** SDK usage-aware context estimate, or approximate byte/3 fallback (never a tokenizer guarantee). */
+  contextEstimateBasis?: "sdk-context" | "heuristic";
   contextHistoryTokens?: number;
   contextBudgetPercent?: number;
   contextWindow?: number;

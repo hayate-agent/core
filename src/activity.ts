@@ -13,7 +13,7 @@ export interface ActivitySnapshot {
   outputTags?: string[];
   context: "operator" | "host" | "scheduled" | "worker";
   phase: "starting" | "running" | "tool" | "completed" | "failed" | "cancelled";
-  activity: "opening session" | "selecting model" | "runtime active" | "tool running" | "tool settled" | "turn settled";
+  activity: "opening session" | "selecting model" | "runtime active" | "tool running" | "tool settled" | "turn settled" | "compacting context" | "compaction completed" | "compaction failed; original retained" | "compaction cancelled; original retained";
   tools: Array<{ callId: string; name: string }>;
   execution?: ExecutionMetadata;
   executionState?: "pending" | "observed" | "unavailable";
@@ -88,6 +88,13 @@ export class TurnActivity {
       this.executionState = this.execution.model && this.execution.thinking ? "observed" : "unavailable";
       this.phase = this.tools.size ? "tool" : "running";
       this.activity = this.tools.size ? "tool running" : "runtime active";
+      this.publish("progress");
+      return;
+    }
+    if (event.type === "compaction") {
+      this.phase = "running";
+      this.activity = event.state === "started" ? "compacting context" : event.state === "completed" ? "compaction completed"
+        : event.state === "failed" ? "compaction failed; original retained" : "compaction cancelled; original retained";
       this.publish("progress");
       return;
     }
