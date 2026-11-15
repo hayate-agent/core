@@ -427,6 +427,16 @@ export function sequentialStrategy(deps: SequentialDeps): DispatcherStrategy {
           const exact = state.assessment?.route ?? await exactRole(runtime, deps.roles()?.config, role);
           if (typeof exact === "string") return block(exact);
           route = exact;
+          // A new step gets its own context, not every earlier tool log. Retain
+          // the exact same session for corrections/recovery of an unsettled step.
+          // Native session files remain archived and prior outcomes are supplied
+          // explicitly below; this never grants effect replay.
+          if (!state.assessment && !state.correction && !state.prior && !state.escalation &&
+              (index > 0 || state.planHistory) && typeof deps.harness.sessionFor === "function") {
+            await deps.harness.waitForSessionIdle(sessionKey);
+            await authorize();
+            await deps.harness.sessionFor(sessionKey, true);
+          }
           await context.intent(intentKey, "unsafe", route, decisionRevision);
         }
         let assessmentRecovery = !!state.assessment;
@@ -715,7 +725,11 @@ End your reply with exactly one final line: "STEP-STATUS: complete" only if the 
           status = stepStatus(reply);
           verdictState = undefined;
         }
-        const result = (state.assessment?.reply ?? reply).slice(0, STEP_RESULT_LIMIT);
+        const settledReport = reply; // the just-validated report, not its storage-budget projection
+        let parentReport = state.assessment?.reply ?? settledReport;
+        try { parentReport = await runtime.compactResult?.(sessionKey, settledReport) ?? parentReport; }
+        catch { /* Do not fail an independently settled step for optional shortening. */ }
+        const result = parentReport.slice(0, STEP_RESULT_LIMIT);
         const next: SequentialState = structuredClone(state);
         delete next.prior;
         delete next.progress; // progress evidence belongs to this exact step only

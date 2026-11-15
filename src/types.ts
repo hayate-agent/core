@@ -228,6 +228,9 @@ export interface AgentRuntime {
   planDispatchHttp?(request: import("./planner-http.js").PlannerHttpRequest): Promise<import("./planner-http.js").PlannerHttpOutcome>;
   readonly name: string;
   open(sessionKey: string, options?: OpenSessionOptions): Promise<RuntimeSession>;
+  /** Optional context optimization: retain a long child report and return an excerpt/reference.
+   * Must not add model calls, change authority or fail a completed operation. */
+  compactResult?(sessionKey: string, text: string): Promise<string>;
   /** Model refs ("provider/model") usable for per-turn overrides. */
   models?(): Promise<string[]>;
   sessions?(key: string, offset?: number): Promise<import("./sessions.js").SessionSummary[]>;

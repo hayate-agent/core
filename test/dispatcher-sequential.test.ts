@@ -137,6 +137,39 @@ async function setup(t: import("node:test").TestContext, script: Script, opts: {
 }
 const state = (checkpoint?: string) => JSON.parse(checkpoint!) as SequentialState;
 
+test("each new step gets a small fresh context; independent validation sees the original before parent shortening", async t => {
+  const report = "verified step result\n" + "RAW TOOL DETAIL ".repeat(1000) + "\nSTEP-STATUS: complete";
+  const env = await setup(t, {
+    plan: steps(["inspect source", "simple"], ["check tests", "simple"]),
+    worker: () => report,
+    verdict: text => { assert.match(text, /RAW TOOL DETAIL/); return '{"state":"completed"}'; },
+  });
+  let shortened = 0;
+  (env.runtime as AgentRuntime).compactResult = async (_key, value) => {
+    assert.equal(value, report); shortened++;
+    return "Verified step summary; full report retained in task artifact.\nSTEP-STATUS: complete";
+  };
+  const task = await env.run("Inspect source and check tests, without external changes.");
+  assert.equal(task.status, "completed"); assert.equal(env.calls.worker.length, 2);
+  const workerOpens = env.runtime.opened.filter(item => item.key.startsWith("dispatch:"));
+  assert.equal(workerOpens.length, 2); assert.equal(workerOpens[1]!.fresh, true);
+  assert.equal(env.runtime.sessions.get(workerOpens[1]!.key)!.prompts.length, 1, "no prior-step tool history inherited");
+  assert.equal(shortened, 2); assert.doesNotMatch(task.result!, /RAW TOOL DETAIL/);
+});
+
+test("a report above 64K reaches independent validation with material evidence in its middle", async t => {
+  const report = "ordinary detail ".repeat(600) + "MATERIAL-MIDDLE: required receipt was never obtained\n" + "ordinary detail ".repeat(4200) + "\nSTEP-STATUS: complete";
+  assert(report.length > 64000);
+  let checked = 0;
+  const env = await setup(t, {
+    worker: () => report,
+    verdict: text => { checked++; assert.match(text, /MATERIAL-MIDDLE/); return '{"state":"blocked"}'; },
+  });
+  const task = await env.run("Inspect the required receipt without changing external state.");
+  assert.equal(checked, 1); assert.equal(task.status, "paused");
+  assert.equal(env.calls.worker.length, 1, "independent rejection does not replay the worker");
+});
+
 test("blocked verification does not strand independently admitted same-role publication or replay its settled worker", async t => {
   const env = await setup(t, {
     plan: steps(["live verification", "simple"], ["publish source", "simple"]),

@@ -19,6 +19,11 @@ export function capabilityContext(input: {
     exposed: registered.has(name) && !denied.includes(name) && (input.selectedTools === undefined || input.selectedTools.includes(name)) });
   const dispatch = tool("plugin_dispatch");
   const subagent = tool("plugin_subagent");
+  if (child) return [input.reviewInstructions,
+    "Use the declared tools for this work package; return a summary and evidence references. Parent orchestration is not part of the assignment. Messaging availability is not permission to send or bypass tool selection.",
+    `Effective Harness capabilities (host facts, not authority): ${JSON.stringify({ revision: input.revision,
+      dispatcher: { ...dispatch, sessionAllowed: false }, subagent: { ...subagent, sessionAllowed: false },
+      review: tool("plugin_review"), messaging: { tool: tool("plugin_message") } })}`].filter(Boolean).join("\n\n");
   const executionGuidance = child ? "" : input.dispatcherEnabled && input.dispatcherReady
     ? "Main answers questions and uses native read/search directly. Delegate shell execution and implementation through the ready dispatcher, including after worker failures. A busy worker is not a broken dispatcher."
     : "Main execution: delegation is optional, not a prerequisite for answering the operator. Answer short questions, known facts and simple status requests directly. For a bounded lookup, local inspection or short research, use your available tools yourself; do not queue a worker merely because the dispatcher is enabled or busy. Delegate substantial, long-running or independently parallel work when useful, within the existing mandate. A delegated dependent task still waits for its prerequisites. The dispatcher is an event-driven host scheduler, not a single exclusive execution slot: it accepts multiple tasks and handles worker results while other tasks run. Worker capacity limits active worker executions, not Main turns or task submission. Queued work waits for worker capacity, not for the dispatcher to finish an unrelated task. Do not invent capacity or claim live status without current evidence. This guidance grants no unavailable tools, permissions, review exemptions or backend concurrency.";
