@@ -170,6 +170,8 @@ function withDetail<T extends object>(event: T, value: unknown): T {
 
 /** PI session event → harness turn event (undefined: not relevant). */
 export function toTurnEvent(event: AgentSessionEvent): TurnEvent | undefined {
+  if (event.type === "compaction_start") return { type: "compaction", state: "started", reason: event.reason };
+  if (event.type === "compaction_end") return { type: "compaction", state: event.result ? "completed" : event.aborted ? "cancelled" : "failed", reason: event.reason };
   if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
     return { type: "text", delta: event.assistantMessageEvent.delta };
   }
@@ -478,10 +480,17 @@ export class PiSession implements RuntimeSession {
     // Keep the physical-window telemetry intact and label this separate estimate.
     const active = budget ? new Set(this.session.getActiveToolNames()) : new Set<string>();
     const historyBytes = budget ? modelInputEstimate(this.session.messages.filter(message => message.role !== "system")) : 0;
-    const estimate = budget ? this.workingOverhead() + Buffer.byteLength(this.session.systemPrompt) + historyBytes +
-      Buffer.byteLength(JSON.stringify(this.session.getAllTools().filter(tool => active.has(tool.name)).map(tool => tool.parameters))) : undefined;
+    const fallbackBytes = budget ? this.workingOverhead() + Buffer.byteLength(this.session.systemPrompt) + historyBytes +
+      Buffer.byteLength(JSON.stringify(this.session.getAllTools().filter(tool => active.has(tool.name)).map(tool => tool.parameters))) : 0;
+    // SDK context usage already accounts for provider counters, trailing messages
+    // and invalidated pre-compaction usage. Bytes are only a labelled fallback
+    // estimate, never tokens or a reason to force native compaction.
+    const known = typeof usage?.tokens === "number" && Number.isFinite(usage.tokens) && usage.tokens > 0;
+    const estimate = budget ? known ? usage.tokens! : Math.ceil(fallbackBytes / 3) : undefined;
     return {
-      ...(budget && estimate !== undefined ? { contextBudgetTokens: budget, contextEstimateTokens: estimate, contextHistoryTokens: historyBytes, contextBudgetPercent: estimate / budget * 100 } : {}),
+      ...(budget && estimate !== undefined ? { contextBudgetTokens: budget, contextEstimateTokens: estimate,
+        contextEstimateBasis: known ? "sdk-context" as const : "heuristic" as const,
+        contextHistoryTokens: Math.ceil(historyBytes / 3), contextBudgetPercent: estimate / budget * 100 } : {}),
       ...(nativeCompactionFailure ? { nativeCompactionFailure } : {}),
       sessionId: this.record?.id ?? this.session.sessionId,
       title: this.record?.title ?? this.session.sessionManager?.getSessionName(),
@@ -1036,16 +1045,11 @@ export class PiRuntime implements AgentRuntime {
       const budget = Math.min(MAX_MODEL_INPUT_TOKENS, localContextBudget(configured, child, local, policy));
       const bounded = policy ? contextCompactionSettings(model.contextWindow, baseline, budget)
         : options.ephemeral ? undefined : workerCompactionSettings(sessionKey, model.contextWindow, baseline, this.opts.workerContextTokens?.());
-      // Byte-aware early history maintenance supplements native usage counters
-      // (local providers can report zero). Native compaction runs only after all
-      // tools settle and retains original entries; never truncate tool pairs.
-      const limit = modelInputLimit(budget, model.contextWindow, model.maxTokens);
-      const pressure = modelInputEstimate(session.sessionManager.buildSessionProjection().messages) > limit * 0.75;
-      if (bounded || pressure) settingsManager.applyOverrides({ compaction: { enabled: true,
-        modelOverrides: { [`${model.provider}/${model.id}`]: {
-          reserveTokens: pressure ? model.contextWindow : bounded!.reserveTokens,
-          keepRecentTokens: pressure ? Math.min(baseline.keepRecentTokens, Math.floor(limit / 16)) : bounded!.keepRecentTokens,
-        } } } });
+      // Native SDK checks use provider usage plus trailing-message estimates,
+      // with their own heuristic fallback for missing/zero counters. Do not
+      // compare JSON bytes to a token budget and force a zero-token threshold.
+      if (bounded) settingsManager.applyOverrides({ compaction: { enabled: true,
+        modelOverrides: { [key]: { reserveTokens: bounded.reserveTokens, keepRecentTokens: bounded.keepRecentTokens } } } });
       else settingsManager.applyOverrides({ compaction: { enabled: this.opts.compactionOwner?.() === "agent",
         modelOverrides: { [key]: baseline } } });
     };

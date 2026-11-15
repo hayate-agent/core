@@ -33,7 +33,15 @@ export class GatewayProgress {
     }
   }
   event(event: TurnEvent): void {
-    if (this.closed || this.mode === "off" || event.type !== "tool") return;
+    if (this.closed || this.mode === "off") return;
+    if (event.type === "compaction") {
+      this.pending.push(event.state === "started" ? "⏳ Kontext wird komprimiert."
+        : event.state === "completed" ? "✓ Kontextkomprimierung abgeschlossen."
+          : `⚠ Kontextkomprimierung ${event.state === "cancelled" ? "abgebrochen" : "fehlgeschlagen"}; Originalkontext bleibt erhalten.`);
+      this.flush();
+      return;
+    }
+    if (event.type !== "tool") return;
     let error = event.error;
     if (event.phase === "start") {
       const active = this.active.get(event.name);

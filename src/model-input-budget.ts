@@ -1,10 +1,9 @@
-/** Admission bound for the final PI message projection, NOT a tokenizer or disk
- * retention policy. UTF-8 JSON bytes plus framing conservatively count normal
- * text, tool declarations/arguments and inline image data. Provider templates,
- * image token expansion and payload-hook rewrites are not tokenizer-accounted.
- * No messages are removed or changed: oversized evidence fails closed instead
- * of silently losing authority, unfinished effects or one half of a tool pair.
- * Exact provider token accounting remains provider-specific. */
+/** Configured input-token ceiling and legacy diagnostic byte-size helpers.
+ * modelInputEstimate returns UTF-8 JSON BYTES plus framing, not tokens. Its
+ * historical name does not make it a tokenizer or production admission gate.
+ * Never compare those bytes directly with token capacity to force compaction.
+ * Native SDK/provider context accounting owns actual capacity enforcement;
+ * no messages, authority or tool/result pairs are removed by these helpers. */
 export const MAX_MODEL_INPUT_TOKENS = 131072;
 export function modelInputEstimate(messages: readonly unknown[]): number {
   return messages.reduce<number>((total, message) => total + Buffer.byteLength(JSON.stringify(message), "utf8") + 32, 256);
