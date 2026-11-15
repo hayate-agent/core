@@ -62,6 +62,8 @@ test("actual SDK requests: Main and children receive excerpts, children skip his
       assert.match(sent, /Grouped results still belong to their individual calls/);
       assert.match(sent, /Repeated status calls without a new event add no progress/);
       assert.match(sent, /Never rerun a completed or uncertain operation merely to recover its output/);
+      assert.match(sent, /FIRST read that original's relevant range/);
+      assert.match(sent, /never automatically retry a failed batch member/);
       assert.doesNotMatch(sent, /OLD-MEMORY/, 'Main and workers reference historical overlays instead of injecting the full file');
       assert.match(sent, /Persona\/history index/);
       if (key === "main") assert(recalls > beforeRecall, 'Main retains relevant working-memory recall');
