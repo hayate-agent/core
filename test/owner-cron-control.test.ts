@@ -1,0 +1,31 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { mkdtemp, writeFile, rm } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import path from "node:path";
+import os from "node:os";
+import { Harness } from "../src/harness.js";
+import { Scheduler } from "../src/scheduler.js";
+import { executionControlRequest } from "../src/execution-control.js";
+import { FakeRuntime } from "./fakes.js";
+
+const hash = (s: string) => createHash("sha256").update(s).digest("hex");
+test("owner cron reload fingerprint and idempotent enabled prompt admission", async t => {
+ const dir = await mkdtemp(path.join(os.tmpdir(), "owner-cron-")); const file = path.join(dir, "jobs.yaml");
+ const runtime = new FakeRuntime(); let calls = 0; runtime.answer = () => { calls++; return "NO_REPLY"; };
+ const h = new Harness({ runtime }); h.onStateChange = async () => {};
+ const sched = new Scheduler(h, { jobsFile: file, timezone: "UTC", log: () => {} });
+ t.after(async () => { sched.stop(); await h.stop(0); await rm(dir, { recursive: true, force: true }); });
+ const text = JSON.stringify({ jobs: [{ name: "overview", schedule: "0 * * * *", prompt: "exact mandate", deliver: "local" }] });
+ await writeFile(file, text);
+ await assert.rejects(executionControlRequest(undefined, { op: "cron-reload", digest: "0".repeat(64) }, undefined, undefined, sched));
+ assert.equal(sched.list().length, 0);
+ await executionControlRequest(undefined, { op: "cron-reload", digest: hash(text) }, undefined, undefined, sched);
+ const digest = hash(JSON.stringify(sched.find("overview"))); const frame = { op: "cron-run", name: "overview", digest, requestId: "one" };
+ await executionControlRequest(undefined, frame, undefined, undefined, sched); await h.waitForSessionIdle("cron:overview");
+ await executionControlRequest(undefined, frame, undefined, undefined, sched); await h.waitForSessionIdle("cron:overview");
+ assert.equal(calls, 1);
+ sched.setEnabled("overview", false);
+ await assert.rejects(executionControlRequest(undefined, { ...frame, requestId: "two" }, undefined, undefined, sched));
+ assert.equal(calls, 1);
+});

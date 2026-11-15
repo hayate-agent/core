@@ -63,6 +63,12 @@ The same private owner socket accepts `{ "op": "freeze-loop", "parent": "<exact 
 
 This is only a handoff primitive, **not** a migration transaction: provision and validate the intended cron job separately, freeze the verified source before enabling it, and reconcile an interruption at each boundary. Never enable both schedules at once. Check the new destination, timezone, original prompt and cadence. The host owner must explicitly authorize every handoff; this endpoint is not exposed to model tools or network clients.
 
+## Owner Cron controls
+
+The private owner socket accepts `{"op":"cron-reload","digest":"<sha256>"}`, where digest is the exact UTF-8 jobs file bytes. A missing or changed file is rejected without replacing the active schedule. The response lists loaded jobs, their enabled states and next times. Cron overrides are not changed. Reload replaces all jobs from the operator-owned source file: inspect the entire file first.
+
+For a single enabled plain-prompt job, `{"op":"cron-run","name":"<exact name>","digest":"<sha256>","requestId":"<stable ID>"}` admits one extra `cron` turn. Digest is SHA-256 of UTF-8 `JSON.stringify(job)` of the parsed definition in property order. Script, prompt-file, audience and creator-owned jobs are deliberately rejected. The request does not change any schedule, enable state, HOLD or existing execution. The occurrence is durably admitted using a deterministic ID and normal inbox deduplication; it does not assert the work completed. **Deduplication is bounded by the ordinary 2000-ID seen window:** after a lost response, reconcile the exact occurrence and receipts; never blindly retry once the ID may have aged out. No automatic retry or second request ID is safe for an unknown outcome.
+
 ## Contradictory completion
 
 A worker's final `blocked` or missing status cannot become terminal success merely
