@@ -45,6 +45,43 @@ Enroll a new public key before switching its signer, keep the old verifier while
 old requests can still arrive, then retire it after those requests/proofs drain.
 Never restart active business writers forcibly to rotate a scheduling key.
 
+## Optional in-runtime admission (not global hardware QoS)
+
+Installations can explicitly configure physical local request concurrency:
+
+```yaml
+localModelScheduling:
+  - model: homelab-main/deepseek-v4-flash
+    concurrency: 1
+```
+
+Omitted means unchanged/unrestricted behavior. This is an installation setting,
+not a model-writable settings overlay or a token/context-window limit. Only the
+specified physical endpoint + model is affected. Provider aliases pointing at
+that same endpoint/model share capacity, including Main, worker, subagent, native
+summary, HTTP classifier/planner/review, and review-worktree requests in this
+runtime. Different physical models are unaffected; model, thinking, original
+worker intent, tools, effect ownership and completion/review authority are not
+changed.
+
+The permit covers one **complete model response**, not just headers/first delta
+and not the subsequent tool batch or its independent assessment. Queued human
+requests precede queued background work; after four foreground admissions a
+waiting background request gets its turn. Already-running inference is never
+aborted or migrated. Waiting precedes creation of the SDK provider stream/HTTP
+timeout, so waiting cannot itself trigger repeated HTTP attempts. Cancellation
+and authority/expiry are rechecked before sending; cancelled queued work sends
+nothing. Explicit outer task/review deadlines remain binding. A local queue event
+is reported as capacity waiting/admission/cancellation, not as model reasoning,
+tool progress, a productive receipt or a reset of own semantic inactivity.
+
+This prevents one runtime from filling the same backend with competing cold
+prefills and retry queues. It does **not** control other processes/agents, reserve
+hardware globally, preempt a long already-running request, or bound provider
+queue/prefill duration. The separate signed headers remain metadata until an
+actual shared admission owner uses them. Activate configuration through the
+normal runtime owner; never silently restart other active model users.
+
 ## Delivery boundary
 
 The actual SDK/HTTP fixture verifies foreground/background headers, signatures,
