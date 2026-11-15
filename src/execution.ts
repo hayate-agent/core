@@ -165,7 +165,7 @@ export interface TurnSettlement {
   goal?: import("./harness.js").Goal;
   consumed: string[];
 }
-export interface DurableTurn { id: string; sessionKey: string; state: "running" | "settled"; stopped?: boolean; settlement?: TurnSettlement; scheduledOccurrence?: { taskId: string; ref: TaskRef } }
+export interface DurableTurn { id: string; sessionKey: string; state: "running" | "settled"; stopped?: boolean; settlement?: TurnSettlement; scheduledOccurrence?: { taskId: string; ref: TaskRef }; takeoverTaskId?: string; takeoverExecutionIds?: string[] }
 export type WaitAuthorityDenialReason = "ownership" | "cancelled" | "deadline" | "missing-task" | "stopped-task" | "sequence";
 export interface WaitAuthorityDenialReceipt {
   reason: WaitAuthorityDenialReason;
@@ -326,6 +326,8 @@ export class ExecutionStore {
           if (!turn || typeof turn.id !== "string" || !turn.id || turnIds.has(turn.id) ||
               typeof turn.sessionKey !== "string" || !turn.sessionKey || !["running", "settled"].includes(turn.state)) throw Error("Invalid durable turn");
           if (turn.stopped !== undefined && typeof turn.stopped !== "boolean") throw Error("Invalid turn stop marker");
+          if (turn.takeoverTaskId !== undefined && (typeof turn.takeoverTaskId !== "string" || !turn.takeoverTaskId)) throw Error("Invalid takeover task");
+          if (turn.takeoverExecutionIds !== undefined && (!Array.isArray(turn.takeoverExecutionIds) || turn.takeoverExecutionIds.some(id => typeof id !== "string" || !id))) throw Error("Invalid takeover executions");
           turnIds.add(turn.id);
           if (turn.state === "settled") this.validateSettlement(turn.sessionKey, turn.settlement);
           else if (turn.settlement !== undefined) throw Error("Unexpected turn settlement");
@@ -424,7 +426,7 @@ export class ExecutionStore {
         draft.executions.some(task => task.token && task.intent && turn.sessionKey === `dispatch:${task.id}:${task.token}`));
     });
   }
-  beginTurn(id: string, sessionKey: string, scheduledOccurrence?: { taskId: string; ref: TaskRef }): Promise<void> {
+  beginTurn(id: string, sessionKey: string, scheduledOccurrence?: { taskId: string; ref: TaskRef }, takeoverTaskId?: string): Promise<void> {
     return this.mutate(draft => {
       if (typeof id !== "string" || !id || typeof sessionKey !== "string" || !sessionKey) throw Error("Invalid turn identity");
       const turns = draft.turns ??= [];
@@ -432,9 +434,34 @@ export class ExecutionStore {
       // A pre-upgrade running turn has no occurrence binding. Keep it runnable,
       // but never retroactively assert provenance for its eventual result.
       if (old && (old.sessionKey !== sessionKey || old.scheduledOccurrence && scheduledOccurrence && JSON.stringify(old.scheduledOccurrence) !== JSON.stringify(scheduledOccurrence))) throw Error("Turn identity conflict");
+      if (takeoverTaskId && draft.executions.some(task => task.parent === sessionKey && task.dependency?.taskId === takeoverTaskId && task.status === "running" &&
+          (!old?.takeoverExecutionIds || old.takeoverExecutionIds.includes(task.id))))
+        throw new ExecutionClaimConflict("Worker currently executing this task");
+      if (takeoverTaskId && old?.takeoverTaskId && old.takeoverTaskId !== takeoverTaskId) throw Error("Turn takeover identity conflict");
+      const takeoverExecutionIds = takeoverTaskId ? draft.executions.filter(task => task.parent === sessionKey && task.dependency?.taskId === takeoverTaskId && !["completed", "cancelled"].includes(task.status)).map(task => task.id) : undefined;
       if (!old) {
         if (turns.length >= 10000) throw Error("Retained turn limit reached; reconcile before executing more work");
-        turns.push({ id, sessionKey, state: "running", ...(scheduledOccurrence ? { scheduledOccurrence: structuredClone(scheduledOccurrence) } : {}) });
+        turns.push({ id, sessionKey, state: "running", ...(scheduledOccurrence ? { scheduledOccurrence: structuredClone(scheduledOccurrence) } : {}), ...(takeoverTaskId ? { takeoverTaskId, takeoverExecutionIds } : {}) });
+      } else if (takeoverTaskId && old.state === "running") {
+        old.takeoverTaskId = takeoverTaskId;
+        old.takeoverExecutionIds ??= takeoverExecutionIds;
+      } else if (old.state === "running" && old.takeoverTaskId) {
+        // Replayed input may no longer be a takeover (for example an explicit
+        // independent admission). A previous process must not retain its fence.
+        delete old.takeoverTaskId;
+        delete old.takeoverExecutionIds;
+      }
+    });
+  }
+  /** Release only the execution fence after the runtime has actually exited.
+   * The durable turn remains available for the existing inbox retry. */
+  releaseTurnTakeover(id: string, sessionKey: string): Promise<void> {
+    return this.mutate(draft => {
+      const turn = draft.turns?.find(item => item.id === id);
+      if (turn && turn.sessionKey !== sessionKey) throw Error("Turn identity conflict");
+      if (turn?.state === "running") {
+        delete turn.takeoverTaskId;
+        delete turn.takeoverExecutionIds;
       }
     });
   }
@@ -624,13 +651,6 @@ export class ExecutionStore {
             JSON.stringify(old.pinned ?? null) !== JSON.stringify(pinned ?? null)) throw Error("Conflicting execution request ID");
         return old;
       }
-      // A fresh request ID is not new authority to escape a stagnant execution.
-      // Preserve independent work on other mandates and idempotent request retries.
-      const held = dependency?.taskId && draft.executions.find(item => item.parent === parent &&
-        item.dependency?.taskId === dependency.taskId && !item.parentStopped &&
-        ["paused", "blocked"].includes(item.status) && (item.diagnosticCode === "assessment-stalled" ||
-          item.input === input && !!item.assessmentHold));
-      if (held) throw Error(`execution-held: reconcile or explicitly resume existing execution ${held.id}; a new request ID cannot bypass its hold`);
       if (draft.executions.length >= 2000) throw Error("Retained execution limit reached; archive only after reconciliation");
       if (origin !== undefined && !validAddress(origin)) throw Error("Invalid execution origin");
       const task: Execution = { recoveryEnrollment: "current", dependency: structuredClone(dependency), ...(origin ? { origin: structuredClone(origin) } : {}), pinned: structuredClone(pinned), id: randomUUID(), parent, requestId, input, strategy, strategyVersion, status: "ready", restarts: 0 };
@@ -650,10 +670,18 @@ export class ExecutionStore {
       }
     });
   }
+  private parentOwnsTask(task: Readonly<Execution>, turns = this.data.turns): boolean {
+    // A stop request revokes authority but does not mean the runtime has exited.
+    // Keep the fence until settlement or startup reconciliation removes the turn.
+    return !!task.dependency?.taskId && !!turns?.some(turn => turn.state === "running" &&
+      turn.sessionKey === task.parent && turn.takeoverTaskId === task.dependency?.taskId &&
+      (turn.takeoverExecutionIds === undefined || turn.takeoverExecutionIds.includes(task.id)));
+  }
+  parentTakeoverActive(task: Readonly<Execution>): boolean { return this.parentOwnsTask(task); }
   /** Current policy is supplied by the trusted host registry, never by model input.
    * Recovery is not itself a replay grant: policy is checked again at claim time. */
   assessmentDue(task: Readonly<Execution>): boolean {
-    return !task.ownershipHold && (task.assessmentRetryAt === undefined || task.assessmentRetryAt <= this.now()) &&
+    return !this.parentOwnsTask(task) && !task.ownershipHold && (task.assessmentRetryAt === undefined || task.assessmentRetryAt <= this.now()) &&
       (task.workerRetry === undefined || task.workerRetry.nextAt <= this.now());
   }
   claim(id: string, current?: RecoveryStrategy & { strategy: string }, policy?: ExecutionRecoveryPolicy): Promise<Execution> {
@@ -661,6 +689,8 @@ export class ExecutionStore {
       const task = this.find(draft, id);
       if (this.retention.enforceTaskAuthority && !task.dependency?.taskRef) throw new ExecutionClaimConflict("Operator task authority missing");
       if (task.dependency?.taskRef && (!draft.taskBook || !taskOpen(draft.taskBook, task.dependency.taskRef))) throw new ExecutionClaimConflict("Operator task is closed or stale");
+      if (this.parentOwnsTask(task, draft.turns))
+        throw new ExecutionClaimConflict("Parent is executing this task");
       if (task.recoveryEnrollment === "held-legacy" || task.status !== "ready" || !this.assessmentDue(task))
         throw new ExecutionClaimConflict("Execution not ready");
       const reason = task.intent ? recoveryBlock(task, current?.strategy === task.strategy ? current : undefined, policy)
@@ -1096,6 +1126,7 @@ export class ExecutionStore {
   retryWorker(id: string, strategy: RecoveryStrategy, policy?: ExecutionRecoveryPolicy): Promise<void> {
     return this.mutate(draft => {
       const task = this.find(draft, id);
+      if (this.parentOwnsTask(task, draft.turns)) return;
       const reason = task.recoveryReason;
       if (this.scheduleWorkerRetry(task, strategy, policy, false))
         this.event(draft, task, "status", "Interne Pause mit dauerhaftem automatischem Wiederanlauf und Backoff; keine Nutzeraktion erforderlich.");

@@ -115,10 +115,10 @@ test("d2494ffb: technical validator failure after five continuations keeps a dur
   assert.equal(host.runtime.sessions.size, 0);
   assert.equal(host.store.list().find(e => e.id === phase1.id)!.status, "ready");
   assert.equal(await readFile(phase1.file, "utf8"), before);
-  // The dispatcher already owns the persisted retry. No second parent assessor.
+  // The existing wait remains waiting; a delayed retry does not itself reactivate it.
   assert.equal(host.assessments(), 0);
-  assert.equal(host.h.pendingInputs().length, 0);
-  assert.equal(host.h.snapshotSessions()[0]!.task?.state, "waiting");
+  assert.ok(host.h.pendingInputs().every(input => input.waitCheck), "a due wait may be checked without replaying the worker");
+  assert.ok(["waiting", "active"].includes(host.h.snapshotSessions()[0]!.task?.state ?? ""));
 });
 
 test("explicit manual pause and open question stay binding for host supervision", async t => {

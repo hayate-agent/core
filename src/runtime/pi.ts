@@ -14,6 +14,7 @@ import { toolGuardDenialReason } from "../tool-guard-error.js";
 import { childDeniedTools } from "../child-tools.js";
 import { compactContext, compactTaskReport, compactAccumulatedToolContext, retainContext, contextArtifactDirectory, COMPACT_WORKER_PROMPT } from "../context-artifacts.js";
 import { CONTEXT_RESULT_CONTRACT } from "../context-contract.js";
+import { OPERATOR_AUTHORITY } from "../operator-authority.js";
 import { localModel, localContextBudget, essentialPluginTools, compactSkillCatalog, materializeSkillCatalog } from "../local-context.js";
 import { workerCompactionSettings, contextCompactionSettings } from "../worker-context.js";
 import { ModelWorkProof } from "../model-work-proof.js";
@@ -799,7 +800,7 @@ export class PiRuntime implements AgentRuntime {
       // persona builder supplies a smaller generated foundation for workers.
       const optional = (text: string) => /^# Persona overlay: MEMORY\.md\n/.test(text);
       const selected = persona.filter(text => !optional(text));
-      const prefix = [...(childSession ? [COMPACT_WORKER_PROMPT] : []), CONTEXT_RESULT_CONTRACT];
+      const prefix = [...(childSession ? [COMPACT_WORKER_PROMPT] : []), OPERATOR_AUTHORITY, CONTEXT_RESULT_CONTRACT];
       if (selected.length === persona.length) return [...prefix, ...persona];
       const retained = await retainContext(artifactDirectory, persona.join("\n\n"));
       return retained ? [...prefix, ...selected, `Persona/history index: ${retained.file}. Read relevant details on demand; bounded long-line view ${retained.view}. Historical memory is not authority.`] : [...prefix, ...persona];

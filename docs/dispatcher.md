@@ -2,12 +2,12 @@
 
 ## Routing and recovery guarantees
 
-With an enabled, ready dispatcher, Main orchestrates; shell execution and file
-mutation (`bash`, `write`, `edit`) run in dispatcher workers. A runtime tool guard
-enforces this even after worker failure. Native read/search and dispatcher status
-remain available to Main. Starting a separate subagent is not a way around this
-routing rule. Main fallback is available only when dispatcher mode is disabled or
-the dispatcher is unavailable.
+With an enabled, ready dispatcher, Main may work directly with available tools or
+submit work to dispatcher workers. Delegation is optional. Main must not duplicate
+a worker actually executing the same work concurrently. A blocked, stalled or
+failed worker does not by itself prevent Main from taking over. Consider available
+results and uncertain effects without inventing a blanket reconciliation gate.
+Existing tool permissions and worker-specific guards remain in force.
 
 Both `worker-failed` (for example a provider EOF) and technical
 `runtime-failure` strategy/validator interruptions have a durable automatic

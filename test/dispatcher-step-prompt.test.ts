@@ -23,8 +23,9 @@ test("derived evidence cannot invent runtime-state or merge-SHA gates or waive r
       task: "Publish the reviewed PR using a normal merge; no runtime activation.",
     }, () => 1000);
   assert.match(prompt, /planning aids, not additional authority/);
-  assert.match(prompt, /correct planner-invented preconditions/);
-  assert.match(prompt, /Never weaken an explicit operator constraint, required review\/CI, permission boundary or existing budget/);
+  assert.match(prompt, /Correct invented preconditions/);
+  assert.match(prompt, /identify the source of any claimed binding review, check, approval or policy/);
+  assert.match(prompt, /Do not invent security rules, approvals, checks or acceptance criteria/);
   assert.match(prompt, /state-file hash or mtime changing is not a source-review blocker unless/);
   assert.match(prompt, /merge SHA differs from the reviewed PR-head SHA by construction/);
   assert.match(prompt, /tree equivalence does not prove a missing check ran or waive an explicit exact-commit requirement/);

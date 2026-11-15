@@ -4,7 +4,8 @@ import {mkdtemp,mkdir,writeFile,readFile,rm,stat} from'node:fs/promises';
 import os from'node:os';import path from'node:path';
 import {PiRuntime}from'../src/runtime/pi.js';
 import {ModelRuntime}from'@earendil-works/pi-coding-agent';
-import {CONTEXT_RESULT_CONTRACT}from'../src/context-contract.js';
+import {OPERATOR_AUTHORITY} from '../src/operator-authority.js';
+import {CONTEXT_RESULT_CONTRACT} from '../src/context-contract.js';
 
 test('real SDK child skill discovery stays paged on local/frontier, reload and I/O failure preserve discovery',async t=>{
  const home=await mkdtemp(path.join(os.tmpdir(),'worker-skills-'));t.after(()=>rm(home,{recursive:true,force:true}));
@@ -25,7 +26,10 @@ test('real SDK child skill discovery stays paged on local/frontier, reload and I
   const emit=()=>session.extensionRunner.emitBeforeAgentStart({messageType:'user',prompt:'metadata fixture',images:[]},session._baseSystemPromptOptions);
   const local=await emit();assert.deepEqual(local.systemPromptOptions.skills,[]);assert.equal(session.resourceLoader.getSkills().skills.length,30,'SDK skill expansion remains available');
   assert.match(local.systemPromptOptions.appendSystemPrompt,/Required authority boundary/);assert.match(local.systemPromptOptions.appendSystemPrompt,/Available skills: 30/);
-  assert.ok(local.systemPromptOptions.appendSystemPrompt.length<3000+CONTEXT_RESULT_CONTRACT.length,'bounded skill/worker guidance plus the shared result protocol, not all skill metadata');assert.equal(session._baseSystemPromptOptions.skills.length,30,'base/default remains available for model switch');
+  const prompt = local.systemPromptOptions.appendSystemPrompt;
+  assert.ok(prompt.includes(OPERATOR_AUTHORITY)); assert.ok(prompt.includes(CONTEXT_RESULT_CONTRACT));
+  assert.ok(prompt.length - OPERATOR_AUTHORITY.length - CONTEXT_RESULT_CONTRACT.length < 3000, 'skill catalog overhead stays bounded independently of shared guidance');
+  assert.equal(session._baseSystemPromptOptions.skills.length,30,'base/default remains available for model switch');
   const file=/catalog (".*?") with bounded/.exec(local.systemPromptOptions.appendSystemPrompt);assert.ok(file);const catalog=JSON.parse(await readFile(JSON.parse(file[1]!), 'utf8'));assert.equal(catalog.length,30);assert.deepEqual(catalog.map((s:any)=>s.filePath),original.map((s:any)=>s.filePath));
   const before=await stat(JSON.parse(file[1]!));await emit();assert.equal((await stat(JSON.parse(file[1]!))).mtimeMs,before.mtimeMs,'unchanged catalog is not rewritten');
   await wrapped.setModel('skill-fixture/frontier');const frontier=await emit();assert.deepEqual(frontier.systemPromptOptions.skills,[]);assert.match(frontier.systemPromptOptions.appendSystemPrompt,/Available skills: 30/,'child context remains small on frontier too');

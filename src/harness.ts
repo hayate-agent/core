@@ -728,7 +728,7 @@ export class Harness {
     const task = this.opts.executionStore?.coreTask(input.taskRef.id);
     if (!task) return;
     return `Core operator order (host-owned): ${JSON.stringify({ id: task.id, generation: task.generation, revision: task.revision, operatorStatus: task.operatorStatus,
-      sourceIds: task.sources.map(s => s.id), plan: task.plan?.map(({ id, title, kind, status, sourceId }) => ({ id, title, kind, status, sourceId })) })}\nUse plugin_tasks show for exact original request and operator clarifications when needed; do not reconstruct authority from unrelated session history.\nOperator disposition overrides technical validation. Never resume a done/unresolved order or an old generation. If this input clarifies/reopens/closes an existing topic, use plugin_tasks rather than starting another independent perpetual mandate. Only larger multi-step work needs propose-plan with memory/skill/source/internet research, implementation/verification and final skill-check; trivial requests need no plan or extra review. A done/omitted todo requires its actual outcome or a justified omission. Main displays only the committed plan. Do not invent repeated checks or acceptance criteria.`;
+      sourceIds: task.sources.map(s => s.id), plan: task.plan?.map(({ id, title, kind, status, sourceId }) => ({ id, title, kind, status, sourceId })) })}\nUse plugin_tasks show for exact original request and operator clarifications when needed; do not reconstruct authority from unrelated session history.\nOperator disposition overrides technical validation. Never resume a done/unresolved order or an old generation. If this input clarifies/reopens/closes an existing topic, use plugin_tasks rather than starting another independent perpetual mandate. For larger multi-step work, propose a plan when useful, choosing only steps relevant to the operator's request; trivial requests need no plan or extra review. A done/omitted todo requires its actual outcome or a justified omission. Main displays only the committed plan. Do not invent repeated checks or acceptance criteria.`;
   }
   private taskAllowed(task: DurableTask | undefined, input?: Inbound): boolean {
     if (!this.opts.taskLifecycle?.enabled) return true;
@@ -940,6 +940,7 @@ export class Harness {
         throw Error("Explicit resume requires a committed budget reset");
       }
       const before = structuredClone(task);
+      const resetFailedAssessment = action !== "resume" && task.termination === "recovery_assessment_failed";
       const receipt: NonNullable<DurableTask["budgetReceipts"]>[number] = { request, action, actor, at: this.now(), expected,
         before: { state: task.state, depth: task.depth, repetition: structuredClone(task.repetition), recoveryRetry: structuredClone(task.recoveryRetry),
           recoveryAssessment: task.recoveryAssessment, recoveryAttentionId: task.recoveryAttentionId,
@@ -962,9 +963,11 @@ export class Harness {
         for (const wait of [task.wait, task.lastWait]) if (wait)
           task.expiresAt = Math.min(task.expiresAt ?? Infinity, wait.deadline);
         task.termination = undefined;
-        // An authenticated explicit resume is host authority, not a model proposal.
-        task.recoveryAdmission = { id: this.taskQueueId(task, task.depth + 1), depth: task.depth + 1,
-          next: task.next!, original: task.original, expiresAt: task.expiresAt };
+        // A failed assessment has no admitted next step to resume. Reset its
+        // retry budget and reassess; do not manufacture an empty admission.
+        if (!resetFailedAssessment && task.next?.trim())
+          task.recoveryAdmission = { id: this.taskQueueId(task, task.depth + 1), depth: task.depth + 1,
+            next: task.next, original: task.original, expiresAt: task.expiresAt };
       }
       task.budgetReceipts = [...(task.budgetReceipts ?? []), receipt].slice(-16);
       try { await this.onStateChange(); }
@@ -980,6 +983,8 @@ export class Harness {
     const s = this.sessions.get(key);
     const task = taskId && s ? this.tasks(s).find(t => t.id === taskId) : undefined;
     const pending = store?.list(key).filter(e => !["completed", "cancelled"].includes(e.status) &&
+      (e.status === "running" || !e.dependency?.taskId || e.parentStopped || e.ownershipHold || e.recoveryEnrollment === "held-legacy" ||
+        e.diagnosticCode === "manual-pause" || !!e.question && !e.question.answer || !!e.intent && !!e.assessmentHold) &&
       (!taskId || this.mayDependOn(e, taskId, task))) ?? [];
     if (!pending.length) return false;
     return !(task && this.independentSnapshotMatches(key, task, pending));
@@ -2292,7 +2297,7 @@ export class Harness {
         s.unsaved = true;
         await this.onStateChange?.();
       }
-      await this.reconcileBlockedDependency(s, task);
+      if (!task.recoveryAdmission || this.hasPendingDependency(s.key, task.id)) await this.reconcileBlockedDependency(s, task);
       const assessed = !task.recoveryAdmission;
       if (assessed) await this.assessStartupTask(s, task, false, true);
       if (!this.tasks(s).includes(task) || (this.paused && (assessed || task.recoveryAdmission?.independent)) || this.stopping || task.state !== "active" || !task.next?.trim() || !Number.isSafeInteger(task.depth) || task.depth < 0 || repetitions(task) >= 20 ||
@@ -2307,7 +2312,7 @@ export class Harness {
         continue;
       }
       const input: Inbound = { id: admission?.id ?? this.taskQueueId(task, task.depth + 1), source: "heartbeat", sessionKey: s.key,
-        text: `Resume the authorized task after restart. Verify completed side effects before acting. Original task:\n${task.original}\nNext step:\n${task.next}`,
+        text: `Resume the authorized task after restart. Consider known effects where relevant; do not repeat completed or uncertain effects merely to recover output. Original task:\n${task.original}\nNext step:\n${task.next}`,
         replyTo: s.replyTo, taskId: task.id, continuationDepth: task.depth + 1, continuationExpiresAt: task.expiresAt,
         completionAnchor: task.anchor, contextPreparation: task.contextPreparation };
       await this.submit(input, true);
@@ -2513,6 +2518,7 @@ export class Harness {
       !s.current && !s.queue.length && (!s.running || betweenTurns) && !this.paused && !this.stopping &&
       s.key !== "improvement:nightly" && !this.stoppingHostParents.has(s.key);
     if (!this.onStateChange || !eligible() || this.opts.externallyRecoveredSession?.(s.key) ||
+        task.explicitBlocked || task.supervisorDecision?.dependencyHold ||
         this.hasPendingDependency(s.key, task.id)) return;
     // Missing independent assessment never authorizes a working fallback.
     const retry = task.recoveryRetry;
@@ -2575,7 +2581,7 @@ export class Harness {
       taskId: task.id, continuationDepth: task.depth, continuationExpiresAt: task.expiresAt,
       completionAnchor: task.anchor ?? { id: task.id, task: task.original, receivedAt: this.now() } };
     const retainedReply = typeof task.lastReply === "string" && !!task.lastReply.trim() && task.lastReply.length <= 8000 && task.lastReply !== NO_REPLY;
-    const evidence = JSON.stringify({ startup: true, reply: retainedReply ? task.lastReply : "No retained turn result. Completion is unknown. Assess the original mandate; any next step must first reconcile actual effects, never blindly replay work.",
+    const evidence = JSON.stringify({ startup: true, reply: retainedReply ? task.lastReply : "No retained turn result. Completion is unknown. Assess the original mandate; consider prior effects where relevant to the next action, without blindly replaying work.",
       executions: this.opts.executionStore?.list(s.key).slice(-20).map(e => ({ id: e.id, status: e.status, parentStopped: e.parentStopped })) ?? [] });
     let plan: Inbound["continuation"];
     // Assessment is read-only: never open a working runtime just to reconcile a
@@ -2604,7 +2610,7 @@ export class Harness {
           (task.expiresAt === undefined || plan.expiresAt <= task.expiresAt)))) {
       task.state = "active";
       task.explicitBlocked = false;
-      task.next = `First reconcile the actual task state and completed side effects; do not blindly replay external effects. Then: ${plan.next.trim()}`;
+      task.next = plan.next.trim();
       task.anchor = input.completionAnchor;
       task.recoveryRetry = undefined;
       task.supervisorDecision = { proposal: task.supervisorDecision?.proposal, verdict: "continue" };
@@ -2898,7 +2904,10 @@ export class Harness {
             if (ledger && input.executionTurnId) await ledger.beginTurn(input.executionTurnId, s.key,
               input.source === "cron" && s.key.startsWith("cron:") && input.taskId && input.taskRef &&
               input.continuationDepth === undefined && !input.waitCheck && !input.waitRecheck
-                ? { taskId: input.taskId, ref: input.taskRef } : undefined);
+                ? { taskId: input.taskId, ref: input.taskRef } : undefined,
+              (input.source !== "host" || !!this.resultMandate(input)) && !input.waitCheck && input.taskId && this.tasks(s).some(task => task.id === input.taskId && !task.recoveryAdmission?.independent) &&
+                ledger.list(s.key).some(child => child.dependency?.taskId === input.taskId && !["completed", "cancelled"].includes(child.status))
+                ? input.taskId : undefined);
             await this.runTurn(s, input, selectedHistory);
             const task = this.tasks(s).find(t => t.id === (input.continuation?.taskId ?? input.taskId));
             const evidenceAfter = await this.opts.progressEvidence?.(input).catch(() => undefined);
@@ -2953,6 +2962,10 @@ export class Harness {
             await this.onStateChange?.();
             continue;
           }
+          // The runtime has exited. Do not let a retained inbox retry hold its
+          // former workers indefinitely while this turn is no longer active.
+          if (input.executionTurnId) await this.opts.executionStore?.releaseTurnTakeover(input.executionTurnId, s.key)
+            .catch(error => this.log(`takeover release failed: ${error instanceof Error ? error.message : error}`));
           // Host attention is not a speculative model reply. Keep it (and its
           // durable marker) when an interrupted model turn is rolled back.
           const attention = s.outbox.slice(outboxStart).filter(entry =>
@@ -3703,7 +3716,7 @@ export class Harness {
         this.budgetAttention(s, task);
         if (s.unsaved) { void this.pump(s); break; }
       }
-      await this.reconcileBlockedDependency(s, task);
+      if (!task.recoveryAdmission || this.hasPendingDependency(s.key, task.id)) await this.reconcileBlockedDependency(s, task);
       // Reconcile orphaned open tasks through the existing admission path,
       // including saved next steps whose queue/admission was lost. No second
       // scheduler or inference for running, queued, admitted or not-due work.

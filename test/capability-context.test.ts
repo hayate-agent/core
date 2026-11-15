@@ -15,7 +15,7 @@ test("configured, ready, exposed and session-allowed are separate host facts", (
   assert.equal(data(capabilityContext({...facts,sessionKey:"dispatch:child"})).dispatcher.sessionAllowed, false);
   assert.equal(data(capabilityContext({...facts,dispatcherEnabled:false})).preferredDelegationRoute, "dedicated-subagent");
   assert.equal(data(capabilityContext(facts)).preferredDelegationRoute, "dispatcher-worker");
-  assert.equal(data(capabilityContext(facts)).delegationPolicy, "dispatcher-worker");
+  assert.equal(data(capabilityContext(facts)).delegationPolicy, "optional");
   assert.equal(data(capabilityContext({ ...facts, dispatcherReady: false })).delegationPolicy, "optional");
 });
 test("Core adds no unconditional review or approval rule when no review engine supplies one", () => {
@@ -32,12 +32,11 @@ test("Main gets direct-answer guidance independently of dispatcher state without
     const text = capabilityContext({ ...facts, dispatcherEnabled, dispatcherReady, selectedTools: [],
       dispatcherWorkers: { capacity: 4, active: 4, queued: 9 } });
     if (dispatcherEnabled && dispatcherReady) {
-      assert.match(text, /Delegate shell execution and implementation through the ready dispatcher/);
-      assert.match(text, /A busy worker is not a broken dispatcher/);
+      assert.match(text, /Main may use its available tools directly/);
+      assert.match(text, /delegation is not mandatory/);
       assert.match(text, /requestId=<stable logical task id>/);
-      assert.match(text, /do not try blocked bash\/edit\/write calls in Main/);
-      assert.match(text, /Do not poll an unchanged task in a tool loop/);
-      assert.match(text, /without closing unfinished work/);
+      assert.match(text, /worker actually executing the same work concurrently/);
+      assert.match(text, /blocked, stalled or failed worker is not by itself a reason to prevent Main from taking over/);
     } else {
       assert.match(text, /delegation is optional, not a prerequisite/);
       assert.match(text, /use your available tools yourself/);
@@ -71,8 +70,8 @@ test("selected review instructions and fresh capability facts reach working turn
     const opts=runtime.sessions.get("mem:room1")!.options;
     assert.doesNotMatch(opts[0].instructions!,/ALWAYS vertical slices|ALWAYS KISS/);
     assert.match(opts[0].instructions!,/Dedicated review is mandatory/);
-    assert.match(opts[0].instructions!,/Main answers questions and uses native read\/search directly/);
-    assert.match(opts[1].instructions!,/Delegate shell execution and implementation through the ready dispatcher/);
+    assert.match(opts[0].instructions!,/Main may use its available tools directly/);
+    assert.match(opts[1].instructions!,/delegation is not mandatory/);
     assert.equal(data(opts[0].instructions!).revision,1);
     assert.equal(data(opts[1].instructions!).revision,2);
     assert.doesNotMatch(opts[1].instructions!,/ALWAYS vertical slices|ALWAYS KISS/);

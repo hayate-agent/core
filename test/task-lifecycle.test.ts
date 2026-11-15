@@ -61,9 +61,11 @@ test("clarification retains the original request and supplies an authentic sourc
   validateTaskBook(book); assert.equal(task.plan!.length, 9);
 });
 
-test("plans require research and a final skill-check; omitted research needs a reason, and completed todos cannot be reopened by another outcome", () => {
+test("plans need no invented research or skill-check; completed todos remain settled", () => {
+  const minimal = fixture();
+  commitTaskOutcome(minimal.book, { ref: minimal.ref, expectedRevision: 1, eventId: "minimal", technical: { state: "open" }, plan: plan().filter(t => t.kind === "work") }, 1001);
+  validateTaskBook(minimal.book);
   const { book, ref, task } = fixture();
-  assert.throws(() => commitTaskOutcome(book, { ref, expectedRevision: 1, eventId: "bad", technical: { state: "open" }, plan: plan().filter(t => t.kind !== "skill-check") }, 1001), /skill-check/);
   const initial = plan(); initial[3] = { ...initial[3], status: "omitted", outcome: "No external facts needed; private source-only fix" };
   initial[0] = { ...initial[0], status: "done", outcome: "Existing decisions found; reference memory/decision-1" };
   commitTaskOutcome(book, { ref, expectedRevision: 1, eventId: "first", technical: { state: "open" }, plan: initial }, 1100);
