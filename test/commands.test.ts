@@ -619,3 +619,16 @@ test("cron management uses system locale and preserves controls and admitted run
     await check("/cron", /Kein Scheduler/);
   } finally { await harness.stop(1000); }
 });
+
+test("loop run requires authenticated admin ingress and runs once without changing schedule", async t => {
+  const { harness, runtime, ch } = setup({ admins: ["owner"] }); t.after(() => harness.stop(0));
+  const s = harness.state("mem:room1"); s.loop = { prompt: "check", everyMs: 60000, nextAt: Date.now() + 100000, paused: false };
+  const before = structuredClone(s.loop); let calls = 0; runtime.answer = () => { calls++; return "NO_REPLY"; };
+  const command = { ...msg("/loop run", "owner"), id: "event-loop-run" };
+  await harness.submit(command); await harness.drained(); assert.equal(calls, 0);
+  await harness.accept(command); await harness.drained(); assert.equal(calls, 1);
+  await harness.accept(command); await harness.drained(); assert.equal(calls, 1);
+  assert.deepEqual(s.loop, before);
+  await harness.accept({ ...msg("/loop run", "intruder"), id: "event-loop-denied" }); await harness.drained();
+  assert.equal(calls, 1); assert.ok(ch.texts().some(t => t.includes("admin only")));
+});

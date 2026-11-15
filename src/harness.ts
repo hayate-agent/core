@@ -1461,6 +1461,15 @@ export class Harness {
     return s.loop ? structuredClone(s.loop) : null;
   }
 
+  /** Admit one additional occurrence without changing the recurring schedule or count. */
+  async runLoopNow(key: string, commandId: string): Promise<void> {
+    const s = this.state(key);
+    if (!s.loop || s.loop.paused) throw Error("Loop missing or paused");
+    if (!this.onStateChange) throw Error("Loop persistence unavailable");
+    if (this.resetAdmissionBlocked({ sessionKey: key, source: "loop", text: s.loop.prompt })) throw Error("Conversation reset in progress");
+    await this.accept({ id: `loop-run:${commandId}`, sessionKey: key, source: "loop", explicitLoopRun: true, text: s.loop.prompt });
+  }
+
   /** Transfer retained execution evidence, never authority or an opaque prompt replay. */
   async prepareWorkerEvidence(key: string, evidence: { executionId: string; task: string }): Promise<void> {
     if (!key.startsWith(`dispatch:${evidence.executionId}:`) || !evidence.executionId || !evidence.task) throw Error("Invalid worker admission evidence identity");
