@@ -34,8 +34,8 @@ test("silence provenance cannot cross occurrences or bypass cancellation", async
   const store = new ExecutionStore(path.join(dir, "executions.json")); await store.load();
   const a = await store.enrollTask("cron:a", "a", "A", "a", "schedule");
   const b = await store.enrollTask("cron:a", "b", "B", "b", "schedule");
-  await store.beginTurn("bad", "cron:a");
-  await assert.rejects(store.settleTurn("bad", "cron:a", { outbox: [], consumed: [], scheduledSilence: { taskId: "a", ref: b } }), /provenance/);
+  await store.beginTurn("bad", "cron:a", { taskId: "a", ref: a });
+  await assert.rejects(store.settleTurn("bad", "cron:a", { outbox: [], consumed: [], scheduledSilence: { taskId: "b", ref: b } }), /provenance/);
   await store.beginTurn("stopped", "cron:a"); await store.stopTurn("stopped", "cron:a");
   await store.settleTurn("stopped", "cron:a", { outbox: [], consumed: [], scheduledSilence: { taskId: "a", ref: a } });
   assert.equal(store.coreTask(a.id)!.receipts.some(r => r.kind === "scheduled-silence"), false);

@@ -2884,7 +2884,10 @@ export class Harness {
               s.cancelling = input;
               for (const task of this.tasks(s)) if (task.id === input.taskId) task.state = "stopped";
             }
-            if (ledger && input.executionTurnId) await ledger.beginTurn(input.executionTurnId, s.key);
+            if (ledger && input.executionTurnId) await ledger.beginTurn(input.executionTurnId, s.key,
+              input.source === "cron" && s.key.startsWith("cron:") && input.taskId && input.taskRef &&
+              input.continuationDepth === undefined && !input.waitCheck && !input.waitRecheck
+                ? { taskId: input.taskId, ref: input.taskRef } : undefined);
             await this.runTurn(s, input, selectedHistory);
             const task = this.tasks(s).find(t => t.id === (input.continuation?.taskId ?? input.taskId));
             const evidenceAfter = await this.opts.progressEvidence?.(input).catch(() => undefined);
