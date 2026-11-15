@@ -40,8 +40,12 @@ of long lines. Files are private, persist across restart and are not deleted whi
 still referenced. No background cleanup or new model/service dependency is added.
 If optional artifact storage fails, preserve the original output and continue;
 never fail or repeat a completed effect because shortening failed. Parent-facing
-durable results retain the existing 64K fallback bound with a marked excerpt and
-reference to the retained child session, rather than bloating state indefinitely.
+durable results retain the existing 64K fallback bound with a marked head/tail
+excerpt and reference to the retained child session, rather than bloating state
+indefinitely. Dispatcher and subagent fallbacks keep tail blockers/uncertainties
+visible instead of silently retaining only a success-looking report prefix.
+A settled dispatcher effect reuses that exact durable result across restart;
+optional shortening failure never authorizes another worker turn.
 
 This is context efficiency, **not a 5,000-token total input limit**. There is no
 per-request tokenization round trip, extra summary-model gate, or compulsory
