@@ -66,7 +66,7 @@ export class SessionArchives {
       // Summaries and archived roles are explicitly untrusted context.
       entries.unshift({ id: `${archive.id}:summary`, role: "archive-summary", text: archive.retrospective },
         ...archive.entries.slice(-48).map(entry => ({ ...entry, id: `${archive.id}:${entry.id}`, role: `archive-${entry.role}` })));
-      if (archive.entries.length > 48) incomplete = true;
+      if (archive.entries.length > 48 || archive.entries.some(entry => entry.truncated)) incomplete = true;
       target = archive.sourceSessionId;
       if (depth === 3 && archives.some(item => item.targetSessionId === target)) incomplete = true;
     }
