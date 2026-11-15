@@ -27,7 +27,7 @@ test("startup missing next assesses retained mandate, executes resumed turn and 
   try {
     await Promise.all([h.recoverTasks(), h.recoverTasks()]);
     assert.equal(h.pendingInputs().length, 1);
-    assert.match(h.pendingInputs()[0].text, /First reconcile/);
+    assert.match(h.pendingInputs()[0].text, /Consider known effects where relevant/);
     h.releaseRestored(); await h.drained();
     assert.equal(turns, 1); assert.equal(checks, 2);
     await h.recoverTasks(); await h.tick(); await h.drained();

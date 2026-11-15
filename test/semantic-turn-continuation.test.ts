@@ -89,7 +89,7 @@ for (const verdict of ["malformed", "uncertain", "failed", "completed"] as const
       now = h.snapshotSessions()[0].task!.recoveryRetry!.nextAt;
       await h.tick(); await h.drained();
       assert.equal(turns, 2); assert.equal(h.snapshotSessions()[0].task?.state, "completed");
-      assert.match(runtime.sessions.get("mem:room1")!.prompts[1], /First reconcile/);
+      assert.match(runtime.sessions.get("mem:room1")!.prompts[1], /Reconcile test evidence before executing anything/);
       await h.tick(); await h.drained(); assert.equal(turns, 2);
     } finally { await h.stop(0); }
   });

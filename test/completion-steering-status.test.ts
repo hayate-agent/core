@@ -31,7 +31,8 @@ for (const boundary of ["continue", "stop", "pause"] as const) {
       if (boundary === "continue") {
         assert.equal(task.state, "completed");
         assert.equal(prompts.length, 2);
-        assert.match(prompts[1], /First reconcile the actual task state and completed side effects/);
+        assert.match(prompts[1], /Inspect existing configuration before applying the approved policy/);
+        assert.doesNotMatch(prompts[1], /First reconcile the actual task state/);
         assert.ok(h.snapshotSessions()[0].tasks!.some(t => t.original === "Have you implemented it now?" && t.state === "completed"));
       } else {
         assert.equal(prompts.length, 1, "no coding after explicit host stop/pause");

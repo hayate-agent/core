@@ -74,8 +74,6 @@ export function validatePlan(task: CoreTask, plan: TaskTodo[]): void {
       plan.some(t => !nonempty(t.id, 100) || !nonempty(t.title, 500) || !kinds.includes(t.kind) ||
         !["open", "running", "waiting", "done", "omitted"].includes(t.status) || !task.sources.some(s => s.id === t.sourceId) ||
         t.outcome !== undefined && !nonempty(t.outcome, 2000) || ["done", "omitted"].includes(t.status) && !t.outcome)) throw Error("Invalid task plan or missing outcome/source");
-  for (const kind of ["memory-research", "skill-research", "source-research", "internet-research", "skill-check"])
-    if (!plan.some(t => t.kind === kind)) throw Error(`Planned task requires ${kind}; explain an omission with an outcome`);
 }
 export function taskFor(book: TaskBook, ref: TaskRef): CoreTask {
   const task = book.tasks.find(t => t.id === ref.id);

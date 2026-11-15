@@ -36,11 +36,9 @@ try {
  // Submit during an actual Main turn so the dispatcher captures host-owned provenance.
  working.sessions.get('main').prompt=async()=>{await call('plugin_dispatch',{requestId:'initial',task:'Implement tests'});harness.planContinuation('main',{state:'waiting'});return 'Delegated';};
  await harness.accept({source:'cron',sessionKey:'main',text:'Continue original task',taskId:task.id,completionAnchor:task.anchor});await harness.waitForSessionIdle('main');
- // An intermediate completion proposal while the child runs leaves its
- // parent waiting, not terminal. An unrelated user reply does not cancel it.
- working.sessions.get('main').prompt=async()=>{harness.planContinuation('main',{state:'completed'});return 'Checkpoint recorded';};
- await harness.accept({source:'cron',sessionKey:'main',text:'Record intermediate checkpoint',taskId:task.id,completionAnchor:task.anchor});await harness.waitForSessionIdle('main');
- assert.equal(task.state,'waiting');
+ // An unrelated user reply does not cancel the active child; an extra
+ // parent turn for the same mandate would race that worker.
+ assert.notEqual(task.state,'completed');
  await harness.accept({id:'question',source:'channel',sessionKey:'main',text:'What is the current version?'});await harness.waitForSessionIdle('main');
  assert.notEqual(harness.sessions.get('main').task.id,task.id);
  assert.equal(store.list('main').find(e=>e.requestId==='initial').status,'running');
@@ -88,7 +86,7 @@ try {
  await store.cancelParent('main');assert.equal((await emit('plugin_dispatch',{}))?.block,true);
  assert.throws(()=>bridge.guardTool('dispatch:missing:claim','plugin_dispatch'),/no longer authorized/);
  await followDispatcher.stop();assert.ok(reviewCalls>=3);
-} finally {await wrapped.dispose();await dispatcher.stop();}
+} finally {finishChild('fixture cleanup');await wrapped.dispose();await dispatcher.stop();}
 console.log('RESULT_HOOK_PASSED');`;
     const { stdout } = await promisify(execFile)(process.execPath, ["--import", "tsx", "--input-type=module", "-e", code], { cwd: process.cwd(), env: { ...process.env, PI_CODING_AGENT_DIR: dir, TEST_DIR: dir }, timeout: 20000 });
     assert.match(stdout, /RESULT_HOOK_PASSED/);

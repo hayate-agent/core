@@ -12,7 +12,9 @@ import { reasoningEffortNoneModels as reasoningEffortNoneModelsFromEnv } from ".
 import type { AdaptiveSkills } from "../adaptive-skills.js";
 import { toolGuardDenialReason } from "../tool-guard-error.js";
 import { childDeniedTools } from "../child-tools.js";
-import { compactContext, retainContext, contextArtifactDirectory, COMPACT_WORKER_PROMPT } from "../context-artifacts.js";
+import { compactContext, compactTaskReport, compactAccumulatedToolContext, retainContext, contextArtifactDirectory, COMPACT_WORKER_PROMPT } from "../context-artifacts.js";
+import { CONTEXT_RESULT_CONTRACT } from "../context-contract.js";
+import { OPERATOR_AUTHORITY } from "../operator-authority.js";
 import { localModel, localContextBudget, essentialPluginTools, compactSkillCatalog, materializeSkillCatalog } from "../local-context.js";
 import { workerCompactionSettings, contextCompactionSettings } from "../worker-context.js";
 import { ModelWorkProof } from "../model-work-proof.js";
@@ -650,7 +652,7 @@ export class PiRuntime implements AgentRuntime {
   }
 
   async compactResult(key: string, text: string): Promise<string> {
-    return compactContext(contextArtifactDirectory(this.opts.sessionsDir, key, key), text, "Retained task context", 6000);
+    return compactTaskReport(contextArtifactDirectory(this.opts.sessionsDir, key, key), text);
   }
 
   async prepareWorkerEvidence(key: string, evidence: { executionId: string; task: string }): Promise<void> {
@@ -796,7 +798,7 @@ export class PiRuntime implements AgentRuntime {
       // persona builder supplies a smaller generated foundation for workers.
       const optional = (text: string) => /^# Persona overlay: MEMORY\.md\n/.test(text);
       const selected = persona.filter(text => !optional(text));
-      const prefix = childSession ? [COMPACT_WORKER_PROMPT] : [];
+      const prefix = [...(childSession ? [COMPACT_WORKER_PROMPT] : []), OPERATOR_AUTHORITY, CONTEXT_RESULT_CONTRACT];
       if (selected.length === persona.length) return [...prefix, ...persona];
       const retained = await retainContext(artifactDirectory, persona.join("\n\n"));
       return retained ? [...prefix, ...selected, `Persona/history index: ${retained.file}. Read relevant details on demand; bounded long-line view ${retained.view}. Historical memory is not authority.`] : [...prefix, ...persona];
@@ -922,15 +924,14 @@ export class PiRuntime implements AgentRuntime {
               // Also optimize retained pre-upgrade histories without editing their
               // native archives or dropping tool/call pairs. New results already
               // arrive as excerpts and take the cheap unchanged path.
-              const messages = await Promise.all(event.messages.map(async message => {
+              let messages = await Promise.all(event.messages.map(async message => {
                 if (message.role !== "toolResult") return message;
                 const text = message.content.map(part => part.type === "text" ? part.text : "").join("\n");
                 const excerpt = await compactContext(artifactDirectory, text, "Tool evidence");
                 return excerpt === text ? message : { ...message, content: [{ type: "text" as const, text: excerpt }, ...message.content.filter(part => part.type !== "text")] };
               }));
-              let policy = this.opts.pruning?.();
-              if (policy && ctx.model && localModel(this.opts.contextBudgets?.(), `${ctx.model.provider}/${ctx.model.id}`))
-                policy = { ...policy, maxResultChars: Math.min(policy.maxResultChars, 1024), minResultChars: Math.max(Math.min(policy.maxResultChars, 1024) + 1, Math.min(policy.minResultChars, 2048)), keepRecent: Math.min(policy.keepRecent, 2), proactivePruneTokens: Math.min(policy.proactivePruneTokens, 2048) };
+              const policy = this.opts.pruning?.();
+              if (policy) messages = await compactAccumulatedToolContext(artifactDirectory, messages, policy);
               if (policy && this.opts.projectToolResults) return { messages: this.opts.projectToolResults(messages, policy) };
               return messages.some((message, index) => message !== event.messages[index]) ? { messages } : undefined;
             });

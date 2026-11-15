@@ -14,11 +14,13 @@ const deadline = 301000;
 test("validator continue cannot destroy the parent monitor while a worker owns unfinished work", async t => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "hy-monitor-")); t.after(() => rm(dir, { recursive: true, force: true }));
   const store = new ExecutionStore(path.join(dir, "executions.json")); await store.load();
-  const child = await store.submit(key, "owner", "Implement fix", "direct", 1, { taskId: "operator-task", original, depth: 0 });
-  await store.claim(child.id);
   let now = 1000; let turns = 0;
-  const runtime = new FakeRuntime(() => {
+  const runtime = new FakeRuntime(async () => {
     turns++;
+    if (turns === 1) {
+      const child = await store.submit(key, "owner", "Implement fix", "direct", 1, { taskId: "operator-task", original, depth: 0 });
+      await store.claim(child.id);
+    }
     h.planContinuation(key, { state: "waiting", next: "Inspect the existing worker; do not duplicate it",
       wait: { reason: "Worker verification pending", retryAfterMs: 60000, deadline: now < deadline ? deadline : now + 300000 } });
     return "147 tests passed. Full suite, build, review and publication remain open.";

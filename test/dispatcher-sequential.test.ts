@@ -690,9 +690,9 @@ test("planner-derived invariants are corrected in the same worker without repeat
       return "PR already merged. Blocked only because merge M is not reviewed head H.\nSTEP-STATUS: blocked: SHA equality";
     },
     verdict: prompt => {
-      assert.match(prompt, /correct planner-invented preconditions/);
+      assert.match(prompt, /Correct invented preconditions/);
       assert.match(prompt, /never repeat it to satisfy a false precondition/);
-      assert.match(prompt, /Never weaken an explicit operator constraint/);
+      assert.match(prompt, /Preserve explicit operator constraints and actual host-enforced boundaries/);
       return prompt.includes('"reply":"PR already merged.')
         ? JSON.stringify({ state: "continue", next: "Report the existing PR head, merge parents and checked tree read-only; do not publish again." })
         : '{"state":"completed"}';
@@ -1134,8 +1134,8 @@ test("planner chooses lowest sufficient capability without operational-risk infl
   assert.match(prompt, /"high" \(genuinely complex reasoning beyond medium: ambiguous root-cause investigation, difficult concurrency\/recovery reasoning or architecture\)/);
   assert.match(prompt, /production labels, credentials, deployment or irreversible effects alone do NOT require high/);
   assert.match(prompt, /Routine authorized credential rotation with a known runbook and production read-only checks can be simple/);
-  assert.match(prompt, /authorization, safety and verification gates still apply at every role/);
-  assert.match(prompt, /choosing a role grants no permission and bypasses no gate/);
+  assert.match(prompt, /do not invent security, approval or verification gates/);
+  assert.match(prompt, /Choosing a role grants no permission/);
   assert.doesNotMatch(prompt, /by operational risk and consequence|not by how much thought|genuinely hard or risky/);
   assert.match(prompt, /one coherent change with its own tests and verification is ONE step/);
   assert.ok(prompt.endsWith(JSON.stringify({ task: "x" })));

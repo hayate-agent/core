@@ -19,7 +19,7 @@ for (const failure of [false, true]) {
     const runtime = new FakeRuntime(text => {
       events.push("work");
       assert.match(text, /No deployment/);
-      assert.match(text, /First reconcile/);
+      assert.match(text, /Consider known effects where relevant/);
       return "Remaining regressions verified without deployment";
     });
     const open = runtime.open.bind(runtime);

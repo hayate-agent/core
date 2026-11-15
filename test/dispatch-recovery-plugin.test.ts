@@ -45,6 +45,8 @@ async function fixture(t: { after(fn: () => unknown): void }, policy?: { name: s
   let tool!: PluginTool;
   await dispatchRecoveryPlugin(() => dispatcher, async key => { readCalls++; assert.equal(key, `dispatch:${initial.id}:${claimed.token}`); await duringRead?.(); return { sessionId: "original-session", entries, incomplete }; })
     .activate({ registerTool: value => { tool = value; } } as PluginAPI);
+  assert.match(tool.description, /not a blanket prerequisite for Main to work directly or assign new work/);
+  assert.doesNotMatch(tool.description, /do not spawn replacement workers/);
   const run = (input: Record<string, unknown>, parent = "parent") => tool.execute({ id: initial.id, ...input }, { sessionKey: parent });
   const inspect = async () => JSON.parse(await run({ action: "evidence" }));
   const resume = (fingerprint: string, extra: Record<string, unknown> = {}) => run({ action: "continue", fingerprint, requestId: "reconciled-1", evidence: "Original local file exists unchanged, no commit/push/enrollment; all tool calls answered. Continue remaining work only.", ...extra });
