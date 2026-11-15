@@ -85,7 +85,7 @@ test("stop before inference cannot publish intent or launch worker; invalid infe
   const { runtime, seen } = runtimeFixture("invalid JSON");
   let effects = 0; let intents = 0; let bridge!: DispatcherRuntime;
   const task = { id: "id", token: "token", input: "work" } as never;
-  const harness = { runtime, accept: async (input: Inbound) => { effects++; assert.equal(input.turn, undefined); await bridge.channel.send!({ channel: "dispatch", target: "id:token" }, "done"); }, stopSession: async () => {}, waitForSessionIdle: async () => {} };
+  const harness = { runtime, accept: async (input: Inbound) => { effects++; assert.deepEqual(input.turn, fixture.roles!.high); await bridge.channel.send!({ channel: "dispatch", target: "id:token" }, "done"); }, stopSession: async () => {}, waitForSessionIdle: async () => {} };
   Object.assign(harness, { sessions: new Map(), channels: new Map() });
   bridge = new DispatcherRuntime(harness as never, { observeClassifier: async () => {} } as never, undefined, () => ({ config: fixture, defaults }));
   const abort = new AbortController(); abort.abort();

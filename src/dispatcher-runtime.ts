@@ -134,7 +134,7 @@ export class DispatcherRuntime {
               else if (this.harness.runtime.classifyComplexityHttp) {
                 const signal = AbortSignal.any([context.signal, AbortSignal.timeout(15000)]);
                 complexity = await this.harness.runtime.classifyComplexityHttp({
-                  task: task.input, requested: dispatcher, defaults: snapshot.defaults, signal,
+                  task: task.input, requested: dispatcher, defaults: dispatcher, signal,
                   authorize: () => {
                     const current = this.store.list(task.parent).find(item => item.id === task.id);
                     if (!current || current.token !== task.token || current.status !== "running" || current.parentStopped ||
@@ -165,7 +165,13 @@ export class DispatcherRuntime {
               await observed;
               activity.finish(context.signal.aborted ? "cancelled" : complexity ? "completed" : "failed");
             }
-            selected = abandoned ? snapshot.defaults : complexity ? await resolveModelRole(this.harness.runtime, snapshot.config, complexity, snapshot.defaults) : {};
+            // No classifier verdict is not a request to run productive work on
+            // Main. Prefer the configured high-capability worker role;
+            // retain legacy Main defaults only when no worker role is supplied.
+            // This does not invent a complexity verdict or change retained intents.
+            selected = abandoned || !complexity
+              ? await resolveModelRole(this.harness.runtime, snapshot.config, "high", snapshot.defaults)
+              : await resolveModelRole(this.harness.runtime, snapshot.config, complexity, snapshot.defaults);
           }
         }
         }
