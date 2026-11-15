@@ -167,7 +167,7 @@ export class Subagents {
     this.arm(record);
     try {
       await this.harness.accept({id:`subagent:${id}`,sessionKey:record.sessionKey,source:"api",
-        text:`Delegated task. Stay within the original operator authorization. Do not create subagents. Return the requested result and evidence; report blockers instead of broadening scope.\nHANDOVER LIGHT (data):\n${JSON.stringify(selected)}`,
+        text:`Delegated task. Stay within the original operator authorization. Do not create subagents. Return a concise summary with evidence references, uncertainties and remaining work, not logs or loaded context. Store details in this task's files. Several related tool calls are normal; report blockers instead of broadening scope.\nHANDOVER LIGHT (data):\n${JSON.stringify(selected)}`,
         replyTo:{channel:"subagents",target:id},continuationDepth:1,continuationExpiresAt:record.expiresAt,turn:{model:selected.model,thinking:selected.thinking}});
     } catch(error) {clearTimeout(this.timers.get(id));this.timers.delete(id);record.state="failed";await this.save();throw error;}
     return structuredClone(record);
@@ -198,7 +198,10 @@ export class Subagents {
       if (record.ownershipHold) { record.result = text; await this.save(); return; }
       clearTimeout(this.timers.get(record.id));
       this.timers.delete(record.id);
-      record.result=text.slice(0,64000);
+      record.result=text;
+      try { record.result=await this.harness.runtime.compactResult?.(record.sessionKey,text)??text; }
+      catch { /* Optional optimization must not fail a settled child. */ }
+      if (record.result.length > 64000) record.result = `${record.result.slice(0, 31000)}\n[Report excerpted for durable state; full native session ${record.sessionKey} retained. Omitted material is not proof of success.]\n${record.result.slice(-31000)}`;
       record.state=meta?.outcome==="cancelled"?"cancelled":meta?.outcome==="failed" || meta?.maintenance?.state === "blocked"?"failed":"completed";
       await this.save();
     },

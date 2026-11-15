@@ -32,7 +32,7 @@ test('provider rejecting oversized continuation does not replay effect or lose i
  try {
   const wrapped:any=await runtime.open('matrix:effect'); const id=wrapped.session.sessionId;
   try {
-   await assert.rejects(wrapped.prompt('Perform the authorized fixture once; reconcile any uncertain receipt.'),/provider context limit/);
+   await assert.rejects(wrapped.prompt('Perform the authorized fixture once; reconcile any uncertain receipt. Current task data: '+ '界'.repeat(46000)),/provider context limit/);
    assert.equal(effects,1);assert.ok(calls>=2, 'provider rejected the oversized continuation');
    const file=wrapped.session.sessionManager.getSessionFile();
    await wrapped.dispose();

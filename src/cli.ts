@@ -443,9 +443,9 @@ async function main(argv: string[]): Promise<void> {
       }
       await plugins.policies.beforeTool(cwdFor(key), tool, input);
     },
-    personaSections: async (cwd = config.cwd) => {
+    personaSections: async (cwd = config.cwd, worker = false) => {
       await protectedContent.verify();
-      return personaSections(await loadPersona(config.persona, personality), { name: config.agent, workspace: cwd });
+      return personaSections(await loadPersona(config.persona, personality), { name: config.agent, workspace: cwd, worker });
     },
     approvals,
     requestApproval: (key, tool, input) => harness.requestApproval(key, tool, input),

@@ -35,6 +35,15 @@ test('real SDK local tool schemas are deferred/discoverable, restrictions preser
   assert.ok(projected.content[0].text.length<4000);assert.deepEqual(projected.structuredContent,{receipt:'unchanged'});
   const match=/Complete original at (.*?); sha256=([a-f0-9]{64})/.exec(projected.content[0].text)!;assert.ok(match);assert.equal(await readFile(match[1]!,'utf8'),original);
   const view=match[1]!.replace(/\.txt$/,'.lines.txt');assert.equal((await readFile(view,'utf8')).split('\n').join(''),original);
+  const nested=await session.extensionRunner.emitToolResult({type:'tool_result',toolCallId:'script/read',parentToolCallId:'script',toolName:'read',input:{},content:[{type:'text',text:original}],isError:false});
+  assert.equal(nested,undefined,'script/codemode receives full data for internal filtering');
+  const image={type:'image',data:'fixture-image',mimeType:'image/png'};
+  const mixedResult=await session.extensionRunner.emitToolResult({type:'tool_result',toolCallId:'image-read',toolName:'read',input:{},content:[{type:'text',text:original},image],isError:true});
+  assert.deepEqual(mixedResult.content[1],image);assert.equal(mixedResult.isError,true,'error flag is not overwritten');
+  const old={role:'toolResult',toolCallId:'retained-old',toolName:'read',content:[{type:'text',text:original}],isError:true,timestamp:1};
+  const oldCopy=structuredClone(old);
+  const oldProjection=await session.extensionRunner.emitContext([old]);
+  assert.deepEqual(old,oldCopy,'pre-upgrade retained history stays unchanged');assert.equal(oldProjection[0].isError,true);assert.ok(oldProjection[0].content[0].text.length<4000);
   session.prompt=async()=>{const settings=session.settingsManager.getCompactionSettings(session.model);assert.equal(settings.enabled,true);assert.ok(session.model.contextWindow-settings.reserveTokens<=16384);};session.waitForIdle=async()=>{};
   await wrapped.prompt('metadata-only offline fixture');const status=wrapped.status();assert.equal(status.contextBudgetTokens,16384);assert.ok(status.contextEstimateTokens>0);
  }finally{await wrapped.dispose();}
