@@ -3,6 +3,7 @@ import type { ReviewConfig } from "./config.js";
 export function reviewConfig(input?: Partial<Omit<ReviewConfig, "mandatory" | "scope">> & { mandatory?: Partial<ReviewConfig["mandatory"]>; scope?: Partial<ReviewConfig["scope"]> }): ReviewConfig {
   if (input !== undefined && (!input || typeof input !== "object" || Array.isArray(input))) throw new Error("Invalid review configuration");
   if (input?.mandatory !== undefined && (!input.mandatory || typeof input.mandatory !== "object" || Array.isArray(input.mandatory))) throw new Error("Invalid review.mandatory");
+  if (input?.scope !== undefined && (!input.scope || typeof input.scope !== "object" || Array.isArray(input.scope))) throw new Error("Invalid review.scope");
   const result: ReviewConfig = {
     enabled: input?.enabled ?? false,
     shellGuard: input?.shellGuard ?? false,
