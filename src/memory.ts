@@ -81,6 +81,9 @@ export function memoryConfig(input: Partial<MemoryConfig> = {}): MemoryConfig {
   }
   if (config.embedding) {
     const e = config.embedding;
+    // Fail closed on typos (e.g. `tokenenv`) and keep credentials out of the URL; use tokenEnv.
+    if (typeof e !== "object" || Array.isArray(e) || Object.keys(e).some((k) => !["url", "model", "tokenEnv", "dimensions"].includes(k)) ||
+        typeof e.url !== "string" || typeof e.model !== "string" || !e.model.trim() || /^[a-z][a-z0-9+.-]*:\/\/[^/?#]*@/i.test(e.url.trim())) throw Error("Invalid memory.embedding");
     if (!e.model || e.model.length > 200 || !/^https?:$/.test(new URL(e.url).protocol) || (e.dimensions !== undefined && (!Number.isInteger(e.dimensions) || e.dimensions < 1 || e.dimensions > 8192))) throw Error("Invalid memory.embedding");
     if (e.tokenEnv && !/^[A-Z_][A-Z0-9_]*$/.test(e.tokenEnv)) throw Error("Invalid memory.embedding.tokenEnv");
   }
