@@ -340,7 +340,7 @@ test("toTurnEvent maps text deltas, tools and per-message usage", () => {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const ev = (e: unknown) => toTurnEvent(e as any);
   assert.deepEqual(ev({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "hi" } }), { type: "text", delta: "hi" });
-  assert.equal(ev({ type: "message_update", assistantMessageEvent: { type: "thinking_delta", delta: "x" } }), undefined);
+  assert.deepEqual(ev({ type: "message_update", assistantMessageEvent: { type: "thinking_delta", delta: "x" } }), { type: "model_progress", phase: "reasoning" });
   assert.deepEqual(ev({ type: "tool_execution_end", toolName: "bash", isError: true }), { type: "tool", phase: "end", name: "bash", error: true });
   assert.deepEqual(
     ev({

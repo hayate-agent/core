@@ -52,3 +52,14 @@ test("bundled loop tool uses context session and rejects foreign selectors", asy
   await assert.rejects(tool.execute({ action: "stop", sessionKey: "two" }, { sessionKey: "one" }), /Unknown/);
   await tool.execute({ action: "stop" }, { sessionKey: "one" }); assert.equal(h.state("one").loop, undefined);
 });
+
+test("explicit loop run is durable, deduplicated and leaves schedule and held work untouched", async t => {
+  const h = setup(); t.after(() => h.stop(0));
+  const s = h.state("one"); s.loop = { prompt: "do nothing", everyMs: 60000, nextAt: 9999999999999, paused: false, remaining: 2 };
+  const before = structuredClone(s.loop); let count = 0;
+  (h.opts.runtime as FakeRuntime).answer = () => { count++; return "NO_REPLY"; };
+  await h.runLoopNow("one", "command-1"); await h.waitForSessionIdle("one");
+  await h.runLoopNow("one", "command-1"); await h.waitForSessionIdle("one");
+  assert.equal(count, 1); assert.deepEqual(s.loop, before);
+  s.loop!.paused = true; await assert.rejects(h.runLoopNow("one", "command-2"), /paused/);
+});

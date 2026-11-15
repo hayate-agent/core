@@ -174,6 +174,8 @@ function withDetail<T extends object>(event: T, value: unknown): T {
 export function toTurnEvent(event: AgentSessionEvent): TurnEvent | undefined {
   if (event.type === "compaction_start") return { type: "compaction", state: "started", reason: event.reason };
   if (event.type === "compaction_end") return { type: "compaction", state: event.result ? "completed" : event.aborted ? "cancelled" : "failed", reason: event.reason };
+  if (event.type === "message_update" && event.assistantMessageEvent.type === "thinking_delta" && event.assistantMessageEvent.delta) return { type: "model_progress", phase: "reasoning" };
+  if (event.type === "message_update" && event.assistantMessageEvent.type === "toolcall_delta" && event.assistantMessageEvent.delta) return { type: "model_progress", phase: "tool_arguments" };
   if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
     return { type: "text", delta: event.assistantMessageEvent.delta };
   }

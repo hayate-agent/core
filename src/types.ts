@@ -28,6 +28,8 @@ export interface Inbound {
   sessionKey: string;
   text: string;
   source: InputSource;
+  /** Explicitly admitted loop occurrence, durably retained independently of timer ticks. */
+  explicitLoopRun?: boolean;
   /** Host event identity for authority checks; event data never grants continuation. */
   hostEvent?: { executionId: string };
   /** Trusted scheduler metadata; output never expands the configured follow-up scope. */
@@ -128,6 +130,8 @@ export interface TurnOptions {
 export type TurnEvent =
   | { type: "execution"; selection: import("./builtin-plugins/execution-metadata.js").ExecutionMetadata }
   | { type: "text"; delta: string }
+  /** Request-local semantic activity only; private reasoning/arguments are never exported. */
+  | { type: "model_progress"; phase: "reasoning" | "tool_arguments" }
   | { type: "compaction"; state: "started" | "completed" | "failed" | "cancelled"; reason: "manual" | "threshold" | "overflow" }
   | { type: "tool"; phase: "start" | "end"; name: string; callId?: string; error?: boolean; detail?: string }
   /** One assistant message finished; usage is for that message only. */

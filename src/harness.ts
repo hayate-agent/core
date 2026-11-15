@@ -1466,6 +1466,15 @@ export class Harness {
     return s.loop ? structuredClone(s.loop) : null;
   }
 
+  /** Admit one additional occurrence without changing the recurring schedule or count. */
+  async runLoopNow(key: string, commandId: string): Promise<void> {
+    const s = this.state(key);
+    if (!s.loop || s.loop.paused) throw Error("Loop missing or paused");
+    if (!this.onStateChange) throw Error("Loop persistence unavailable");
+    if (this.resetAdmissionBlocked({ sessionKey: key, source: "loop", text: s.loop.prompt })) throw Error("Conversation reset in progress");
+    await this.accept({ id: `loop-run:${commandId}`, sessionKey: key, source: "loop", explicitLoopRun: true, text: s.loop.prompt });
+  }
+
   /** Transfer retained execution evidence, never authority or an opaque prompt replay. */
   async prepareWorkerEvidence(key: string, evidence: { executionId: string; task: string }): Promise<void> {
     if (!key.startsWith(`dispatch:${evidence.executionId}:`) || !evidence.executionId || !evidence.task) throw Error("Invalid worker admission evidence identity");
@@ -1699,6 +1708,8 @@ export class Harness {
     // Local terminal lines have no upstream delivery ID; assign one at the trusted ingress.
     if (input.source === "channel" && input.replyTo?.channel === "console" && !input.id && naturalBudgetReset(input.text))
       input = { ...input, id: `console-budget:${randomUUID()}` };
+    if (input.source === "channel" && input.replyTo?.channel === "console" && !input.id && /^\/(?:loop|proactive)\s+run\s*$/i.test(input.text.trim()))
+      input = { ...input, id: `console-loop-run:${randomUUID()}` };
     // Drop what was already accepted before (redelivery after a cursor rewind or crash).
     // Acknowledge a duplicate only once the state is durable (an earlier save may have failed).
     const duplicate = async () => void (await this.onStateChange?.());
