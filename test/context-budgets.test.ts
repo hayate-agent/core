@@ -13,7 +13,7 @@ test('frontier main128Ki/children128Ki; explicit local main16Ki/children8Ki with
  models.registerProvider('budget-fixture',{api:'openai-completions',baseUrl:'https://offline.invalid',apiKey:'offline',models:['frontier','local'].map(id=>({id,name:id,api:'openai-completions',reasoning:false,input:['text'],contextWindow:1000000,maxTokens:4096,cost:{input:0,output:0,cacheRead:0,cacheWrite:0}}))});
  try {
   for(const id of ['frontier','local']) {
-   const runtime=new PiRuntime({cwd:home,sessionsDir:path.join(home,id),skillPaths:[],model:'budget-fixture/'+id,personaSections:async()=>[],compactionOwner:()=> 'agent',contextBudgets:()=>contextPolicy({localModels:['budget-fixture/local']}),approvals:{mode:'off',tools:[]}});
+   const runtime=new PiRuntime({cwd:home,sessionsDir:path.join(home,id),skillPaths:[],model:'budget-fixture/'+id,personaSections:async()=>[],compactionOwner:()=> 'agent',contextBudgets:()=>contextPolicy({localModels:['budget-fixture/local'],localMainContextTokens:16384,localWorkerContextTokens:8192}),approvals:{mode:'off',tools:[]}});
    (runtime as any).modelRuntime=async()=>models;
    for(const [key,ephemeral]of [['matrix:main',false],['dispatch:worker:claim',false],['subagent:worker',false],['assessment:validator',true],['cron:status',false],['api:cron-migrated-status',false]]as const){
     const wrapped:any=await runtime.open(key,{ephemeral});const session=wrapped.session;

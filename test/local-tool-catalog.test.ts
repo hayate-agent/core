@@ -12,7 +12,7 @@ test('real SDK local tool schemas are deferred/discoverable, restrictions preser
  const pluginTools=()=>Array.from({length:30},(_,i)=>({name:'plugin_large_'+i,description:'Large fixture '+i,parameters:{type:'object',properties:{input:{type:'string',description:'metadata'.repeat(1000)}}},execute:async()=> 'no effects'}));
  const steps:Array<{key:string;id:string;reply:string;tools:number;failed:boolean}>=[];
  const options={captureStep:async(key:string,step:any)=>{steps.push({key,...step});},cwd:home,sessionsDir:path.join(home,'sessions'),skillPaths:[],model:'local-fixture/model',personaSections:async()=>[],pluginTools,
-  contextBudgets:()=>({mainContextTokens:262144,workerContextTokens:131072,localModels:['local-fixture/model']}),approvals:{mode:'off' as const,tools:[]}};
+  contextBudgets:()=>({mainContextTokens:262144,workerContextTokens:131072,localModels:['local-fixture/model'],localMainContextTokens:16384,localWorkerContextTokens:8192}),approvals:{mode:'off' as const,tools:[]}};
  const runtime=new PiRuntime(options);(runtime as any).modelRuntime=async()=>models;
  const wrapped:any=await runtime.open('matrix:fixture');const session=wrapped.session;
  try{

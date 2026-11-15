@@ -14,9 +14,9 @@ export interface ContextPolicy {
   workerContextTokens?: number;
   /** Main budget; actual model capacity and output headroom remain authoritative. */
   mainContextTokens?: number;
-  /** Explicit local backend model references; local budgets are half of frontier. */
+  /** Explicit local backend model references; locality alone does not shrink context capacity. */
   localModels?: string[];
-  /** Small by default, explicitly adjustable without changing provider/locality. */
+  /** Optional stricter local targets; omitted values inherit the configured role budget. */
   localMainContextTokens?: number;
   localWorkerContextTokens?: number;
   checkEveryTurns: number;
@@ -26,14 +26,14 @@ export interface ContextPolicy {
   autoHandover: boolean;
 }
 export const defaultContextPolicy: ContextPolicy = {
-  compactionOwner: "harness", enabled: true, workerContextTokens: 131072, mainContextTokens: 131072, localModels: [], localMainContextTokens: 16384, localWorkerContextTokens: 8192, checkEveryTurns: 5, assessPercent: 60, compactPercent: 75, cooldownTurns: 5, autoHandover: true,
+  compactionOwner: "harness", enabled: true, workerContextTokens: 131072, mainContextTokens: 131072, localModels: [], checkEveryTurns: 5, assessPercent: 60, compactPercent: 75, cooldownTurns: 5, autoHandover: true,
 };
 export function contextPolicy(input: Partial<ContextPolicy> = {}): ContextPolicy {
   const policy = { ...defaultContextPolicy, ...input };
   if (!["harness", "agent"].includes(policy.compactionOwner!)) throw new Error("Invalid compaction owner");
   if (!Number.isSafeInteger(policy.workerContextTokens) || policy.workerContextTokens! < 8192) throw new Error("Invalid worker context token budget");
   if (!Number.isSafeInteger(policy.mainContextTokens) || policy.mainContextTokens! < 8192) throw new Error("Invalid main context token budget");
-  if (![policy.localMainContextTokens, policy.localWorkerContextTokens].every(value => Number.isSafeInteger(value) && value! >= 4096)) throw Error("Invalid local context token budget");
+  if (![policy.localMainContextTokens, policy.localWorkerContextTokens].every(value => value === undefined || Number.isSafeInteger(value) && value! >= 4096)) throw Error("Invalid local context token budget");
   if (!Array.isArray(policy.localModels) || policy.localModels.some(m => typeof m !== "string" || !/^[^\s/]+\/.+/.test(m))) throw new Error("Invalid local model references");
   if (typeof policy.enabled !== "boolean" || typeof policy.autoHandover !== "boolean" ||
       !Number.isInteger(policy.checkEveryTurns) || policy.checkEveryTurns < 1 ||
