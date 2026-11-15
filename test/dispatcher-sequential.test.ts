@@ -170,6 +170,23 @@ test("a report above 64K reaches independent validation with material evidence i
   assert.equal(env.calls.worker.length, 1, "independent rejection does not replay the worker");
 });
 
+test("inconclusive step permits separately admitted original plan work without replay", async t => {
+  const env = await setup(t, {
+    plan: steps(["inspect unclear evidence", "simple"], ["independent source work", "simple"]),
+    ready: '{"state":"continue","next":"2"}',
+    worker: text => text.includes("inspect unclear evidence") ? "unclear evidence\nSTEP-STATUS: complete" : "source verified\nSTEP-STATUS: complete",
+    verdict: text => JSON.parse(text.slice(text.lastIndexOf("DATA: ") + 6)).reply.includes("unclear evidence") ? '{"state":"uncertain","next":"Receipt remains ambiguous"}' : '{"state":"completed"}',
+  });
+  const task = await env.run("Inspect unclear evidence and independently verify source.");
+  assert.equal(env.calls.worker.length, 2);
+  assert.equal(task.status, "ready");
+  assert.match(state(task.checkpoint).assessment!.reply, /unclear evidence/);
+  assert.deepEqual(state(task.checkpoint).assessment!.failure, { cause: "uncertain", reason: "Receipt remains ambiguous" });
+  const reload = new ExecutionStore(env.file); await reload.load();
+  assert.deepEqual(state(reload.list()[0]!.checkpoint).assessment!.failure, { cause: "uncertain", reason: "Receipt remains ambiguous" });
+  assert.equal(state(task.checkpoint).outcomes.length, 1);
+});
+
 test("blocked verification does not strand independently admitted same-role publication or replay its settled worker", async t => {
   const env = await setup(t, {
     plan: steps(["live verification", "simple"], ["publish source", "simple"]),
@@ -312,7 +329,7 @@ for (const gate of ["current", "manual-pause", "held-legacy", "expired", "opaque
     worker: text => text.includes("STEP 1/2:\nlive verification") ? "Live gate missing\nSTEP-STATUS: blocked: external" : "source receipt\nSTEP-STATUS: complete",
     verdict: text => JSON.parse(text.slice(text.lastIndexOf("DATA: ") + 6)).reply.includes("Live gate missing") ? '{"state":"blocked"}' : '{"state":"completed"}',
   };
-  const old = await setup(t, { ...script, verdict: () => { throw Error("old read-only assessment interrupted"); } });
+  const old = await setup(t, { ...script, ready: '{"state":"uncertain"}', verdict: () => { throw Error("old read-only assessment interrupted"); } });
   const first = await old.run("Verify live service only with credentials; independently publish source through required CI.");
   await old.dispatcher.stop(); await old.harness.stop(1000);
   // A stopped fixture models an old persisted release, never a live production ledger edit.

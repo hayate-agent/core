@@ -609,10 +609,10 @@ Correctable vs blocked: a worker "blocked" claim or evidence shortfall that rest
               (verdict?.state === "continue" || !verdict && validation === "inconclusive");
             if (!verdict) {
               // An inconclusive/technical CURRENT report is not a global veto
-              // over an explicit scoped follow-up. Its separate readiness judge
-              // must still authorize an exact candidate; never infer permission
-              // from the missing verdict or replay this retained worker.
-              if (state.appliedFollowUps?.length && await selectReadyStep()) continue work;
+              // over other planned work. The separate readiness judge must admit
+              // an exact candidate; never infer permission from a missing verdict
+              // or replay the retained worker.
+              if (await selectReadyStep()) continue work;
               if (!clarifyReopenedReport) {
                 if (!context.deferAssessment) return block("Assessment retry scheduler unavailable; retained evidence requires reconciliation.");
                 await context.deferAssessment(nextAt);
