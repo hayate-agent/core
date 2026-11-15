@@ -298,6 +298,16 @@ export class PiSession implements RuntimeSession {
       unsubscribe = this.session.subscribe((event) => {
         // Attribute results to this invocation, never to a historical transcript lookup.
         if (event.type === "message_end" && event.message.role === "assistant") last = event.message;
+        if (event.type === "compaction_end" && !turn.aborted) {
+          if (event.result || !event.aborted && (event.reason === "threshold" || event.reason === "overflow")) {
+            // Native failures are durable metadata, never model instructions.
+            // An extension's intentional cancel is NOT a failure. Hooks that
+            // cancel an incomplete summary record this same receipt explicitly.
+            this.session.sessionManager?.appendCustomEntry("harness-native-compaction-v1", {
+              state: event.result ? "applied" : "failed", reason: event.reason,
+            });
+          }
+        }
         if (!turn.aborted && onEvent) {
           const mapped = toTurnEvent(event);
           if (mapped) onEvent(mapped);
@@ -401,6 +411,7 @@ export class PiSession implements RuntimeSession {
 
   async compact(instructions?: string, signal?: AbortSignal): Promise<void> {
     await maintenanceStep("compact", () => this.cancellableCompaction(signal, () => boundedMaintenance(() => this.compaction.compact({ instructions, compactNative: (text) => this.session.compact(text).then(() => {}) }), () => this.session.abortCompaction(), 300000, "compact")));
+    this.session.sessionManager?.appendCustomEntry("harness-native-compaction-v1", { state: "applied", reason: "manual" });
     await maintenanceStep("save", async () => { await this.checkpoint?.(); });
   }
 
@@ -456,6 +467,10 @@ export class PiSession implements RuntimeSession {
 
   status(): RuntimeSessionStatus {
     const stats = this.session.getSessionStats();
+    const native = [...(this.session.sessionManager?.getBranch?.() ?? [])].reverse().find(entry => entry.type === "compaction" || entry.type === "custom" && entry.customType === "harness-native-compaction-v1");
+    const receipt = native?.type === "custom" ? native.data as { state?: unknown; reason?: unknown } : undefined;
+    const nativeCompactionFailure = receipt?.state === "failed" && (receipt.reason === "threshold" || receipt.reason === "overflow")
+      ? { reason: receipt.reason as "threshold" | "overflow", receiptId: native!.id } : undefined;
     const usage = this.session.getContextUsage();
     const m = this.session.model;
     const budget = this.workingBudget?.();
@@ -467,6 +482,7 @@ export class PiSession implements RuntimeSession {
       Buffer.byteLength(JSON.stringify(this.session.getAllTools().filter(tool => active.has(tool.name)).map(tool => tool.parameters))) : undefined;
     return {
       ...(budget && estimate !== undefined ? { contextBudgetTokens: budget, contextEstimateTokens: estimate, contextHistoryTokens: historyBytes, contextBudgetPercent: estimate / budget * 100 } : {}),
+      ...(nativeCompactionFailure ? { nativeCompactionFailure } : {}),
       sessionId: this.record?.id ?? this.session.sessionId,
       title: this.record?.title ?? this.session.sessionManager?.getSessionName(),
       sessionFile: this.session.sessionFile,
