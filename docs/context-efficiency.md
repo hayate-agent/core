@@ -48,3 +48,34 @@ per-request tokenization round trip, extra summary-model gate, or compulsory
 new delegation hierarchy. Existing configured model/context budgets still apply.
 The intended small local base-context target is not a claim that arbitrary
 operator instructions or direct MCP schemas now satisfy a verified token ceiling.
+
+## Opt-in real-model probe
+
+```sh
+HAYATE_PROBE_BASE_URL=http://your-approved-backend:port/v1 \
+HAYATE_PROBE_MODEL=your-explicit-model \
+HAYATE_PROBE_OUTPUT=/private/probe-results \
+node --import tsx scripts/probe-task-context.mts
+```
+
+The diagnostic has **no fixed overall deadline**. It records only request-local
+text, reasoning, tool-argument or emitted-token progress as model activity.
+Response headers, sockets, empty SSE frames and global GPU counters are not model
+progress. Before the first own delta, queue/prefill is unknown, not a proven
+stalled model. If the caller explicitly sets `LIVE_MODEL_IDLE_MS`, it applies only
+after observed own model progress; the default does not invent an abort policy.
+This detects lack of observable stream progress, not proof that invisible backend
+computation stopped. SIGTERM/SIGINT cancels the diagnostic gracefully. Existing
+production authority/deadline and transport policies are not changed by this tool.
+
+For a vLLM backend, `HAYATE_PROBE_VLLM=1` adds a unique request ID and asks for
+emitted token IDs so hidden reasoning also contributes observable progress. Do not
+set it for other APIs without support. Synthetic payloads/results and task artifacts
+remain under the diagnostic's output directory; credentials/headers are not logged.
+Use `HAYATE_PROBE_API_KEY` only if the chosen backend requires authentication.
+
+Observed isolated local fixture: two model requests, 1,585 and 2,517 reported input
+tokens, one read-only fixture tool call returning 43,304 characters, final summary
+733 characters. The successful turn took about 138 seconds in total; an old
+90-second whole-turn test timer would have aborted it despite useful progress.
+This is isolated model/tool evidence, not a claim of production activation.
