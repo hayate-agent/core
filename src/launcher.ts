@@ -97,7 +97,7 @@ export async function runForeground(entrypoint: string, args: string[], nodeArgs
         if (value?.type === "hayate-restart" && /^[a-f0-9-]{36}$/.test(value.session ?? "")) resumeSession = value.session;
         if (value?.type === "hayate-runtime-ready") void refresh().then(() => { if (!stopping) { updates?.start(); flush(); } }).catch(() => {});
         if (value?.type === "hayate-software-ack" && receipts.has(value.id!)) ack(value.id!);
-        if (value?.type !== "hayate-software-request" || !/^[a-f0-9-]{36}$/.test(value.id ?? "") || !["status", "check", "install"].includes(value.action ?? "")) return;
+        if (value?.type !== "hayate-software-request" || !/^[a-f0-9-]{36}$/.test(value.id ?? "") || !["status", "check", "install", "update"].includes(value.action ?? "")) return;
         const id = value.id!; receipts.set(id, undefined);
         void refresh().then(() => updates?.request(value.action as "status" | "check" | "install") ?? { phase: "external-owner", detail: "Native update owner unavailable", updatedAt: Date.now() }).then(status => {
           send({ type: "hayate-software-status", id, status });

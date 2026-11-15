@@ -82,7 +82,7 @@ test("all sources configurable without inheriting internal forge defaults; inval
 test("install is durably scheduled outside command turn; three sources built, no selection before old runtime exits", async () => {
   const f = await fixture();
   try {
-    const queued = await f.owner.request("install"); assert.equal(queued.phase, "checking"); assert.ok(queued.requestId);
+    const queued = await f.owner.request("update"); assert.equal(queued.phase, "checking"); assert.ok(queued.requestId);
     const persisted = JSON.parse(await readFile(path.join(f.home, "software-updates/status.json"), "utf8")); assert.equal(persisted.requestId, queued.requestId);
     assert.equal((await f.settled()).phase, "prepared");
     assert.equal(f.commands.filter(c => c.args[0] === "checkout").length, 3);
@@ -104,9 +104,9 @@ test("install is durably scheduled outside command turn; three sources built, no
 test("candidate startup configuration failure retains active runtime and never announces prepared restart", async () => {
   const f = await fixture();
   try {
-    await f.owner.request("install"); assert.equal((await f.settled()).phase, "prepared"); await f.owner.afterExit();
+    await f.owner.request("update"); assert.equal((await f.settled()).phase, "prepared"); await f.owner.afterExit();
     const before = await readFile(path.join(f.home, "software-updates/selected.json"), "utf8"), entry = f.owner.entrypoint("original");
-    f.events.length = 0; f.advanceCore(); f.fail("--eval"); await f.owner.request("install"); const result = await f.settled("failed");
+    f.events.length = 0; f.advanceCore(); f.fail("--eval"); await f.owner.request("update"); const result = await f.settled("failed");
     assert.equal(result.phase, "failed"); assert.match(result.detail!, /startup configuration compatibility failed/);
     assert.equal(await readFile(path.join(f.home, "software-updates/selected.json"), "utf8"), before);
     assert.equal(f.owner.entrypoint("original"), entry); assert.ok(!f.events.some(event => event.startsWith("prepared:")));
@@ -117,7 +117,7 @@ test("candidate startup configuration failure retains active runtime and never a
 test("installed build metadata records the checked-out version, not package.json's stale base", async () => {
   const f = await fixture({ tags: `${revisions.core}\trefs/tags/v0.1.253` });
   try {
-    await f.owner.request("install"); const result = await f.settled(); assert.equal(result.phase, "prepared");
+    await f.owner.request("update"); const result = await f.settled(); assert.equal(result.phase, "prepared");
     const info = JSON.parse(await readFile(path.join(f.home, "software-updates/releases", result.pendingSelection!.release, "core/build-info.json"), "utf8"));
     assert.deepEqual(info, { version: "0.1.253", revision: revisions.core });
   } finally { await f.cleanup(); }
@@ -126,7 +126,7 @@ test("installed build metadata records the checked-out version, not package.json
 test("unavailable version metadata does not become an update/restart gate", async () => {
   const f = await fixture({ metadataFailure: true });
   try {
-    await f.owner.request("install"); const result = await f.settled(); assert.equal(result.phase, "prepared");
+    await f.owner.request("update"); const result = await f.settled(); assert.equal(result.phase, "prepared");
     const info = JSON.parse(await readFile(path.join(f.home, "software-updates/releases", result.pendingSelection!.release, "core/build-info.json"), "utf8"));
     assert.equal(info.version, `0.0.0+git.${revisions.core.slice(0, 12)}`);
     await f.owner.afterExit(); assert.equal(f.owner.snapshot().phase, "activated");
@@ -136,7 +136,7 @@ test("unavailable version metadata does not become an update/restart gate", asyn
 test("public snapshots use hash-locked vendored sources rather than leaking private commit lookups", async () => {
   const f = await fixture({ vendored: true });
   try {
-    await f.owner.request("install"); assert.equal((await f.settled()).phase, "prepared");
+    await f.owner.request("update"); assert.equal((await f.settled()).phase, "prepared");
     assert.ok(!f.commands.some(c => c.args.includes("e".repeat(40)) || c.args.includes("f".repeat(40))));
     const build = f.commands.find(c => c.command === "npm" && c.args[0] === "run" && c.cwd.endsWith("/core"))!;
     assert.ok(build.env?.HAYATE_PLUGIN_SOURCE?.endsWith("/core/vendor/plugins"));
@@ -147,34 +147,77 @@ test("public snapshots use hash-locked vendored sources rather than leaking priv
 test("external service owner replacement supersedes a self-update selected from an older base", async () => {
   const f = await fixture();
   try {
-    await f.owner.request("install"); await f.settled(); await f.owner.afterExit();
+    await f.owner.request("update"); await f.settled(); await f.owner.afterExit();
     const replaced = new NativeSoftwareUpdates(f.home, softwareUpdatePolicy(), () => {}, f.command, false, "/new/external/release/cli.js");
     await replaced.open(); assert.equal(replaced.entrypoint("new-external"), "new-external"); replaced.stop();
   } finally { await f.cleanup(); }
 });
 
-test("operator check prompts, never installs; later explicit install works with same sources", async () => {
+test("check remains staged across owner restart even with automatic updates enabled", async () => {
   const f = await fixture();
   try {
-    await f.owner.request("check"); assert.equal((await f.settled("available")).phase, "available");
-    assert.equal(f.commands.filter(c => c.command === "npm").length, 0);
-    await f.owner.request("install"); assert.equal((await f.settled()).phase, "prepared");
+    await f.owner.request("check");
+    assert.equal((await f.settled()).pendingSelection?.installation, "staged");
+    const events: string[] = [];
+    const restored = new NativeSoftwareUpdates(f.home, softwareUpdatePolicy(), event => events.push(event), async () => { throw Error("staged restore must not fetch"); }, false);
+    await restored.open(); restored.start();
+    assert.equal(restored.snapshot().phase, "prepared");
+    assert.equal(events.includes("prepared"), false);
+    await restored.afterExit();
+    assert.equal(restored.entrypoint("original"), "original");
+    restored.stop();
+  } finally { f.owner.stop(); await rm(f.home, { recursive: true, force: true }); }
+});
+
+test("a fresh check replaces staged revisions", async () => {
+  const f = await fixture();
+  try {
+    await f.owner.request("check");
+    const first = await f.settled();
+    f.advanceCore();
+    await f.owner.request("check");
+    const next = await f.settled();
+    assert.notEqual(next.pendingSelection?.plan.id, first.pendingSelection?.plan.id);
+    assert.equal(next.pendingSelection?.plan.revisions.core, "d".repeat(40));
+    assert.equal(next.pendingSelection?.installation, "staged");
+  } finally { f.owner.stop(); await rm(f.home, { recursive: true, force: true }); }
+});
+
+test("operator check downloads without activation; install uses only the prepared sources", async () => {
+  const f = await fixture();
+  try {
+    await assert.rejects(f.owner.request("install"), /No prepared update/);
+    assert.equal(f.commands.length, 0);
+    await f.owner.request("check"); assert.equal((await f.settled()).phase, "prepared");
+    assert.ok(f.commands.some(c => c.command === "npm"));
+    assert.equal(f.events.some(e => e.startsWith("prepared:")), false);
+    assert.equal(f.owner.snapshot().pendingSelection?.installation, "staged");
+    await f.owner.afterExit();
+    assert.equal(f.owner.entrypoint("original"), "original");
+    f.advanceCore();
+    const before = f.commands.length;
+    await f.owner.request("install");
+    assert.equal(f.owner.snapshot().pendingSelection?.plan.revisions.core, revisions.core);
+    assert.equal(f.commands.length, before, "install does not fetch or rebuild");
+    assert.equal(f.events.some(e => e.startsWith("prepared:")), true);
+    await f.owner.afterExit();
+    assert.equal(f.owner.snapshot().phase, "activated");
   } finally { await f.cleanup(); }
 });
 
 test("build failure leaves selection unchanged, redacts secrets and can retry without a permanent busy fence", async () => {
   const f = await fixture();
   try {
-    f.fail("build"); await f.owner.request("install"); assert.equal((await f.settled()).phase, "failed");
+    f.fail("build"); await f.owner.request("update"); assert.equal((await f.settled()).phase, "failed");
     assert.equal(f.owner.entrypoint("incumbent"), "incumbent"); assert.ok(!JSON.stringify(f.owner.snapshot()).includes("PRIVATE"));
-    f.fail(""); await f.owner.request("install"); assert.equal((await f.settled()).phase, "prepared");
+    f.fail(""); await f.owner.request("update"); assert.equal((await f.settled()).phase, "prepared");
   } finally { await f.cleanup(); }
 });
 
 test("prepared transaction survives owner restart without blind build/install replay", async () => {
   const f = await fixture();
   try {
-    await f.owner.request("install"); await f.settled(); f.owner.stop();
+    await f.owner.request("update"); await f.settled(); f.owner.stop();
     const events: string[] = [];
     const restored = new NativeSoftwareUpdates(f.home, softwareUpdatePolicy(), e => events.push(e), async () => { throw Error("must not repeat build"); }, false);
     await restored.open(); restored.start(); assert.deepEqual(events, ["prepared"]);

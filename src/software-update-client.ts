@@ -27,13 +27,13 @@ export function softwareLifecyclePlugin(restart: () => Promise<void>,
   authorize: (action: string, key: string) => boolean = () => false): PluginModule {
   return { apiVersion: 1, activate(api) {
     api.registerTool({ name: "plugin_software_update",
-      description: "Native agent lifecycle: inspect software status, check configured Core/Plugins/WebUI Git sources, or schedule a validated native installation and durable restart. The external foreground owner executes it; do not write ad-hoc restart/update scripts or wait for all business work to finish. Use only within operator-authorized maintenance or configured automatic updates. Does not change repositories/config, update containers, cancel tasks or replay external effects. Restart fences new input and checkpoints all owners within the configured total deadline (default60s). Scheduling is not installation completion: inspect status for the retained outcome.",
-      parameters: { type: "object", properties: { action: { type: "string", enum: ["status", "check", "install", "restart"] } }, required: ["action"], additionalProperties: false },
+      description: "Native agent lifecycle: status inspects state; check freshly resolves Core/Plugins/WebUI sources and downloads/validates without restart; install activates only an already prepared update; update freshly checks and installs when newer. Installation uses the durable native restart. The external foreground owner executes it; do not write ad-hoc restart/update scripts or wait for all business work to finish. Use only within operator-authorized maintenance or configured automatic updates. Does not change repositories/config, update containers, cancel tasks or replay external effects. Restart fences new input and checkpoints all owners within the configured total deadline (default60s). Scheduling is not installation completion: inspect status for the retained outcome.",
+      parameters: { type: "object", properties: { action: { type: "string", enum: ["status", "check", "install", "update", "restart"] } }, required: ["action"], additionalProperties: false },
       async execute(input, context) {
         if (["install", "restart"].includes(input.action as string) && !authorize(input.action as string, context.sessionKey))
           throw Error("Operator-authorized maintenance required");
         if (input.action === "restart") { await restart(); return "Durable restart initiated; current work retained, new ingress fenced"; }
-        if (!["status", "check", "install"].includes(input.action as string)) throw Error("Invalid lifecycle action");
+        if (!["status", "check", "install", "update"].includes(input.action as string)) throw Error("Invalid lifecycle action");
         return JSON.stringify(await requestSoftwareUpdate(input.action as SoftwareUpdateAction));
       },
     });
