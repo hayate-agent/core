@@ -2518,6 +2518,21 @@ export class Harness {
       await this.outbox.barrier();
       return;
     }
+    // A recurring occurrence is a separate order, not an authorization to
+    // repeatedly reassess the same inconclusive result forever. Retain the
+    // retry record and all evidence for an authenticated budget reset; never
+    // mark the order complete or affect future scheduler occurrences.
+    const order = task.taskRef && this.opts.taskLifecycle?.enabled
+      ? this.opts.executionStore?.coreTask(task.taskRef.id) : undefined;
+    if (retry && retry.attempts >= 3 && order?.scheduled &&
+        order.generation === task.taskRef?.generation && order.operatorStatus === "open") {
+      task.termination = "recovery_assessment_failed";
+      task.recoveryAssessment = "decided";
+      task.explicitBlocked = false;
+      this.recoveryAttention(s, task, "exhausted");
+      await this.outbox.barrier();
+      return;
+    }
     const policyStamp = this.opts.assessmentPolicy?.();
     const policyChanged = !!policyStamp && task.recoveryPolicyStamp !== policyStamp;
     if (retry && this.now() < retry.nextAt && !policyChanged) {
