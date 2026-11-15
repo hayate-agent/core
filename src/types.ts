@@ -128,6 +128,8 @@ export interface TurnOptions {
 export type TurnEvent =
   | { type: "execution"; selection: import("./builtin-plugins/execution-metadata.js").ExecutionMetadata }
   | { type: "text"; delta: string }
+  /** Request-local semantic activity only; private reasoning/arguments are never exported. */
+  | { type: "model_progress"; phase: "reasoning" | "tool_arguments" }
   | { type: "compaction"; state: "started" | "completed" | "failed" | "cancelled"; reason: "manual" | "threshold" | "overflow" }
   | { type: "tool"; phase: "start" | "end"; name: string; callId?: string; error?: boolean; detail?: string }
   /** One assistant message finished; usage is for that message only. */

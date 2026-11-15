@@ -57,6 +57,11 @@ test("actual SDK requests: Main and children receive excerpts, children skip his
       assert.equal(requests.length - start, 2, "one tool request plus final response; no summarization model request");
       const sent = JSON.stringify(requests[start]);
       assert.match(sent, /do not publish/);
+      assert.match(sent, /# Tool results and retained context/);
+      assert.match(sent, /Do NOT automatically open every artifact/);
+      assert.match(sent, /Grouped results still belong to their individual calls/);
+      assert.match(sent, /Repeated status calls without a new event add no progress/);
+      assert.match(sent, /Never rerun a completed or uncertain operation merely to recover its output/);
       assert.doesNotMatch(sent, /OLD-MEMORY/, 'Main and workers reference historical overlays instead of injecting the full file');
       assert.match(sent, /Persona\/history index/);
       if (key === "main") assert(recalls > beforeRecall, 'Main retains relevant working-memory recall');

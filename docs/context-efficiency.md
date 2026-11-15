@@ -53,6 +53,40 @@ new delegation hierarchy. Existing configured model/context budgets still apply.
 The intended small local base-context target is not a claim that arbitrary
 operator instructions or direct MCP schemas now satisfy a verified token ceiling.
 
+## Working result protocol and accumulation
+
+The runtime injects one source-owned result protocol into ordinary Main,
+Dispatcher-worker and Subagent system context, refreshed by the same persona
+path as the working call. It distinguishes raw/structured receipts, excerpts,
+worker-authored findings and independent verification; explains targeted
+artifact reads and nested codemode filtering; and prohibits result-retrieval
+replays. It also explains required Dispatcher submit arguments and yielding
+for asynchronous results instead of an unchanged status-polling tool loop.
+Existing authority, mandatory report formats and tool guards are not changed.
+
+Workers may supply `hayate-task-report-v1` JSON with string arrays `findings`,
+`changes`, `evidence`, `uncertainties`, `remaining`. This is synthesis by the
+working model, **not** an additional summary-model request. Valid large reports
+retain the exact original and project selected finding/change/evidence fields;
+uncertainty and remaining-work arrays stay exact. Unknown report fields/formats
+fall back to the ordinary honest excerpt path rather than being silently dropped.
+Plain reports and explicitly required `STEP-STATUS` remain supported.
+
+Many individually small older tool payloads are subject to the existing soft
+`toolResultPruning` budget too. Private exact payloads are retained with a scoped,
+content-addressed index; result bodies refer to indexed records while every
+call/result identity, error flag, recent result, image and structured machine
+field remains present. No native transcript is edited. Storage/index failure
+preserves the input unchanged. This is a tool-text projection preference, not
+a hard total-input gate or a guarantee that irreducible evidence fits a limit.
+
+On local/unrestricted worker catalogs, permitted plugin schemas are discovered
+by relevance with `tool_search`, including Dispatcher/memory/messaging tools;
+only the maintenance escape hatch remains eager. Explicit allowlists and the
+existing frontier-Main behavior are unchanged. Own reasoning/tool-argument deltas
+also update bounded activity metadata without exporting private reasoning; an
+open connection or another request's computation is never counted as progress.
+
 ## Opt-in real-model probe
 
 ```sh

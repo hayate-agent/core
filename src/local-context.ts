@@ -19,4 +19,7 @@ export async function materializeSkillCatalog(home:string,skills:readonly SkillI
  const dir=path.join(home,'skill-catalogs');await mkdir(dir,{recursive:true,mode:0o700});
  const file=path.join(dir,digest+'.json');await writeFileDurable(file,raw);return file;
 }
-export const essentialPluginTools=new Set(['plugin_dispatch','plugin_dispatch_recovery','plugin_memory','plugin_message','plugin_context_maintenance']);
+/** Keep only the maintenance escape hatch eager. Other permitted plugin schemas
+ * remain searchable; eagerly repeating orchestration/memory/messaging catalogs
+ * in every local request defeats task-selected context. Permissions do not change. */
+export const essentialPluginTools=new Set(['plugin_context_maintenance']);
