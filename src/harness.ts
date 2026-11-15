@@ -1703,6 +1703,8 @@ export class Harness {
     // Local terminal lines have no upstream delivery ID; assign one at the trusted ingress.
     if (input.source === "channel" && input.replyTo?.channel === "console" && !input.id && naturalBudgetReset(input.text))
       input = { ...input, id: `console-budget:${randomUUID()}` };
+    if (input.source === "channel" && input.replyTo?.channel === "console" && !input.id && /^\/(?:loop|proactive)\s+run\s*$/i.test(input.text.trim()))
+      input = { ...input, id: `console-loop-run:${randomUUID()}` };
     // Drop what was already accepted before (redelivery after a cursor rewind or crash).
     // Acknowledge a duplicate only once the state is durable (an earlier save may have failed).
     const duplicate = async () => void (await this.onStateChange?.());

@@ -632,3 +632,12 @@ test("loop run requires authenticated admin ingress and runs once without changi
   await harness.accept({ ...msg("/loop run", "intruder"), id: "event-loop-denied" }); await harness.drained();
   assert.equal(calls, 1); assert.ok(ch.texts().some(t => t.includes("admin only")));
 });
+
+test("trusted console loop run receives a durable command identity", async t => {
+  const { harness, runtime } = setup(); t.after(() => harness.stop(0));
+  const consoleChannel = new MemoryChannel(); Object.defineProperty(consoleChannel, "name", { value: "console" }); harness.addChannel(consoleChannel);
+  harness.state("console:local").loop = { prompt: "console task", everyMs: 60000, nextAt: Date.now() + 60000, paused: false };
+  let calls = 0; runtime.answer = () => { calls++; return "NO_REPLY"; };
+  await harness.accept({ sessionKey: "console:local", source: "channel", text: "/loop run", replyTo: { channel: "console", target: "local" } });
+  await harness.drained(); assert.equal(calls, 1);
+});
