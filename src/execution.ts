@@ -429,7 +429,9 @@ export class ExecutionStore {
       if (typeof id !== "string" || !id || typeof sessionKey !== "string" || !sessionKey) throw Error("Invalid turn identity");
       const turns = draft.turns ??= [];
       const old = turns.find(item => item.id === id);
-      if (old && (old.sessionKey !== sessionKey || scheduledOccurrence && JSON.stringify(old.scheduledOccurrence) !== JSON.stringify(scheduledOccurrence))) throw Error("Turn identity conflict");
+      // A pre-upgrade running turn has no occurrence binding. Keep it runnable,
+      // but never retroactively assert provenance for its eventual result.
+      if (old && (old.sessionKey !== sessionKey || old.scheduledOccurrence && scheduledOccurrence && JSON.stringify(old.scheduledOccurrence) !== JSON.stringify(scheduledOccurrence))) throw Error("Turn identity conflict");
       if (!old) {
         if (turns.length >= 10000) throw Error("Retained turn limit reached; reconcile before executing more work");
         turns.push({ id, sessionKey, state: "running", ...(scheduledOccurrence ? { scheduledOccurrence: structuredClone(scheduledOccurrence) } : {}) });
@@ -475,6 +477,9 @@ export class ExecutionStore {
         }
         validateTaskBook(draft.taskBook);
       }
+      // Legacy turns lack a pre-execution binding: resume them without inventing
+      // occurrence-specific evidence. The result itself may still be processed.
+      if (committed.scheduledSilence && !turn.scheduledOccurrence) committed.scheduledSilence = undefined;
       if (committed.scheduledSilence) {
         const { taskId, ref } = committed.scheduledSilence;
         const book = draft.taskBook;

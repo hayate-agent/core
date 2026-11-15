@@ -36,7 +36,13 @@ test("silence provenance cannot cross occurrences or bypass cancellation", async
   const b = await store.enrollTask("cron:a", "b", "B", "b", "schedule");
   await store.beginTurn("bad", "cron:a", { taskId: "a", ref: a });
   await assert.rejects(store.settleTurn("bad", "cron:a", { outbox: [], consumed: [], scheduledSilence: { taskId: "b", ref: b } }), /provenance/);
-  await store.beginTurn("stopped", "cron:a"); await store.stopTurn("stopped", "cron:a");
-  await store.settleTurn("stopped", "cron:a", { outbox: [], consumed: [], scheduledSilence: { taskId: "a", ref: a } });
-  assert.equal(store.coreTask(a.id)!.receipts.some(r => r.kind === "scheduled-silence"), false);
+  await store.beginTurn("legacy", "cron:a");
+  const reloaded = new ExecutionStore(path.join(dir, "executions.json")); await reloaded.load();
+  await reloaded.beginTurn("legacy", "cron:a", { taskId: "a", ref: a });
+  const legacy = await reloaded.settleTurn("legacy", "cron:a", { outbox: [], consumed: [], scheduledSilence: { taskId: "a", ref: a } });
+  assert.equal(legacy.scheduledSilence, undefined);
+  assert.equal(reloaded.coreTask(a.id)!.receipts.some(r => r.kind === "scheduled-silence"), false);
+  await reloaded.beginTurn("stopped", "cron:a"); await reloaded.stopTurn("stopped", "cron:a");
+  await reloaded.settleTurn("stopped", "cron:a", { outbox: [], consumed: [], scheduledSilence: { taskId: "a", ref: a } });
+  assert.equal(reloaded.coreTask(a.id)!.receipts.some(r => r.kind === "scheduled-silence"), false);
 });
