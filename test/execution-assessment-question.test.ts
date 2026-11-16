@@ -79,3 +79,50 @@ test("retained assessment question survives restart and answer never settles the
   assert.equal(fresh.list()[0]!.settledEffect, undefined);
   await assert.rejects(fresh.answer("parent", task.id, question.id, "Again"), /awaiting/);
 });
+
+
+test("stalled answered assessment creates one durable task-bound notification without replay", async t => {
+  const home = await mkdtemp(path.join(os.tmpdir(), "stalled-notice-"));
+  t.after(() => rm(home, { recursive: true, force: true }));
+  const file = path.join(home, "executions.json");
+  const store = new ExecutionStore(file); await store.load();
+  const task = await store.submit("parent", "req", "original", "sequential");
+  const first = await store.claim(task.id); await store.intent(task.id, first.token!, "effect", "unsafe");
+  await store.checkpoint(task.id, first.token!, JSON.stringify({ outcomes: [], assessment: { index: 0, reply: "report", mainClarification: true } }));
+  await store.ask(task.id, first.token!, "What remains?", true);
+  await store.answer("parent", task.id, store.list()[0]!.question!.id, "Inspect receipt");
+  const next = await store.claim(task.id, { strategy: "sequential", version: 1, replaySafe: false, reconcile: true });
+  await store.fail(task.id, next.token!, "assessment-stalled");
+  const notice = store.events().find(e => e.type === "assessment-stalled")!;
+  assert.ok(notice); const held = store.list()[0]!;
+  const input = { id: `dispatch-event:${notice.id}`, source: "host" as const, sessionKey: "parent", text: store.assessmentStalledText(held), hostEvent: { executionId: task.id, assessmentStalled: { eventId: notice.id } } };
+  assert.equal(store.assessmentStalledAllowed(input), true);
+  assert.equal(store.assessmentStalledAllowed({ ...input, sessionKey: "other" }), false);
+  assert.equal(store.assessmentStalledAllowed({ ...input, text: input.text + " forged" }), false);
+  await store.ack(notice.id);
+  const fresh = new ExecutionStore(file); await fresh.load(); await fresh.recover(new Map());
+  assert.equal(fresh.events().filter(e => e.type === "assessment-stalled").length, 0);
+  assert.equal(fresh.assessmentStalledAllowed(input), true);
+  assert.equal(fresh.list()[0]!.intent?.key, "effect");
+  assert.equal(fresh.list()[0]!.recoveryGrant, undefined);
+  await fresh.control(task.id, "pause");
+  assert.equal(fresh.assessmentStalledAllowed(input), false);
+});
+
+
+test("startup reconstructs only eligible legacy exhausted assessment notice once", async t => {
+  const home = await mkdtemp(path.join(os.tmpdir(), "legacy-stalled-")); t.after(() => rm(home, { recursive: true, force: true }));
+  const file = path.join(home, "executions.json"); const store = new ExecutionStore(file); await store.load();
+  const task = await store.submit("parent", "req", "original", "sequential");
+  const first = await store.claim(task.id); await store.intent(task.id, first.token!, "effect", "unsafe");
+  await store.checkpoint(task.id, first.token!, JSON.stringify({ outcomes: [], assessment: { index: 0, reply: "report", mainClarification: true } }));
+  await store.ask(task.id, first.token!, "What remains?", true); await store.answer("parent", task.id, store.list()[0]!.question!.id, "Inspect receipt");
+  const next = await store.claim(task.id, { strategy: "sequential", version: 1, replaySafe: false, reconcile: true }); await store.fail(task.id, next.token!, "assessment-stalled");
+  const storage = new PartitionedJson(file, { executions: 1, events: 1, turns: 1, waitAuthorityDenials: 1 });
+  const data = await storage.load(); const row = (data!.executions as any[]).find(e => e.id === task.id);
+  row.diagnosticCode = "retry-exhausted"; delete row.assessmentStalledEventId;
+  data!.events = (data!.events as any[]).filter(e => e.type !== "assessment-stalled"); await storage.save(data!, true);
+  const fresh = new ExecutionStore(file); await fresh.load(); await fresh.recover(new Map()); await fresh.recover(new Map());
+  assert.equal(fresh.events().filter(e => e.type === "assessment-stalled").length, 1);
+  assert.equal(fresh.list()[0]!.diagnosticCode, "retry-exhausted"); assert.equal(fresh.list()[0]!.intent?.key, "effect");
+});

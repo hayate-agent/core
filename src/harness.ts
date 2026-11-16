@@ -1386,6 +1386,7 @@ export class Harness {
     const expiresAt = deadlines.length ? Math.min(...deadlines) : undefined;
     const eventAllowed = input.hostEvent?.question
       ? this.opts.executionStore?.questionAllowed(input)
+      : input.hostEvent?.assessmentStalled ? this.opts.executionStore?.assessmentStalledAllowed(input)
       : execution?.status === "completed";
     if (!task || !this.taskAllowed(task) || task.recoveryEnrollment === "held-legacy" || task.original !== execution?.dependency?.original || !eventAllowed || !execution || execution.parentStopped ||
         this.stoppingHostParents.has(input.sessionKey) || !this.opts.hostEventAllowed?.(input) ||
