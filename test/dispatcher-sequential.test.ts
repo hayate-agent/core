@@ -96,13 +96,14 @@ async function setup(t: import("node:test").TestContext, script: Script, opts: {
   bridge = new DispatcherRuntime(harness, store, undefined, () => ({ config: opts.roles ?? roles, defaults }), opts.validators ?? legacyValidatorRegistry(), opts.runtimeProvenance);
   harness.addChannel(bridge.channel);
   const events: ExecutionEvent[] = [];
+  const errors: unknown[] = [];
   let settle!: () => void; let settled = new Promise<void>(r => { settle = r; });
   const dispatcher = new Dispatcher(store, bridge.sequential, 1, async event => {
     events.push(event);
     if (event.type === "result" || (event.type === "status" && ["blocked", "paused"].includes(event.status ?? ""))) settle();
-  }, () => {});
+  }, error => errors.push(String(error)));
   retainFixture(t, { home, stop: async () => { await dispatcher.stop(); await harness.stop(1000); } });
-  return { home, file, store, dispatcher, harness, bridge, runtime, calls, events, http,
+  return { home, file, store, dispatcher, harness, bridge, runtime, calls, events, errors, http,
     async tickAt(at: number) { now = at; await dispatcher.kick(); },
     async retry(id: string) {
       const task = store.list().find(item => item.id === id)!;
@@ -136,6 +137,34 @@ async function setup(t: import("node:test").TestContext, script: Script, opts: {
     } };
 }
 const state = (checkpoint?: string) => JSON.parse(checkpoint!) as SequentialState;
+
+test("uncertain assessment asks Main once, retains effects, and stops identical retries", async t => {
+  const f = await setup(t, {
+    plan: steps(["inspect original goal", "simple"]),
+    worker: () => "Inspection executed\nSTEP-STATUS: complete",
+    tools: () => 1,
+    verdict: () => '{"state":"uncertain"}',
+  });
+  const task = await f.run("Original goal: inspect only, do not publish");
+  assert.equal(task.status, "paused", JSON.stringify({ diagnostic: task.diagnostic, events: f.events, errors: f.errors }));
+  assert.ok(task.question, JSON.stringify({ status: task.status, diagnostic: task.diagnostic, events: f.events }));
+  assert.match(task.question!.text, /Nacharbeiten/);
+  assert.match(task.question!.text, /Original goal: inspect only, do not publish/);
+  assert.match(task.question!.text, /bereits|erledigte|Erhaltener/i);
+  const checked = f.calls.review.length;
+  for (let i = 0; i < 10; i++) await f.dispatcher.kick();
+  assert.equal(f.calls.review.length, checked, "idle ticks must not reclassify unchanged evidence");
+  assert.equal(f.calls.worker.length, 1);
+  await f.dispatcher.answer("parent", task.id, task.question!.id, "No additional evidence available");
+  await f.dispatcher.waitForExecution(task.id);
+  const held = f.store.list().find(x => x.id === task.id)!;
+  assert.equal(held.status, "blocked");
+  assert.equal(f.calls.worker.length, 1, "clarification cannot replay settled worker effects");
+  assert.ok(f.calls.review.length <= checked + 1, "at most one review of Main clarification");
+  const reviews = f.calls.review.length;
+  for (let i = 0; i < 10; i++) await f.dispatcher.kick();
+  assert.equal(f.calls.review.length, reviews);
+});
 
 test("each new step gets a small fresh context; independent validation sees the original before parent shortening", async t => {
   const report = "verified step result\n" + "RAW TOOL DETAIL ".repeat(1000) + "\nSTEP-STATUS: complete";
@@ -450,8 +479,10 @@ test(`missing current verdict ${missing} cannot veto or implicitly admit an inde
   const current = env.store.list()[0]!, saved = state(current.checkpoint);
   assert.equal(current.id, task.id); assert.equal(repairs, admitted ? 1 : 0);
   assert.equal(env.calls.worker.length, admitted ? 3 : 2, "Only independently admitted follow-up may run, no old worker replay");
-  assert.equal(current.status, "ready", "Missing current verdict never completes or semantically blocks original work");
-  assert.ok(current.assessmentRetryAt); assert.equal(saved.outcomes.length, admitted ? 2 : 1);
+  assert.equal(current.status, missing.includes("uncertain") && !admitted ? "paused" : "ready", "Missing verdict never completes original work; semantic uncertainty asks Main");
+  if (current.status === "paused") { assert.ok(current.question); assert.equal(current.assessmentRetryAt, undefined); }
+  else assert.ok(current.assessmentRetryAt);
+  assert.equal(saved.outcomes.length, admitted ? 2 : 1);
   if (admitted) assert.deepEqual(saved.stepIds, [0, 2, 1]);
 });
 
@@ -824,7 +855,7 @@ test("worker STEP-STATUS cannot admit a successor without independent completion
   for (const verdict of ['{"state":"blocked"}', '{"state":"uncertain"}', 'invalid']) {
     const env = await setup(t, { plan: steps(["first", "simple"], ["second", "simple"]), verdict });
     const task = await env.run("two steps");
-    assert.equal(task.status, verdict.includes("blocked") ? "paused" : "ready");
+    assert.equal(task.status, verdict.includes("blocked") || verdict.includes("uncertain") ? "paused" : "ready");
     assert.equal(env.calls.worker.length, 1);
     assert.equal((JSON.parse(task.checkpoint!) as SequentialState).outcomes.length, 0);
   }
@@ -896,10 +927,10 @@ test("worker blocked claim with reviewer continue runs the next same-step turn, 
 
 test("true external blocked holds: no continuation, no successor; invalid/uncertain assessment grants no execution", async t => {
   for (const [verdict, text] of [['{"state":"blocked"}', /externe Blockade/], ['{"state":"waiting"}', /Warten auf externe/],
-    ['invalid', /technisch fehlgeschlagen/], ['{"state":"uncertain"}', /technisch fehlgeschlagen/]] as const) {
+    ['invalid', /technisch fehlgeschlagen/], ['{"state":"uncertain"}', /Validator kann den erhaltenen Bericht nicht entscheiden/]] as const) {
     const env = await setup(t, { plan: steps(["first", "simple"], ["second", "simple"]), worker: blockedWorker, verdict });
     const task = await env.run("two steps");
-    assert.equal(task.status, verdict === 'invalid' || verdict.includes("uncertain") ? "ready" : "paused", verdict);
+    assert.equal(task.status, verdict === 'invalid' ? "ready" : "paused", verdict);
     assert.equal(env.calls.worker.length, 1, verdict);
     assert.equal(state(task.checkpoint).outcomes.length, 0, verdict);
     if (task.status === "paused") assert.ok(env.events.some(e => text.test(JSON.stringify(e))), verdict);
@@ -1285,7 +1316,7 @@ test("validator 'blocked' (genuine external) and technical failure never trigger
   for (const verdict of ['{"state":"blocked"}', "not json", '{"state":"uncertain"}']) {
     const env = await setup(t, { plan: steps(["only", "simple"]), worker: () => "x\nSTEP-STATUS: blocked: x", verdict });
     const task = await env.run("one");
-    assert.equal(task.status, verdict.includes("blocked") ? "paused" : "ready");
+    assert.equal(task.status, verdict.includes("blocked") || verdict.includes("uncertain") ? "paused" : "ready");
     assert.equal(env.calls.worker.length, 1);
   }
 });
@@ -1344,13 +1375,28 @@ test("reviewer completed cannot silently complete an empty worker report; report
   assert.match(env.calls.worker[1]!.prompt, /Using EXISTING facts ONLY, no tools/);
 });
 
-test("uncertain or invalid assessment retries only inference, never the worker effects", async t => {
+test("uncertainty asks Main and invalid assessment retries only inference, never worker effects", async t => {
   for (const failure of ['{"state":"uncertain"}', 'invalid']) {
     let reviews = 0;
-    const env = await setup(t, { verdict: () => ++reviews === 1 ? failure : '{"state":"completed"}' });
+    const env = await setup(t, { verdict: prompt => {
+      if (++reviews === 1) return failure;
+      if (failure.includes("uncertain")) {
+        assert.match(prompt, /Main clarification/);
+        assert.match(prompt, /Review retained evidence only; do not repeat effects/);
+        assert.match(prompt, /not new operator authority/);
+      }
+      return '{"state":"completed"}';
+    } });
     let task = await env.run("one step");
-    assert.equal(task.status, "ready");
-    task = await env.retry(task.id);
+    if (failure.includes("uncertain")) {
+      assert.equal(task.status, "paused");
+      await env.dispatcher.answer("parent", task.id, task.question!.id, "Review retained evidence only; do not repeat effects");
+      await env.dispatcher.waitForExecution(task.id);
+      task = env.store.list()[0]!;
+    } else {
+      assert.equal(task.status, "ready");
+      task = await env.retry(task.id);
+    }
     assert.equal(task.status, "completed");
     assert.equal(reviews, 2);
     assert.equal(env.calls.worker.length, 1);
@@ -1455,12 +1501,12 @@ test("no-progress pacing survives restart; due continuation executes once and ma
   assert.equal(second.calls.worker.length, 1); assert.equal(second.calls.review.length, 1);
 });
 
-test("six failed assessments retain one worker effect, release capacity and eventually complete", async t => {
+test("six technical failures ask Main after bounded backoff, never replaying the worker effect", async t => {
   let checks = 0;
   const env = await setup(t, { verdict: () => ++checks <= 6 ? 'invalid' : '{"state":"completed"}' });
   let task = await env.run("create exactly once");
   const workerSession = task.recoverySession;
-  for (let i = 1; i <= 6; i++) {
+  for (let i = 1; i < 6; i++) {
     assert.equal(task.status, "ready");
     assert.equal(env.store.list().filter(e => e.status === "running").length, 0, "backoff retains no running execution");
     assert.equal(state(task.checkpoint).assessment?.attempts, i);
@@ -1470,6 +1516,16 @@ test("six failed assessments retain one worker effect, release capacity and even
     assert.equal(reloaded.list()[0]!.assessmentRetryAt, task.assessmentRetryAt);
     task = await env.retry(task.id);
   }
+  assert.equal(task.status, "paused");
+  assert.ok(task.question);
+  assert.equal(task.assessmentRetryAt, undefined);
+  assert.equal(checks, 6);
+  await env.dispatcher.waitForExecution(task.id);
+  await new Promise(resolve => setTimeout(resolve, 30));
+  assert.equal(checks, 6, "exhausted retries never spin while waiting for Main");
+  await env.dispatcher.answer("parent", task.id, task.question!.id, "Reassess retained evidence once; no effect replay");
+  await env.dispatcher.waitForExecution(task.id);
+  task = env.store.list()[0]!;
   assert.equal(task.status, "completed");
   assert.equal(checks, 7);
   assert.equal(env.calls.worker.length, 1);
@@ -1498,7 +1554,10 @@ test("uncertain assessment can request exact read-only facts from the same worke
   const env = await setup(t, { verdict: () => ++reviews === 1 ? '{"state":"uncertain"}'
     : reviews === 2 ? '{"state":"continue","next":"Read the existing receipt, no mutation"}' : '{"state":"completed"}' });
   let task = await env.run("verify receipt");
-  task = await env.retry(task.id);
+  assert.equal(task.status, "paused");
+  await env.dispatcher.answer("parent", task.id, task.question!.id, "Read-only receipt inspection is within the original task; no mutations");
+  await env.dispatcher.waitForExecution(task.id);
+  task = env.store.list()[0]!;
   assert.equal(task.status, "ready", "tool-free correction is paced even after independent admission");
   task = await env.retry(task.id);
   assert.equal(task.status, "completed");
@@ -1510,12 +1569,12 @@ test("failed inference backoff and settled evidence survive restart without effe
   const home = await mkdtemp(path.join(os.tmpdir(), "seq-assessment-"));
   retainFixture(t, { home, stop: async () => {} });
   const file = path.join(home, "executions.json");
-  const first = await setup(t, { verdict: '{"state":"uncertain"}' }, { home, file });
+  const first = await setup(t, { verdict: 'invalid' }, { home, file });
   const paused = await first.run("create resource");
   assert.equal(paused.status, "ready");
   assert.equal(first.calls.review.length, 1);
   assert.equal(state(paused.checkpoint).assessment?.attempts, 1);
-  assert.equal(state(paused.checkpoint).assessment?.diagnostic, "inconclusive");
+  assert.equal(state(paused.checkpoint).assessment?.diagnostic, "invalid_response");
   await first.dispatcher.stop(); await first.harness.stop(1000);
   const second = await setup(t, {}, { home, file });
   await second.dispatcher.start();
@@ -1648,7 +1707,7 @@ test("retained assessment bounds reports and tool entries to the reloadable chec
     checkpoint: value => env.store.checkpoint(task.id, claim.token!, value),
     intent: (key, replay, route) => env.store.intent(task.id, claim.token!, key, replay, route),
     settleIntent: (key, result, checkpoint) => env.store.settleIntent(task.id, claim.token!, key, result, checkpoint),
-  } as import("../src/dispatcher.js").DispatchContext), /Assessment retry scheduler unavailable/);
+  } as import("../src/dispatcher.js").DispatchContext), /Main-Klärung erforderlich/);
   const checkpoint = env.store.list()[0]!.checkpoint!;
   assert.ok(checkpoint.length <= 64000);
   const a = state(checkpoint).assessment!;
