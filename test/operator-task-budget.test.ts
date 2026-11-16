@@ -474,3 +474,12 @@ test('pending grants enforce stale token, stopped, paused, blocked and grant dea
     assert.match(next.h.snapshotSessions()[0].operatorBudgetGrants![0].result!, /failed because/);
   }
 });
+
+test('natural reset tolerates decomposed Unicode and repeated spaces but still rejects multi-line text', () => {
+  assert.ok(naturalBudgetReset('setze das Budget zuru\u0308ck'));
+  assert.deepEqual(naturalBudgetReset('Setze das Budget zuru\u0308ck fu\u0308r Aufgabe t1'), { taskId: 't1' });
+  assert.ok(naturalBudgetReset('reset  the\tbudget'));
+  assert.deepEqual(naturalBudgetReset('reset the budget for  task abc'), { taskId: 'abc' });
+  for (const text of ['reset the budget\nand continue', 'reset the budget for task a b', 'reset the budget please'])
+    assert.equal(naturalBudgetReset(text), undefined);
+});
