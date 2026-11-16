@@ -377,7 +377,7 @@ async function main(argv: string[]): Promise<void> {
       return harness.withForegroundWork(() => executionContexts.bind(key, context));
     },
   });
-  const adaptiveSkills = config.skills.adaptive === true ? new AdaptiveSkills(config.home, config.cwd, skillCatalog) : undefined;
+  const adaptiveSkills = config.skills.adaptive !== false ? new AdaptiveSkills(config.home, config.cwd, skillCatalog) : undefined;
   const runtime = new PiRuntime({
     modelWorkKeyFile: path.join(config.home, "model-work-key.pem"),
     localModelScheduling: config.localModelScheduling,
