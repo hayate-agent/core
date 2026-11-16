@@ -80,6 +80,8 @@ export interface DurableTask {
   /** Closed host receipt only: no provider output, prompt, or tool payloads. */
   supervisorDecision?: { proposal?: "continue" | "waiting" | "blocked" | "completed";
     verdict: "continue" | "waiting" | "blocked" | "completed" | "unresolved";
+    /** Bounded independent verification after a silent terminal result. */
+    silentCompletionRecheck?: "admitted" | "exhausted";
     diagnostic?: import("./completion-check.js").CompletionDiagnostic;
     detail?: import("./validator.js").CompletionFailureDetail;
     /** Host reason for a non-decision, not a semantic denial or execution permit. */
@@ -3481,6 +3483,7 @@ export class Harness {
       throw new Error("shut down after inbox snapshot; input will replay");
     }
     let finalStatus: TurnOutcome | "completed" = outcome ?? "completed";
+    let silentCompletionRecheck: "admitted" | "exhausted" | undefined;
     // Self-reported completion or blockage is evidence, not final authority.
     // Recheck against the original mandate. Productive model plans are proposals,
     // never admission: only an affirmative independent decision may schedule work.
@@ -3561,7 +3564,18 @@ export class Harness {
             !independentlyResolved && plan?.state === "continue" && typeof plan.next === "string" && plan.next.trim() && plan.next.length <= 4000) {
           // An explicit progress verdict keeps PR185's milestone/replay semantics.
           independentlyResolved = true;
-          input.continuation = plan;
+          const silentTerminal = reply === NO_REPLY && (!checkpoint || checkpoint.state === "completed");
+          const previous = this.tasks(s).find(task => task.id === input.taskId)?.supervisorDecision;
+          if (silentTerminal && previous?.silentCompletionRecheck === "admitted" && workTools === 0 && pendingWorkTools === 0) {
+            // The first independent recheck remains valid. A second silent
+            // terminal result with no work must not start another identical
+            // verification cycle, and is not proof the mandate is complete.
+            silentCompletionRecheck = "exhausted";
+            input.continuation = { state: "blocked" };
+          } else {
+            silentCompletionRecheck = silentTerminal ? "admitted" : undefined;
+            input.continuation = plan;
+          }
         }
         // Supervisor verdict overrides the proposal; only a matching waiting
         // verdict retains the nonproductive timer. Dependencies still gate work.
@@ -3592,6 +3606,7 @@ export class Harness {
         !this.opts.completionCheck ? undefined : !diagnostic ? "no-verdict" : undefined;
       this.supervisorDecisions.set(input, { ...(checkpoint ? { proposal: checkpoint.state } : {}),
         verdict: independentlyResolved ? input.continuation!.state : "unresolved", ...(diagnostic ? { diagnostic } : {}),
+        ...(silentCompletionRecheck ? { silentCompletionRecheck } : {}),
         ...(diagnostic && this.completionFailureDetails.has(input) ? { detail: this.completionFailureDetails.get(input) } : {}),
         ...(deferred ? { deferred } : {}) });
     }
