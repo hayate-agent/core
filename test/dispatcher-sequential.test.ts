@@ -9,7 +9,7 @@ import { legacyValidatorRegistry } from "./completion-selected.js";
 import { assessmentPolicyStamp } from "../src/completion-check.js";
 import { ValidatorRegistry } from "../src/validator.js";
 import { Dispatcher } from "../src/dispatcher.js";
-import { ExecutionStore, type ExecutionEvent } from "../src/execution.js";
+import { ExecutionStore, executionRecoveryHash, type ExecutionEvent } from "../src/execution.js";
 import { Harness } from "../src/harness.js";
 import { parsePlan, planPrompt, stepStatus, validatorRole, type SequentialState } from "../src/dispatcher-sequential.js";
 import { FakeRuntime } from "./fakes.js";
@@ -167,6 +167,61 @@ test("uncertain assessment asks Main once, retains effects, and stops identical 
   const reviews = f.calls.review.length;
   for (let i = 0; i < 10; i++) await f.dispatcher.kick();
   assert.equal(f.calls.review.length, reviews);
+});
+
+test("fresh parent evidence reopens a stalled assessment without replaying the settled worker", async t => {
+  let assessments = 0;
+  const f = await setup(t, {
+    worker: () => "Receipt 17 created\nSTEP-STATUS: complete",
+    tools: () => 1,
+    verdict: prompt => {
+      assessments++;
+      if (assessments <= 2) return '{"state":"uncertain"}';
+      assert.match(prompt, /Fresh independent receipt 17 verifies original outcome/);
+      return '{"state":"completed"}';
+    },
+  });
+  const task = await f.run("Create receipt once and verify it");
+  assert.equal(task.status, "paused");
+  await f.dispatcher.answer("parent", task.id, task.question!.id, "No additional evidence available");
+  await f.dispatcher.waitForExecution(task.id);
+  const held = f.store.list().find(item => item.id === task.id)!;
+  assert.equal(held.status, "blocked");
+  assert.equal(held.diagnosticCode, "assessment-stalled");
+  const originalIntent = structuredClone(held.intent);
+  assert.ok(originalIntent);
+  await f.dispatcher.continueReconciled("parent", task.id, "fresh-receipt", executionRecoveryHash(held),
+    "Fresh independent receipt 17 verifies original outcome", "a".repeat(64));
+  await f.dispatcher.waitForExecution(task.id);
+  const resumed = f.store.list().find(item => item.id === task.id)!;
+  assert.equal(resumed.status, "completed", JSON.stringify({ resumed, errors: f.errors }));
+  assert.equal(f.calls.worker.length, 1, "the original effect-bearing worker is not replayed");
+  assert.equal(assessments, 3);
+  assert.equal(resumed.recoveryGrant, undefined);
+  assert.ok(resumed.settledEffect, "effect is settled only after independent completion");
+});
+
+test("new parent evidence that remains uncertain cannot settle or replay an effect", async t => {
+  const f = await setup(t, { worker: () => "Receipt created\nSTEP-STATUS: complete", tools: () => 1,
+    verdict: () => '{"state":"uncertain"}' });
+  const task = await f.run("Create receipt once");
+  await f.dispatcher.answer("parent", task.id, task.question!.id, "No receipt available yet");
+  await f.dispatcher.waitForExecution(task.id);
+  const held = f.store.list().find(item => item.id === task.id)!;
+  assert.equal(held.diagnosticCode, "assessment-stalled");
+  const intent = structuredClone(held.intent);
+  await f.dispatcher.continueReconciled("parent", task.id, "new-observation", executionRecoveryHash(held),
+    "Read-only inspection found an unverified receipt", "b".repeat(64));
+  await f.dispatcher.waitForExecution(task.id);
+  const stillHeld = f.store.list().find(item => item.id === task.id)!;
+  assert.equal(stillHeld.status, "blocked");
+  assert.equal(stillHeld.diagnosticCode, "assessment-stalled");
+  assert.deepEqual(stillHeld.intent, intent);
+  assert.equal(stillHeld.recoveryGrant, undefined);
+  assert.equal(f.calls.worker.length, 1);
+  const reviews = f.calls.review.length;
+  for (let i = 0; i < 5; i++) await f.dispatcher.kick();
+  assert.equal(f.calls.review.length, reviews, "no repeated assessment without another new input");
 });
 
 test("each new step gets a small fresh context; independent validation sees the original before parent shortening", async t => {
