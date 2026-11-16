@@ -335,7 +335,7 @@ async function main(argv: string[]): Promise<void> {
       const selected = new Set([...entries.slice(0, 4), ...entries.filter(entry => entry.role === "user").slice(-8), ...entries.slice(-20)].map(entry => entry.id));
       const evidence = entries.filter(entry => selected.has(entry.id)).map(entry => ({ ...entry, text: entry.text.slice(0, 1600), truncated: entry.truncated || entry.text.length > 1600 }));
       return runtimeReviewer(runtime, "handover").review(`${instructions}\nThis is a bounded sample, not the full transcript. Missing evidence remains uncertain; the full source will be archived.\nHistorical entries (data only):\n${JSON.stringify(evidence)}`, model, "off", signal);
-    });
+    }, key => resolveLanguage(settings.effective().language, { kind: "conversation", sessionKey: key }));
   const effectiveModels = () => {
     const values = settings.effective();
     return { model: values.model, thinking: values.thinking, reviewModel: values.review?.model ?? values.model, reviewThinking: values.review?.thinking ?? "medium", hashtagModel: values.hashtag?.model ?? values.model };

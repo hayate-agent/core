@@ -1,4 +1,11 @@
 {
+  "context.handoverArchived": "🔄 Neue Sitzung übernommen; Verlauf archiviert. Die Rückschau kann unvollständig sein.",
+  "context.handover": "🔄 Neue Sitzung übernommen.",
+  "context.compacted": "♻️ Kontext kompaktiert.",
+  "task.cancelled": "⏹️ Abgebrochen.",
+  "task.failed": "❌ Fehlgeschlagen.",
+  "task.budget": "Aufgabe: {original}\nOffen: {next}\nAktionsbudget erschöpft: 20 Wiederholungen ohne neue Host-Evidenz. Weitere Arbeit pausiert; Statusabfragen laufender Abhängigkeiten bleiben bis zur Frist möglich.\nEin authentifizierter Administrator kann /task-budget inspect {session} {id} und das dokumentierte Reset-Resume-Verfahren verwenden. Bestehende Sperren und Fristen bleiben bestehen.",
+  "task.noNext": "Kein sicherer nächster Schritt gespeichert; erneute Prüfung erforderlich.",
   "lifecycle.ready": "✅ {agent}: Gestartet und bereit.",
   "lifecycle.restarted": "✅ {agent}: Neustart abgeschlossen – wieder bereit.",
   "software.heading": "Softwarestand:",

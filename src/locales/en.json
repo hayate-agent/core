@@ -1,4 +1,11 @@
 {
+  "context.handoverArchived": "🔄 Switched to a new session; history archived. The retrospective may be incomplete.",
+  "context.handover": "🔄 Switched to a new session.",
+  "context.compacted": "♻️ Context compacted.",
+  "task.cancelled": "⏹️ Cancelled.",
+  "task.failed": "❌ Failed.",
+  "task.budget": "Task: {original}\nNext: {next}\nAction budget exhausted: 20 repetitions without new host evidence. Further work is paused; existing dependency checks remain available until their deadline.\nAn authenticated administrator can use /task-budget inspect {session} {id} and the documented reset-resume procedure. Existing holds and deadlines remain in force.",
+  "task.noNext": "No safe next step recorded; reassessment required.",
   "lifecycle.ready": "✅ {agent}: Started and ready.",
   "lifecycle.restarted": "✅ {agent}: Restart complete — ready again.",
   "software.heading": "Software versions:",
