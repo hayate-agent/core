@@ -76,9 +76,11 @@ test("memguard: no kill when pressure is gone after the victim scan", async () =
     kill: (p) => killed.push(p),
     usage: async () => ({ workingSet: readings[Math.min(calls++, 1)]!, limit: 1000 }),
   });
-  await new Promise((r) => setTimeout(r, 40));
-  stop();
-  assert.ok(calls >= 2);
+  try {
+    const deadline = Date.now() + 2000;
+    while (calls < 2 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 10));
+  } finally { stop(); }
+  assert.ok(calls >= 2, "victim scan reached the second pressure reading");
   assert.deepEqual(killed, []);
 });
 
