@@ -15,7 +15,7 @@ import { applyGatewaySettings, assertGatewayConversationSupport, gatewaySettings
 import { createHash, randomUUID } from "node:crypto";
 import { naturalBudgetReset, type OperatorBudgetGrant } from "./natural-budget-reset.js";
 import { TurnActivity } from "./activity.js";
-import { continuationProvenance, continuationRequest } from "./continuation-provenance.js";
+import { continuationProvenance, continuationRequest, recoveryProposalGuidance } from "./continuation-provenance.js";
 import { deliverTaskStatus, routineWait, taskStatusId } from "./notification-routing.js";
 import type { PersistedSession } from "./state.js";
 import { executionTarget } from "./execution.js";
@@ -1113,7 +1113,7 @@ export class Harness {
     s.queue.push({ id: admission?.id ?? this.taskQueueId(task, task.depth + 1), source: "cron", sessionKey: s.key,
       taskId: task.id, continuationDepth: task.depth + 1, continuationExpiresAt: task.expiresAt,
       completionAnchor: task.anchor, replyTo: s.replyTo, contextPreparation: task.contextPreparation,
-      text: `Resume the explicitly authorized task after an interruption. Verify actual state and completed side effects; do not repeat them or broaden authority. Original task:\n${task.original}\nNext step:\n${task.next}` });
+      text: `Resume the explicitly authorized task after an interruption. Verify actual state and completed side effects; do not repeat them or broaden authority.\n${recoveryProposalGuidance}\nOriginal task:\n${task.original}\nHistorical suggested next step:\n${task.next}` });
     s.unsaved = true;
     return true;
   }
@@ -2330,7 +2330,7 @@ export class Harness {
         continue;
       }
       const input: Inbound = { id: admission?.id ?? this.taskQueueId(task, task.depth + 1), source: "heartbeat", sessionKey: s.key,
-        text: `Resume the authorized task after restart. Consider known effects where relevant; do not repeat completed or uncertain effects merely to recover output. Original task:\n${task.original}\nNext step:\n${task.next}`,
+        text: `Resume the authorized task after restart. Consider known effects where relevant; do not repeat completed or uncertain effects merely to recover output.\n${recoveryProposalGuidance}\nOriginal task:\n${task.original}\nHistorical suggested next step:\n${task.next}`,
         replyTo: s.replyTo, taskId: task.id, continuationDepth: task.depth + 1, continuationExpiresAt: task.expiresAt,
         completionAnchor: task.anchor, contextPreparation: task.contextPreparation };
       await this.submit(input, true);
