@@ -75,7 +75,7 @@ export const updateCommand: UpdateCommand = (command, args, cwd, additions, sign
     /^(PATH|HOME|USER|LOGNAME|SHELL|TMPDIR|TMP|TEMP|TZ|LANG|LD_LIBRARY_PATH|DYLD_LIBRARY_PATH|LC_[A-Z_]+|SYSTEMROOT|WINDIR|COMSPEC|PATHEXT|SSH_AUTH_SOCK|NODE_EXTRA_CA_CERTS|SSL_CERT_FILE|SSL_CERT_DIR|HTTPS?_PROXY|ALL_PROXY|NO_PROXY|https?_proxy|all_proxy|no_proxy|GIT_[A-Z_]+|NPM_CONFIG_[A-Z_]+|npm_config_[a-z_]+|NPM_TOKEN)$/.test(name)));
   const child = spawn(command, args, { cwd, env: { ...environment, GIT_TERMINAL_PROMPT: "0", ...additions },
     detached: process.platform !== "win32", stdio: ["ignore", "pipe", "ignore"] });
-  let output = "";
+  let output = "", overflow = false;
   const terminate = () => {
     try { if (process.platform !== "win32" && child.pid) process.kill(-child.pid, "SIGTERM"); else child.kill("SIGTERM"); } catch { /* Child may already have exited. */ }
     clearTimeout(timer); child.stdout.destroy(); child.unref();
@@ -83,10 +83,10 @@ export const updateCommand: UpdateCommand = (command, args, cwd, additions, sign
   };
   const timer = setTimeout(terminate, 600_000);
   signal?.addEventListener("abort", terminate, { once: true });
-  child.stdout.on("data", data => { if (output.length < 16384) output += String(data).slice(0, 16384 - output.length); });
+  child.stdout.on("data", data => { const text = String(data); if (output.length + text.length > 1048576) overflow = true; else output += text; });
   const cleanup = () => { clearTimeout(timer); signal?.removeEventListener("abort", terminate); };
   child.once("error", () => { cleanup(); reject(Error("update command unavailable")); });
-  child.once("close", code => { cleanup(); if (code === 0) resolve(output); else reject(Error("update command failed")); });
+  child.once("close", code => { cleanup(); if (code === 0 && !overflow) resolve(output); else reject(Error("update command failed")); });
 });
 
 /** External foreground-owner service. Never awaits business idle or writes the
@@ -353,8 +353,8 @@ export class NativeSoftwareUpdates {
       let tags = "", history = "";
       try {
         const signal = AbortSignal.any([this.abort.signal, AbortSignal.timeout(5000)]);
-        tags = await this.runCommand("git", ["ls-remote", "--tags", "origin"], path.join(root, "core"), undefined, signal);
         history = await this.runCommand("git", ["rev-list", "--first-parent", "--max-count=64", revisions.core], path.join(root, "core"), undefined, signal);
+        tags = await this.runCommand("git", ["ls-remote", "--tags", "origin", "refs/tags/v[0-9]*", "refs/tags/v[0-9]*^{}"], path.join(root, "core"), undefined, signal);
       } catch { /* Version lookup is informational, never an installation gate. */ }
       const version = sourceVersion(revisions.core, tags, history, corePackage.version);
       await writeFileDurable(path.join(root, "core/build-info.json"), JSON.stringify({ version, revision: revisions.core, ...(variant ? { variant: variant.identity } : {}) }) + "\n");

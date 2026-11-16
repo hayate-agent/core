@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { NativeSoftwareUpdates, softwareUpdatePolicy, type UpdateCommand } from "../src/software-updates.js";
+import { NativeSoftwareUpdates, softwareUpdatePolicy, updateCommand, type UpdateCommand } from "../src/software-updates.js";
 import { defaultConfig } from "../src/config.js";
 
 const revisions = { core: "a".repeat(40), plugins: "b".repeat(40), webui: "c".repeat(40) };
@@ -55,6 +55,12 @@ async function fixture(options: { vendored?: boolean; tags?: string; history?: s
   };
   return { home, owner, events, commands, command, settled, fail: (value: string) => { fail = value; }, advanceCore: () => { heads.core = "d".repeat(40); }, cleanup: async () => { await owner.close(); await rm(home, { recursive: true, force: true }); } };
 }
+
+test("update command preserves large tag listings and fails rather than silently truncating", async () => {
+  const result = await updateCommand(process.execPath, ["-e", "process.stdout.write('x'.repeat(30000))"], process.cwd());
+  assert.equal(result.length, 30000);
+  await assert.rejects(updateCommand(process.execPath, ["-e", "process.stdout.write('x'.repeat(1100000))"], process.cwd()), /update command failed/);
+});
 
 test("startup defaults: hourly automatic checks, GitHub sources, one 60s restart budget", () => {
   const value = softwareUpdatePolicy();
