@@ -81,6 +81,28 @@ test("uncertain recovery diagnostic survives reload without admitting work", asy
   } finally { await h.stop(0); }
 });
 
+test("startup assessment claim preserves the previous diagnostic if interrupted", async () => {
+  const detail = { cause: "uncertain" as const, reason: "Previous low confidence" };
+  const retained = { ...task(), recoveryRetry: { attempts: 2, nextAt: 1, diagnostic: "inconclusive" as const, detail } };
+  let saved: DurableTask | undefined;
+  const h = new Harness({ runtime: new FakeRuntime(), now: () => 1000, completionCheck: async () => {
+    assert.deepEqual(saved?.recoveryRetry?.detail, detail);
+    throw Error("interrupted assessor");
+  } });
+  h.restoreSessions([{ key: "mem:room1", task: retained }]);
+  h.onStateChange = async () => {
+    const current = h.state("mem:room1").task;
+    if (current?.recoveryAssessment === "claimed") saved = structuredClone(current);
+  };
+  try {
+    await h.recoverTasks();
+    assert.equal(saved?.recoveryRetry?.attempts, 3);
+    assert.equal(saved?.recoveryRetry?.diagnostic, "inconclusive");
+    assert.deepEqual(saved?.recoveryRetry?.detail, detail);
+    assert.equal(saved?.recoveryAdmission, undefined);
+  } finally { await h.stop(0); }
+});
+
 test("startup fences states, expiry, depth, absent mandate and accepted children", { timeout: 30000 }, async () => {
   for (const fence of ["waiting", "blocked", "completed", "stopped", "expired", "depth", "missing", "ready", "running", "paused-child", "cancelled-parent", "paused", "anchor-mismatch"] as const) {
     let checks = 0;
