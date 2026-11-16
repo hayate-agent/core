@@ -1123,6 +1123,9 @@ export class Harness {
     if (!to) return;
     const id = `task-budget:${s.key}:${task.id}${task.budgetEpoch ? `:${task.budgetEpoch}` : ""}`;
     task.budgetAttentionId = id;
+    // Scheduled output has its own mandate; host diagnostics must not leak
+    // task details or override its delivery/silence policy in the target chat.
+    if (s.key.startsWith("cron:")) { s.unsaved = true; return; }
     const short = (text: string) => text.replace(/\s+/g, " ").trim().slice(0, 240);
     s.outbox.push({ id, sessionKey: s.key, to,
       text: `Aufgabe: ${short(task.original)}\nOffen: ${task.next ? short(task.next) : "Kein sicherer nächster Schritt gespeichert; erneute Prüfung erforderlich."}\nAktionsbudget erschöpft: 20 Wiederholungen ohne neue Host-Evidenz verbraucht. Weitere Arbeit pausiert; Statusabfragen laufender Abhängigkeiten bleiben bis zur bestehenden Frist möglich.\nAls authentifizierter Administrator einfach schreiben: „Setze das Budget zurück für Aufgabe ${task.id} und fahre fort“. Ohne Aufgaben-ID wird nur eine eindeutig erschöpfte Aufgabe gewählt; andernfalls fragt der Host nach. Der Host bestätigt die Ausführung erst nach dauerhafter Speicherung. Optional bleibt die technische Diagnose verfügbar: /task-budget inspect ${s.key} ${task.id}` });
@@ -2720,6 +2723,14 @@ export class Harness {
       const s = this.state(entry.sessionKey);
       // Upgrade only this reserved host diagnostic family. Never filter ordinary
       // replies by their wording, nor approvals, genuine blockers or task results.
+      // Remove only the exact host-owned queued budget notice for this task.
+      // Persist this migration before any restored delivery is released.
+      if (s.key.startsWith("cron:") && entry.id?.startsWith(`task-budget:${s.key}:`) &&
+          this.tasks(s).some(task => task.budgetAttentionId === entry.id) &&
+          entry.text.startsWith("Aufgabe: ") && entry.text.includes("\nAktionsbudget erschöpft: 20 Wiederholungen ohne neue Host-Evidenz verbraucht.")) {
+        s.unsaved = true;
+        continue;
+      }
       const diagnostic = (entry.id?.startsWith(`task-recovery:${s.key}:`) ||
         entry.id?.startsWith(`task-recovery-exhausted:${s.key}:`)) &&
         (entry.text.startsWith("⚠️ Recovery angehalten:") || entry.text.startsWith("Recovery assessment paused:"));
