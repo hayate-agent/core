@@ -302,8 +302,8 @@ test('host budget notice explains scope, pending work, reason and authenticated 
   assert.match(text, /verify effects first/);
   assert.match(text, /20/);
   assert.ok(text.includes(`/task-budget inspect ${key} a`));
-  assert.match(text, /Setze das Budget zurück für Aufgabe a und fahre fort/);
-  assert.match(text, /authentifiziert/);
+  assert.match(text, /documented reset-resume procedure/);
+  assert.match(text, /authenticated administrator/);
 });
 
 

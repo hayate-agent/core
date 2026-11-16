@@ -6,7 +6,7 @@ import { completionFailureDetail } from "./validator.js";
  * for heartbeats, /loop prompts and standing goals, which is what keeps the agent
  * "alive" between messages.
  */
-import { backgroundLanguageKey, resolveLanguage, languageInstructions, languageTag, type LanguagePolicy } from "./language.js";
+import { backgroundLanguageKey, resolveLanguage, languageInstructions, languageTag, message, type LanguagePolicy } from "./language.js";
 import { loadAttachments, validateAttachmentAdmission } from "./attachments.js";
 import { recoveryEvidence } from "./recovery-evidence.js";
 import { assessmentRetryDelay } from "./assessment-retry.js";
@@ -1129,8 +1129,9 @@ export class Harness {
     // task details or override its delivery/silence policy in the target chat.
     if (s.key.startsWith("cron:")) { s.unsaved = true; return; }
     const short = (text: string) => text.replace(/\s+/g, " ").trim().slice(0, 240);
+    const locale = resolveLanguage(this.opts.language?.() ?? {}, { kind: "conversation", sessionKey: s.key, language: task.anchor?.language });
     s.outbox.push({ id, sessionKey: s.key, to,
-      text: `Aufgabe: ${short(task.original)}\nOffen: ${task.next ? short(task.next) : "Kein sicherer nächster Schritt gespeichert; erneute Prüfung erforderlich."}\nAktionsbudget erschöpft: 20 Wiederholungen ohne neue Host-Evidenz verbraucht. Weitere Arbeit pausiert; Statusabfragen laufender Abhängigkeiten bleiben bis zur bestehenden Frist möglich.\nAls authentifizierter Administrator einfach schreiben: „Setze das Budget zurück für Aufgabe ${task.id} und fahre fort“. Ohne Aufgaben-ID wird nur eine eindeutig erschöpfte Aufgabe gewählt; andernfalls fragt der Host nach. Der Host bestätigt die Ausführung erst nach dauerhafter Speicherung. Optional bleibt die technische Diagnose verfügbar: /task-budget inspect ${s.key} ${task.id}` });
+      text: message(locale, "task.budget", { original: short(task.original), next: task.next ? short(task.next) : message(locale, "task.noNext"), session: s.key, id: task.id }) });
     // The marker and notice share the same persistence barrier, including retries.
     s.unsaved = true;
   }
@@ -3679,8 +3680,12 @@ export class Harness {
       return;
     }
     if (!reply || reply === NO_REPLY) {
-      if (outcome === "cancelled" && to) s.outbox.push({ ...this.outbox.create(s.key, to, "⏹️ Abgebrochen.", outcome, input.outputTags), ...(input.progressId ? { progressId: input.progressId } : {}) });
-      else if (input.progressId && input.replyTo) s.outbox.push({ ...this.outbox.create(s.key, input.replyTo, outcome === "failed" ? "❌ Fehlgeschlagen." : "✅ Bearbeitung abgeschlossen.", outcome, input.outputTags), progressId: input.progressId });
+      const locale = resolveLanguage(this.opts.language?.() ?? {}, { kind: "conversation", sessionKey: s.key, language: input.language ?? input.completionAnchor?.language });
+      if (outcome === "cancelled" && to) s.outbox.push({ ...this.outbox.create(s.key, to, message(locale, "task.cancelled"), outcome, input.outputTags), ...(input.progressId ? { progressId: input.progressId } : {}) });
+      else if (outcome === "failed" && input.progressId && input.replyTo) {
+        s.outbox.push({ ...this.outbox.create(s.key, input.replyTo, message(locale, "task.failed"), outcome, input.outputTags), progressId: input.progressId });
+      }
+      // NO_REPLY is silent, including progress edits; it is not task completion.
       return;
     }
     if (replyInput.source === "cron" && !replyInput.replyTo) {

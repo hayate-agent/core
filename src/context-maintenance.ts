@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { SessionArchives } from "./session-archive.js";
+import { message } from "./language.js";
 import { writeFileDurable } from "./durable.js";
 import type { Address, RuntimeSession, SendMeta } from "./types.js";
 import type { BoundaryAssessment } from "./context-assessment.js";
@@ -162,7 +163,8 @@ export class ContextMaintenance {
   readonly archives: SessionArchives;
   constructor(private readonly home: string, private readonly policy: () => ContextPolicy, private readonly assess?: BoundaryAssessment,
     private readonly now: () => number = Date.now,
-    private readonly handoverSummary?: (instructions: string, entries: import("./session-archive.js").ArchiveEntry[], model: string | undefined, signal: AbortSignal) => Promise<string>) { this.archives = new SessionArchives(home); }
+    private readonly handoverSummary?: (instructions: string, entries: import("./session-archive.js").ArchiveEntry[], model: string | undefined, signal: AbortSignal) => Promise<string>,
+    private readonly noticeLanguage: (key: string) => string = () => "en") { this.archives = new SessionArchives(home); }
 
   /** Explicit /new cancels old maintenance; never seed its prepared handover
    * into the fresh conversation. Preserve failed-attempt counters and archives. */
@@ -514,8 +516,8 @@ export class ContextMaintenance {
           state.handover.phase = "switched";
           this.finishHandover(state, id);
           state.completionNotice = state.handover.archiveId
-            ? "🔄 Neue Sitzung übernommen; Rückschau gespeichert."
-            : "🔄 Neue Sitzung übernommen.";
+            ? message(this.noticeLanguage(key), "context.handoverArchived")
+            : message(this.noticeLanguage(key), "context.handover");
           this.recordNotice(key, state, state.completionNotice);
           if (state.noticeTarget) state.completionNotice = undefined;
           state.sessionId = id;
@@ -664,8 +666,8 @@ export class ContextMaintenance {
         state.sessionId = state.handover.to;
         this.finishHandover(state, state.handover.to!);
         const notice = state.handover.archiveId
-          ? "🔄 Neue Sitzung übernommen; Rückschau gespeichert."
-          : "🔄 Neue Sitzung übernommen.";
+          ? message(this.noticeLanguage(key), "context.handoverArchived")
+          : message(this.noticeLanguage(key), "context.handover");
         this.recordNotice(key, state, notice);
         await this.save(key, state);
         return state.noticeTarget ? undefined : notice;
@@ -770,11 +772,11 @@ export class ContextMaintenance {
           await maintenanceStep("archive-link", () => this.archives.link(key, prepared.archiveId, state.sessionId!));
           state.handover.phase = "switched";
           this.finishHandover(state, state.sessionId!);
-          notice = "🔄 Neue Sitzung übernommen; Rückschau gespeichert.";
+          notice = message(this.noticeLanguage(key), "context.handoverArchived");
         } else {
           await maintenanceStep("compact", () => this.modelStep(key, signal => session.compact(instructions, signal)));
           state.pressureSinceCompaction = true;
-          notice = "♻️ Kontext kompaktiert.";
+          notice = message(this.noticeLanguage(key), "context.compacted");
         }
         state.lastError = undefined;
         this.finishRecovery(state);

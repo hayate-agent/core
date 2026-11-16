@@ -23,7 +23,7 @@ test("manual handover rotates idle session immediately without a working prompt,
   const harness = new Harness({ runtime, contextMaintenance: maintenance, tickMs: 60000, busyMode: "queue" });
   harness.onStateChange = async () => {};
   const result = await harness.handover("chat", "Continue testing only");
-  assert.match(result, /Neue Sitzung/);
+  assert.match(result, /Switched to a new session/);
   assert.equal(summaries, 1);
   assert.match(seeded, /verified checkpoint/);
   assert.match(seeded, /Continue testing only/);
