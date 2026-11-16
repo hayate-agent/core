@@ -36,7 +36,8 @@ test("plugin_skill_search matches skills by keyword and reports misses", async t
   assert.ok(tool, "plugin_skill_search registered");
   const hit = await tool.execute({ query: "firecrawl" }, { sessionKey: "test:1" });
   assert.match(hit, /web-search/);
-  assert.match(hit, /Read the named SKILL\.md/);
+  assert.ok(hit.includes(path.join(home, '.pi', 'skills', 'web-search', 'SKILL.md')), 'search supplies the actual readable path');
+  assert.match(hit, /automatic loading is not guaranteed/);
   const miss = await tool.execute({ query: "quantumfloristics" }, { sessionKey: "test:1" });
   assert.match(miss, /No matching skills/);
 });
