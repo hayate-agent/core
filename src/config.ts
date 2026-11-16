@@ -1,5 +1,6 @@
 import { validateHashtagConfig, type HashtagConfig } from "./hashtag-config.js";
 import { validateLanguagePolicy } from "./language.js";
+import { validateLocalModelScheduling, type LocalModelScheduling } from "./local-model-admission.js";
 import { readFile } from "node:fs/promises";
 import { agentHome, configurationFile } from "./product-paths.js";
 import path from "node:path";
@@ -37,6 +38,8 @@ export interface HarnessConfig {
   timezone: string;
   model?: string;
   thinking?: string;
+  /** Startup-owned opt-in concurrency for explicitly local model refs. */
+  localModelScheduling?: LocalModelScheduling[];
   /** Trusted local startup engine module; selects policy and tools together. */
   reviewEngine?: string;
   contextStrategy?: string;
@@ -126,6 +129,7 @@ export interface HarnessConfig {
 
 export function defaultConfig(overrides: Partial<HarnessConfig> = {}): HarnessConfig {
   if (overrides.language !== undefined) validateLanguagePolicy(overrides.language);
+  if (overrides.localModelScheduling !== undefined) validateLocalModelScheduling(overrides.localModelScheduling);
   if (overrides.tools !== undefined && (!Array.isArray(overrides.tools) ||
       overrides.tools.some((name) => typeof name !== "string" || !/^[a-zA-Z0-9_][a-zA-Z0-9_.:-]*$/.test(name)))) {
     throw new Error("tools must be an array of literal tool names (or [] for no tools)");
@@ -191,6 +195,7 @@ export function defaultConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
     timezone: overrides.timezone ?? process.env.TZ ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
     model: overrides.model,
     thinking: overrides.thinking,
+    localModelScheduling: overrides.localModelScheduling,
     reviewOverrides: { model: overrides.review?.model, thinking: overrides.review?.thinking },
     review: reviewConfig(overrides.review),
     reviewEngine: overrides.reviewEngine,

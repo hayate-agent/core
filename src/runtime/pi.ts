@@ -19,6 +19,8 @@ import { localModel, localContextBudget, essentialPluginTools, compactSkillCatal
 import { workerCompactionSettings, contextCompactionSettings } from "../worker-context.js";
 import { ModelWorkProof } from "../model-work-proof.js";
 import { modelWorkFetch } from "../model-work-fetch.js";
+import { modelWorkClass } from "../model-work-class.js";
+import { LocalModelAdmission, validateLocalModelScheduling, type LocalModelScheduling } from "../local-model-admission.js";
 import { DISPATCH_PLAN_SYSTEM_PROMPT } from "../planner-http.js";
 import { MaintenanceError, maintenanceStep, type MaintenanceStage } from "../context-maintenance.js";
 import type { PruningPolicy, ToolResultProjector } from "../tool-result-pruning.js";
@@ -80,6 +82,7 @@ export function installAdaptiveSkillHooks(pi: ExtensionAPI, adaptive: AdaptiveSk
 export interface PiRuntimeOptions {
   /** Optional private Ed25519 key, dedicated exclusively to local scheduling metadata. */
   modelWorkKeyFile?: string;
+  localModelScheduling?: LocalModelScheduling[];
   cwd: string;
   /** Immutable host-owned per-stream context; never process-global chdir. */
   executionContext?: (sessionKey: string) => { cwd: string; directories: string[] } | Promise<{ cwd: string; directories: string[] }>;
@@ -137,6 +140,8 @@ function safeKey(key: string): string {
 /** Per-turn system instructions, read by the session's inline extension (one turn at a time). */
 interface TurnSlot {
   active?: boolean;
+  beforeExecution?: () => void;
+  onEvent?: PromptOptions["onEvent"];
   modelWork?: "interactive" | "background";
   instructions?: string;
   mcpInstructions?: string;
@@ -335,6 +340,8 @@ export class PiSession implements RuntimeSession {
         await this.setThinking("off");
       }
       this.slot.active = true;
+      this.slot.beforeExecution = options.beforeExecution;
+      this.slot.onEvent = onEvent;
       this.slot.modelWork = options.modelWork;
       this.slot.instructions = instructions?.trim() || undefined;
       const mcpPolicy = this.mcpLanguage?.();
@@ -353,6 +360,8 @@ export class PiSession implements RuntimeSession {
       await this.session.waitForIdle();
     } finally {
       this.slot.active = false;
+      this.slot.beforeExecution = undefined;
+      this.slot.onEvent = undefined;
       this.slot.modelWork = undefined;
       this.slot.instructions = undefined;
       this.slot.mcpInstructions = undefined;
@@ -539,13 +548,32 @@ export class PiRuntime implements AgentRuntime {
   private modelReload?: Promise<void>;
 
   private readonly workProof: Promise<ModelWorkProof | undefined>;
-  constructor(private readonly opts: PiRuntimeOptions) {
+  constructor(private readonly opts: PiRuntimeOptions, private readonly admission = new LocalModelAdmission()) {
+    validateLocalModelScheduling(opts.localModelScheduling ?? []);
     this.workProof = ModelWorkProof.load(opts.modelWorkKeyFile);
   }
 
   forReviewWorktree(cwd: string): AgentRuntime {
     return new PiRuntime({ ...this.opts, cwd, executionContext: undefined, tools: [], skillPaths: [],
-      sessionProvider: undefined, legacySessionProvider: undefined });
+      sessionProvider: undefined, legacySessionProvider: undefined }, this.admission);
+  }
+
+  private async admitModel(model: import("@earendil-works/pi-ai").Model<import("@earendil-works/pi-ai").Api>,
+    interactive: boolean, signal?: AbortSignal, waiting?: () => void): Promise<() => void> {
+    signal?.throwIfAborted();
+    if (!this.opts.localModelScheduling?.length) return () => {};
+    const identity = (m: typeof model) => `${m.baseUrl.replace(/\/+$/, "")}\0${m.id}`;
+    const key = identity(model), models = await this.modelRuntime();
+    let concurrency: number | undefined;
+    for (const rule of this.opts.localModelScheduling) {
+      const { provider, id } = parseModelRef(rule.model);
+      const physical = models.getPhysicalModel(provider, id);
+      if (!physical) throw Error(`Configured local scheduling model is unavailable: ${rule.model}`);
+      if (identity(physical) !== key) continue;
+      if (concurrency !== undefined && concurrency !== rule.concurrency) throw Error("Conflicting physical local model scheduling limits");
+      concurrency = rule.concurrency;
+    }
+    return concurrency === undefined ? () => {} : this.admission.acquire(key, concurrency, interactive, signal, waiting);
   }
 
   private async modelRuntime(): Promise<ModelRuntime> {
@@ -629,17 +657,20 @@ export class PiRuntime implements AgentRuntime {
 
   async reviewCodeHttp(prompt: string, assessment: import("../builtin-plugins/review-executor.js").ReviewHttpContext, executionId: string, signal: AbortSignal) {
     const { reviewHttp } = await import("../reviewer-http.js");
-    return reviewHttp(await this.modelRuntime(), prompt, assessment, executionId, signal);
+    return reviewHttp(await this.modelRuntime(), prompt, assessment, executionId, signal, globalThis.fetch,
+      (model, signal) => this.admitModel(model, false, signal));
   }
 
   async classifyComplexityHttp(assessment: import("../classifier-http.js").ClassifierAssessment) {
     const { classifyHttp } = await import("../classifier-http.js");
-    return classifyHttp(await this.modelRuntime(), assessment);
+    return classifyHttp(await this.modelRuntime(), assessment, globalThis.fetch,
+      (model, signal) => this.admitModel(model, false, signal));
   }
 
   async planDispatchHttp(request: import("../planner-http.js").PlannerHttpRequest) {
     const { planHttp } = await import("../planner-http.js");
-    return planHttp(await this.modelRuntime(), request);
+    return planHttp(await this.modelRuntime(), request, globalThis.fetch,
+      (model, signal) => this.admitModel(model, false, signal));
   }
 
   async modelPreflight(ref: string, thinking?: string): Promise<{ available: boolean; thinkingSupported: boolean }> {
@@ -1028,12 +1059,32 @@ export class PiRuntime implements AgentRuntime {
     // In particular, summary requests must not be blocked by the same estimate
     // that triggers compaction. No history or tool result is truncated here.
     const stream = session.agent.streamFunction;
-    session.agent.streamFunction = (model, context, requestOptions) => {
+    session.agent.streamFunction = async (model, context, requestOptions) => {
       const local = localModel(this.opts.contextBudgets?.(), `${model.provider}/${model.id}`);
-      return stream(model, context, local && (model.api === "openai-completions" || model.api === "openai-responses")
-        ? { ...requestOptions, fetch: modelWorkFetch(requestOptions?.fetch ?? globalThis.fetch, this.workProof,
-          sessionKey, !!options.ephemeral || !slot.active || requestOptions?.sessionId !== session.sessionManager.getSessionId(), slot.modelWork) }
-        : requestOptions);
+      const background = !!options.ephemeral || !slot.active || requestOptions?.sessionId !== session.sessionManager.getSessionId();
+      let queued = false, release: (() => void) | undefined;
+      const queueEvent = (state: "waiting" | "admitted" | "cancelled") => {
+        try { slot.onEvent?.({ type: "model_queue", state }); } catch { /* Telemetry cannot fail inference. */ }
+      };
+      try {
+        release = await this.admitModel(model, modelWorkClass(sessionKey, background || requestOptions?.maxTokens === 1, slot.modelWork) === "interactive", requestOptions?.signal,
+          () => { queued = true; queueEvent("waiting"); });
+        requestOptions?.signal?.throwIfAborted();
+        if (queued) queueEvent("admitted");
+        // A permit is capacity, not renewed ownership/expiry authorization.
+        if (this.opts.localModelScheduling?.length) slot.beforeExecution?.();
+        const response = await stream(model, context, local && (model.api === "openai-completions" || model.api === "openai-responses")
+          ? { ...requestOptions, fetch: modelWorkFetch(requestOptions?.fetch ?? globalThis.fetch, this.workProof,
+            sessionKey, background, slot.modelWork) }
+          : requestOptions);
+        // Release after the COMPLETE model response, not after headers/first delta.
+        // The public SDK result promise resolves at done/error, before tool execution.
+        void response.result().then(release, release);
+        return response;
+      } catch (error) {
+        if (queued && !release) queueEvent("cancelled");
+        release?.(); throw error;
+      }
     };
     const prepareWorkerCompaction = () => {
       const model = session.model;

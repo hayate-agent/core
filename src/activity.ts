@@ -13,7 +13,7 @@ export interface ActivitySnapshot {
   outputTags?: string[];
   context: "operator" | "host" | "scheduled" | "worker";
   phase: "starting" | "running" | "tool" | "completed" | "failed" | "cancelled";
-  activity: "opening session" | "selecting model" | "runtime active" | "tool running" | "tool settled" | "turn settled" | "compacting context" | "compaction completed" | "compaction failed; original retained" | "compaction cancelled; original retained" | "model reasoning active" | "preparing tool arguments";
+  activity: "opening session" | "selecting model" | "runtime active" | "tool running" | "tool settled" | "turn settled" | "compacting context" | "compaction completed" | "compaction failed; original retained" | "compaction cancelled; original retained" | "model reasoning active" | "preparing tool arguments" | "waiting for local model capacity" | "local model request admitted" | "local model wait cancelled";
   tools: Array<{ callId: string; name: string }>;
   execution?: ExecutionMetadata;
   executionState?: "pending" | "observed" | "unavailable";
@@ -81,6 +81,14 @@ export class TurnActivity {
   }
   event(event: TurnEvent): void {
     if (this.closed) return;
+    if (event.type === "model_queue") {
+      this.phase = "running";
+      this.activity = event.state === "waiting" ? "waiting for local model capacity"
+        : event.state === "admitted" ? "local model request admitted" : "local model wait cancelled";
+      // Queue notifications do not reset the last own semantic activity time.
+      this.publish("progress");
+      return;
+    }
     // Text/usage indicate real activity, but their content is never exported.
     this.last = this.now();
     if (event.type === "execution") {

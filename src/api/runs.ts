@@ -200,6 +200,7 @@ export class RunRegistry {
     if (event.type === "text") this.emit(r, "message.delta", { delta: event.delta });
     else if (event.type === "tool") this.emit(r, event.phase === "start" ? "tool.started" : "tool.completed", { tool: event.name, ...(event.error ? { error: true } : {}) });
     else if (event.type === "compaction") this.emit(r, "context.compaction", { state: event.state, reason: event.reason });
+    else if (event.type === "model_queue") this.emit(r, "model.queue", { state: event.state });
     else if (event.type === "usage") {
       // Validate the complete update before mutating counters, routing metadata or events.
       const previous = r.usage;

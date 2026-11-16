@@ -1,11 +1,12 @@
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import type { ModelAdmission } from "./local-model-admission.js";
 import { assessmentHttpAttempt, resolveHttpAssessment } from "./assessment-http.js";
 import type { ReviewHttpContext } from "./builtin-plugins/review-executor.js";
 import { createHash } from "node:crypto";
 
 /** Dedicated code review only. Consumption belongs to the parent Round ledger. */
 export async function reviewHttp(runtime: ModelRuntime, prompt: string, assessment: ReviewHttpContext,
-  executionId: string, signal: AbortSignal, transport: typeof fetch = globalThis.fetch): Promise<string> {
+  executionId: string, signal: AbortSignal, transport: typeof fetch = globalThis.fetch, admit?: ModelAdmission): Promise<string> {
   const check = () => { if (signal.aborted) throw Error("Review stopped"); };
   check();
   if (createHash("sha256").update(prompt).digest("hex") !== assessment.promptDigest || assessment.consumed()) {
@@ -21,7 +22,7 @@ export async function reviewHttp(runtime: ModelRuntime, prompt: string, assessme
     return assessmentHttpAttempt(runtime, selected, {
       systemPrompt: "Review the supplied candidate only. Return review JSON. No actions or tools.",
       messages: [{ role: "user", content: prompt, timestamp: 0 }],
-    }, signal, check, transport);
+    }, signal, check, transport, admit);
   };
   let selected = first;
   let outcome = await run(first, "initial");

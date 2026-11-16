@@ -34,6 +34,12 @@ export class GatewayProgress {
   }
   event(event: TurnEvent): void {
     if (this.closed || this.mode === "off") return;
+    if (event.type === "model_queue") {
+      this.pending.push(event.state === "waiting" ? "⏳ Wartet auf lokale Modellkapazität; noch keine eigene Modellaktivität."
+        : event.state === "admitted" ? "Lokale Modellanfrage zugelassen; Anbieterfortschritt noch unbekannt." : "Warten auf lokale Modellkapazität abgebrochen.");
+      this.flush();
+      return;
+    }
     if (event.type === "compaction") {
       this.pending.push(event.state === "started" ? "⏳ Kontext wird komprimiert."
         : event.state === "completed" ? "✓ Kontextkomprimierung abgeschlossen."
