@@ -55,6 +55,6 @@
     "wasm-tools-plugin.ts": "438c6ac8899e283e4268f51ef451275bf16a37b584db84ee8302a26200cc70de"
   },
   "repository": "https://git.vanillacore.net/harness/plugins",
-  "revision": "7d601ded685913e74b27639e1a3fd65184c1c895",
+  "revision": "7b64a11fdd04786893ca30b336c34c1dd54b822c",
   "schema": 1
 }
