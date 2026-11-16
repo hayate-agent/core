@@ -104,7 +104,8 @@ export interface DurableTask {
   recoveryPolicyStamp?: string;
   /** Consecutive unusable assessments, including an in-flight crash reservation.
    * Used only for persisted backoff, never as a total attempt/authority limit. */
-  recoveryRetry?: { attempts: number; nextAt: number; diagnostic?: import("./completion-check.js").CompletionDiagnostic };
+  recoveryRetry?: { attempts: number; nextAt: number; diagnostic?: import("./completion-check.js").CompletionDiagnostic;
+    detail?: import("./validator.js").CompletionFailureDetail };
   wait?: { reason: string; nextAt: number; deadline: number };
   /** Monotonic scheduler claims, independent of productive follow-up depth. */
   waitChecks?: number;
@@ -2437,6 +2438,7 @@ export class Harness {
       input.completionContext = await this.completionEvidence(s, input);
       let plan: Inbound["continuation"];
       let diagnostic: import("./completion-check.js").CompletionDiagnostic | undefined;
+      let detail: import("./validator.js").CompletionFailureDetail | undefined;
       if (!unchanged()) return;
       const assessmentController = new AbortController(); this.recoveryAssessmentAbort.add(assessmentController);
       try {
@@ -2446,7 +2448,7 @@ export class Harness {
             recoveryReason: e.recoveryReason, diagnosticCode: e.diagnosticCode,
             intent: e.intent && { key: e.intent.key, replay: e.intent.replay, settled: e.intent.result !== undefined },
             settledEffect: e.settledEffect && { key: e.settledEffect.key }, parentStopped: e.parentStopped }))
-        }), assessmentController.signal, value => { diagnostic = value; });
+        }), assessmentController.signal, (value, evidence) => { diagnostic = value; detail = completionFailureDetail(evidence); });
       } catch { diagnostic = "technical"; }
       finally { this.recoveryAssessmentAbort.delete(assessmentController); }
       if (!unchanged()) return;
@@ -2460,6 +2462,8 @@ export class Harness {
       if (diagnostic) {
         task.supervisorDecision.diagnostic = diagnostic;
         task.recoveryRetry!.diagnostic = diagnostic;
+        task.recoveryRetry!.detail = detail;
+        task.supervisorDecision.detail = detail;
         task.recoveryRetry!.nextAt = this.now() + assessmentRetryDelay(task.recoveryRetry!.attempts);
       }
       else task.recoveryRetry = undefined;
@@ -2598,21 +2602,28 @@ export class Harness {
       completionAnchor: task.anchor ?? { id: task.id, task: task.original, receivedAt: this.now() } };
     const retainedReply = typeof task.lastReply === "string" && !!task.lastReply.trim() && task.lastReply.length <= 8000 && task.lastReply !== NO_REPLY;
     const evidence = JSON.stringify({ startup: true, reply: retainedReply ? task.lastReply : "No retained turn result. Completion is unknown. Assess the original mandate; consider prior effects where relevant to the next action, without blindly replaying work.",
-      executions: this.opts.executionStore?.list(s.key).slice(-20).map(e => ({ id: e.id, status: e.status, parentStopped: e.parentStopped })) ?? [] });
+      // Session history can contain many unrelated mandates. Only exact host-captured
+      // task ancestry is evidence for this assessment; unscoped executions remain
+      // subject to the separate dependency/effect fences, but are not attributed here.
+      executions: this.opts.executionStore?.list(s.key).filter(e => e.dependency?.taskId === task.id &&
+        e.dependency.original === task.original && (!task.taskRef ||
+          task.taskRef.id === e.dependency.taskRef?.id && task.taskRef.generation === e.dependency.taskRef.generation))
+        .slice(-20).map(e => ({ id: e.id, status: e.status, parentStopped: e.parentStopped })) ?? [] });
     let plan: Inbound["continuation"];
     // Assessment is read-only: never open a working runtime just to reconcile a
     // retained task. Persisted observations and linked archives remain available.
     input.completionContext = await this.completionEvidence(s, input);
     let diagnostic: import("./completion-check.js").CompletionDiagnostic | undefined;
+    let detail: import("./validator.js").CompletionFailureDetail | undefined;
     if (!unchanged()) return;
     const assessmentController = new AbortController(); this.recoveryAssessmentAbort.add(assessmentController);
-    try { plan = await this.opts.completionCheck(input, evidence, assessmentController.signal, value => {
-      if (["technical", "invalid_response", "inconclusive", "unavailable"].includes(value)) diagnostic = value;
+    try { plan = await this.opts.completionCheck(input, evidence, assessmentController.signal, (value, evidence) => {
+      if (["technical", "invalid_response", "inconclusive", "unavailable"].includes(value)) { diagnostic = value; detail = completionFailureDetail(evidence); }
     }); }
     catch { diagnostic = "technical"; this.log("retained task assessment failed; deferred retry retained"); }
     finally { this.recoveryAssessmentAbort.delete(assessmentController); }
     if (!unchanged()) return;
-    if (diagnostic) task.recoveryRetry.diagnostic = diagnostic;
+    if (diagnostic) { task.recoveryRetry.diagnostic = diagnostic; task.recoveryRetry.detail = detail; }
     task.recoveryAssessment = "decided";
     if (diagnostic === "inconclusive" || diagnostic === "unavailable") {
       // Keep #369's read-only retry ownership: a missing verdict is neither a
