@@ -97,6 +97,11 @@ export class Subagents {
     const bound = records.filter(record => record.parentTaskId === taskId);
     const children = bound.filter(record => !["completed", "failed"].includes(record.state));
     const unscoped = records.filter(record => !record.parentTaskId && record.state !== "cancelled");
+    // No child exists in this scope. The parent's persisted stop fence is
+    // authoritative; do not resave the whole host for every childless old task.
+    // Existing children still always cross the original durable save barrier,
+    // including retry after a prior save failure and before any runtime abort.
+    if (!bound.length && !unscoped.length) return;
     for (const child of bound) this.records.get(child.id)!.parentStopped = true;
     for (const child of children) this.records.get(child.id)!.state = "cancelled";
     // Never guess that a legacy child belongs to this task, nor silently keep
