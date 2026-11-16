@@ -921,7 +921,7 @@ export class PiRuntime implements AgentRuntime {
         {
           name: "hayate-agent-turn",
           factory: (pi) => {
-            const adaptive = !options.ephemeral && !childSession ? this.opts.adaptiveSkills : undefined;
+            const adaptive = !options.ephemeral ? this.opts.adaptiveSkills : undefined;
             if (adaptive) installAdaptiveSkillHooks(pi, adaptive, sessionKey);
             // PI emits structured system patches; current run instructions are
             // replaced on the next run, without resetting the conversation.

@@ -235,7 +235,7 @@ export function defaultConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
         overlaysDir: path.resolve(home, instructionPaths([overrides.persona.overlaysDir])[0]!),
       }),
     },
-    skills: { paths: [path.join(home, "skills")], context: "auto", ...overrides.skills },
+    skills: { paths: [path.join(home, "skills")], context: "auto", adaptive: true, ...overrides.skills },
     language: { default: "en", ...overrides.language },
     cron: { jobsFile: path.join(home, "cron", "jobs.yaml"), ...overrides.cron },
     loop,
