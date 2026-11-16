@@ -3579,7 +3579,8 @@ export class Harness {
         }
         // Supervisor verdict overrides the proposal; only a matching waiting
         // verdict retains the nonproductive timer. Dependencies still gate work.
-        else if ((input.source !== "host" || this.resultMandate(input)) && plan && ["completed", "waiting", "blocked"].includes(plan.state) && (checkpoint?.state === "waiting" && plan.state === "waiting" || reply && reply !== NO_REPLY) &&
+        else if ((input.source !== "host" || this.resultMandate(input)) && plan && ["completed", "waiting", "blocked"].includes(plan.state) && (checkpoint?.state === "waiting" && plan.state === "waiting" || reply && reply !== NO_REPLY ||
+              plan.state === "completed" && checkpoint?.state === "completed" && progressTools.some(t => !t.error && t.name !== "plugin_task_continuation")) &&
             assessmentEligible() && !this.paused && !this.stopping && !s.queue.length &&
             !assessmentAbort.signal.aborted && s.cancelling !== input) {
           independentlyResolved = true;
