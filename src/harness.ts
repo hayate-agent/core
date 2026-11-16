@@ -2427,8 +2427,11 @@ export class Harness {
       const executions = snapshot();
       const evidence = createHash("sha256").update(executions).digest("hex");
       task.supervisorDecision = { verdict: "unresolved", dependencyHold: { evidence, parentDepth: task.depth, reason: "assessment-claimed" } };
-      const attempts = Math.min(Number.MAX_SAFE_INTEGER, (task.recoveryRetry?.attempts ?? 0) + 1);
-      task.recoveryRetry = { attempts, nextAt: this.now() + assessmentRetryDelay(attempts) };
+      const previousRetry = task.recoveryRetry;
+      const attempts = Math.min(Number.MAX_SAFE_INTEGER, (previousRetry?.attempts ?? 0) + 1);
+      task.recoveryRetry = { attempts, nextAt: this.now() + assessmentRetryDelay(attempts),
+        ...(previousRetry?.diagnostic ? { diagnostic: previousRetry.diagnostic } : {}),
+        ...(previousRetry?.detail ? { detail: previousRetry.detail } : {}) };
       const authority = JSON.stringify(task);
       await this.onStateChange(); // no inference before the durable one-shot claim
       const unchanged = () => eligible() && JSON.stringify(task) === authority && snapshot() === executions;
@@ -2591,7 +2594,8 @@ export class Harness {
     // A usable decision releases the reservation and ends this failure sequence.
     const attempts = Math.min(Number.MAX_SAFE_INTEGER, (retry?.attempts ?? 0) + 1);
     task.recoveryRetry = { attempts, nextAt: this.now() + assessmentRetryDelay(attempts),
-      ...(retry?.diagnostic ? { diagnostic: retry.diagnostic } : {}) };
+      ...(retry?.diagnostic ? { diagnostic: retry.diagnostic } : {}),
+      ...(retry?.detail ? { detail: retry.detail } : {}) };
     task.recoveryAssessment = "claimed";
     if (policyStamp) task.recoveryPolicyStamp = policyStamp;
     const claimedAuthority = JSON.stringify(task);

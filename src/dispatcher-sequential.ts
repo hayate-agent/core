@@ -628,7 +628,8 @@ Correctable vs blocked: a worker "blocked" claim or evidence shortfall that rest
                 delete assessment.nextAt;
                 if (assessment.mainClarification) {
                   await context.checkpoint(JSON.stringify(state));
-                  return block(`Schritt ${index + 1}: Weiterhin keine belastbare Entscheidung (${validation ?? "invalid_response"}). Keine erneute identische Prüfung; Main muss konkrete neue Evidenz oder Nacharbeit gegenüber dem Originalauftrag bestimmen.`);
+                  await context.status?.(`Schritt ${index + 1}: Weiterhin keine belastbare Entscheidung (${validation ?? "invalid_response"}). Keine erneute identische Prüfung; Main muss konkrete neue Evidenz oder Nacharbeit gegenüber dem Originalauftrag bestimmen.`).catch(() => {});
+                  throw new ExecutionAssessmentStalled();
                 }
                 assessment.mainClarification = true;
                 await context.checkpoint(JSON.stringify(state));
