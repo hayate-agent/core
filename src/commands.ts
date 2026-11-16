@@ -30,6 +30,7 @@ export interface CommandContext {
     source?: (key: import("./model-settings.js").ModelSetting) => string;
     set: (key: import("./model-settings.js").ModelSetting, value?: string) => Promise<void>;
   };
+  gatewaySettings?: () => import("./gateway-settings.js").GatewayConfig | undefined;
   modelRoles?: { get(): import("./model-roles.js").ModelRoles | undefined; set(value: import("./model-roles.js").ModelRoles | undefined): Promise<void> };
   scheduler?: Scheduler;
   updater?: import("./update.js").OverlayUpdater;
@@ -460,11 +461,18 @@ export const COMMANDS: Command[] = [
   { name: "loop", aliases: ["proactive"], help: "Re-run a prompt: [interval] <prompt> [--times N] | status | run | pause | resume | stop", run: recurringCommand("loop") },
   {
     name: "status",
-    help: "Show session, model, token and context info",
+    help: "Show installed versions, model and gateway configuration, session and operating settings",
     run: async (_a, input, ctx) => {
       const st = (await ctx.harness.sessionFor(input.sessionKey)).status();
       return [
         `agent: ${ctx.agent} · runtime: ${ctx.harness.runtime.name}`,
+        formatSoftwareVersions(readSoftwareVersions(BUILD_INFO, undefined, ctx.harness.channels.has("webui")), resolveLanguage(ctx.language?.get(), { kind: "system" })),
+        `configured models: ${JSON.stringify(Object.fromEntries(Object.entries(ctx.modelSettings?.get() ?? {}).filter(([key]) => ["model", "thinking", "reviewModel", "reviewThinking", "hashtagModel"].includes(key))))}`,
+        `gateways: ${[...ctx.harness.channels.keys()].join(", ") || "none"} · settings: ${JSON.stringify((() => {
+          const config = ctx.gatewaySettings?.();
+          const safe = (value?: Partial<import("./gateway-settings.js").GatewaySettings>) => ({ progress: value?.progress, statusReactions: value?.statusReactions, recoveryDiagnostics: value?.recoveryDiagnostics });
+          return { ...safe(config), overrides: Object.fromEntries(Object.entries(config?.overrides ?? {}).map(([name, value]) => [name, safe(value)])) };
+        })())}`,
         `session: ${st.sessionId}${st.busy ? " (busy)" : ""}`,
         `model: ${st.model ?? "default"} · reasoning: ${st.thinking ?? "default"}`,
         `messages: ${st.messages ?? "?"} · tokens in/out: ${st.tokens?.input ?? "?"}/${st.tokens?.output ?? "?"}`,
@@ -645,13 +653,13 @@ export const COMMANDS: Command[] = [
   {
     name: "update",
     admin: true,
-    help: "status | check | install [software]; native Core/Plugins/WebUI update, or apply [skills|cron|all] for local overlays",
+    help: "Check and install updates; check downloads only; install activates a prepared update; status | apply [skills|cron|all]",
     run: async (args, _input, ctx) => {
-      const [action = "status", target = "all", ...extra] = args.trim().split(/\s+/).filter(Boolean);
-      if (["check", "install"].includes(action) || (action === "status" && target === "software")) {
+      const [action = "update", target = "all", ...extra] = args.trim().split(/\s+/).filter(Boolean);
+      if (["update", "check", "install"].includes(action) || (action === "status" && ["software", "all"].includes(target))) {
         if (!["software", "all"].includes(target) || extra.length) throw Error("usage: /update status|check|install [software]");
         if (!ctx.softwareUpdates) throw Error("Native lifecycle owner unavailable");
-        const result = await ctx.softwareUpdates(action as "status" | "check" | "install");
+        const result = await ctx.softwareUpdates(action as "status" | "check" | "install" | "update");
         return `${result.phase}: ${result.detail}${result.requestId ? ` (request ${result.requestId})` : ""}`;
       }
       if (!ctx.updater) throw Error("Overlay updater unavailable");

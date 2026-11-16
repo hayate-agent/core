@@ -1054,6 +1054,7 @@ async function main(argv: string[]): Promise<void> {
   installCommands({
     harness,
     softwareUpdates: requestSoftwareUpdate,
+    gatewaySettings: () => settings.effective().gateways,
     benchmark: benchmarkService,
     mcp,
     scheduler,

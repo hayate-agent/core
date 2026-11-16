@@ -49,7 +49,7 @@ export function softwareUpdatePolicy(value: SoftwareUpdateConfig = {}): Software
 export function containerRuntime(): boolean {
   return process.env.HAYATE_RUNTIME_KIND === "container" || !!process.env.KUBERNETES_SERVICE_HOST || existsSync("/.dockerenv") || existsSync("/run/.containerenv");
 }
-export type SoftwareUpdateAction = "status" | "check" | "install";
+export type SoftwareUpdateAction = "status" | "check" | "install" | "update";
 interface Plan { id: string; revisions: Record<SoftwareComponent, string>; sources: SoftwareUpdatePolicy["sources"]; variant?: VariantIdentity;
   variantSelector?: Pick<VariantPolicy, "repository" | "branch" | "manifest"> }
 function variantSelector(policy: VariantPolicy): Plan["variantSelector"] {
@@ -60,7 +60,7 @@ function planId(plan: Omit<Plan, "id">): string {
     ...(plan.variant ? { variant: { binding: plan.variant.binding, profile: plan.variant.profile,
       repository: plan.variant.repository, manifest: plan.variant.manifest, selector: plan.variantSelector } } : {}) })).digest("hex");
 }
-interface Selection { schema: 1; release: string; plan: Plan; baseline?: string; installation?: "automatic" | "operator" }
+interface Selection { schema: 1; release: string; plan: Plan; baseline?: string; installation?: "automatic" | "operator" | "staged" }
 export interface SoftwareUpdateStatus {
   phase: "idle" | "checking" | "available" | "preparing" | "prepared" | "activated" | "failed" | "external-owner" | "disabled";
   detail: string; requestId?: string; plan?: Plan; selection?: Selection; pendingSelection?: Selection;
@@ -98,7 +98,6 @@ export class NativeSoftwareUpdates {
   private selection?: Selection;
   private prepared?: Selection;
   private busy = false;
-  private installRequested = false;
   private operatorInstall = false;
   private pending?: Promise<void>;
   private writing: Promise<void> = Promise.resolve();
@@ -150,7 +149,7 @@ export class NativeSoftwareUpdates {
   start(): void {
     if (this.timer || this.stopped || this.external || !this.policy.enabled) return;
     if (this.prepared) {
-      if (this.prepared.installation === "operator" || this.policy.autoInstall) this.notify("prepared", "Previously validated source installation awaits durable restart");
+      if (this.prepared.installation === "operator" || (this.prepared.installation !== "staged" && this.policy.autoInstall)) this.notify("prepared", "Previously validated source installation awaits durable restart");
       return;
     }
     const tick = async () => {
@@ -180,34 +179,26 @@ export class NativeSoftwareUpdates {
     this.requests = next; return next;
   }
   private async handleRequest(action: SoftwareUpdateAction): Promise<SoftwareUpdateStatus> {
-    if (!["status", "check", "install"].includes(action)) throw Error("Invalid update action");
+    if (!["status", "check", "install", "update"].includes(action)) throw Error("Invalid update action");
     if (action === "status" || this.external || !this.policy.enabled) return this.snapshot();
-    if (this.prepared) {
-      if (action === "install" && this.prepared.installation !== "operator") {
-        this.prepared = { ...this.prepared, installation: "operator" };
-        await writeFileDurable(path.join(this.directory, "releases", this.prepared.release, "prepared.json"), JSON.stringify(this.prepared) + "\n");
-        await this.save({ pendingSelection: this.prepared });
-        this.notify("prepared", "Validated source installation explicitly approved for durable restart");
-      }
-      return this.snapshot();
-    }
     if (this.busy && this.status.phase === "failed") await this.pending;
-    if (this.busy) {
-      if (action === "install") {
-        await this.save({ detail: "Explicit installation approved; source preparation pending" });
-        this.installRequested = true; this.operatorInstall = true;
-        void this.pending?.then(() => {
-          if (!this.busy && !this.prepared && !this.stopped) return this.queue("install", true);
-        }).catch(() => {});
-      }
+    if (this.busy) throw Error("Software preparation is already running; wait for it to finish");
+    if (action === "install") {
+      if (!this.prepared) throw Error("No prepared update; run /update check first");
+      await this.verifySelection(this.prepared, true);
+      this.prepared = { ...this.prepared, installation: "operator" };
+      await writeFileDurable(path.join(this.directory, "releases", this.prepared.release, "prepared.json"), JSON.stringify(this.prepared) + "\n");
+      await this.save({ pendingSelection: this.prepared, detail: "Prepared installation approved for durable restart" });
+      this.notify("prepared", "Validated source installation explicitly approved for durable restart");
       return this.snapshot();
     }
-    return this.queue(action, action === "install");
+    this.prepared = undefined;
+    await this.save({ pendingSelection: undefined });
+    return this.queue(action, action === "update");
   }
-  private async queue(_action: "check" | "install", install: boolean): Promise<SoftwareUpdateStatus> {
+  private async queue(_action: "check" | "update", install: boolean): Promise<SoftwareUpdateStatus> {
     this.busy = true;
-    this.installRequested = install;
-    this.operatorInstall = _action === "install";
+    this.operatorInstall = _action === "update";
     this.status = { ...this.status, phase: "checking", detail: "Checking configured Core, Plugins and WebUI sources", requestId: randomUUID(), updatedAt: Date.now() };
     // Durable acknowledgement before any network/build work. The command turn
     // never waits for installation and cannot become its own admission blocker.
@@ -273,7 +264,7 @@ export class NativeSoftwareUpdates {
       }
       await this.save({ phase: "available", detail: "New source versions available; /update install downloads, validates and restarts", plan });
       this.notify("available", softwareComponents.map(c => `${c} ${revisions[c].slice(0, 12)}`).join(", "));
-      if ((!install && !this.installRequested) || this.stopped) return;
+      if (this.stopped) return;
       const release = randomUUID(); const root = path.join(this.directory, "releases", release);
       await mkdir(root, { recursive: true, mode: 0o700 });
       await this.save({ phase: "preparing", detail: "Preparing isolated source installation; current work continues" });
@@ -358,14 +349,14 @@ export class NativeSoftwareUpdates {
       } catch { /* Version lookup is informational, never an installation gate. */ }
       const version = sourceVersion(revisions.core, tags, history, corePackage.version);
       await writeFileDurable(path.join(root, "core/build-info.json"), JSON.stringify({ version, revision: revisions.core, ...(variant ? { variant: variant.identity } : {}) }) + "\n");
-      const selection: Selection = { schema: 1, release, plan, installation: this.operatorInstall ? "operator" : "automatic", ...(this.baseline ? { baseline: this.baseline } : {}) };
+      const selection: Selection = { schema: 1, release, plan, installation: this.operatorInstall ? "operator" : (install ? "automatic" : "staged"), ...(this.baseline ? { baseline: this.baseline } : {}) };
       if (variant) await writeFileDurable(path.join(root, "variant-payload.json"), JSON.stringify({ binding: variant.identity.binding, sha256: await variantPayloadDigest(root) }));
       await writeFileDurable(path.join(root, "prepared.json"), JSON.stringify(selection) + "\n");
       await this.verifySelection(selection, true);
       if (this.stopped) { await this.save({ phase: "available", detail: "Prepared source retained; process owner is stopping" }); return; }
       this.prepared = selection;
-      await this.save({ phase: "prepared", pendingSelection: selection, detail: "Validated installation prepared; requesting bounded durable restart" });
-      this.notify("prepared", `Core, Plugins, WebUI prepared (${id.slice(0, 12)})`);
+      await this.save({ phase: "prepared", pendingSelection: selection, detail: selection.installation === "staged" ? "Validated update downloaded; run /update install to activate" : "Validated installation prepared; requesting bounded durable restart" });
+      if (selection.installation !== "staged") this.notify("prepared", `Core, Plugins, WebUI prepared (${id.slice(0, 12)})`);
     } catch {
       await this.save({ phase: "failed", detail: `${component}: ${stage} failed; previous installation untouched; next scheduled check retries preparation` }).catch(() => {});
     }
@@ -417,7 +408,7 @@ export class NativeSoftwareUpdates {
    * No old runtime can write beside the selected replacement at this boundary. */
   async afterExit(): Promise<void> {
     if (!this.prepared || !this.policy.enabled || this.external || this.stopped ||
-        (this.prepared.installation !== "operator" && !this.policy.autoInstall)) return;
+        (this.prepared.installation === "staged" || (this.prepared.installation !== "operator" && !this.policy.autoInstall))) return;
     try { await this.verifySelection(this.prepared, true); }
     catch (error) {
       if (!this.prepared.plan.variant && !this.selection?.plan.variant) throw error;
