@@ -21,7 +21,7 @@ export interface Changeset { root: string; base: string; fingerprint: string; di
 export async function captureChangeset(cwd: string, baseRef: string): Promise<Changeset> {
   const root = (await git(cwd, ["rev-parse", "--show-toplevel"])).replace(/\n$/, "");
   const base = (await git(root, ["rev-parse", "--verify", `${baseRef}^{commit}`])).trim();
-  let diff = await git(root, ["diff", "--no-ext-diff", "--no-textconv", "--binary", base, "--"]);
+  let diff = await git(root, ["diff", "--no-color", "--no-ext-diff", "--no-textconv", "--binary", base, "--"]);
   const tracked = (await git(root, ["diff", "--no-renames", "--name-only", "-z", base, "--"])).split("\0").filter(Boolean);
   const untracked = (await git(root, ["ls-files", "--others", "--exclude-standard", "-z"])).split("\0").filter(Boolean).sort();
   for (const file of untracked) {
