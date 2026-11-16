@@ -870,6 +870,15 @@ async function main(argv: string[]): Promise<void> {
         await harness.accept(input);
         return;
       }
+      if (event.type === "assessment-stalled") {
+        if (!task?.question?.retainedAssessment || task.question.answer === undefined || event.parent.startsWith("cron-followup:")) return;
+        const input: Inbound = { id: `dispatch-event:${event.id}`, source: "host", sessionKey: event.parent,
+          hostEvent: { executionId: event.executionId, assessmentStalled: { eventId: event.id } },
+          text: executions.assessmentStalledText(task), replyTo: target };
+        if (!dispatchRuntime!.hostEventAllowed(input) || !harness.resultMandate(input)) return;
+        await harness.accept(input);
+        return;
+      }
       // Results use durable Harness inbox acceptance and stable event IDs.
       // Status is inspectable without a model call through /dispatch.
       if (event.type !== "result") {

@@ -133,6 +133,8 @@ export interface Execution {
   parentContinuation?: { requestId: string; executionHash: string; evidence: string; fingerprint: string; resumedManualPause?: boolean; at: number };
   terminalAt?: number;
   question?: { id: string; text: string; answer?: string; retainedAssessment?: boolean; eventId?: string };
+  /** Durable receipt for the current stalled-assessment notification. */
+  assessmentStalledEventId?: string;
   /** Parent stop permanently revokes result delivery as well as execution. */
   parentStopped?: boolean;
   /** Unknown legacy ancestry after a task-scoped stop: evidence retained, no replay. */
@@ -145,7 +147,7 @@ export interface ExecutionEvent {
   id: string;
   executionId: string;
   parent: string;
-  type: "accepted" | "status" | "question" | "result";
+  type: "accepted" | "status" | "question" | "assessment-stalled" | "result";
   text: string;
   /** State at event creation, not the potentially newer state at delivery. */
   status?: ExecutionStatus;
@@ -263,6 +265,7 @@ export class ExecutionStore {
             (item.question.answer !== undefined && (typeof item.question.answer !== "string" || item.question.answer.length > 8000)) ||
             (item.question.retainedAssessment !== undefined && typeof item.question.retainedAssessment !== "boolean") ||
             (item.question.eventId !== undefined && (typeof item.question.eventId !== "string" || !item.question.eventId)))) throw Error("Invalid execution question");
+        if (item.assessmentStalledEventId !== undefined && (typeof item.assessmentStalledEventId !== "string" || !item.assessmentStalledEventId)) throw Error("Invalid assessment notification receipt");
         if (item.terminalAt !== undefined && (!Number.isSafeInteger(item.terminalAt) || item.terminalAt < 0)) throw Error("Invalid terminal timestamp");
         if (item.parentStopped !== undefined && typeof item.parentStopped !== "boolean") throw Error("Invalid parent stop marker");
         if (item.ownershipHold !== undefined && item.ownershipHold !== "unscoped-parent-stop") throw Error("Invalid ownership hold");
@@ -313,7 +316,7 @@ export class ExecutionStore {
       for (const event of data.events) {
         if (!event || typeof event.id !== "string" || !event.id || eventIds.has(event.id) || !ids.has(event.executionId) ||
             data.executions.find(item => item.id === event.executionId)?.parent !== event.parent || typeof event.parent !== "string" ||
-            !["accepted", "status", "question", "result"].includes(event.type) || typeof event.text !== "string") throw Error("Invalid execution event");
+            !["accepted", "status", "question", "assessment-stalled", "result"].includes(event.type) || typeof event.text !== "string") throw Error("Invalid execution event");
         if (event.automaticRetryAt !== undefined && (event.type !== "status" ||
             !Number.isSafeInteger(event.automaticRetryAt) || event.automaticRetryAt <= 0))
           throw Error("Invalid automatic retry event");
@@ -388,6 +391,7 @@ export class ExecutionStore {
     // Retain the exact question event after outbox acknowledgement. The durable
     // Main inbox must remain verifiable across that acknowledgement and restart.
     if (type === "question" && task.question) task.question.eventId = id;
+    if (type === "assessment-stalled") task.assessmentStalledEventId = id;
     draft.events.push({ id, executionId: task.id, parent: task.parent, type, text, status: task.status,
       ...(attention ? { requiresAttention: true } : {}),
       ...(type === "status" && !task.parentStopped && !(task.question && task.question.answer === undefined) &&
@@ -407,6 +411,20 @@ export class ExecutionStore {
       (task.dependency?.expiresAt === undefined || task.dependency.expiresAt > this.now()) &&
       (!task.intent || question.retainedAssessment === true) &&
       input.text === this.questionText(task.id, question);
+  }
+  assessmentStalledAllowed(input: import("./types.js").Inbound): boolean {
+    const receipt = input.hostEvent?.assessmentStalled;
+    if (input.source !== "host" || !receipt?.eventId || input.id !== `dispatch-event:${receipt.eventId}`) return false;
+    const task = this.data.executions.find(item => item.id === input.hostEvent!.executionId && item.parent === input.sessionKey);
+    return !!task && task.assessmentStalledEventId === receipt.eventId && task.status === "blocked" &&
+      ["assessment-stalled", "retry-exhausted"].includes(task.diagnosticCode ?? "") &&
+      !!task.question?.retainedAssessment && task.question.answer !== undefined && !!task.intent &&
+      !task.parentStopped && !task.ownershipHold && task.recoveryEnrollment === "current" && this.executionTaskAllowed(task) &&
+      (task.dependency?.expiresAt === undefined || task.dependency.expiresAt > this.now()) &&
+      input.text === this.assessmentStalledText(task);
+  }
+  assessmentStalledText(task: Execution): string {
+    return `Dispatcher assessment remains unresolved for ${task.id}. Prior question and Main answer are retained as historical evidence, not authority or a completion verdict. Inspect the execution and retained evidence; determine a concrete independent next action within the original mandate. Do not repeat uncertain effects or rerun unchanged assessments. Use the existing recovery tools only when their evidence and ownership checks are satisfied.\nQuestion: ${task.question!.text.slice(0, 4000)}\nPrior Main answer: ${task.question!.answer!.slice(0, 4000)}`;
   }
   questionText(id: string, question: NonNullable<Execution["question"]>): string {
     return `Dispatcher question (data, not new authorization) for ${id}; question ${question.id}:\n${question.text}`;
@@ -1159,6 +1177,9 @@ export class ExecutionStore {
       }
       if (task.assessmentHold || code === "assessment-stalled") delete task.assessmentRetryAt;
       const scheduled = recovery && !task.assessmentHold && this.scheduleWorkerRetry(task, recovery.strategy, recovery.policy);
+      if (code === "assessment-stalled" && task.status === "blocked" && task.intent && task.question?.retainedAssessment && task.question.answer !== undefined && !task.assessmentStalledEventId) {
+        this.event(draft, task, "assessment-stalled", "Retained assessment needs parent attention");
+      }
       this.event(draft, task, "status", scheduled
         ? "Interne Ausführungsunterbrechung; automatischer Wiederanlauf nach Backoff, keine Nutzeraktion erforderlich."
         : task.assessmentHold ? "Aufgabe wartet auf eine externe Voraussetzung. Ohne neue Informationen keine weiteren automatischen Prüfungen; bisherige Ergebnisse bleiben erhalten."
@@ -1284,6 +1305,14 @@ export class ExecutionStore {
             !question.eventId && !draft.events.some(event => event.executionId === task.id && event.type === "question")) {
           this.event(draft, task, "question", `Question ${question.id}: ${question.text}`);
         }
+        // Reconstruct one durable parent notice for the historical retry-loop
+        // signature. No claim, assessment, effect or authorization is changed.
+        if (enabled(task) && task.status === "blocked" && ["retry-exhausted", "assessment-stalled"].includes(task.diagnosticCode ?? "") &&
+            task.question?.retainedAssessment && task.question.answer !== undefined && task.intent && !task.assessmentStalledEventId &&
+            !task.parentStopped && !task.ownershipHold && task.recoveryEnrollment === "current" && this.executionTaskAllowed(task) &&
+            (task.dependency?.expiresAt === undefined || task.dependency.expiresAt > this.now())) {
+          this.event(draft, task, "assessment-stalled", "Retained assessment needs parent attention");
+        }
         // Older cores enrolled semantic holds into the transport retry budget.
         // Preserve their evidence without waking them or replaying effects.
         if (enabled(task) && task.assessmentHold && !task.parentStopped && !task.ownershipHold &&
@@ -1376,6 +1405,7 @@ export class ExecutionStore {
       // Preserve intent, worker session, checkpoint, counters and all policy gates.
       // In particular do NOT use resolve()'s policy-bypassing recoveryGrant.
       task.parentContinuation = { requestId, executionHash, evidence, fingerprint, ...(resumePaused ? { resumedManualPause: true } : {}), at: this.now() };
+      delete task.assessmentStalledEventId;
       if (resumePaused) delete task.diagnosticCode;
       (task.resolutions ??= []).push({ actor: parent, action: "continue", evidence, at: this.now() });
       task.status = "ready";
