@@ -1,5 +1,15 @@
 # Optional durable dispatcher
 
+## Startup and restored ingress
+
+The CLI waits for durable structural Dispatcher recovery before releasing restored
+inbox entries, but does not wait for the live scheduling loop to become idle.
+Scheduling can keep receiving new kick requests or wait for claim persistence
+under load; this must not withhold an unrelated accepted Matrix question.
+Each worker still needs its ordinary durable claim, policy, deadline, ownership
+and effect checks. Structural recovery failures still fail startup; scheduling
+failure uses the normal shutdown path, not a bypass or a replay grant.
+
 ## Routing and recovery guarantees
 
 With an enabled, ready dispatcher, Main may work directly with available tools or

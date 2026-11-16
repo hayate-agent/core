@@ -1150,7 +1150,7 @@ async function main(argv: string[]): Promise<void> {
   await harness.migrateTaskAuthority();
   await harness.reconcileStoppedTasks();
   await subagents.reconcile(sessionEnabled);
-  await dispatcher?.start();
+  await dispatcher?.start({ schedule: false });
   if (saved?.pending?.length || saved?.outbox?.length || harness.pendingInputs().length) {
     const pending = (saved?.pending ?? []).filter(input => sessionEnabled(input.sessionKey)).length;
     const replies = (saved?.outbox ?? []).filter(entry => sessionEnabled(entry.sessionKey)).length;
@@ -1184,6 +1184,12 @@ async function main(argv: string[]): Promise<void> {
   // slow/unavailable reviewers must not withhold launcher readiness for minutes
   // (or make an otherwise healthy Kubernetes agent fail startup probes).
   // Each retained task still independently persists/rechecks its admission.
+  // Dispatcher scheduling can keep receiving kick() requests under live work.
+  // It is not another global startup/replay fence after structural recovery.
+  void dispatcher?.kick().catch(() => {
+    log("dispatcher startup scheduling failed; shutting down without bypassing admission");
+    void shutdown(1);
+  });
   void harness.recoverTasks(true).catch(() => {
     log("retained task recovery scan failed; shutting down without bypassing admission");
     void shutdown(1);
