@@ -2449,6 +2449,13 @@ export class Harness {
           dependencyReconciliation: "These blocked children remain execution-fenced: do not retry, resume, cancel, resolve or replay their tools or effects. Assess the full original mandate and recent host evidence. Return continue only with a concrete DIFFERENT independent parent step within that original authority and deadline, not work assigned to the blocked child. A valid continue admits that step once. Return blocked/waiting for a true global hold. No worktree inspection has occurred; do not claim otherwise.",
           executions: pending.map(e => ({ id: e.id, status: e.status, input: e.input?.slice(0, 8000), dependency: e.dependency,
             recoveryReason: e.recoveryReason, diagnosticCode: e.diagnosticCode,
+            // The answered retained question is task-bound historical evidence,
+            // not an operator amendment or a completion/replay grant. Without it
+            // the parent assessor cannot identify useful independent next work.
+            ...(e.dependency?.taskId === task.id && e.dependency.original === task.original &&
+              e.question?.retainedAssessment && e.question.answer !== undefined ? {
+                retainedAssessment: { question: e.question.text.slice(0, 4000), answer: e.question.answer.slice(0, 4000) },
+              } : {}),
             intent: e.intent && { key: e.intent.key, replay: e.intent.replay, settled: e.intent.result !== undefined },
             settledEffect: e.settledEffect && { key: e.settledEffect.key }, parentStopped: e.parentStopped }))
         }), assessmentController.signal, (value, evidence) => { diagnostic = value; detail = completionFailureDetail(evidence); });
