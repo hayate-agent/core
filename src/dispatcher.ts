@@ -16,7 +16,7 @@ export interface DispatchContext {
   /** Optional only for source compatibility with existing strategy test adapters. */
   status?(text: string): Promise<void>;
   /** Persists a question and suspends this execution; never returns normally. */
-  question?(text: string): Promise<never>;
+  question?(text: string, retainedAssessment?: boolean): Promise<never>;
   intent(key: string, replay: "safe" | "unsafe", route?: import("./model-roles.js").ModelPair, decisionRevision?: number): Promise<void>;
   settleIntent(key: string, result: string, checkpoint: string, decisionRevision?: number): Promise<void>;
   /** Authenticated parent data, not authority expansion or verdict override. */
@@ -268,8 +268,8 @@ export class Dispatcher {
           // event remains queued until a later delivery attempt succeeds.
           void this.flushEvents().catch(this.report);
         },
-        question: async text => {
-          check(); await this.store.ask(task.id, token, text);
+        question: async (text, retainedAssessment) => {
+          check(); await this.store.ask(task.id, token, text, retainedAssessment);
           void this.flushEvents().catch(this.report);
           throw new ExecutionClaimConflict("Execution waiting for answer");
         },

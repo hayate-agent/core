@@ -132,7 +132,7 @@ export interface Execution {
   controlRevision?: number;
   parentContinuation?: { requestId: string; executionHash: string; evidence: string; fingerprint: string; resumedManualPause?: boolean; at: number };
   terminalAt?: number;
-  question?: { id: string; text: string; answer?: string };
+  question?: { id: string; text: string; answer?: string; retainedAssessment?: boolean };
   /** Parent stop permanently revokes result delivery as well as execution. */
   parentStopped?: boolean;
   /** Unknown legacy ancestry after a task-scoped stop: evidence retained, no replay. */
@@ -260,7 +260,8 @@ export class ExecutionStore {
                 : d.appliedAt !== undefined || d.appliedClaim !== undefined)))) throw Error("Invalid execution decisions");
         if (item.question !== undefined && (!item.question || typeof item.question.id !== "string" || !item.question.id ||
             typeof item.question.text !== "string" || !item.question.text.trim() || item.question.text.length > 8000 ||
-            (item.question.answer !== undefined && (typeof item.question.answer !== "string" || item.question.answer.length > 8000)))) throw Error("Invalid execution question");
+            (item.question.answer !== undefined && (typeof item.question.answer !== "string" || item.question.answer.length > 8000)) ||
+            (item.question.retainedAssessment !== undefined && typeof item.question.retainedAssessment !== "boolean"))) throw Error("Invalid execution question");
         if (item.terminalAt !== undefined && (!Number.isSafeInteger(item.terminalAt) || item.terminalAt < 0)) throw Error("Invalid terminal timestamp");
         if (item.parentStopped !== undefined && typeof item.parentStopped !== "boolean") throw Error("Invalid parent stop marker");
         if (item.ownershipHold !== undefined && item.ownershipHold !== "unscoped-parent-stop") throw Error("Invalid ownership hold");
@@ -836,12 +837,20 @@ export class ExecutionStore {
       this.event(draft, task, "status", text);
     });
   }
-  ask(id: string, token: string, text: string): Promise<void> {
+  ask(id: string, token: string, text: string, retainedAssessment = false): Promise<void> {
     return this.mutate(draft => {
       const task = this.owned(draft, id, token);
-      if (task.intent) throw Error("Cannot ask with unresolved effect intent");
+      // Trusted strategy may ask about retained review evidence. The intent
+      // stays unresolved; an answer cannot settle it or authorize effect replay.
+      if (task.intent && !retainedAssessment) throw Error("Cannot ask with unresolved effect intent");
+      if (retainedAssessment) {
+        const saved = task.checkpoint ? JSON.parse(task.checkpoint) : undefined;
+        if (!saved?.assessment?.mainClarification || saved.assessment.index !== saved.outcomes?.length ||
+            typeof saved.assessment.reply !== "string" || !saved.assessment.reply.trim())
+          throw Error("Retained assessment checkpoint required");
+      }
       if (typeof text !== "string" || !text.trim() || text.length > 8000) throw Error("Invalid question");
-      task.question = { id: randomUUID(), text };
+      task.question = { id: randomUUID(), text, ...(retainedAssessment ? { retainedAssessment: true } : {}) };
       task.status = "paused";
       delete task.workerRetry;
       delete task.assessmentHold;
@@ -1036,7 +1045,7 @@ export class ExecutionStore {
   answer(parent: string, id: string, questionId: string, text: string): Promise<void> {
     return this.mutate(draft => {
       const task = this.find(draft, id);
-      if (task.parent !== parent || task.parentStopped || task.intent || task.status !== "paused" ||
+      if (task.parent !== parent || task.parentStopped || (task.intent && !task.question?.retainedAssessment) || task.status !== "paused" ||
           task.question?.id !== questionId || task.question.answer !== undefined) throw Error("Question no longer awaiting an answer");
       if (typeof text !== "string" || !text.trim() || text.length > 8000) throw Error("Invalid answer");
       task.question.answer = text;
