@@ -132,7 +132,7 @@ export interface Execution {
   controlRevision?: number;
   parentContinuation?: { requestId: string; executionHash: string; evidence: string; fingerprint: string; resumedManualPause?: boolean; at: number };
   terminalAt?: number;
-  question?: { id: string; text: string; answer?: string; retainedAssessment?: boolean };
+  question?: { id: string; text: string; answer?: string; retainedAssessment?: boolean; eventId?: string };
   /** Parent stop permanently revokes result delivery as well as execution. */
   parentStopped?: boolean;
   /** Unknown legacy ancestry after a task-scoped stop: evidence retained, no replay. */
@@ -261,7 +261,8 @@ export class ExecutionStore {
         if (item.question !== undefined && (!item.question || typeof item.question.id !== "string" || !item.question.id ||
             typeof item.question.text !== "string" || !item.question.text.trim() || item.question.text.length > 8000 ||
             (item.question.answer !== undefined && (typeof item.question.answer !== "string" || item.question.answer.length > 8000)) ||
-            (item.question.retainedAssessment !== undefined && typeof item.question.retainedAssessment !== "boolean"))) throw Error("Invalid execution question");
+            (item.question.retainedAssessment !== undefined && typeof item.question.retainedAssessment !== "boolean") ||
+            (item.question.eventId !== undefined && (typeof item.question.eventId !== "string" || !item.question.eventId)))) throw Error("Invalid execution question");
         if (item.terminalAt !== undefined && (!Number.isSafeInteger(item.terminalAt) || item.terminalAt < 0)) throw Error("Invalid terminal timestamp");
         if (item.parentStopped !== undefined && typeof item.parentStopped !== "boolean") throw Error("Invalid parent stop marker");
         if (item.ownershipHold !== undefined && item.ownershipHold !== "unscoped-parent-stop") throw Error("Invalid ownership hold");
@@ -320,6 +321,15 @@ export class ExecutionStore {
           throw Error("Invalid event attention flag");
         eventIds.add(event.id);
       }
+      // Upgrade only a still-pending legacy outbox receipt that exactly matches
+      // the saved unanswered question. The next commit (including ack) saves it.
+      for (const task of data.executions) {
+        if (task.question && task.question.answer === undefined && !task.question.eventId) {
+          const events = data.events.filter(event => event.executionId === task.id && event.parent === task.parent &&
+            event.type === "question" && event.text === `Question ${task.question!.id}: ${task.question!.text}`);
+          if (events.length === 1) task.question.eventId = events[0]!.id;
+        }
+      }
       if (data.turns !== undefined) {
         if (!Array.isArray(data.turns)) throw Error("Invalid durable turns");
         const turnIds = new Set<string>();
@@ -370,11 +380,32 @@ export class ExecutionStore {
   async drain(): Promise<void> { await this.queue; }
 
   private event(draft: Ledger, task: Execution, type: ExecutionEvent["type"], text: string, attention = false): void {
-    draft.events.push({ id: randomUUID(), executionId: task.id, parent: task.parent, type, text, status: task.status,
+    const id = randomUUID();
+    // Retain the exact question event after outbox acknowledgement. The durable
+    // Main inbox must remain verifiable across that acknowledgement and restart.
+    if (type === "question" && task.question) task.question.eventId = id;
+    draft.events.push({ id, executionId: task.id, parent: task.parent, type, text, status: task.status,
       ...(attention ? { requiresAttention: true } : {}),
       ...(type === "status" && !task.parentStopped && !(task.question && task.question.answer === undefined) &&
         task.workerRetry && ["runtime-failure", "worker-failed"].includes(task.diagnosticCode ?? "") &&
         ["paused", "blocked", "ready"].includes(task.status) ? { automaticRetryAt: task.workerRetry.nextAt } : {}) });
+  }
+  /** Exact host-owned question receipt, never an arbitrary host-input mandate. */
+  questionAllowed(input: import("./types.js").Inbound): boolean {
+    const receipt = input.hostEvent?.question;
+    if (input.source !== "host" || !receipt || !receipt.eventId || !receipt.id ||
+        input.id !== `dispatch-event:${receipt.eventId}`) return false;
+    const task = this.data.executions.find(item => item.id === input.hostEvent!.executionId && item.parent === input.sessionKey);
+    const question = task?.question;
+    return !!task && !!question && question.id === receipt.id && question.eventId === receipt.eventId &&
+      question.answer === undefined && task.status === "paused" && !task.parentStopped && !task.ownershipHold &&
+      this.executionTaskAllowed(task) &&
+      (task.dependency?.expiresAt === undefined || task.dependency.expiresAt > this.now()) &&
+      (!task.intent || question.retainedAssessment === true) &&
+      input.text === this.questionText(task.id, question);
+  }
+  questionText(id: string, question: NonNullable<Execution["question"]>): string {
+    return `Dispatcher question (data, not new authorization) for ${id}; question ${question.id}:\n${question.text}`;
   }
   private find(draft: Ledger, id: string): Execution {
     const task = draft.executions.find(item => item.id === id);
@@ -1232,6 +1263,17 @@ export class ExecutionStore {
     if (restartLimit !== undefined && (!Number.isSafeInteger(restartLimit) || restartLimit < 0)) throw Error("Invalid recovery restart limit");
     return this.mutate(draft => {
       for (const task of draft.executions) {
+        // Older versions acknowledged question events after showing them to the
+        // channel, without ever delivering them to Main. Reconstitute one stable
+        // receipt from the persisted question, not a new worker execution.
+        const question = task.question;
+        if (enabled(task) && task.status === "paused" && question && question.answer === undefined &&
+            (!task.intent || question.retainedAssessment === true) && !task.parentStopped && !task.ownershipHold &&
+            task.recoveryEnrollment === "current" && task.diagnosticCode !== "manual-pause" &&
+            this.executionTaskAllowed(task) && (task.dependency?.expiresAt === undefined || task.dependency.expiresAt > this.now()) &&
+            !question.eventId && !draft.events.some(event => event.executionId === task.id && event.type === "question")) {
+          this.event(draft, task, "question", `Question ${question.id}: ${question.text}`);
+        }
         // Older cores enrolled semantic holds into the transport retry budget.
         // Preserve their evidence without waking them or replaying effects.
         if (enabled(task) && task.assessmentHold && !task.parentStopped && !task.ownershipHold &&
