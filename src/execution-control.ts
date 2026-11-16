@@ -7,12 +7,13 @@ import { writeFileDurable } from "./durable.js";
 import { validExecutionFollowUp, executionDecisionRevision } from "./execution.js";
 import type { Dispatcher } from "./dispatcher.js";
 import type { PluginModule } from "./plugins.js";
+import type { Scheduler } from "./scheduler.js";
 
 /** Local host-owner control, deliberately NOT an inference API or model tool.
  * Same-UID filesystem authority is required, as for native lifecycle control.
  * It never edits a ledger or bypasses Dispatcher decision/admission checks. */
 export function executionControlPlugin(get: () => Dispatcher | undefined, directory: string,
-  resetConversation?: (parent: string) => Promise<void>, freezeLoop?: (parent: string, digest: string) => Promise<void>): PluginModule {
+  resetConversation?: (parent: string) => Promise<void>, freezeLoop?: (parent: string, digest: string) => Promise<void>, scheduler?: Scheduler): PluginModule {
   return { apiVersion: 1, async activate(api) {
     if (!process.getuid) return;
     try { await mkdir(directory, { mode: 0o700 }); } catch (e) { if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e; }
@@ -45,7 +46,7 @@ export function executionControlPlugin(get: () => Dispatcher | undefined, direct
             if (buffer.slice(end + 1).length) throw Error("One request per connection");
             const frame = JSON.parse(buffer.slice(0, end));
             if (frame?.op === "reset-conversation") socket.setTimeout(0); // owned script drain may take its full deadline
-            const result = await executionControlRequest(get(), frame, resetConversation, freezeLoop);
+            const result = await executionControlRequest(get(), frame, resetConversation, freezeLoop, scheduler);
             if (!closed && !socket.destroyed) socket.end(JSON.stringify({ ok: true, result }) + "\n");
           } catch { if (!socket.destroyed) socket.end('{"ok":false,"error":"request rejected; inspect exact execution and ownership before retry"}\n'); }
         })();
@@ -72,9 +73,21 @@ export function executionControlPlugin(get: () => Dispatcher | undefined, direct
  * Explicit consolidation reuses existing audited same-owner follow-up admission.
  * No resume/cancel, deadline extension, original-scope replacement or new job. */
 export async function executionControlRequest(dispatcher: Dispatcher | undefined, input: unknown,
-  resetConversation?: (parent: string) => Promise<void>, freezeLoop?: (parent: string, digest: string) => Promise<void>): Promise<unknown> {
-  if (!dispatcher || !input || typeof input !== "object") throw Error("Dispatcher control unavailable");
+  resetConversation?: (parent: string) => Promise<void>, freezeLoop?: (parent: string, digest: string) => Promise<void>, scheduler?: Scheduler): Promise<unknown> {
+  if (!input || typeof input !== "object") throw Error("Control unavailable");
   const frame = input as Record<string, unknown>;
+  if (frame.op === "cron-reload") {
+    if (!scheduler || Object.keys(frame).length !== 2 || typeof frame.digest !== "string" || !/^[a-f0-9]{64}$/.test(frame.digest)) throw Error("Invalid cron reload");
+    await scheduler.load(frame.digest);
+    return { jobs: scheduler.list() };
+  }
+  if (frame.op === "cron-run") {
+    if (!scheduler || Object.keys(frame).length !== 4 || typeof frame.name !== "string" || !frame.name.trim() || frame.name.length > 200 ||
+        typeof frame.digest !== "string" || !/^[a-f0-9]{64}$/.test(frame.digest) || typeof frame.requestId !== "string" || !/^[A-Za-z0-9_-]{1,100}$/.test(frame.requestId)) throw Error("Invalid cron run");
+    await scheduler.runOwnedPrompt(frame.name, frame.digest, frame.requestId);
+    return { accepted: true, name: frame.name, requestId: frame.requestId };
+  }
+  if (!dispatcher) throw Error("Dispatcher control unavailable");
   if (typeof frame.parent !== "string" || !frame.parent.trim() || frame.parent.length > 1000 || /^(dispatch|subagent):/.test(frame.parent)) throw Error("Invalid exact parent scope");
   if (frame.op === "freeze-loop") {
     if (!freezeLoop || Object.keys(frame).length !== 3 || typeof frame.digest !== "string" || !/^[a-f0-9]{64}$/.test(frame.digest)) throw Error("Invalid loop handoff");

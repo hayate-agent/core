@@ -10,7 +10,7 @@
  */
 import { languageTag } from "./language.js";
 import { execFile } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -158,7 +158,7 @@ export class Scheduler {
     this.log = opts.log ?? ((m) => console.error(`[cron] ${m}`));
   }
 
-  async load(): Promise<void> {
+  async load(expectedDigest?: string): Promise<void> {
     if (this.resettingParents.size) throw Error("Cron reset in progress; retry reload");
     const generation = this.resetGeneration;
     if (!this.opts.jobsFile) { this.stop(); this.jobs = []; return; }
@@ -167,12 +167,14 @@ export class Scheduler {
       text = await readFile(this.opts.jobsFile, "utf8");
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        if (expectedDigest) throw Error("Cron configuration missing");
         if (this.resettingParents.size || generation !== this.resetGeneration) throw Error("Cron reset in progress or changed; retry reload");
         this.stop(); this.jobs = []; return;
       }
       throw err;
     }
     if (this.resettingParents.size || generation !== this.resetGeneration) throw Error("Cron reset in progress or changed; retry reload");
+    if (expectedDigest && createHash("sha256").update(text).digest("hex") !== expectedDigest) throw Error("Cron configuration changed");
     const jobs = parseJobs(text);
     const crons: Cron[] = [];
     try {
@@ -211,6 +213,20 @@ export class Scheduler {
 
   find(name: string): CronJob | undefined {
     return this.jobs.find((j) => j.name === name);
+  }
+
+  /** Same-UID owner path: exact enabled prompt job, idempotent durable admission. */
+  async runOwnedPrompt(name: string, digest: string, requestId: string): Promise<void> {
+    const job = this.find(name), entry = this.list().find(item => item.name === name);
+    if (!job || !entry?.enabled || createHash("sha256").update(JSON.stringify(job)).digest("hex") !== digest)
+      throw Error("Cron job changed, missing or paused");
+    if (job.script || job.prompt_file || job.no_agent || job.audience || job.origin?.user_id || !job.prompt?.trim()) throw Error("Only owner-independent plain prompt jobs supported");
+    if (this.resettingNames.has(name) || this.resettingParents.has(this.creator(job) ?? "") || this.harness.paused || this.harness.stopping || this.harness.updateFenced || this.originResetPending(job)) throw Error("Cron admission fenced");
+    const to = resolveDelivery(job, this.harness.home);
+    const replyTo = to === "home" ? this.harness.home : to;
+    const text = `${job.prompt}\n\n(Scheduled job "${job.name}". If there is nothing worth reporting, reply exactly ${NO_REPLY}.)`;
+    const id = `owner-cron:${createHash("sha256").update(JSON.stringify([name, requestId])).digest("hex")}`;
+    await this.harness.accept({ id, sessionKey: `cron:${name}`, text, source: "cron", language: languageTag(this.opts.language?.(job) ?? job.language ?? "en"), replyTo });
   }
 
   setEnabled(name: string, enabled: boolean): boolean {
