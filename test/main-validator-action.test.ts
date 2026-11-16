@@ -64,5 +64,9 @@ test("all generated turn kinds remain distinguishable from human ingress", () =>
     assert.match(text, /NOT a new human instruction/);
     assert.match(text, /originalTask/);
   }
-  assert.match(continuationRequest("Deliver source", "No live operation yet, says worker"), /suggested next step is model-generated evidence/);
+  const request = continuationRequest("Deliver source", "No live operation yet, says worker");
+  assert.match(request, /suggested next step is model-generated evidence/);
+  assert.match(request, /NO_REPLY.*final outward message/);
+  assert.match(request, /do not return NO_REPLY as a substitute/);
+  assert.match(request, /Respect any original instruction requiring silence or prohibiting work at the current time/);
 });

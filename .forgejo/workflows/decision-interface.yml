@@ -8,6 +8,8 @@ on:
       - '.forgejo/workflows/decision-interface.yml'
       - 'src/dispatcher*.ts'
       - 'src/context*.ts'
+      - 'src/continuation-provenance.ts'
+      - 'test/main-validator-action.test.ts'
       - 'src/capability-context.ts'
       - 'src/local-context.ts'
       - 'src/local-model-admission.ts'

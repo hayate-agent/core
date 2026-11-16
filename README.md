@@ -106,8 +106,14 @@ Command availability depends on the channel and your permissions. Use
 after changing skills. `/restart` fences new input, checkpoints work within one
 configurable deadline (default60s), then restarts and resumes durable work.
 Native installations check configurable Core/Plugins/WebUI Git sources hourly
-and update automatically by default; `/update check`, `/update install` and
-`/update status software` expose the same external lifecycle owner. Containers
+and update automatically by default. `/update` freshly checks sources and installs
+an available update through the external lifecycle owner. `/update check` downloads
+and validates a candidate without activating it or restarting, even with automatic
+updates enabled. `/update install` activates only an already prepared candidate
+(and reports an error if none exists); it does not fetch a newer revision.
+`/update status` shows lifecycle status. `/status` includes installed component
+versions, configured model/reasoning settings, gateway presentation settings and
+session operating information, without credentials. Containers
 keep image updates with their deployment owner. See [native lifecycle](docs/native-lifecycle.md).
 
 ## Configuration and safety

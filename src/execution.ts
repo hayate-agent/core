@@ -351,7 +351,7 @@ export class ExecutionStore {
     }
     this.loaded = true;
   }
-  private mutate<T>(fn: (draft: Ledger) => T | Promise<T>): Promise<T> {
+  private mutate<T>(fn: (draft: Ledger) => T | Promise<T>, shouldCommit?: () => boolean): Promise<T> {
     const next = this.queue.catch(() => {}).then(async () => {
       if (!this.loaded) throw Error("Execution store not loaded");
       this.storage.assertWritable();
@@ -362,6 +362,10 @@ export class ExecutionStore {
       draft.executions = draft.executions.map((task, index) => Object.fromEntries(Object.keys(this.data.executions[index]!).map(key =>
         [key, key === "dependency" ? this.data.executions[index]!.dependency : task[key as keyof Execution]])) as unknown as Execution);
       const result = await fn(draft);
+      // Only explicitly tracked idempotent operations may omit an unchanged
+      // commit, AFTER joining the serialized queue and checking writability.
+      // Never decide from an unlocked snapshot before preceding writes settle.
+      if (shouldCommit && !shouldCommit()) return structuredClone(result);
       await mkdir(path.dirname(this.file), { recursive: true });
       // Preserve immutable v2 dependency evidence and binding validation; partition
       // only the lightweight stored rows, never duplicate full dependencies in them.
@@ -1109,11 +1113,13 @@ export class ExecutionStore {
     return this.cancelParent(parent, taskId, preexistingUnscoped);
   }
   cancelParent(parent: string, taskId?: string, preexistingUnscoped: readonly string[] = []): Promise<void> {
+    let changed = false;
     return this.mutate(draft => {
       const revoked = new Set<string>();
       for (const task of draft.executions) {
         if (task.parent !== parent) continue;
         if (taskId !== undefined && !task.dependency?.taskId && !preexistingUnscoped.includes(task.id) && task.status !== "cancelled") {
+          changed ||= task.ownershipHold !== "unscoped-parent-stop" || task.status === "ready" || task.recoveryReason == null;
           task.ownershipHold = "unscoped-parent-stop";
           if (task.status === "ready") task.status = "blocked";
           task.recoveryReason ??= "Legacy execution ancestry held after a task-scoped parent stop; inspect ownership before retrying.";
@@ -1121,13 +1127,17 @@ export class ExecutionStore {
         }
         if (taskId !== undefined && task.dependency?.taskId !== taskId) continue;
         revoked.add(task.id);
+        changed ||= task.parentStopped !== true || !["completed", "cancelled"].includes(task.status) ||
+          task.terminalAt == null || task.token !== undefined;
         task.parentStopped = true;
         if (!["completed", "cancelled"].includes(task.status)) task.status = "cancelled";
         task.terminalAt ??= this.now();
         delete task.token;
       }
-      draft.events = draft.events.filter(event => taskId === undefined ? event.parent !== parent : !revoked.has(event.executionId));
-    });
+      const remaining = draft.events.filter(event => taskId === undefined ? event.parent !== parent : !revoked.has(event.executionId));
+      changed ||= remaining.length !== draft.events.length;
+      draft.events = remaining;
+    }, () => changed);
   }
   /** Token fencing prevents a late failure from pausing a replacement claim. */
   fail(id: string, token: string, code: ExecutionDiagnosticCode,
@@ -1263,6 +1273,17 @@ export class ExecutionStore {
     if (restartLimit !== undefined && (!Number.isSafeInteger(restartLimit) || restartLimit < 0)) throw Error("Invalid recovery restart limit");
     return this.mutate(draft => {
       for (const task of draft.executions) {
+        // Older versions acknowledged question events after showing them to the
+        // channel, without ever delivering them to Main. Reconstitute one stable
+        // receipt from the persisted question, not a new worker execution.
+        const question = task.question;
+        if (enabled(task) && task.status === "paused" && question && question.answer === undefined &&
+            (!task.intent || question.retainedAssessment === true) && !task.parentStopped && !task.ownershipHold &&
+            task.recoveryEnrollment === "current" && task.diagnosticCode !== "manual-pause" &&
+            this.executionTaskAllowed(task) && (task.dependency?.expiresAt === undefined || task.dependency.expiresAt > this.now()) &&
+            !question.eventId && !draft.events.some(event => event.executionId === task.id && event.type === "question")) {
+          this.event(draft, task, "question", `Question ${question.id}: ${question.text}`);
+        }
         // Older cores enrolled semantic holds into the transport retry budget.
         // Preserve their evidence without waking them or replaying effects.
         if (enabled(task) && task.assessmentHold && !task.parentStopped && !task.ownershipHold &&

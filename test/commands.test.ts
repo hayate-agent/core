@@ -40,6 +40,40 @@ function setup(opts: { admins?: string[]; approvers?: string[]; skills?: SkillIn
   return { runtime, harness, ch, ctx, send, approvals };
 }
 
+test("/update routes bare, check and install to distinct lifecycle actions", async () => {
+  const { ctx, harness, send } = setup();
+  const actions: string[] = [];
+  ctx.softwareUpdates = async action => {
+    actions.push(action);
+    return { phase: "idle", detail: "test", configured: {} };
+  };
+  try {
+    await send("/update");
+    await send("/update check");
+    await send("/update install");
+    await send("/update status");
+    assert.deepEqual(actions, ["update", "check", "install", "status"]);
+  } finally { await harness.stop(1000); }
+});
+
+test("/status reports installed versions and safe model/gateway settings", async () => {
+  const { ctx, harness, send, ch } = setup();
+  ctx.modelSettings = { get: () => ({ model: "provider/model", reviewModel: "provider/reviewer", reviewThinking: "high", apiKey: "SECRET_MODEL" } as never), set: async () => {} };
+  ctx.gatewaySettings = () => ({ progress: "reduced", statusReactions: true, overrides: { matrix: { progress: "full", token: "SECRET_GATEWAY" } as never } });
+  try {
+    await send("/version");
+    const versions = ch.texts().at(-1)!.split("\n").slice(1).join("\n");
+    await send("/status");
+    const status = ch.texts().at(-1)!;
+    assert.ok(status.includes(versions));
+    assert.match(status, /provider\/reviewer/);
+    assert.match(status, /reviewThinking.*high/);
+    assert.match(status, /gateways: mem/);
+    assert.match(status, /matrix.*full/);
+    assert.doesNotMatch(status, /SECRET_|apiKey|"token"/);
+  } finally { await harness.stop(1000); }
+});
+
 test("channel command expansion assigns semantic tags before queueing with classifier enabled", async () => {
   const { harness, send, ch } = setup();
   harness.opts.topicLabeler = async text => {

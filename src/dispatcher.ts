@@ -115,12 +115,16 @@ export class Dispatcher {
     }
     return blockers;
   }
-  async start(): Promise<void> {
+  /** Structural recovery is required before ingress replay; scheduling is not.
+   * A live scheduling loop can keep requesting another pass while old workers
+   * settle, so awaiting its quiescence must not hold unrelated restored input.
+   */
+  async start(options: { schedule?: boolean } = {}): Promise<void> {
     if (this.initialized) throw Error("Dispatcher already started");
     this.initialized = true;
     await this.store.recover(this.strategies, undefined, this.recoveryPolicy, task => this.parentEnabled(task.parent));
     this.recovered = true;
-    await this.kick();
+    if (options.schedule !== false) await this.kick();
   }
   /** Explicit conversation selection may release only its retained, non-active workers. */
   async activateParent(parent: string): Promise<void> {
