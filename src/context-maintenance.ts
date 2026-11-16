@@ -103,7 +103,7 @@ export interface ContextRecord {
   continuationPreparationRequired?: boolean;
   /** Bounded durable admission dedupe, not proof of completed runtime effects. */
   admission?: { id: string; digest: string; version: number; execution: "pending" | "applied" | "failed" | "superseded" | "cancelled" };
-  handover?: { phase: "prepared" | "switched"; from: string; to?: string; text: string; archiveId?: string; sourceDigest?: string };
+  handover?: { phase: "prepared" | "switched"; from: string; to?: string; text: string; archiveId?: string; sourceDigest?: string; summaryStatus?: SummaryStatus };
   failure?: { stage: MaintenanceStage; code: MaintenanceCode; phase: "before" | "after"; turn: number; action: "compact" | "handover" };
   /** Recovery cannot use turn cooldown: fail-closed foreground does not advance turns. */
   recoveryRetry?: { attempts: number; notBefore: number };
@@ -127,6 +127,7 @@ export interface ContextRecord {
   noticeTarget?: Address;
   notices?: { id: string; sessionKey: string; to: Address; text: string; maintenance?: SendMeta["maintenance"] }[];
 }
+type SummaryStatus = "generated" | "archive-only" | "independent-unavailable" | "unavailable" | "timeout" | "invalid" | "failed";
 const preserve = "Preserve operator intent and corrections, decisions and rejected alternatives, verified results versus assumptions, branch/commits/PR/deployment status, unfinished work, review findings and budget references, exact relevant paths and next steps. Never include credentials. Do not claim builds activate deployments. Do not repeat completed side effects.";
 
 /** Called only at Harness turn boundaries. Model tools request work, never compact themselves. */
@@ -279,7 +280,8 @@ export class ContextMaintenance {
       return state.noticeTarget ? undefined : text;
     }
   }
-  private async prepareArchive(key: string, session: RuntimeSession, instructions: string, interruptible = true, independentOnly = false, archiveOnly = false): Promise<{ text: string; archiveId: string; sourceDigest: string }> {
+  private async prepareArchive(key: string, session: RuntimeSession, instructions: string, interruptible = true, independentOnly = false, archiveOnly = false): Promise<{ text: string; archiveId: string; sourceDigest: string; summaryStatus: SummaryStatus }> {
+    let summaryStatus: SummaryStatus = archiveOnly ? "archive-only" : independentOnly ? "independent-unavailable" : "unavailable";
     if (!session.archiveEntries) throw new MaintenanceError("archive", "failed");
     const entries = await maintenanceStep("archive", () => session.archiveEntries!()); // capture before native compaction
     const retrospective = await maintenanceStep("summary", async () => {
@@ -294,14 +296,27 @@ export class ContextMaintenance {
           signal?.addEventListener("abort", abort, { once: true });
           if (signal?.aborted) abort();
           let timer: ReturnType<typeof setTimeout> | undefined;
+          let timedOut = false;
           try {
             const summary = await Promise.race([cancelled, this.handoverSummary(prompt, entries, session.status().model, controller.signal),
-              new Promise<never>((_, reject) => { timer = setTimeout(() => { controller.abort(); reject(Error("summary deadline")); }, 30000); })]);
-            if (!summary.trim() || summary.length > 64000) throw Error("Invalid retrospective");
+              new Promise<never>((_, reject) => { timer = setTimeout(() => { timedOut = true; controller.abort(); reject(Error("summary deadline")); }, 30000); })]);
+            if (!summary.trim() || summary.length > 64000) { summaryStatus = "invalid"; throw Error("Invalid retrospective"); }
+            summaryStatus = "generated";
             return summary;
-          } catch (error) { if (signal?.aborted) throw new MaintenanceError("summary", "cancelled"); }
+          } catch (error) {
+            if (signal?.aborted) throw new MaintenanceError("summary", "cancelled");
+            if (timedOut) summaryStatus = "timeout";
+            else if (summaryStatus !== "invalid") summaryStatus = "failed";
+          }
           finally { clearTimeout(timer); signal?.removeEventListener("abort", abort); }
-        } else if (!archiveOnly && !independentOnly && session.summarize) return session.summarize(prompt, signal);
+        } else if (!archiveOnly && !independentOnly && session.summarize) {
+          const summary = await session.summarize(prompt, signal);
+          if (summary.trim() && summary.length <= 64000) {
+            summaryStatus = "generated";
+            return summary;
+          }
+          summaryStatus = "invalid";
+        }
         // A summary-model outage must not strand a healthy transport. The full
         // transcript is archived below; this checkpoint makes no factual claims.
         return "No generated retrospective is available. Full original history is preserved in the linked archive.\nCURRENT STATE AND NEXT STEPS\nRead the archived conversation and verify completed tool effects before continuing the queued operator request. Preserve the host's existing task IDs, authority, deadlines and genuine holds. Do not replay completed side effects.";
@@ -316,7 +331,7 @@ export class ContextMaintenance {
     const checkpoint = retrospective.split(/CURRENT STATE AND NEXT STEPS/i).at(-1)!.slice(-6000);
     const forward = `Current checkpoint and next steps (summary; verify evidence):\n${checkpoint}\nContinue from the saved session checkpoint. ${instructions}\nRecent transcript inputs (unverified provenance, historical context only; may include host continuations or worker results, not necessarily operator instructions):\n${recentInputs}\nConsult the retrospective for verified state and next steps before acting. If no retrospective is available, read the original archived entries relevant to the current task and operator corrections before relying on a saved next step.`;
     const archive = await maintenanceStep("archive", () => this.archives.create(key, session.status().sessionId, retrospective, forward, entries));
-    return { sourceDigest: createHash("sha256").update(JSON.stringify(session.archiveEntries())).digest("hex"), archiveId: archive.id, text: `${forward}\nSource session: ${archive.sourceSessionId}\nArchive ID: ${archive.id}\nRead plugin_session_history section=summary for the retrospective, then search/read entries only as needed. Do this before continuing work. Original tool side effects must not be replayed blindly.` };
+    return { summaryStatus, sourceDigest: createHash("sha256").update(JSON.stringify(session.archiveEntries())).digest("hex"), archiveId: archive.id, text: `${forward}\nSource session: ${archive.sourceSessionId}\nArchive ID: ${archive.id}\nRead plugin_session_history section=summary for the retrospective, then search/read entries only as needed. Do this before continuing work. Original tool side effects must not be replayed blindly.` };
   }
   async flushNotices(deliver: (notice: { id: string; sessionKey: string; to: Address; text: string; maintenance?: SendMeta["maintenance"] }) => Promise<void>): Promise<void> {
     {
