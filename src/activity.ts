@@ -13,7 +13,7 @@ export interface ActivitySnapshot {
   outputTags?: string[];
   context: "operator" | "host" | "scheduled" | "worker";
   phase: "starting" | "running" | "tool" | "completed" | "failed" | "cancelled";
-  activity: "opening session" | "selecting model" | "runtime active" | "tool running" | "tool settled" | "turn settled" | "compacting context" | "compaction completed" | "compaction failed; original retained" | "compaction cancelled; original retained" | "model reasoning active" | "preparing tool arguments" | "waiting for local model capacity" | "local model request admitted" | "local model wait cancelled";
+  activity: "opening session" | "selecting model" | "runtime active" | "tool running" | "tool settled" | "turn settled" | "compacting context" | "compaction completed" | "compaction failed; original retained" | "compaction cancelled; original retained" | "model reasoning active" | "preparing tool arguments" | "waiting for local model capacity" | "local model request admitted" | "local model wait cancelled" | "skill reference loaded" | "working memory recalled";
   tools: Array<{ callId: string; name: string }>;
   execution?: ExecutionMetadata;
   executionState?: "pending" | "observed" | "unavailable";
@@ -21,7 +21,7 @@ export interface ActivitySnapshot {
   inactiveMs: number;
 }
 export interface ActivityPolicy { enabled?: boolean; intervalMs?: number; maxAlive?: number }
-export type ActivityEvent = { type: "activity"; kind: "progress" | "alive"; snapshot: ActivitySnapshot; tool?: { callId: string; name: string; state: "started" | "completed" | "failed" } };
+export type ActivityEvent = { type: "activity"; kind: "progress" | "alive"; snapshot: ActivitySnapshot; tool?: { callId: string; name: string; state: "started" | "completed" | "failed" }; resource?: { kind: "skill" | "memory"; action: "loaded" | "recalled" } };
 
 let nextSequence = 0;
 const identity = (value: string) => createHash("sha256").update(value).digest("hex").slice(0, 12);
@@ -64,10 +64,10 @@ export class TurnActivity {
       execution: this.execution ? { ...this.execution } : undefined, executionState: this.executionState,
       phase: this.phase, activity: this.activity, tools: [...this.tools.values()].map(tool => ({ ...tool })), elapsedMs: Math.max(0, now - this.started), inactiveMs: Math.max(0, now - this.last) };
   }
-  private publish(kind: ActivityEvent["kind"], tool?: ActivityEvent["tool"]): void {
+  private publish(kind: ActivityEvent["kind"], tool?: ActivityEvent["tool"], resource?: ActivityEvent["resource"]): void {
     if (!this.enabled) return;
     this.lastEmitted = this.now();
-    try { this.emit({ type: "activity", kind, snapshot: this.snapshot(), ...(tool ? { tool } : {}) }); } catch { /* Telemetry cannot fail execution. */ }
+    try { this.emit({ type: "activity", kind, snapshot: this.snapshot(), ...(tool ? { tool } : {}), ...(resource ? { resource } : {}) }); } catch { /* Telemetry cannot fail execution. */ }
   }
   running(observationExpected = false): void {
     if (this.closed) return;
@@ -97,6 +97,12 @@ export class TurnActivity {
       this.phase = this.tools.size ? "tool" : "running";
       this.activity = this.tools.size ? "tool running" : "runtime active";
       this.publish("progress");
+      return;
+    }
+    if (event.type === "resource_usage") {
+      this.phase = "running";
+      this.activity = event.resource === "skill" ? "skill reference loaded" : "working memory recalled";
+      this.publish("progress", undefined, { kind: event.resource, action: event.action });
       return;
     }
     if (event.type === "model_progress") {

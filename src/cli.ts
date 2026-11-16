@@ -79,7 +79,7 @@ import { dispatchDecisionsPlugin } from "./dispatch-decisions-plugin.js";
 import { taskLifecyclePlugin } from "./task-lifecycle-plugin.js";
 import { taskPriorityPlugin } from "./task-priority-plugin.js";
 import { operatorPriorityIntent } from "./priority-intent.js";
-import { loopPlugin } from "./builtin-plugins/loop-plugin.js";
+import { loopManagementPlugin } from "./loop-management-plugin.js";
 import { OverlayUpdater } from "./update.js";
 import { SkillUpdates } from "./skill-updates.js";
 import { skillSearchPlugin } from "./skill-search-plugin.js";
@@ -831,7 +831,10 @@ async function main(argv: string[]): Promise<void> {
       }
       const mandate = await harness.operatorTaskMandate(parent, requestId, input);
       return dispatcher.submitScheduled(parent, requestId, input, mandate);
-    }), subagentPlugin(subagents,async()=>{await persist();}), ...(reloadableTools ? [reloadableToolsPlugin(reloadableTools)] : []), wasmToolsPlugin(config.home, config.wasmTools ?? []), continuationPlugin(harness), loopPlugin(harness), improvementPlugin(improvement!), protectedContentPlugin(protectedContent), gatewayManagerPlugin(gatewayManager, settings), messagePlugin(config.home, gatewayManager), conversationPolicyPlugin(settings, harness), policyManagerPlugin(policyManager, settings), extensionManagerPlugin(extensionManager, settings), gatewayPlugin(settings, harness), contextPlugin(maintenance, settings), ...(config.memory.enabled ? [memoryPlugin(memory), ...(config.memory.consolidation ? [memoryConsolidationHost(config.memory.consolidation, runtime, memory, log)] : [])] : []), skillSearchPlugin(skillCatalog), ...(adaptiveSkills ? [adaptiveSkills.plugin()] : []), ...reviewEngine.plugins], [settings.desired().gatewayPlugins?.webui?.module].filter((value): value is string => typeof value === "string"));
+    }), subagentPlugin(subagents,async()=>{await persist();}), ...(reloadableTools ? [reloadableToolsPlugin(reloadableTools)] : []), wasmToolsPlugin(config.home, config.wasmTools ?? []), continuationPlugin(harness), loopManagementPlugin(harness, key => {
+      const input = harness.sessions.get(key)?.current;
+      return !!input && (input.source === "api" || input.source === "channel" && (input.replyTo?.channel === "console" || !!input.sender && admins.includes(input.sender)));
+    }), improvementPlugin(improvement!), protectedContentPlugin(protectedContent), gatewayManagerPlugin(gatewayManager, settings), messagePlugin(config.home, gatewayManager), conversationPolicyPlugin(settings, harness), policyManagerPlugin(policyManager, settings), extensionManagerPlugin(extensionManager, settings), gatewayPlugin(settings, harness), contextPlugin(maintenance, settings), ...(config.memory.enabled ? [memoryPlugin(memory), ...(config.memory.consolidation ? [memoryConsolidationHost(config.memory.consolidation, runtime, memory, log)] : [])] : []), skillSearchPlugin(skillCatalog), ...(adaptiveSkills ? [adaptiveSkills.plugin()] : []), ...reviewEngine.plugins], [settings.desired().gatewayPlugins?.webui?.module].filter((value): value is string => typeof value === "string"));
   // Registration may happen during plugin activation; reject an unresolved name before admitting work.
   void plugins.validators.current;
   void plugins.dispatchDecisions.current;

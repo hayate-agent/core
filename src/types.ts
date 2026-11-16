@@ -136,6 +136,8 @@ export type TurnEvent =
   | { type: "model_queue"; state: "waiting" | "admitted" | "cancelled" }
   | { type: "compaction"; state: "started" | "completed" | "failed" | "cancelled"; reason: "manual" | "threshold" | "overflow" }
   | { type: "tool"; phase: "start" | "end"; name: string; callId?: string; error?: boolean; detail?: string }
+  /** Host-observed use, not proof of successful application; no content or paths. */
+  | { type: "resource_usage"; resource: "skill" | "memory"; action: "loaded" | "recalled" }
   /** One assistant message finished; usage is for that message only. */
   | {
       type: "usage";

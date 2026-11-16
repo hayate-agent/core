@@ -1,0 +1,31 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { Harness } from "../src/harness.js";
+import { FakeRuntime } from "./fakes.js";
+import { loopManagementPlugin } from "../src/loop-management-plugin.js";
+
+test("main can inventory and stop an exact persisted loop without touching other work", async t => {
+  const h = new Harness({ runtime: new FakeRuntime(), tickMs: 60000 }); t.after(() => h.stop(0));
+  let saves = 0; h.onStateChange = async () => { saves++; };
+  await h.controlLoop("matrix:one", { action: "set", prompt: "poll one", everyMs: 60000 });
+  await h.controlLoop("matrix:two", { action: "set", prompt: "poll two", everyMs: 60000 });
+  const s = h.state("matrix:one");
+  s.queue.push({ sessionKey: s.key, source: "loop", text: "poll one" }, { sessionKey: s.key, source: "cron", text: "keep" });
+  let tool: any; await loopManagementPlugin(h, key => key === "matrix:main").activate({ registerTool(value: any) { tool = value; } } as any);
+  const ctx = { sessionKey: "matrix:main" };
+  const list = JSON.parse(await tool.execute({ action: "list" }, ctx));
+  assert.deepEqual(list.loops.map((x: any) => x.sessionKey).sort(), ["matrix:one", "matrix:two"]);
+  assert.equal(list.loops.find((x: any) => x.sessionKey === "matrix:one").queued, 1);
+  await tool.execute({ action: "stop", sessionKey: "matrix:one" }, ctx);
+  assert.equal(s.loop, undefined); assert.deepEqual(s.queue.map(x => x.text), ["keep"]);
+  assert.equal(h.state("matrix:two").loop?.prompt, "poll two"); assert.equal(saves, 3);
+  const restored = new Harness({ runtime: new FakeRuntime(), tickMs: 60000 }); t.after(() => restored.stop(0));
+  restored.restoreSessions(structuredClone(h.snapshotSessions()));
+  assert.equal(restored.sessions.get("matrix:one")?.loop, undefined);
+  assert.equal(restored.sessions.get("matrix:two")?.loop?.prompt, "poll two");
+  await assert.rejects(tool.execute({ action: "stop", sessionKey: "nonexistent" }, ctx), /Exact existing/);
+  await assert.rejects(tool.execute({ action: "list" }, { sessionKey: "dispatch:1:2" }), /main-owned/);
+  assert.deepEqual(JSON.parse(await tool.execute({ action: "list" }, { sessionKey: "matrix:other" })).loops, []);
+  await assert.rejects(tool.execute({ action: "stop", sessionKey: "matrix:two" }, { sessionKey: "matrix:other" }), /operator scope/);
+  assert.ok(h.state("matrix:two").loop);
+});

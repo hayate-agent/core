@@ -29,8 +29,8 @@ test("full progress never reads MCP arguments or results, but retains status", a
   }
   p.event({ type: "tool", phase: "end", name: "bash", detail: "ordinary output" });
   await p.finish();
-  assert.match(sent.join("\n"), /⏳ mcp__fritz_brain__brain_search/);
-  assert.match(sent.join("\n"), /⚠ mcp__fritz_brain__brain_search/);
+  assert.match(sent.join("\n"), /⏳ MCP · mcp__fritz_brain__brain_search/);
+  assert.match(sent.join("\n"), /⚠ MCP · mcp__fritz_brain__brain_search/);
   assert.match(sent.join("\n"), /ordinary output/);
 });
 

@@ -40,6 +40,13 @@ export class GatewayProgress {
       this.flush();
       return;
     }
+    if (event.type === "resource_usage") {
+      if (this.count >= 50) return;
+      this.count++;
+      this.pending.push(event.resource === "skill" ? "✓ Skill-Referenz geladen (Anwendung nicht bestätigt)." : "✓ Arbeitsgedächtnis abgerufen.");
+      if (!this.scheduled) this.scheduled = setTimeout(() => { this.scheduled = undefined; this.flush(); }, 1500);
+      return;
+    }
     if (event.type === "compaction") {
       this.pending.push(event.state === "started" ? "⏳ Kontext wird komprimiert."
         : event.state === "completed" ? "✓ Kontextkomprimierung abgeschlossen."
@@ -63,10 +70,13 @@ export class GatewayProgress {
       this.active.delete(event.name);
     }
     if (this.count >= 50) return;
+    const label = event.name.startsWith("mcp__") || mcpResourceTools.has(event.name) ? `MCP · ${event.name}`
+      : event.name === "plugin_memory" ? `Memory · ${event.name}`
+      : event.name.startsWith("plugin_skill_") ? `Skill · ${event.name}` : event.name;
     if (this.mode === "reduced") {
-      this.pending.push(event.phase === "start" ? `⏳ ${event.name} gestartet` : `${error ? "⚠" : "✓"} ${event.name} beendet`);
+      this.pending.push(event.phase === "start" ? `⏳ ${label} gestartet` : `${error ? "⚠" : "✓"} ${label} beendet`);
     } else {
-      this.pending.push(`${event.phase === "start" ? "⏳" : error ? "⚠" : "✓"} ${event.name}${!event.name.startsWith("mcp__") && !mcpResourceTools.has(event.name) && event.detail ? `\n${event.detail.slice(0, 2000)}` : ""}`);
+      this.pending.push(`${event.phase === "start" ? "⏳" : error ? "⚠" : "✓"} ${label}${!event.name.startsWith("mcp__") && !mcpResourceTools.has(event.name) && event.detail ? `\n${event.detail.slice(0, 2000)}` : ""}`);
     }
     this.count++;
     if (!this.scheduled) this.scheduled = setTimeout(() => { this.scheduled = undefined; this.flush(); }, 1500);
