@@ -430,6 +430,14 @@ before the answer is sent. Its bounded supervision still runs before the next
 queued prompt, so a continuous foreground queue cannot starve it. A failed send
 retains the same durable delivery ID for normal retry; no model/effect replay.
 
+Decision revision checks still join the serialized writer queue and check current
+writer/claim ownership after earlier decisions or revocations settle. A read-only
+revision fence does not republish the entire ledger. `applyDecisions` commits
+only an actual pending→applied receipt transition; already-applied/no-decision
+reads do not refresh timestamps or rewrite historical task/effect evidence. Failed
+receipt commits remain pending and must be retried durably. These checks create
+no execution/replay permission and do not replace durable claim/intent fences.
+
 ## Persistence and restart
 
 `executions.json` under Harness home holds tasks, claims, checkpoints, effect
