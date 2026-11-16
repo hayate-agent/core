@@ -12,10 +12,10 @@ test("Matrix native activity delivers host skill and memory use and labels MCP w
   const delivery = new NativeActivityDelivery(path.join(home, "activity.json"), async (_to, _id, text) => { sent.push(text); }, 60000);
   t.after(() => delivery.stop());
   const activity = new TurnActivity({ id: "one", role: "main", context: "operator" }, event => delivery.event(to, event, "input"), { maxAlive: 0 });
-  activity.event({ type: "resource_usage", resource: "skill", action: "loaded" }); await delivery.flush();
-  activity.event({ type: "resource_usage", resource: "memory", action: "recalled" }); await delivery.flush();
+  activity.event({ type: "resource_usage", resource: "skill", action: "loaded", name: "pdf", locale: "de" }); await delivery.flush();
+  activity.event({ type: "resource_usage", resource: "memory", action: "recalled", locale: "de" }); await delivery.flush();
   activity.event({ type: "tool", phase: "start", name: "mcp__server__query", callId: "x", detail: "secret" }); await delivery.flush();
-  assert.match(sent.join("\n"), /Skill-Referenz geladen/); assert.match(sent.join("\n"), /Arbeitsgedächtnis abgerufen/);
+  assert.match(sent.join("\n"), /Skill pdf geladen/); assert.match(sent.join("\n"), /Arbeitsgedächtnis abgerufen/);
   assert.match(sent.join("\n"), /MCP · mcp__server__query/); assert.doesNotMatch(sent.join("\n"), /secret/);
   activity.finish("completed");
 });

@@ -57,7 +57,7 @@ type Thinking = (typeof THINKING)[number];
 /** Approval hook; resolve true to allow. Called only when the approval mode is "manual". */
 export type ApprovalRequest = (sessionKey: string, tool: string, input: unknown) => Promise<boolean>;
 
-export function installAdaptiveSkillHooks(pi: ExtensionAPI, adaptive: AdaptiveSkills, sessionKey: string, report?: () => void): void {
+export function installAdaptiveSkillHooks(pi: ExtensionAPI, adaptive: AdaptiveSkills, sessionKey: string, report?: (name: string) => void): void {
   // Projection only: a single bounded host notice, not a skill reference or tool-call block.
   // Rebuilt after PI restores system context; never append warnings to session history.
   pi.on("context_with_system", (event) => {
@@ -70,8 +70,8 @@ export function installAdaptiveSkillHooks(pi: ExtensionAPI, adaptive: AdaptiveSk
     if (event.toolName === "plugin_skill_learn") return;
     // SDK tool_call has no context-injection result. A bounded block carries reference
     // data before execution; a retry still traverses ordinary approvals and guards.
-    const reference = await adaptive.match(sessionKey, `${event.toolName} ${JSON.stringify(event.input).slice(0, 2048)}`);
-    if (reference) { report?.(); return { block: true, reason: `Relevant skill reference loaded before action. Consider it then retry if still authorized.${reference}` }; }
+    const reference = await adaptive.match(sessionKey, `${event.toolName} ${JSON.stringify(event.input).slice(0, 2048)}`, report);
+    if (reference) return { block: true, reason: `Relevant skill reference loaded before action. Consider it then retry if still authorized.${reference}` };
   });
   pi.on("tool_result", event => {
     const receipt = adaptive.observe(sessionKey, event.toolCallId, event.toolName, event.isError);
@@ -142,6 +142,7 @@ interface TurnSlot {
   active?: boolean;
   beforeExecution?: () => void;
   onEvent?: PromptOptions["onEvent"];
+  locale?: string;
   modelWork?: "interactive" | "background";
   instructions?: string;
   mcpInstructions?: string;
@@ -321,7 +322,10 @@ export class PiSession implements RuntimeSession {
         }
         if (!turn.aborted && onEvent) {
           const mapped = toTurnEvent(event);
-          if (mapped) onEvent(mapped);
+          if (mapped) {
+            if (mapped.type === "tool" && options.presentationLocale) mapped.locale = options.presentationLocale;
+            onEvent(mapped);
+          }
         }
       });
       // Validate and apply every override before anything runs, then restore them afterwards
@@ -342,6 +346,7 @@ export class PiSession implements RuntimeSession {
       this.slot.active = true;
       this.slot.beforeExecution = options.beforeExecution;
       this.slot.onEvent = onEvent;
+      this.slot.locale = options.presentationLocale;
       this.slot.modelWork = options.modelWork;
       this.slot.instructions = instructions?.trim() || undefined;
       const mcpPolicy = this.mcpLanguage?.();
@@ -362,6 +367,7 @@ export class PiSession implements RuntimeSession {
       this.slot.active = false;
       this.slot.beforeExecution = undefined;
       this.slot.onEvent = undefined;
+      this.slot.locale = undefined;
       this.slot.modelWork = undefined;
       this.slot.instructions = undefined;
       this.slot.mcpInstructions = undefined;
@@ -922,10 +928,10 @@ export class PiRuntime implements AgentRuntime {
           name: "hayate-agent-turn",
           factory: (pi) => {
             const adaptive = !options.ephemeral ? this.opts.adaptiveSkills : undefined;
-            const reportResource = (resource: "skill" | "memory", action: "loaded" | "recalled") => {
-              try { slot.onEvent?.({ type: "resource_usage", resource, action }); } catch { /* telemetry must not affect the turn */ }
+            const reportResource = (resource: "skill" | "memory", action: "loaded" | "recalled" | "created" | "updated", name?: string) => {
+              try { slot.onEvent?.({ type: "resource_usage", resource, action, ...(name ? { name } : {}), ...(slot.locale ? { locale: slot.locale } : {}) }); } catch { /* telemetry must not affect the turn */ }
             };
-            if (adaptive) installAdaptiveSkillHooks(pi, adaptive, sessionKey, () => reportResource("skill", "loaded"));
+            if (adaptive) installAdaptiveSkillHooks(pi, adaptive, sessionKey, name => reportResource("skill", "loaded", name));
             // PI emits structured system patches; current run instructions are
             // replaced on the next run, without resetting the conversation.
             if (!options.ephemeral && !childSession && this.opts.recallStep) pi.on("context_with_system", async event => {
@@ -948,6 +954,25 @@ export class PiRuntime implements AgentRuntime {
               catch { /* Complete native evidence remains authoritative on memory failure. */ }
             });
             pi.on("tool_result", async (event, ctx) => {
+              if (event.toolName === "plugin_skill_learn" && !event.isError) {
+                const text = event.content.find(part => part.type === "text");
+                try {
+                  const saved = JSON.parse((text?.type === "text" ? text.text : "").split("\n")[0]);
+                  if (saved.saved === true && (saved.action === "created" || saved.action === "updated") && typeof saved.name === "string" && /^[a-z][a-z0-9-]{0,47}$/.test(saved.name)) reportResource("skill", saved.action, saved.name);
+                } catch { /* No verified save receipt, so do not report a mutation. */ }
+              }
+              if (adaptive && !event.isError && ["read", "edit", "write"].includes(event.toolName)) {
+                const rawPath = event.input.path;
+                if (typeof rawPath === "string") {
+                  const file = path.resolve(cwd, rawPath);
+                  const previous = adaptive.skillName(file);
+                  let name = previous;
+                  if (event.toolName !== "read" && path.basename(file) === "SKILL.md") {
+                    try { name = await adaptive.refreshSkillName(file); } catch { /* No confirmed catalog entry; do not report a skill mutation. */ }
+                  }
+                  if (name) reportResource("skill", event.toolName === "read" ? "loaded" : previous ? "updated" : "created", name);
+                }
+              }
               // Nested calls belong to codemode/scripts: let them filter the full
               // result before the outer model-facing result is shortened.
               if (event.parentToolCallId) return;
@@ -976,8 +1001,7 @@ export class PiRuntime implements AgentRuntime {
               let reference = "";
               if (adaptive) {
                 adaptive.begin(sessionKey);
-                reference = await adaptive.match(sessionKey, "prompt" in event ? event.prompt : "");
-                if (reference) reportResource("skill", "loaded");
+                reference = await adaptive.match(sessionKey, "prompt" in event ? event.prompt : "", name => reportResource("skill", "loaded", name));
               }
               // A delegated worktree has its own SDK skill discovery. Do not
               // substitute the primary-cwd catalog (or discard project skills).
