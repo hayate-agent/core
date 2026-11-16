@@ -437,7 +437,7 @@ async function main(argv: string[]): Promise<void> {
       if (current?.source === "host") {
         if (!current.hostEvent) throw new ToolGuardError("authority_revoked", "Host event authority unavailable");
         if (!dispatchRuntime) throw new ToolGuardError("dispatcher_unavailable", "Host result dispatcher unavailable");
-        dispatchRuntime.guardResult(key, current.hostEvent.executionId);
+        dispatchRuntime.guardHostEvent(key, current);
         guardResultOrchestration(harness, key, tool, input);
       }
       await plugins.policies.beforeTool(cwdFor(key), tool, input);
@@ -527,7 +527,7 @@ async function main(argv: string[]): Promise<void> {
     },
     // Nightly owns dispatcher evidence directly, including retained pre-upgrade inbox events.
     // It must never become a new LLM turn through the generic host-result lane.
-    hostEventAllowed: input => input.sessionKey !== "improvement:nightly" && !!input.hostEvent && !!dispatchRuntime?.resultAllowed(input.sessionKey, input.hostEvent.executionId),
+    hostEventAllowed: input => input.sessionKey !== "improvement:nightly" && !!dispatchRuntime?.hostEventAllowed(input),
     // Reserve this namespace even with dispatch disabled: stale opaque turns
     // must be reconciled through the ledger, not replayed by Harness startup.
     externallyRecoveredSession: key => key.startsWith("dispatch:"),
@@ -855,11 +855,26 @@ async function main(argv: string[]): Promise<void> {
       const task = executions.list(event.parent).find(item => item.id === event.executionId);
       // Execution-owned trusted destination; legacy records use configured home.
       const target = executionTarget(task, harness.home);
+      // Questions are durable input to the exact owning Main, not operator output.
+      if (event.type === "question") {
+        // Cron follow-ups retain their existing result-only delivery contract.
+        if (event.parent.startsWith("cron-followup:")) return;
+        const question = task?.question;
+        if (!task || !question || task.parent !== event.parent) return;
+        const input: Inbound = { id: `dispatch-event:${event.id}`, source: "host", sessionKey: event.parent,
+          hostEvent: { executionId: event.executionId, question: { id: question.id, eventId: event.id } },
+          text: executions.questionText(task.id, question), replyTo: target };
+        if (!dispatchRuntime!.hostEventAllowed(input) || !harness.resultMandate(input)) return;
+        // accept persists the input before Dispatcher acknowledges its outbox
+        // receipt. Stable event IDs deduplicate retries and survive restart.
+        await harness.accept(input);
+        return;
+      }
       // Results use durable Harness inbox acceptance and stable event IDs.
       // Status is inspectable without a model call through /dispatch.
       if (event.type !== "result") {
         if (!task || task.parentStopped) return;
-        if ((event.type === "question" || event.type === "status") && !event.parent.startsWith("cron-followup:")) {
+        if (event.type === "status" && !event.parent.startsWith("cron-followup:")) {
           const to = target;
           const presentation = dispatcherEventPresentation(event, task.status, to?.channel);
           if (!presentation) return; // Internal plans/routing/validator rounds are not chat replies.

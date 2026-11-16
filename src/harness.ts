@@ -1372,14 +1372,17 @@ export class Harness {
     // A retained task owns its worker even after an intervening question or
     // completion checkpoint. Only explicit stop/expiry revoke that provenance;
     // productive depth is a separate execution gate, not operator withdrawal.
-    // Results belong exclusively to their persisted task. Missing/legacy ancestry
+    // Results and exact retained question receipts belong exclusively to their persisted task. Missing/legacy ancestry
     // is not authority to adopt whichever unrelated task currently has focus.
     const task = session && execution?.dependency?.taskId
       ? this.tasks(session).find(task => task.id === execution.dependency!.taskId) : undefined;
     const deadlines = [task?.expiresAt, task?.wait?.deadline, task?.lastWait?.deadline,
       execution?.dependency?.expiresAt, input.continuationExpiresAt].filter((value): value is number => value !== undefined);
     const expiresAt = deadlines.length ? Math.min(...deadlines) : undefined;
-    if (!task || !this.taskAllowed(task) || task.recoveryEnrollment === "held-legacy" || task.original !== execution?.dependency?.original || execution?.status !== "completed" || execution.parentStopped ||
+    const eventAllowed = input.hostEvent?.question
+      ? this.opts.executionStore?.questionAllowed(input)
+      : execution?.status === "completed";
+    if (!task || !this.taskAllowed(task) || task.recoveryEnrollment === "held-legacy" || task.original !== execution?.dependency?.original || !eventAllowed || !execution || execution.parentStopped ||
         this.stoppingHostParents.has(input.sessionKey) || !this.opts.hostEventAllowed?.(input) ||
         !task.id || !task.original.trim() ||
         !["active", "waiting", "blocked"].includes(task.state) || !Number.isSafeInteger(task.depth) || task.depth < 0 || !Number.isSafeInteger(repetitions(task)) ||

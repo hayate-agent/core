@@ -7,7 +7,7 @@ import { ToolGuardError } from "./tool-guard-error.js";
 import { childDeniedTools } from "./child-tools.js";
 import { pickModelRule, type DispatchModelRule } from "./dispatcher-config.js";
 import type { Harness } from "./harness.js";
-import type { Address, Channel, SendMeta } from "./types.js";
+import type { Address, Channel, SendMeta, Inbound } from "./types.js";
 import type { DispatcherStrategy, DispatchContext } from "./dispatcher.js";
 import type { ExecutionStore } from "./execution.js";
 import { sequentialStrategy } from "./dispatcher-sequential.js";
@@ -51,6 +51,17 @@ export class DispatcherRuntime {
     return labelOutput(text, task?.dependency?.anchor?.outputTags);
   }
   isWorker(key: string): boolean { return key.startsWith("dispatch:"); }
+  hostEventAllowed(input: Inbound): boolean {
+    if (!input.hostEvent) return false;
+    if (!input.hostEvent.question) return this.resultAllowed(input.sessionKey, input.hostEvent.executionId);
+    return this.store.questionAllowed(input);
+  }
+  guardHostEvent(parent: string, input: Inbound): void {
+    if (input.sessionKey !== parent || !input.hostEvent) throw new ToolGuardError("authority_revoked", "Host event parent mismatch");
+    if (!input.hostEvent.question) return this.guardResult(parent, input.hostEvent.executionId);
+    if (!this.store.questionAllowed(input) || !this.harness.resultMandate(input))
+      throw new ToolGuardError("authority_revoked", "Dispatcher question no longer awaits this parent under its original mandate");
+  }
   resultAllowed(parent: string, id: string): boolean {
     const task = this.store.list(parent).find(item => item.id === id);
     return !!task && task.status === "completed" && !task.parentStopped && !task.ownershipHold;
