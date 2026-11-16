@@ -3427,8 +3427,8 @@ export class Harness {
               maintenanceNotice = "⚠️ Kontextwartung nicht vollständig abgeschlossen; kein bestätigter Abschluss. Wiederherstellungsstand prüfen.";
             }
             await this.flushMaintenanceNotices();
-            if (maintenanceNotice) {
-              reply = !reply || reply === NO_REPLY ? maintenanceNotice : `${reply}\n\n${maintenanceNotice}`;
+            if (maintenanceNotice && reply !== NO_REPLY) {
+              reply = !reply ? maintenanceNotice : `${reply}\n\n${maintenanceNotice}`;
             }
           }
         } finally {

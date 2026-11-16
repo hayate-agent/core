@@ -184,11 +184,14 @@ test("maintenance notices follow the working reply, including silent turns and f
       const ch = new MemoryChannel(); harness.addChannel(ch);
       await harness.submit(msg("do work"));
       await harness.drained();
-      assert.equal(ch.texts().length, 1);
-      const text = ch.texts()[0];
-      assert.equal(text.startsWith("work done"), answer !== NO_REPLY);
-      assert.match(text, fails ? /kein bestätigter Abschluss/ : /Kontext kompaktiert/);
-      assert.doesNotMatch(text, /NO_REPLY|private detail/);
+      if (answer === NO_REPLY) assert.deepEqual(ch.texts(), []);
+      else {
+        assert.equal(ch.texts().length, 1);
+        const text = ch.texts()[0];
+        assert.ok(text.startsWith("work done"));
+        assert.match(text, fails ? /kein bestätigter Abschluss/ : /Kontext kompaktiert/);
+        assert.doesNotMatch(text, /NO_REPLY|private detail/);
+      }
       await harness.stop(1000);
     }
   }
