@@ -20,7 +20,12 @@ export function readBuildInfo(): { version: string; revision?: string; variant?:
       try {
         const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
         const source = JSON.parse(readFileSync(new URL("../dist/source-build-info.json", import.meta.url), "utf8"));
-        if (data.version === pkg.version && source.revision === data.revision && /^\d+\.\d+\.\d+(?:\+(?:dev|git)\.[a-f0-9]{12})?$/.test(source.version))
+        // An older lifecycle owner may have truncated remote tags while writing
+        // build-info after this checkout was built. Prefer the independently
+        // generated source identity only for the same revision and a non-release
+        // owner version; exact release and variant identities remain authoritative.
+        if ((data.version === pkg.version || /^\d+\.\d+\.\d+\+(?:dev|git)\.[a-f0-9]{12}$/.test(data.version)) &&
+            source.revision === data.revision && typeof source.version === "string" && /^\d+\.\d+\.\d+(?:\+(?:dev|git)\.[a-f0-9]{12})?$/.test(source.version))
           return { version: source.version, revision: data.revision };
       } catch { /* Older native owners can bootstrap the new metadata reader. */ }
     }
