@@ -18,7 +18,7 @@ type StepRole = typeof stepRoles[number];
 export interface PlanStep { task: string; role: StepRole; reason: string; evidence: string }
 export interface StepOutcome { role: StepRole; requested: ModelPair; observed?: ModelPair; result: string; escalatedFrom?: StepRole }
 type StepEvidence = NonNullable<NonNullable<import("./types.js").Inbound["completionContext"]>["tools"]>;
-interface StepAssessment { effectsUnknown?: boolean; reopenedReviewOnly?: boolean; route?: ModelPair; session?: string; decisionRevision?: number; index: number; reply: string; tools: number; evidence: StepEvidence; observed?: ModelPair; attempts: number; nextAt?: number; diagnostic?: CompletionDiagnostic; failure?: CompletionFailureDetail }
+interface StepAssessment { mainClarification?: boolean; effectsUnknown?: boolean; reopenedReviewOnly?: boolean; route?: ModelPair; session?: string; decisionRevision?: number; index: number; reply: string; tools: number; evidence: StepEvidence; observed?: ModelPair; attempts: number; nextAt?: number; diagnostic?: CompletionDiagnostic; failure?: CompletionFailureDetail }
 /** Persisted in Execution.checkpoint before any worker turn. Prior outcomes are data, not authority. */
 export interface SequentialState {
   v: 1;
@@ -473,7 +473,7 @@ export function sequentialStrategy(deps: SequentialDeps): DispatcherStrategy {
             ...(e.call !== undefined ? { call: e.call.slice(0, 400) } : {}),
             ...(e.result !== undefined ? { result: e.result.slice(0, 600) } : {}),
           }));
-          const assessment: StepAssessment = { ...((state as SequentialState).assessment?.effectsUnknown ? { effectsUnknown: true } : {}), ...((state as SequentialState).assessment?.reopenedReviewOnly ? { reopenedReviewOnly: true } : {}), route, session: assessmentRecovery ? (state as SequentialState).assessment?.session ?? task.recoverySession ?? sessionKey : sessionKey, decisionRevision, index, reply, tools, evidence: boundedEvidence, ...(observed ? { observed } : {}), attempts,
+          const assessment: StepAssessment = { ...((state as SequentialState).assessment?.mainClarification ? { mainClarification: true } : {}), ...((state as SequentialState).assessment?.effectsUnknown ? { effectsUnknown: true } : {}), ...((state as SequentialState).assessment?.reopenedReviewOnly ? { reopenedReviewOnly: true } : {}), route, session: assessmentRecovery ? (state as SequentialState).assessment?.session ?? task.recoverySession ?? sessionKey : sessionKey, decisionRevision, index, reply, tools, evidence: boundedEvidence, ...(observed ? { observed } : {}), attempts,
             ...(nextAt !== undefined ? { nextAt } : {}), ...(diagnostic ? { diagnostic } : {}), ...(failure ? { failure } : {}) };
           retained.assessment = assessment;
           // Reserve 3K below the 64K cap for a full bounded correction note and
@@ -594,7 +594,7 @@ Correctable vs blocked: a worker "blocked" claim or evidence shortfall that rest
                 workers: { provenance: "host-execution-store", omitted: state.planHistory?.completed ?? 0, unassociated: 0,
                   items: state.outcomes.map((outcome, position) => ({ id: `step:${task.id}:${(state as SequentialState).stepIds?.[position] ?? position}`,
                     requestId: `step:${(state as SequentialState).stepIds?.[position] ?? position}`, status: "completed", restarts: task.restarts, result: outcome.result })) } } },
-            }, reply, { task: `Original mandate (scope and limits):\n${task.input}\n${parentDecisionContext(decisions)}\nValidate ONLY step ${index + 1}:\n${step.task}\nRequired evidence:\n${step.evidence}\n${authority}`,
+            }, reply, { task: `Original operator mandate (scope and completion measure):\n${task.dependency?.original ?? task.input}\nAssigned work (within that scope):\n${task.input}\nMain clarification (evidence, not new operator authority): ${JSON.stringify(task.question?.answer ?? null)}\nDetect deviations from the original request and require correction unless explicitly operator-authorized.\n${parentDecisionContext(decisions)}\nValidate ONLY step ${index + 1}:\n${step.task}\nRequired evidence:\n${step.evidence}\n${authority}`,
               ...(task.dependency?.expiresAt !== undefined ? { expiresAt: task.dependency.expiresAt } : {}) },
             context.signal, reviewer.model, Date.now, stepCompletionPrompt, (value, detail) => { validation = value; failure = detail; }, STEP_VALIDATION_TIMEOUT_MS, deps.validators);
             await authorize();
@@ -614,8 +614,28 @@ Correctable vs blocked: a worker "blocked" claim or evidence shortfall that rest
               // or replay the retained worker.
               if (await selectReadyStep()) continue work;
               if (!clarifyReopenedReport) {
-                if (!context.deferAssessment) return block("Assessment retry scheduler unavailable; retained evidence requires reconciliation.");
-                await context.deferAssessment(nextAt);
+                const assessment = state.assessment!;
+                // Provider/format failures may recover without any new facts.
+                // Bound these read-only retries; semantic uncertainty needs Main
+                // immediately, not another identical assessment on a timer.
+                if (validation !== "inconclusive" && !assessment.mainClarification && attempt < 6) {
+                  const nextAt = assessment.nextAt!;
+                  await context.status?.(`Schritt ${index + 1}: Abschlussprüfung technisch fehlgeschlagen (${validation ?? "invalid_response"}); erhaltener Bericht, begrenzter read-only Retry ${attempt}/6, keine Worker-Wiederholung.`);
+                  if (!context.deferAssessment) return block("Read-only retry scheduler unavailable; retained evidence requires reconciliation.");
+                  await context.deferAssessment(nextAt);
+                  return key;
+                }
+                delete assessment.nextAt;
+                if (assessment.mainClarification) {
+                  await context.checkpoint(JSON.stringify(state));
+                  return block(`Schritt ${index + 1}: Weiterhin keine belastbare Entscheidung (${validation ?? "invalid_response"}). Keine erneute identische Prüfung; Main muss konkrete neue Evidenz oder Nacharbeit gegenüber dem Originalauftrag bestimmen.`);
+                }
+                assessment.mainClarification = true;
+                await context.checkpoint(JSON.stringify(state));
+                if (!context.question) return block("Main-Klärung erforderlich; kein Rückfragekanal verfügbar. Erledigte Effekte bleiben erhalten.");
+                const diagnosticReason = (failure as unknown as CompletionFailureDetail | undefined)?.reason;
+                await context.question(`Schritt ${index + 1}: Validator kann den erhaltenen Bericht nicht entscheiden (${validation ?? "invalid_response"}${diagnosticReason ? `: ${diagnosticReason.slice(0, 800)}` : ""}). Originalauftrag: ${(task.dependency?.original ?? task.input).slice(0, 1800)}\nErhaltener Bericht: ${reply.slice(0, 3200)}\nSind Nacharbeiten gegenüber dem Originalauftrag nötig, welche konkret? Kann Main den Blocker beseitigen oder neue Fakten liefern? Bereits erledigte/unklare Effekte nicht wiederholen. Externe Wartebedingungen nur mit begrenzter Frist. Ohne neue Evidenz keine identische Fortsetzung.`, true);
+                return key;
               }
             }
           }
