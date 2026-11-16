@@ -23,6 +23,9 @@ export function skillSearchPlugin(catalog: SkillCatalog): PluginModule {
         additionalProperties: false,
       },
       async execute(input) {
+        // Skills may be created or edited by normal tools during a session.
+        // Search must reflect the current sources, not just the startup snapshot.
+        await catalog.refresh();
         const q = String(input.query).trim().toLowerCase();
         const limit = Math.max(1, Math.min(20, Number(input.limit) || 8));
         const hits = catalog.skills
