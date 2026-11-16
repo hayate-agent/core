@@ -22,7 +22,7 @@
     "loop-plugin.ts": "ab7e0ea59919503cd4d9c36b01eb08f7687c00ef88679de2dcc33067b56ae6cd",
     "maintenance-client.ts": "ed8a8178f38ed8c3dc7b58e339ca3f358baf48e6feee298c9f83ce2ac6c755c5",
     "maintenance-control-plugin.ts": "6c8033b24190672a7200e6c60ed99c6a14b89de54e535c5ce33b2b07cea27cf4",
-    "matrix-channel.ts": "130e350df9401967c9e4b27dab18876ade0403a0b42d3a7240c51ed35a97cd69",
+    "matrix-channel.ts": "92590412f9ec6ee24d47e8b1d7a543bd954942d4ea99a9d266924d2dc177d7dd",
     "matrix-crypto.ts": "a89018c1cf22afc221df6ca6d621332dc9cae9a2dc222452f44b5444f249ded4",
     "matrix-gateway.ts": "cab666ab5d2675d9b459102f119598b4444dcbbdecb3a5d16d473a676a131be3",
     "matrix-sync.ts": "32a217a65dc5f05f0c0940e2f52426c1ab2044688513befb282af7376943b5c1",
@@ -55,6 +55,6 @@
     "wasm-tools-plugin.ts": "438c6ac8899e283e4268f51ef451275bf16a37b584db84ee8302a26200cc70de"
   },
   "repository": "https://git.vanillacore.net/harness/plugins",
-  "revision": "ba116a0d9b57903e2f95e15859347a75ad710fe9",
+  "revision": "7d601ded685913e74b27639e1a3fd65184c1c895",
   "schema": 1
 }
