@@ -19,7 +19,7 @@ test("fallback handover never labels host and worker transcript inputs as operat
   const next = { status: () => ({ sessionId: "new" }) } as RuntimeSession;
   const maintenance = new ContextMaintenance(home, () => contextPolicy());
   await maintenance.request("chat", { action: "handover", preserve: "scope", resume: "work" });
-  await maintenance.beforeTurn("chat", session, async handover => {
+  const notice = await maintenance.beforeTurn("chat", session, async handover => {
     assert.ok(handover);
     assert.doesNotMatch(handover.text, /Recent operator instructions/);
     assert.match(handover.text, /unverified provenance/);
@@ -28,6 +28,8 @@ test("fallback handover never labels host and worker transcript inputs as operat
     assert.match(handover.text, /DB-004: #24 and #96/);
     return next;
   });
+  assert.match(notice!, /history archived/);
+  assert.doesNotMatch(notice!, /retrospective saved/);
 });
 
 test("continuation marks stale next steps as proposals subordinate to operator corrections", () => {
