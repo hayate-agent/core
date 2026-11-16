@@ -750,7 +750,19 @@ export class Harness {
     const store = this.opts.executionStore; if (!store) throw Error("Core task lifecycle requires the durable execution store");
     let changed = false;
     for (const s of this.sessions.values()) for (const task of this.tasks(s)) if (!task.taskRef) {
-      task.taskRef = await store.enrollTask(s.key, task.id, task.original, task.anchor?.id ?? task.id, "legacy"); changed = true;
+      // Some pre-lifecycle records contain no operator text. Preserve them as
+      // held history, but never fabricate authority or let one abort startup.
+      const sourceId = task.anchor?.id ?? task.id;
+      if (typeof task.original !== "string" || !task.original.trim() || task.original.length > 16 * 1024 * 1024 ||
+          typeof sourceId !== "string" || !sourceId.trim() || sourceId.length > 256) {
+        if (task.recoveryEnrollment !== "held-legacy") {
+          task.recoveryHeldState = task.state;
+          task.recoveryEnrollment = "held-legacy";
+          changed = true;
+        }
+        continue;
+      }
+      task.taskRef = await store.enrollTask(s.key, task.id, task.original, sourceId, "legacy"); changed = true;
     }
     if (changed) await this.onStateChange?.();
   }
