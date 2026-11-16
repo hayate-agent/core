@@ -19,7 +19,7 @@ export async function git(cwd: string, args: string[]): Promise<string> {
 }
 export interface Changeset { root: string; base: string; fingerprint: string; diff: string; files: string[] }
 export async function captureChangeset(cwd: string, baseRef: string): Promise<Changeset> {
-  const root = (await git(cwd, ["rev-parse", "--show-toplevel"])).trim();
+  const root = (await git(cwd, ["rev-parse", "--show-toplevel"])).replace(/\n$/, "");
   const base = (await git(root, ["rev-parse", "--verify", `${baseRef}^{commit}`])).trim();
   let diff = await git(root, ["diff", "--no-ext-diff", "--no-textconv", "--binary", base, "--"]);
   const tracked = (await git(root, ["diff", "--no-renames", "--name-only", "-z", base, "--"])).split("\0").filter(Boolean);
