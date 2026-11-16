@@ -1111,9 +1111,15 @@ async function main(argv: string[]): Promise<void> {
   // A lost native foreground owner is not a user cancellation. Checkpoint in
   // gateway mode too, so an orphan cannot retain the Home lock indefinitely.
   process.once("disconnect", () => void shutdown(interactive ? 129 : 143));
+  const startupStage = async (name: string, work: () => Promise<unknown>) => {
+    const started = performance.now();
+    log(`[startup] ${name}: started`);
+    await work();
+    log(`[startup] ${name}: completed in ${Math.round(performance.now() - started)}ms`);
+  };
   try {
-    await harness.start();
-    await improvement!.start();
+    await startupStage("channels", () => harness.start());
+    await startupStage("improvement state", () => improvement!.start());
   }
   catch (err) {
     clearInterval(policyTimer);
@@ -1134,23 +1140,27 @@ async function main(argv: string[]): Promise<void> {
   // durable inbox until both their reply and the completion-state write succeed.
   // A crash can land between the Harness snapshot and child-ledger saves.
   // Finish retained conversation revocation before any child is admitted.
-  for (const session of harness.snapshotSessions()) {
-    if (!session.stopPending) continue;
-    await executions.cancelParent(session.key);
-    await subagents.revokeChildren(session.key);
-  }
-  for (const session of harness.snapshotSessions()) {
-    if (session.resetPending) await harness.resetSession(session.key);
-    else if (session.stopPending) await harness.stopConversation(session.key);
-  }
-  if (apiKey) await harness.reconcileCancelledApiTasks((key, inputId) => {
-    const receipt = runs.get(inputId.slice("api:".length));
-    return receipt?.status === "cancelled" && receipt.session_key === key && receipt.input_id === inputId;
+  await startupStage("conversation revocations", async () => {
+    for (const session of harness.snapshotSessions()) {
+      if (!session.stopPending) continue;
+      await executions.cancelParent(session.key);
+      await subagents.revokeChildren(session.key);
+    }
+    for (const session of harness.snapshotSessions()) {
+      if (session.resetPending) await harness.resetSession(session.key);
+      else if (session.stopPending) await harness.stopConversation(session.key);
+    }
   });
-  await harness.migrateTaskAuthority();
-  await harness.reconcileStoppedTasks();
-  await subagents.reconcile(sessionEnabled);
-  await dispatcher?.start({ schedule: false });
+  await startupStage("cancelled API receipts", async () => {
+    if (apiKey) await harness.reconcileCancelledApiTasks((key, inputId) => {
+      const receipt = runs.get(inputId.slice("api:".length));
+      return receipt?.status === "cancelled" && receipt.session_key === key && receipt.input_id === inputId;
+    });
+  });
+  await startupStage("task authority", () => harness.migrateTaskAuthority());
+  await startupStage("stopped child revocations", () => harness.reconcileStoppedTasks());
+  await startupStage("subagent reconciliation", () => subagents.reconcile(sessionEnabled));
+  await startupStage("dispatcher structure", async () => { await dispatcher?.start({ schedule: false }); });
   if (saved?.pending?.length || saved?.outbox?.length || harness.pendingInputs().length) {
     const pending = (saved?.pending ?? []).filter(input => sessionEnabled(input.sessionKey)).length;
     const replies = (saved?.outbox ?? []).filter(entry => sessionEnabled(entry.sessionKey)).length;

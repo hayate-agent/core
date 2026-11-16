@@ -10,6 +10,16 @@ Each worker still needs its ordinary durable claim, policy, deadline, ownership
 and effect checks. Structural recovery failures still fail startup; scheduling
 failure uses the normal shutdown path, not a bypass or a replay grant.
 
+Repeated startup revocation of a stopped mandate with no changed executions or
+pending revocation events does not rewrite the ledger. It still joins the same
+serialized mutation queue and checks writer ownership; a real cancellation,
+legacy ownership hold, removed event or failed prior save still commits before
+any affected worker is aborted. A childless subagent scope likewise needs no
+whole-host save. This omits redundant writes, not revocation/recovery checks.
+Content-free `[startup]` phase timings distinguish channel startup, improvement
+state, revocations, API receipts, authority migration and Dispatcher structure;
+they are diagnostics, never readiness, work-success or replay permission.
+
 ## Routing and recovery guarantees
 
 With an enabled, ready dispatcher, Main may work directly with available tools or
