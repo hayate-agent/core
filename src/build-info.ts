@@ -4,7 +4,8 @@ import { readFileSync } from "node:fs";
 export function readBuildInfo(): { version: string; revision?: string; variant?: { profile: string; binding: string; repository: string; revision: string } } {
   try {
     const data = JSON.parse(readFileSync(new URL("../build-info.json", import.meta.url), "utf8"));
-    if (!/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z][0-9A-Za-z.+-]{0,100})?$/.test(data.version) || !/^[a-f0-9]{40}$/.test(data.revision)) throw new Error("Invalid build metadata");
+    if (typeof data?.version !== "string" || typeof data?.revision !== "string" ||
+        !/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z][0-9A-Za-z.+-]{0,100})?$/.test(data.version) || !/^[a-f0-9]{40}$/.test(data.revision)) throw new Error("Invalid build metadata");
     if (data.variant !== undefined) {
       const v = data.variant;
       if (!v || !/^[a-z][a-z0-9-]{0,62}$/.test(v.profile) || !/^[a-f0-9]{64}$/.test(v.binding) ||
