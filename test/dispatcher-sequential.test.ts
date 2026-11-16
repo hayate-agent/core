@@ -159,6 +159,9 @@ test("uncertain assessment asks Main once, retains effects, and stops identical 
   await f.dispatcher.waitForExecution(task.id);
   const held = f.store.list().find(x => x.id === task.id)!;
   assert.equal(held.status, "blocked");
+  assert.equal(held.diagnosticCode, "assessment-stalled", "semantic uncertainty must not enter the transport retry budget");
+  assert.equal(held.workerRetry, undefined);
+  assert.ok(held.intent, "ambiguous original effect remains fenced");
   assert.equal(f.calls.worker.length, 1, "clarification cannot replay settled worker effects");
   assert.ok(f.calls.review.length <= checked + 1, "at most one review of Main clarification");
   const reviews = f.calls.review.length;
