@@ -1072,20 +1072,25 @@ export class ExecutionStore {
   }
   /** Delivery receipt at an owned boundary; never a semantic approval. */
   applyDecisions(id: string, token: string): Promise<ExecutionDecision[]> {
+    let changed = false;
     return this.mutate(draft => {
       const task = this.owned(draft, id, token);
       for (const d of task.decisions ?? []) if (d.state === "pending") {
+        changed = true;
         d.state = "applied"; d.appliedAt = this.now(); d.appliedClaim = createHash("sha256").update(token).digest("hex");
       }
       return task.decisions ?? [];
-    });
+    }, () => changed);
   }
   private checkDecisionRevision(task: Execution, revision?: number): void {
     if (revision !== undefined && revision !== executionDecisionRevision(task.decisions))
       throw new ExecutionDecisionConflict("Parent decision arrived at execution boundary");
   }
   fenceDecisions(id: string, token: string, revision: number): Promise<void> {
-    return this.mutate(draft => this.checkDecisionRevision(this.owned(draft, id, token), revision));
+    // A read-only fence still joins the writer queue and checks writability,
+    // current ownership and revision AFTER preceding mutations have settled.
+    // It creates no receipt or authority, so must not republish the full ledger.
+    return this.mutate(draft => this.checkDecisionRevision(this.owned(draft, id, token), revision), () => false);
   }
   /** Only our own drained claim may yield; keep all evidence and intent. */
   deferDecision(id: string, token: string): Promise<void> {
