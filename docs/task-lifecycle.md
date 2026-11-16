@@ -84,6 +84,20 @@ preserves technical evidence and records its separate reason; it does not claim
 successful work. Detailed recurring-series generation policy remains separate
 from individual schedule occurrences.
 
+## Durable page reuse
+
+The serialized ledger writer stages immutable task-book pages before publishing
+its root. It may reuse a page it already made durable in this process only after
+a fresh ownership/mode check and exact device/inode/size/nanosecond timestamp/
+mode/owner/group/link-count match. This avoids rereading and fsyncing every old
+page for each unrelated execution or conversation update. Cold hydration is not
+a durability receipt: the first writer stage still verifies and fsyncs existing
+bytes. Changed identities cross that same barrier again; failed verification
+never refreshes the cache. Missing known pages, unsafe paths/permissions and
+owner-read-only directories still fail closed. The root publication, writer
+serialization, revocation/stop/HOLD checks and effect-replay rules are unchanged.
+This is storage I/O reuse, not a prompt/token gate or a semantic completion claim.
+
 ## Upgrade boundary
 
 Historical session tasks without a Core binding are imported as `unresolved`, not
