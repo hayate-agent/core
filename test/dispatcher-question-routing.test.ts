@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { ExecutionStore } from "../src/execution.js";
@@ -56,6 +56,50 @@ test("question receipt retains original Main mandate and is durable after outbox
   await f.harness.accept(f.input); await f.harness.waitForSessionIdle("main");
   await f.harness.accept({ ...f.input }); await f.harness.waitForSessionIdle("main");
   assert.equal(calls, 1);
+});
+
+test("durable Harness inbox retains the original question across ack and restart exactly once", async t => {
+  const f = await fixture(t);
+  const snapshotFile = path.join(path.dirname(f.file), "harness-state.json");
+  f.harness.paused = true;
+  f.harness.onStateChange = async () => {
+    await writeFile(snapshotFile, JSON.stringify({ sessions: f.harness.snapshotSessions(),
+      pending: f.harness.pendingInputs(), seen: f.harness.seenIds() }));
+  };
+  await f.harness.accept(f.input);
+  await f.store.ack(f.event.id);
+  assert.equal(f.harness.pendingInputs().length, 1);
+  const snapshot = JSON.parse(await readFile(snapshotFile, "utf8"));
+  await f.harness.stop(0);
+  const reopened = new ExecutionStore(f.file); await reopened.load();
+  const runtime = new FakeRuntime();
+  const restored = new Harness({ runtime, executionStore: reopened, busyMode: "queue", tickMs: 60000,
+    hostEventAllowed: input => reopened.questionAllowed(input) });
+  t.after(() => restored.stop(0));
+  restored.paused = true; restored.onStateChange = async () => {};
+  restored.restoreSessions(snapshot.sessions); restored.restoreSeen(snapshot.seen);
+  restored.restorePending(snapshot.pending);
+  assert.equal(restored.resultMandate(snapshot.pending[0])?.taskId, f.parent.id);
+  assert.equal(restored.resultMandate(snapshot.pending[0])?.original, f.parent.original);
+  await restored.accept(f.input);
+  assert.equal(restored.pendingInputs().length, 1, "redelivery cannot duplicate restored inbox");
+  let calls = 0;
+  const open = runtime.open.bind(runtime);
+  runtime.open = async (...args) => {
+    const session = await open(...args);
+    session.prompt = async (_text, options) => {
+      calls++;
+      assert.match(options?.instructions ?? "", /Original mandate/);
+      assert.equal(restored.resultMandate(f.input)?.original, f.parent.original);
+      return "Question received after restart";
+    };
+    return session;
+  };
+  restored.paused = false; restored.releaseRestored();
+  await restored.waitForSessionIdle("main");
+  assert.equal(calls, 1);
+  await restored.accept(f.input); await restored.waitForSessionIdle("main");
+  assert.equal(calls, 1, "processed input is not replayed");
 });
 
 for (const drift of ["foreign", "event", "question", "text", "expired", "stopped", "answered"])
