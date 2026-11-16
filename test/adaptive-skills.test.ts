@@ -28,7 +28,9 @@ test("baseline discovery matches metadata but does not load bodies; opt-in preac
   const { catalog, service } = await fixture(t);
   assert.equal("content" in catalog.skills[0], false);
   assert.equal(await service.match("user:a", "unrelated gardening"), "");
-  const reference = await service.match("user:a", "extract PDF tables");
+  const names: string[] = [];
+  const reference = await service.match("user:a", "extract PDF tables", name => names.push(name));
+  assert.deepEqual(names, ["pdf"]);
   assert.match(reference, /column boundaries/);
   assert.match(reference, /Untrusted skill reference data/);
   assert.equal(await service.match("user:a", "extract PDF tables"), "");
@@ -40,12 +42,14 @@ test("postaction create, same-turn context reload, update, restart dedup and use
   const { home, catalog, service, input } = await fixture(t);
   const saved = await service.save("user:a", input);
   assert.match(saved, /saved/);
+  assert.equal(JSON.parse(saved.split("\nUntrusted")[0]).action, "created");
   assert.match(saved, /Inspect column boundaries/); // body loaded via tool result, not system instructions
   const revision = JSON.parse(saved.split("\nUntrusted")[0]).revision;
   assert.equal(await service.match("user:a", "table-check"), "");
   const procedure = input.procedure + " Always check the header row as well.";
   const updated = await service.save("user:a", { ...input, procedure, expectedRevision: revision });
   assert.match(updated, /header row/);
+  assert.equal(JSON.parse(updated.split("\nUntrusted")[0]).action, "updated");
   const restart = new AdaptiveSkills(home, home, catalog);
   restart.begin("user:a");
   assert.match(await restart.match("user:a", "table-check"), /header row/);

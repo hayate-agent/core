@@ -135,9 +135,9 @@ export type TurnEvent =
   /** Known host-local capacity wait; never evidence of provider/GPU progress. */
   | { type: "model_queue"; state: "waiting" | "admitted" | "cancelled" }
   | { type: "compaction"; state: "started" | "completed" | "failed" | "cancelled"; reason: "manual" | "threshold" | "overflow" }
-  | { type: "tool"; phase: "start" | "end"; name: string; callId?: string; error?: boolean; detail?: string }
+  | { type: "tool"; phase: "start" | "end"; name: string; callId?: string; error?: boolean; detail?: string; locale?: string }
   /** Host-observed use, not proof of successful application; no content or paths. */
-  | { type: "resource_usage"; resource: "skill" | "memory"; action: "loaded" | "recalled" }
+  | { type: "resource_usage"; resource: "skill" | "memory"; action: "loaded" | "recalled" | "created" | "updated"; name?: string; locale?: string }
   /** One assistant message finished; usage is for that message only. */
   | {
       type: "usage";
@@ -153,6 +153,8 @@ export type TurnEvent =
 export interface PromptOptions extends TurnOptions {
   /** Host-owned per-turn presentation snapshot; not part of transport TurnOptions. */
   languagePolicy?: import("./language.js").LanguagePolicy;
+  /** Resolved host presentation locale for this exact turn. */
+  presentationLocale?: string;
   images?: PromptImage[];
   onEvent?: (event: TurnEvent) => void;
   /** Host-only authorization guard, invoked after asynchronous runtime setup. */

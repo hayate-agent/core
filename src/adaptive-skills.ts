@@ -103,8 +103,11 @@ export class AdaptiveSkills {
   diagnostics(key: string): string {
     return this.runs.get(key)?.diagnostics.join("\n") ?? "";
   }
+  /** Resolve only known catalog paths; do not infer a name from arbitrary file names. */
+  skillName(file: string): string | undefined { return this.catalog.skills.find(skill => skill.filePath === file)?.name; }
+  async refreshSkillName(file: string): Promise<string | undefined> { await this.catalog.refresh(); return this.skillName(file); }
   /** Match relevant skills and expose a bounded excerpt with an explicit continuation path. */
-  async match(key: string, query: string): Promise<string> {
+  async match(key: string, query: string, onLoad?: (name: string) => void): Promise<string> {
     const run = this.run(key);
     if (run.loads >= 3 || run.bytes >= AUTOLOAD_RUN_BYTES - 2048) return "";
     const noise = new Set(["the", "and", "for", "with", "this", "that", "read", "write", "bash", "edit", "find", "grep", "und", "der", "die", "das", "mit", "von", "bitte"]);
@@ -124,10 +127,16 @@ export class AdaptiveSkills {
         const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
         raw = buffer.subarray(0, bytesRead).toString("utf8");
       } finally { await handle.close(); }
-      result += this.load(run, skill.filePath, { name: skill.name, baseDir: skill.baseDir, content: raw,
+      const loaded = this.load(run, skill.filePath, { name: skill.name, baseDir: skill.baseDir, content: raw,
         ...(Buffer.byteLength(raw) < stat.size ? { continuation: `Skill excerpt truncated. Read the remaining sections from ${skill.filePath} using offset/limit.` } : {}) });
+      if (loaded) onLoad?.(skill.name);
+      result += loaded;
     }
-    for (const recipe of (await this.recipes(key)).filter(s => matches(s.name, s.description)).slice(0, 2)) result += this.load(run, recipe.name, recipe);
+    for (const recipe of (await this.recipes(key)).filter(s => matches(s.name, s.description)).slice(0, 2)) {
+      const loaded = this.load(run, recipe.name, recipe);
+      if (loaded) onLoad?.(recipe.name);
+      result += loaded;
+    }
     return result;
   }
   observe(key: string, id: string, tool: string, error: boolean): string {
@@ -172,7 +181,7 @@ export class AdaptiveSkills {
       if ((current?.revision ?? null) !== input.expectedRevision) throw Error("Adaptive skill revision conflict");
       await rename(stage, path.join(folder, "SKILL.md")); stage = undefined;
       const fd = await open(folder, "r"); try { await fd.sync(); } finally { await fd.close(); }
-      return JSON.stringify({ saved: true, revision: candidate.revision }) + this.load(run, name, candidate);
+      return JSON.stringify({ saved: true, revision: candidate.revision, action: previous ? "updated" : "created", name }) + this.load(run, name, candidate);
     } finally {
       if (stage) await unlink(stage).catch(() => {});
       await rmdir(lock);

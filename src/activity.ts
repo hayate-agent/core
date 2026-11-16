@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { TurnEvent } from "./types.js";
+import { resourceUsageLabel } from "./resource-usage-label.js";
 import { executionMetadata, type ExecutionMetadata } from "./builtin-plugins/execution-metadata.js";
 
 /** Host evidence only. No model text, arguments, results or authorization are accepted. */
@@ -13,7 +14,7 @@ export interface ActivitySnapshot {
   outputTags?: string[];
   context: "operator" | "host" | "scheduled" | "worker";
   phase: "starting" | "running" | "tool" | "completed" | "failed" | "cancelled";
-  activity: "opening session" | "selecting model" | "runtime active" | "tool running" | "tool settled" | "turn settled" | "compacting context" | "compaction completed" | "compaction failed; original retained" | "compaction cancelled; original retained" | "model reasoning active" | "preparing tool arguments" | "waiting for local model capacity" | "local model request admitted" | "local model wait cancelled" | "skill reference loaded" | "working memory recalled";
+  activity: "opening session" | "selecting model" | "runtime active" | "tool running" | "tool settled" | "turn settled" | "compacting context" | "compaction completed" | "compaction failed; original retained" | "compaction cancelled; original retained" | "model reasoning active" | "preparing tool arguments" | "waiting for local model capacity" | "local model request admitted" | "local model wait cancelled" | "skill reference loaded" | "skill created" | "skill updated" | "working memory recalled";
   tools: Array<{ callId: string; name: string }>;
   execution?: ExecutionMetadata;
   executionState?: "pending" | "observed" | "unavailable";
@@ -21,7 +22,7 @@ export interface ActivitySnapshot {
   inactiveMs: number;
 }
 export interface ActivityPolicy { enabled?: boolean; intervalMs?: number; maxAlive?: number }
-export type ActivityEvent = { type: "activity"; kind: "progress" | "alive"; snapshot: ActivitySnapshot; tool?: { callId: string; name: string; state: "started" | "completed" | "failed" }; resource?: { kind: "skill" | "memory"; action: "loaded" | "recalled" } };
+export type ActivityEvent = { type: "activity"; kind: "progress" | "alive"; snapshot: ActivitySnapshot; tool?: { callId: string; name: string; state: "started" | "completed" | "failed" }; resource?: { kind: "skill" | "memory"; action: "loaded" | "recalled" | "created" | "updated"; name?: string; locale?: string; label?: string } };
 
 let nextSequence = 0;
 const identity = (value: string) => createHash("sha256").update(value).digest("hex").slice(0, 12);
@@ -101,8 +102,9 @@ export class TurnActivity {
     }
     if (event.type === "resource_usage") {
       this.phase = "running";
-      this.activity = event.resource === "skill" ? "skill reference loaded" : "working memory recalled";
-      this.publish("progress", undefined, { kind: event.resource, action: event.action });
+      this.activity = event.resource === "memory" ? "working memory recalled" : event.action === "created" ? "skill created" : event.action === "updated" ? "skill updated" : "skill reference loaded";
+      const name = event.name && /^[\p{L}\p{N}_.-]{1,80}$/u.test(event.name) ? event.name : undefined;
+      this.publish("progress", undefined, { kind: event.resource, action: event.action, ...(name ? { name } : {}), ...(event.locale ? { locale: event.locale } : {}), label: resourceUsageLabel(event) });
       return;
     }
     if (event.type === "model_progress") {

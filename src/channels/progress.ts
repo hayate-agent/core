@@ -1,4 +1,6 @@
 import type { TurnEvent } from "../types.js";
+import { resourceUsageLabel } from "../resource-usage-label.js";
+import { message } from "../language.js";
 
 // PI exposes resource helpers without the server-tool namespace prefix.
 const mcpResourceTools = new Set(["list_mcp_resources", "list_mcp_resource_templates", "read_mcp_resource"]);
@@ -43,7 +45,7 @@ export class GatewayProgress {
     if (event.type === "resource_usage") {
       if (this.count >= 50) return;
       this.count++;
-      this.pending.push(event.resource === "skill" ? "✓ Skill-Referenz geladen (Anwendung nicht bestätigt)." : "✓ Arbeitsgedächtnis abgerufen.");
+      this.pending.push(`✓ ${resourceUsageLabel(event)}`);
       if (!this.scheduled) this.scheduled = setTimeout(() => { this.scheduled = undefined; this.flush(); }, 1500);
       return;
     }
@@ -74,7 +76,8 @@ export class GatewayProgress {
       : event.name === "plugin_memory" ? `Memory · ${event.name}`
       : event.name.startsWith("plugin_skill_") ? `Skill · ${event.name}` : event.name;
     if (this.mode === "reduced") {
-      this.pending.push(event.phase === "start" ? `⏳ ${label} gestartet` : `${error ? "⚠" : "✓"} ${label} beendet`);
+      const state = event.phase === "start" ? "usage.tool.started" : error ? "usage.tool.failed" : "usage.tool.completed";
+      this.pending.push(`${event.phase === "start" ? "⏳" : error ? "⚠" : "✓"} ${label} ${message(event.locale ?? "en", state)}`);
     } else {
       this.pending.push(`${event.phase === "start" ? "⏳" : error ? "⚠" : "✓"} ${label}${!event.name.startsWith("mcp__") && !mcpResourceTools.has(event.name) && event.detail ? `\n${event.detail.slice(0, 2000)}` : ""}`);
     }
