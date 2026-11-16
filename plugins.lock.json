@@ -29,7 +29,7 @@
     "memory-orchestration-plugin.ts": "c796ff18def036016ac47095d18a490fab0d15ff8eaff342e463babc16bf78ea",
     "memory-plugin.ts": "a73c9c479e9665472732db1648059991430386fe5d764ad5417dbc553acdb104",
     "memory-service.ts": "83e0202810ddb172976caba9fbff2df9131c12e245746c33e0a3622b79d173db",
-    "native-activity.ts": "b9878941092065a395c9333f0533080a258dbb8a0c28e2c901a60fb8ac20a6cc",
+    "native-activity.ts": "08ff771050ab5ddc7c768e220bcc7fc28c3604ddb9a42e8ee21975feba37daa8",
     "nightly-default.ts": "e2669a2947bc9060d68f1dd8d4f903c4646b37ea91ca96ff492ecfb0c012b79f",
     "nightly-strategy-plugin.ts": "f2307c66003387167318055b7e49ce84e115ffd5d8e7d1a21ae8106318dbc0a8",
     "output-language.ts": "7ddc3dbeb169dfdb168b0b63fe5129c998b368cb51d2621613a2cf5f00ff652a",
@@ -55,6 +55,6 @@
     "wasm-tools-plugin.ts": "438c6ac8899e283e4268f51ef451275bf16a37b584db84ee8302a26200cc70de"
   },
   "repository": "https://git.vanillacore.net/harness/plugins",
-  "revision": "7b64a11fdd04786893ca30b336c34c1dd54b822c",
+  "revision": "06c7ec9319364314bd0aff52aaa61b6d87167e77",
   "schema": 1
 }
