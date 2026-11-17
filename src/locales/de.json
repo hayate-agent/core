@@ -109,5 +109,6 @@
   "usage.memory.recalled": "Arbeitsgedächtnis abgerufen",
   "usage.tool.started": "gestartet",
   "usage.tool.completed": "beendet",
-  "usage.tool.failed": "fehlgeschlagen"
+  "usage.tool.failed": "fehlgeschlagen",
+  "dispatcher.assessmentStalled": "Prüfung ohne neue Nachweise angehalten. Neue Informationen oder eine ausdrückliche Fortsetzung sind erforderlich; bisherige Ergebnisse bleiben erhalten."
 }

@@ -109,5 +109,6 @@
   "usage.memory.recalled": "Рабочая память извлечена",
   "usage.tool.started": "запущен",
   "usage.tool.completed": "завершён",
-  "usage.tool.failed": "ошибка"
+  "usage.tool.failed": "ошибка",
+  "dispatcher.assessmentStalled": "Проверка остановлена без новых свидетельств. Требуется новая информация или явное продолжение; предыдущие результаты сохранены."
 }

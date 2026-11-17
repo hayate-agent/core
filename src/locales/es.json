@@ -109,5 +109,6 @@
   "usage.memory.recalled": "Memoria de trabajo consultada",
   "usage.tool.started": "iniciado",
   "usage.tool.completed": "finalizado",
-  "usage.tool.failed": "fallido"
+  "usage.tool.failed": "fallido",
+  "dispatcher.assessmentStalled": "Evaluación detenida por falta de nuevas pruebas. Se necesita información nueva o una continuación explícita; se conservan los resultados anteriores."
 }

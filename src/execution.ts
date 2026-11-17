@@ -8,6 +8,7 @@ import { PartitionedJson } from "./partitioned-json.js";
 import { ExecutionDependencyStorage, freezeExecutionDependency } from "./execution-dependency-storage.js";
 import { TaskBookStorage } from "./task-book-storage.js";
 import { recoveryBlock, type RecoveryStrategy, type ExecutionRecoveryPolicy } from "./execution-recovery.js";
+import { message, resolveLanguage } from "./language.js";
 
 /** Exact host state fence for evidence-backed parent continuation. */
 export function executionRecoveryHash(task: Readonly<Execution>): string {
@@ -71,7 +72,7 @@ export class ExecutionAssessmentHold extends Error {
 
 /** Retained work made no observed progress; automatic transport retries cannot release it. */
 export class ExecutionAssessmentStalled extends Error {
-  constructor() { super("Prüfung ohne neue Nachweise angehalten. Neue Informationen oder eine ausdrückliche Fortsetzung sind erforderlich; bisherige Ergebnisse bleiben erhalten."); }
+  constructor() { super("Assessment stopped without new evidence. New information or an explicit continuation is required; prior results are retained."); }
 }
 
 export class ExecutionWorkerFailure extends Error {
@@ -1198,7 +1199,7 @@ export class ExecutionStore {
       this.event(draft, task, "status", scheduled
         ? "Interne Ausführungsunterbrechung; automatischer Wiederanlauf nach Backoff, keine Nutzeraktion erforderlich."
         : task.assessmentHold ? "Aufgabe wartet auf eine externe Voraussetzung. Ohne neue Informationen keine weiteren automatischen Prüfungen; bisherige Ergebnisse bleiben erhalten."
-        : code === "assessment-stalled" ? new ExecutionAssessmentStalled().message
+        : code === "assessment-stalled" ? message(resolveLanguage({}, { kind: "conversation", language: task.dependency?.anchor?.language }), "dispatcher.assessmentStalled")
         : code === "deadline-expired" ? `${task.status}: deadline-expired`
         : task.diagnosticCode === "retry-exhausted" ? `${task.status}: retry-exhausted; automatische Wiederanläufe beendet nach ${this.retryCap()} Versuchen. Manuelle Intervention erforderlich: Aufgabe explizit fortsetzen oder abbrechen.`
         : task.status,

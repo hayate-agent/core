@@ -94,6 +94,7 @@ test("stalled answered assessment creates one durable task-bound notification wi
   const next = await store.claim(task.id, { strategy: "sequential", version: 1, replaySafe: false, reconcile: true });
   await store.fail(task.id, next.token!, "assessment-stalled");
   const notice = store.events().find(e => e.type === "assessment-stalled")!;
+  assert.match(store.events().find(e => e.type === "status" && e.text.startsWith("Assessment stopped"))!.text, /prior results are retained/);
   assert.ok(notice); const held = store.list()[0]!;
   const input = { id: `dispatch-event:${notice.id}`, source: "host" as const, sessionKey: "parent", text: store.assessmentStalledText(held), hostEvent: { executionId: task.id, assessmentStalled: { eventId: notice.id } } };
   assert.equal(store.assessmentStalledAllowed(input), true);
