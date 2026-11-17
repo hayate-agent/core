@@ -129,14 +129,16 @@ export class TurnActivity {
       this.publish("progress");
     }
     if (event.type !== "tool") return;
-    const name = safeName(event.name);
+    let name = safeName(event.name);
     const key = event.callId ?? (event.phase === "start" ? `legacy-${++this.legacy}` : [...this.tools].find(([, tool]) => tool.name === name)?.[0]);
     if (!key) return;
     if (event.phase === "start") {
       if (this.tools.has(key) || this.tools.size >= 50) return;
       this.tools.set(key, { callId: identity(key), name });
     } else {
-      if (!this.tools.has(key)) return;
+      const started = this.tools.get(key);
+      if (!started) return;
+      name = started.name;
       this.tools.delete(key);
     }
     this.phase = this.tools.size ? "tool" : "running";
