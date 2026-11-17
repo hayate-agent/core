@@ -24,9 +24,10 @@ test('hourly cron run executes exactly once even when the model proposes a conti
   assert.equal(channel.sent.length, 1);
 });
 
-test('retryAfterMs reads the Matrix M_LIMIT_EXCEEDED hint and caps it', () => {
+test('retryAfterMs reads the Matrix M_LIMIT_EXCEEDED hint and caps it at one hour', () => {
   assert.equal(retryAfterMs(new Error('PUT /x: HTTP 429 {"errcode":"M_LIMIT_EXCEEDED","retry_after_ms":2838}')), 2838);
-  assert.equal(retryAfterMs(new Error('HTTP 429 {"retry_after_ms":9999999}')), 60000);
+  assert.equal(retryAfterMs(new Error('HTTP 429 {"retry_after_ms":9999999}')), 3_600_000);
+  assert.equal(retryAfterMs(new Error('HTTP 429 {"retry_after_ms":120000}')), 120_000, 'server wait above 60s is honoured');
   assert.equal(retryAfterMs(new Error('HTTP 500')), undefined);
 });
 

@@ -30,7 +30,7 @@ export interface OutboxDeps {
 /** Server-requested wait (Matrix `retry_after_ms`) from a failed delivery; undefined if none. */
 export function retryAfterMs(err: unknown): number | undefined {
   const m = /"retry_after_ms"\s*:\s*(\d{1,9})\b/.exec(err instanceof Error ? err.message : String(err));
-  return m ? Math.min(Number(m[1]), 60_000) : undefined;
+  return m ? Math.min(Number(m[1]), 3_600_000) : undefined;
 }
 
 /**
