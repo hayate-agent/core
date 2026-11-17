@@ -120,11 +120,14 @@ test("supported PI hook and plugin lifecycle: preaction block/retry, successful 
   const { service, input } = await fixture(t);
   const hooks = new Map<string, Function>();
   installAdaptiveSkillHooks({ on: (event: string, handler: Function) => hooks.set(event, handler) } as any, service, "user:a");
-  const call = { toolName: "bash", input: { command: "extract PDF tables" } };
+  const call = { toolName: "plugin_skill_search", input: { query: "extract PDF tables" } };
   const block = await hooks.get("tool_call")!(call);
   assert.equal(block.block, true);
   assert.match(block.reason, /column boundaries/);
   assert.equal(await hooks.get("tool_call")!(call), undefined); // native execution may now proceed through guards
+  // Regression: tool names and arguments (git/file paths) are not operator intent.
+  assert.equal(await hooks.get("tool_call")!({ toolName: "bash", input: { command: "extract PDF tables" } }), undefined);
+  assert.equal(await hooks.get("tool_call")!({ toolName: "bash", input: { command: "git log --oneline -- src/adaptive-skills.ts" } }), undefined);
   assert.equal(await hooks.get("tool_result")!({ toolName: "bash", toolCallId: "failed", isError: true, content: [] }), undefined);
   const result = await hooks.get("tool_result")!({ toolName: "bash", toolCallId: "verified", isError: false, content: [{ type: "text", text: "ok" }] });
   const receipt = result.content[1].text.match(/[a-f0-9]{24}/)[0];
@@ -220,10 +223,11 @@ test("real PI SDK resource loader and extension runner carry bounded learning co
   assert.equal((await readFile(largeFile)).length, 100047);
   assert.equal(await runner.emitToolCall({ type: "tool_call", toolName: "bash", toolCallId: "unrelated", input: { command: "echo unrelated" } }), undefined);
   assert.equal(warnings.length, 0);
-  const call: any = { type: "tool_call", toolName: "bash", toolCallId: "sdk-call", input: { command: "extract PDF tables" } };
+  const call: any = { type: "tool_call", toolName: "plugin_skill_search", toolCallId: "sdk-call", input: { query: "extract PDF tables" } };
   assert.equal((await runner.emitToolCall(call))?.block, true);
   assert.equal(await runner.emitToolCall(call), undefined);
-  const result = await runner.emitToolResult({ ...call, type: "tool_result", content: [{ type: "text", text: "verified" }], isError: false });
+  // Receipts come only from successful native work, so the verified result is a bash call.
+  const result = await runner.emitToolResult({ ...call, toolName: "bash", type: "tool_result", content: [{ type: "text", text: "verified" }], isError: false });
   const receipt = (result!.content![1] as any).text.match(/[a-f0-9]{24}/)[0];
   const tool = runner.getToolDefinition("plugin_skill_learn")!;
   const learned: any = await tool.execute("save", { ...input, evidence: [receipt] } as any, undefined, undefined, {} as any);
