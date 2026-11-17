@@ -21,7 +21,7 @@ test("actual SDK Main/dispatcher worker/subagent apply the result contract and a
     assert.match(JSON.stringify(context), /# Tool results and retained context/);
     assert.match(JSON.stringify(context), /Never rerun a completed or uncertain operation merely to recover its output/);
     const results: any[] = context.messages.filter((m: any) => m.role === "toolResult");
-    if (results.some(m => JSON.stringify(m.content).includes("Older tool evidence index:"))) indexed++;
+    if (results.some(m => JSON.stringify(m.content).includes("Complete original at"))) indexed++;
     for (const result of results) assert(context.messages.some((m: any) => m.role === "assistant" && m.content.some((p: any) => p.type === "toolCall" && p.id === result.toolCallId)));
     const next = results.length, stream = createAssistantMessageEventStream();
     const message: any = { role: "assistant", api: model.api, provider: model.provider, model: model.id, timestamp: Date.now(),

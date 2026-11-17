@@ -93,13 +93,24 @@ uncertainty and remaining-work arrays stay exact. Unknown report fields/formats
 fall back to the ordinary honest excerpt path rather than being silently dropped.
 Plain reports and explicitly required `STEP-STATUS` remain supported.
 
-Many individually small older tool payloads are subject to the existing soft
-`toolResultPruning` budget too. Private exact payloads are retained with a scoped,
-content-addressed index; result bodies refer to indexed records while every
-call/result identity, error flag, recent result, image and structured machine
-field remains present. No native transcript is edited. Storage/index failure
-preserves the input unchanged. This is a tool-text projection preference, not
-a hard total-input gate or a guarantee that irreducible evidence fits a limit.
+Many individually small tool payloads are subject to the existing soft
+`toolResultPruning` budget too. Projection decisions depend only on each result's
+original tool-text prefix. Results before that prefix reaches the budget stay
+exact; qualifying new results after it are immediately excerpted with individual,
+content-addressed original references and bounded head/tail/diagnostic text.
+No growing aggregate index is inserted into an earlier result. The runtime also
+runs advisory plugin projection at each result's own prefix boundary, not against
+a changing future suffix. Thus `keepRecent` age transitions do not rewrite already
+sent runtime messages; they are replaced by prefix-local immediate projection.
+Standalone plugin users retain their existing policy API.
+
+Every call/result identity, error flag, image and structured machine field remains
+present. No native transcript is edited. Optional storage failure preserves the
+input unchanged. Policy/strategy changes, genuine context compaction, or storage
+failure/recovery can still cause a projection/cache boundary; ordinary appended
+tool results do not. This is a soft tool-text preference, not a hard total-input
+cap: retained below-budget prefixes are not retroactively shrunk to fit new work.
+No extra model call or projection sidecar is introduced.
 
 On local/unrestricted worker catalogs, permitted plugin schemas are discovered
 by relevance with `tool_search`, including Dispatcher/memory/messaging tools;

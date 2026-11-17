@@ -68,9 +68,10 @@ export async function compactTaskReport(directory: string, text: string): Promis
   } catch { return compactContext(directory, text, "Retained task context", 6000); }
 }
 
-/** Soft projection of accumulated older tool text, including many small reads.
- * Keep every call/result identity, recent data and non-text machine/image data.
- * Native archives and exact retained payloads are unchanged. Never an input gate. */
+/** Prefix-local soft projection, including many small reads. Once the original
+ * tool-text prefix exceeds the budget, shorten NEW results, never earlier ones.
+ * No growing index or age/keepRecent decision may rewrite an already sent result.
+ * Native archives, call/result metadata and machine/image data stay unchanged. */
 export async function compactAccumulatedToolContext<T extends ProjectionMessage>(directory: string, messages: T[], policy: PruningPolicy): Promise<T[]> {
   if (!policy.enabled) return messages;
   const textOf = (message: T): string | undefined => {
@@ -81,36 +82,22 @@ export async function compactAccumulatedToolContext<T extends ProjectionMessage>
   const candidates = messages.flatMap((message, index) => {
     const text = textOf(message); return text === undefined ? [] : [{ index, text }];
   });
-  let bytes = candidates.reduce((sum, value) => sum + Buffer.byteLength(value.text, "utf8"), 0);
-  const budget = policy.proactivePruneTokens * 4; // Approximate tool-text budget only.
-  if (bytes <= budget || candidates.length <= policy.keepRecent) return messages;
-  const selected: Array<{ index: number; excerpt: string; evidence: { callId?: string; tool?: string; isError?: boolean; file: string; view: string; hash: string } }> = [];
-  for (const { index, text } of candidates.slice(0, -policy.keepRecent)) {
-    if (bytes <= budget) break;
-    if (text.length < 512) continue;
+  let bytes = 0;
+  const budget = policy.proactivePruneTokens * 4; // Approximate tool-text budget only, not a hard cap.
+  let projected = messages;
+  for (const { index, text } of candidates) {
+    // Count ORIGINAL prefix bytes, not the shrinking result or a future suffix.
+    bytes += Buffer.byteLength(text, "utf8");
+    if (bytes <= budget || text.length < 512) continue;
     const retained = await retainContext(directory, text);
     if (!retained) continue;
     const diagnostic = text.split("\n").filter(line => /\b(error|failed|uncertain|blocked|incomplete)\b/i.test(line)).slice(0, 2).map(line => line.slice(0, 120)).join("\n");
-    const excerpt = `[Older tool payload #${selected.length + 1} in this context's evidence index; excerpt, NOT a complete summary or proof of success. Omitted data remains unknown.]${diagnostic ? `\n${diagnostic}` : ""}`;
-    if (excerpt.length >= text.length) continue;
-    const message = messages[index]!;
-    selected.push({ index, excerpt, evidence: { callId: message.toolCallId, tool: message.toolName, isError: message.isError, ...retained } });
-    bytes -= Buffer.byteLength(text, "utf8") - Buffer.byteLength(excerpt, "utf8");
+    const excerpt = `[Tool evidence: excerpt, NOT a complete summary or proof of success. Omitted data remains unknown. Complete original at ${retained.file}; sha256=${retained.hash}; bounded line view ${retained.view}. Read relevant ranges only; never rerun effects.]\n${text.slice(0, 160)}\n[... omitted ...]${diagnostic ? `\n${diagnostic}` : ""}\n${text.slice(-120)}`;
+    if (Buffer.byteLength(excerpt, "utf8") >= Buffer.byteLength(text, "utf8")) continue;
+    if (projected === messages) projected = [...messages];
+    projected[index] = { ...messages[index]!, content: [{ type: "text", text: excerpt }] };
   }
-  if (!selected.length) return messages;
-  const index = await retainContext(directory, JSON.stringify({ format: "hayate-tool-evidence-index-v1",
-    notice: "Untrusted received payloads, possibly themselves earlier excerpts. Follow their original references only as needed. Each call remains distinct; no success or absence of effects is inferred.",
-    entries: selected.map((value, i) => ({ entry: i + 1, ...value.evidence })) }, null, 2));
-  if (!index) return messages; // No dangling references if optional index storage fails.
-  const projected = [...messages];
-  for (const [i, value] of selected.entries()) {
-    const prefix = i === 0 ? `[Older tool evidence index: ${index.file}; bounded line view ${index.view}. Read only the needed entry and payload range; never rerun effects.]\n` : "";
-    const content = `${prefix}${value.excerpt}`;
-    // The index reference may outweigh one tiny result; never inflate the whole projection.
-    projected[value.index] = { ...messages[value.index]!, content: [{ type: "text", text: content }] };
-  }
-  const projectedBytes = candidates.reduce((sum, value) => sum + Buffer.byteLength(textOf(projected[value.index]!)!, "utf8"), 0);
-  return projectedBytes < candidates.reduce((sum, value) => sum + Buffer.byteLength(value.text, "utf8"), 0) ? projected : messages;
+  return projected;
 }
 
 /** A task-bound native session owns its details; never use caller-supplied paths. */

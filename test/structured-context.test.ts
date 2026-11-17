@@ -18,29 +18,31 @@ test("worker-authored structured synthesis keeps uncertainty/remaining exact and
   assert.match(arbitrary, /excerpt, not a complete summary/); assert.doesNotMatch(arbitrary, /Worker-authored structured findings/);
 });
 
-test("many individually small tool results are indexed without changing call/result pairs, errors, recent results or machine data", async t => {
+test("many small tool results get prefix-local references without changing pairs, errors or machine data", async t => {
   const home = await mkdtemp(path.join(os.tmpdir(), "context-accumulation-")); t.after(() => rm(home, { recursive: true, force: true }));
   const messages: any[] = [];
   for (let i = 0; i < 30; i++) {
     messages.push({ role: "assistant", content: [{ type: "toolCall", id: `call-${i}`, name: "read", arguments: { path: `fixture-${i}` } }] });
-    messages.push({ role: "toolResult", toolCallId: `call-${i}`, toolName: "read", isError: i === 3, content: [{ type: "text", text: `${i === 3 ? "ERROR: uncertain remote effect\n" : ""}fixture-${i} ${"small evidence ".repeat(65)}` }], structuredContent: { exact: i } });
+    messages.push({ role: "toolResult", toolCallId: `call-${i}`, toolName: "read", isError: i === 3, content: [{ type: "text", text: `${i === 3 ? "ERROR: uncertain remote effect\n" : ""}fixture-${i} ${"small evidence ".repeat(100)}` }], structuredContent: { exact: i } });
   }
   const original = structuredClone(messages);
   const projected = await compactAccumulatedToolContext(home, messages, pruningPolicy({ proactivePruneTokens: 2048, keepRecent: 2 }));
   assert.deepEqual(messages, original, "native source is unchanged"); assert.equal(projected.length, messages.length);
-  assert(JSON.stringify(projected).length < JSON.stringify(messages).length * 0.6);
+  assert(JSON.stringify(projected).length < JSON.stringify(messages).length * 0.85, "stable per-result references still reduce accumulated text");
   for (let i = 0; i < projected.length; i++) {
     assert.equal(projected[i].toolCallId, messages[i].toolCallId); assert.equal(projected[i].isError, messages[i].isError);
     assert.deepEqual(projected[i].structuredContent, messages[i].structuredContent);
     if (messages[i].role === "assistant") assert.deepEqual(projected[i], messages[i]);
   }
-  assert.deepEqual(projected.slice(-4), messages.slice(-4));
-  const first = projected.find(m => m.role === "toolResult").content[0].text;
-  const file = /Older tool evidence index: (.*?); bounded line view/.exec(first)![1]!;
-  const index = JSON.parse(await readFile(file, "utf8")); assert.equal(index.format, "hayate-tool-evidence-index-v1");
-  for (const e of index.entries) {
-    const source = messages.find(m => m.role === "toolResult" && m.toolCallId === e.callId);
-    assert.equal(await readFile(e.file, "utf8"), source.content[0].text); assert.equal(e.isError, source.isError);
+  assert.deepEqual(projected.slice(0, 8), messages.slice(0, 8), "below-budget results stay exact, not aged out later");
+  for (let i = 0; i < projected.length; i++) {
+    if (projected[i] === messages[i]) continue;
+    const file = /Complete original at (.*?); sha256=/.exec(projected[i].content[0].text)![1]!;
+    assert.equal(await readFile(file, "utf8"), messages[i].content[0].text);
+  }
+  for (let end = 2; end < messages.length; end += 2) {
+    assert.deepEqual(await compactAccumulatedToolContext(home, messages.slice(0, end), pruningPolicy({ proactivePruneTokens: 2048, keepRecent: 2 })),
+      projected.slice(0, end), `suffix must not alter the projection of prefix ${end}`);
   }
   assert.match(projected.find(m => m.toolCallId === "call-3").content[0].text, /ERROR: uncertain remote effect/);
 });
