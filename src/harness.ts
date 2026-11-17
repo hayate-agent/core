@@ -1399,12 +1399,16 @@ export class Harness {
     const deadlines = [task?.expiresAt, task?.wait?.deadline, task?.lastWait?.deadline,
       execution?.dependency?.expiresAt, input.continuationExpiresAt].filter((value): value is number => value !== undefined);
     const expiresAt = deadlines.length ? Math.min(...deadlines) : undefined;
+    // Once admitted, answering the exact question must not revoke the same
+    // active turn. Never extend this to queued or replayed host receipts.
+    const activeQuestion = !!input.hostEvent?.question && session?.current === input &&
+      !!this.opts.executionStore?.questionAllowed(input, true);
     const eventAllowed = input.hostEvent?.question
-      ? this.opts.executionStore?.questionAllowed(input)
+      ? this.opts.executionStore?.questionAllowed(input) || activeQuestion
       : input.hostEvent?.assessmentStalled ? this.opts.executionStore?.assessmentStalledAllowed(input)
       : execution?.status === "completed";
     if (!task || !this.taskAllowed(task) || task.recoveryEnrollment === "held-legacy" || task.original !== execution?.dependency?.original || !eventAllowed || !execution || execution.parentStopped ||
-        this.stoppingHostParents.has(input.sessionKey) || !this.opts.hostEventAllowed?.(input) ||
+        this.stoppingHostParents.has(input.sessionKey) || (!activeQuestion && !this.opts.hostEventAllowed?.(input)) ||
         !task.id || !task.original.trim() ||
         !["active", "waiting", "blocked"].includes(task.state) || !Number.isSafeInteger(task.depth) || task.depth < 0 || !Number.isSafeInteger(repetitions(task)) ||
         (expiresAt !== undefined && (!Number.isSafeInteger(expiresAt) || expiresAt <= this.now()))) return;

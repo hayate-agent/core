@@ -65,8 +65,8 @@ export class DispatcherRuntime {
       return;
     }
     if (!input.hostEvent.question) return this.guardResult(parent, input.hostEvent.executionId);
-    if (!this.store.questionAllowed(input) || !this.harness.resultMandate(input))
-      throw new ToolGuardError("authority_revoked", "Dispatcher question no longer awaits this parent under its original mandate");
+    if (!this.harness.resultMandate(input))
+      throw new ToolGuardError("authority_revoked", "Dispatcher question no longer belongs to this parent under its original mandate");
   }
   resultAllowed(parent: string, id: string): boolean {
     const task = this.store.list(parent).find(item => item.id === id);
