@@ -122,14 +122,14 @@ export class Dispatcher {
   async start(options: { schedule?: boolean } = {}): Promise<void> {
     if (this.initialized) throw Error("Dispatcher already started");
     this.initialized = true;
-    await this.store.recover(this.strategies, undefined, this.recoveryPolicy, task => this.parentEnabled(task.parent));
+    await this.store.recover(this.strategies, this.store.workerRecoveryLimit(), this.recoveryPolicy, task => this.parentEnabled(task.parent));
     this.recovered = true;
     if (options.schedule !== false) await this.kick();
   }
   /** Explicit conversation selection may release only its retained, non-active workers. */
   async activateParent(parent: string): Promise<void> {
     if (!this.ready || !this.parentEnabled(parent)) return;
-    await this.store.recover(this.strategies, undefined, this.recoveryPolicy,
+    await this.store.recover(this.strategies, this.store.workerRecoveryLimit(), this.recoveryPolicy,
       task => task.parent === parent && !this.active.has(task.id));
     await this.kick();
   }
