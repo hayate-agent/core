@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { Harness } from "../src/harness.js";
+import { installCommands } from "../src/commands.js";
 import { FakeRuntime, MemoryChannel, msg } from "./fakes.js";
 
 for (const explicit of [true, false]) test(`silent terminal rechecks are bounded and silent (checkpoint=${explicit})`, async () => {
@@ -56,6 +57,39 @@ test("silent continuation stalls early and is explicitly resumable", async () =>
     assert.equal(task.state, "active");
     assert.equal(task.repetition?.repetitions, 0);
     assert.equal(task.recoveryAdmission?.next, "Implement the outstanding change");
+  } finally { await h.stop(1000); }
+});
+
+test("operator can resume a silent stall with Weiter and perform real work", async () => {
+  let turns = 0, h!: Harness;
+  const runtime = new FakeRuntime(() => {
+    turns++;
+    if (turns <= 2) {
+      h.planContinuation("mem:room1", { state: "continue", next: "Implement the change" });
+      return "NO_REPLY";
+    }
+    const event = runtime.sessions.get("mem:room1")!.options.at(-1)!.onEvent;
+    event?.({ type: "tool", phase: "start", name: "edit" });
+    event?.({ type: "tool", phase: "end", name: "edit", detail: "changed file" });
+    h.planContinuation("mem:room1", { state: "completed" });
+    return "Implemented the change";
+  });
+  const ch = new MemoryChannel();
+  h = new Harness({ runtime, tickMs: 60000, completionCheck: async () => turns <= 2
+    ? { state: "continue", next: "Implement the change" } : { state: "completed" } });
+  h.addChannel(ch); h.onStateChange = async () => {};
+  installCommands({ harness: h, admins: ["owner"], openAdmin: false, approvals: { mode: "off", tools: [] },
+    agent: "test", skills: () => [], reloadSkills: async () => {}, restart: async () => {} });
+  try {
+    await h.accept({ ...msg("Implement the change", "owner"), id: "original" }); await h.drained();
+    const task = h.state("mem:room1").task!;
+    assert.equal(task.termination, "productive_budget_exhausted");
+    await h.accept({ ...msg("Weiter", "owner"), id: "resume" });
+    await h.recoverTasks(true); await h.drained();
+    assert.equal(turns, 3, "same retained task runs productive work after operator continuation");
+    assert.equal(task.state, "completed");
+    assert.equal(task.budgetReceipts?.length, 1);
+    assert.ok(ch.sent.some(message => message.text.includes("Implemented the change")));
   } finally { await h.stop(1000); }
 });
 
