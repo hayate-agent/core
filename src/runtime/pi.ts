@@ -65,7 +65,9 @@ export function installAdaptiveSkillHooks(pi: ExtensionAPI, adaptive: AdaptiveSk
     if (!diagnostic) return;
     return { messages: [...event.messages, { role: "system" as const, content: diagnostic, timestamp: 0 }] };
   });
-  pi.on("agent_end", () => { adaptive.end(sessionKey); });
+  // PI may continue the same working run after agent_end (retry, compaction,
+  // or before-settle continuation). Only settlement ends the working turn.
+  pi.on("agent_settled", () => { adaptive.end(sessionKey); });
   pi.on("tool_call", async event => {
     if (event.toolName === "plugin_skill_learn") return;
     // SDK tool_call has no context-injection result. A bounded block carries reference
