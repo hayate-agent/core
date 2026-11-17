@@ -1,7 +1,7 @@
 import test from "node:test";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, writeFile, readFile, readdir, rm, symlink, rename } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, readFile, readdir, rm, symlink, rename, realpath } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { skillSearchPlugin } from "../src/skill-search-plugin.js";
@@ -12,7 +12,7 @@ import { defaultConfig } from "../src/config.js";
 import { createAgentSession, DefaultResourceLoader, SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
 
 async function fixture(t: any) {
-  const home = await mkdtemp(path.join(os.tmpdir(), "adaptive-"));
+  const home = await realpath(await mkdtemp(path.join(os.tmpdir(), "adaptive-")));
   t.after(() => rm(home, { recursive: true, force: true }));
   const catalog = new SkillCatalog(path.join(home, "index.json"), () => [path.join(home, "skills")]);
   await mkdir(path.join(home, "skills", "pdf"), { recursive: true });
@@ -115,6 +115,26 @@ test("managed root symlinks rejected", async t => {
   await assert.rejects(service.match("new", "PDF"), /Unsafe/);
 });
 
+
+test("tool names and arguments never trigger skill references; explicit discovery still does", async t => {
+  const { service, catalog } = await fixture(t);
+  const hooks = new Map<string, Function>();
+  installAdaptiveSkillHooks({ on: (event: string, handler: Function) => hooks.set(event, handler) } as any, service, "user:a");
+  const pre = hooks.get("tool_call")!;
+  // Skill whose description shares generic words with git/skill commands: the old matcher fired on those.
+  await mkdir(path.join(service.home, "skills", "fritz-update"), { recursive: true });
+  await writeFile(path.join(service.home, "skills", "fritz-update", "SKILL.md"), "---\nname: fritz-update\ndescription: Update git repository skills checkout and software release\n---\nBody\n");
+  await catalog.refresh();
+  // Concrete regression: git log/show on a source path matched unrelated skill words before the fix.
+  assert.equal(await pre({ toolName: "bash", input: { command: "git log --oneline -- src/adaptive-skills.ts" } }), undefined);
+  assert.equal(await pre({ toolName: "bash", input: { command: "git show 1f0eae0 -- src/adaptive-skills.ts" } }), undefined);
+  // Native memory file check must not be treated as operator intent either.
+  assert.equal(await pre({ toolName: "read", input: { path: "/Users/karsten/.hayate-agent/memory/index.json" } }), undefined);
+  // Legitimate explicit discovery keeps working.
+  const block = await pre({ toolName: "plugin_skill_search", input: { query: "extract PDF tables" } });
+  assert.equal(block.block, true);
+  assert.match(block.reason, /column boundaries/);
+});
 
 test("supported PI hook and plugin lifecycle: preaction block/retry, successful receipt, save/load, cleanup", async t => {
   const { service, input } = await fixture(t);
@@ -278,7 +298,7 @@ test("single name words in pure diagnostics do not inject unrelated skills, expl
 });
 
 test("worker-learned recipes persist in the owning conversation scope and stay isolated from other conversations", async t => {
-  const home = await mkdtemp(path.join(os.tmpdir(), "adaptive-owner-"));
+  const home = await realpath(await mkdtemp(path.join(os.tmpdir(), "adaptive-owner-")));
   t.after(() => rm(home, { recursive: true, force: true }));
   const catalog = new SkillCatalog(path.join(home, "index.json"), () => [path.join(home, "skills")]);
   await catalog.refresh();
