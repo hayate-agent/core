@@ -133,3 +133,24 @@ test("stop drains direct and background operations plus awaited cleanup", async 
   gate.resolve(); await Promise.all(writes); await tick(); assert.equal(stopped, false);
   cleanup.resolve(); await stop; assert.equal(closed, true);
 });
+
+test("worker memory writes land in the owning conversation scope and are retrievable there, not elsewhere", async () => {
+  const home = await mkdtemp(path.join(os.tmpdir(), "memory-owner-scope-"));
+  const store = new FileMemoryStore(path.join(home, "store"), memoryConfig());
+  await store.start();
+  const parents: Record<string, string> = { "dispatch:exec1:tok": "matrix:!room" };
+  const lifecycle = new MemoryProviderLifecycle(async () => store, key => parents[key] ?? key);
+  try {
+    await lifecycle.ensureConnected();
+    const saved = await lifecycle.put({ sessionKey: "dispatch:exec1:tok" }, { key: "worker-decision", kind: "decision", title: "Skill matching", text: "Use whole-word skill matching for diagnostics", source: "test" });
+    assert.equal(saved.sessionKey, "matrix:!room");
+    // Later worker of the same owner and the owner conversation itself retrieve it.
+    parents["dispatch:exec2:tok"] = "matrix:!room";
+    for (const key of ["dispatch:exec2:tok", "matrix:!room"]) {
+      const hits = await lifecycle.search({ sessionKey: key }, "whole-word skill matching");
+      assert.ok(hits.some(hit => hit.entry.id === saved.id), key);
+    }
+    // Other conversations and unknown workers stay isolated.
+    for (const key of ["matrix:!other", "dispatch:orphan:tok"]) assert.equal((await lifecycle.search({ sessionKey: key }, "whole-word skill matching")).length, 0, key);
+  } finally { await lifecycle.close?.(); await store.close?.(); await rm(home, { recursive: true, force: true }); }
+});

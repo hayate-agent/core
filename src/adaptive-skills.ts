@@ -29,7 +29,8 @@ export class SkillRun {
 /** Host-owned opt-in, non-executable recipes. Never part of the system prompt or PI discovery. */
 export class AdaptiveSkills {
   private readonly runs = new Map<string, SkillRun>();
-  constructor(private readonly home: string, private readonly cwd: string, private readonly catalog: SkillCatalog) {}
+  /** `owner` maps delegated worker keys to their owning conversation so learned recipes outlive the worker. */
+  constructor(private readonly home: string, private readonly cwd: string, private readonly catalog: SkillCatalog, private readonly owner: (key: string) => string = key => key) {}
   begin(key: string): void { this.runs.set(key, new SkillRun()); }
   end(key: string): void { this.runs.delete(key); }
   private run(key: string): SkillRun {
@@ -37,7 +38,7 @@ export class AdaptiveSkills {
     if (!run) throw Error("Adaptive skills require an active working turn");
     return run;
   }
-  private scope(key: string): string { return digest(`${path.resolve(this.cwd)}\0${key}`); }
+  private scope(key: string): string { return digest(`${path.resolve(this.cwd)}\0${this.owner(key)}`); }
   private async dir(key: string): Promise<string> {
     // All managed components must be real directories, never symlink aliases.
     const home = path.resolve(this.home);
@@ -110,9 +111,17 @@ export class AdaptiveSkills {
   async match(key: string, query: string, onLoad?: (name: string) => void): Promise<string> {
     const run = this.run(key);
     if (run.loads >= 3 || run.bytes >= AUTOLOAD_RUN_BYTES - 2048) return "";
-    const noise = new Set(["the", "and", "for", "with", "this", "that", "read", "write", "bash", "edit", "find", "grep", "und", "der", "die", "das", "mit", "von", "bitte"]);
+    const noise = new Set(["the", "and", "for", "with", "this", "that", "read", "write", "bash", "edit", "find", "grep", "und", "der", "die", "das", "mit", "von", "bitte", "use", "when", "user", "asks", "about", "from", "into", "all", "any"]);
     const tokens = [...new Set(query.toLowerCase().slice(0, 2048).match(/[\p{L}\p{N}-]{3,}/gu) ?? [])].filter(t => !noise.has(t)).slice(0, 32);
-    const matches = (name: string, description: string) => tokens.some(t => `${name} ${description}`.toLowerCase().includes(t));
+    // Whole-word matching. Substrings ("pdf" in "pdfs", "lint" in "linting") and single name parts
+    // (brain/service/compile) are common diagnostic words and must not inject a skill. Only the full
+    // skill name (explicit invocation) is a strong hit; otherwise two distinct non-name description words.
+    const words = (text: string) => new Set(text.toLowerCase().match(/[\p{L}\p{N}]{3,}/gu) ?? []);
+    const matches = (name: string, description: string) => {
+      const nameFull = name.toLowerCase(), nameWords = words(name), descWords = words(description);
+      if (tokens.some(t => t === nameFull)) return true;
+      return new Set(tokens.flatMap(t => t.split("-")).filter(t => t.length >= 3 && descWords.has(t) && !nameWords.has(t) && !noise.has(t))).size >= 2;
+    };
     let result = "";
     if (!tokens.length) return "";
     for (const skill of this.catalog.skills.filter(s => matches(s.name, s.description)).slice(0, 2)) {
@@ -195,4 +204,18 @@ export class AdaptiveSkills {
         } }, execute: (input, ctx) => this.save(ctx.sessionKey, input) });
     } };
   }
+}
+
+/**
+ * Durable learning owner for a session key. Delegated workers (dispatch:/subagent:) learn for the
+ * conversation that owns them, following a bounded parent chain; every other key stays its own scope.
+ */
+export function learningOwner(key: string, parentOf: (key: string) => string | undefined): string {
+  let current = key;
+  for (let depth = 0; depth < 8 && /^(?:dispatch|subagent):/.test(current); depth++) {
+    const parent = parentOf(current);
+    if (!parent || parent === current) break;
+    current = parent;
+  }
+  return current;
 }

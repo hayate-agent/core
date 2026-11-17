@@ -1,4 +1,4 @@
-import type { MemoryProvider } from "./memory.js";
+import type { MemoryContext, MemoryProvider } from "./memory.js";
 
 /** Stable provider identity for tools, orchestration and background capture.
  * Reconnect is exclusive: drain/close before opening the same backing store.
@@ -14,7 +14,9 @@ export class MemoryProviderLifecycle implements MemoryProvider {
   private changing = false;
   private cleanupFailed = false;
 
-  constructor(private readonly open: () => Promise<MemoryProvider>) {}
+  /** `scope` maps delegated worker keys to their owning conversation; unrelated sessions stay isolated. */
+  constructor(private readonly open: () => Promise<MemoryProvider>, private readonly scope: (key: string) => string = key => key) {}
+  private ctx(context: MemoryContext): MemoryContext { return { ...context, sessionKey: this.scope(context.sessionKey) }; }
 
   get capabilities(): MemoryProvider["capabilities"] {
     return this.current?.capabilities ?? { semantic: false, revisions: true };
@@ -70,11 +72,11 @@ export class MemoryProviderLifecycle implements MemoryProvider {
     return this.stopping;
   }
 
-  put: MemoryProvider["put"] = (...args) => this.call(p => p.put(...args));
-  get: MemoryProvider["get"] = (...args) => this.call(p => p.get(...args));
-  search: MemoryProvider["search"] = (...args) => this.call(p => p.search(...args));
-  revise: MemoryProvider["revise"] = (...args) => this.call(p => p.revise(...args));
-  forget: MemoryProvider["forget"] = (...args) => this.call(p => p.forget(...args));
+  put: MemoryProvider["put"] = (context, ...args) => this.call(p => p.put(this.ctx(context), ...args));
+  get: MemoryProvider["get"] = (context, ...args) => this.call(p => p.get(this.ctx(context), ...args));
+  search: MemoryProvider["search"] = (context, ...args) => this.call(p => p.search(this.ctx(context), ...args));
+  revise: MemoryProvider["revise"] = (context, ...args) => this.call(p => p.revise(this.ctx(context), ...args));
+  forget: MemoryProvider["forget"] = (context, ...args) => this.call(p => p.forget(this.ctx(context), ...args));
   status: MemoryProvider["status"] = () => this.call(p => p.status());
   reindex: MemoryProvider["reindex"] = () => this.call(p => p.reindex());
 }

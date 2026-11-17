@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, mkdir, writeFile, readFile, readdir, rm, symlink, rename } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { AdaptiveSkills } from "../src/adaptive-skills.js";
+import { AdaptiveSkills, learningOwner } from "../src/adaptive-skills.js";
 import { SkillCatalog } from "../src/skill-catalog.js";
 import { installAdaptiveSkillHooks } from "../src/runtime/pi.js";
 import { defaultConfig } from "../src/config.js";
@@ -246,6 +246,62 @@ test("count and full-body load budgets survive persisted recipes without blanket
   await assert.rejects(service.save("user:a", { ...input, evidence: [receipt] }), /count exceeded/);
   assert.match(await service.match("user:a", "recipe-0"), /recipe-0/);
   assert.match(await service.match("user:a", "recipe-1"), /recipe-1/);
-  // Keyword substring matching may load recipe-10 as the third and final body.
-  assert.equal(await service.match("user:a", "recipe-9"), "");
+  // Whole-word matching: recipe-9 is the exact third body; the budget then blocks a fourth.
+  assert.match(await service.match("user:a", "recipe-9"), /recipe-9/);
+  assert.equal(await service.match("user:a", "recipe-10"), "");
+});
+
+test("unrelated tool input does not trigger skill reference via substring or single weak description hit", async t => {
+  const { home, catalog, service } = await fixture(t);
+  await mkdir(path.join(home, "skills", "brainq"), { recursive: true });
+  await writeFile(path.join(home, "skills", "brainq", "SKILL.md"), "---\nname: brain-query\ndescription: Search and synthesize knowledge across all vaults. Use when the user asks about a session or history.\n---\nBODY-BRAIN\n");
+  await catalog.refresh();
+  // "sessions"/"history" only substring/single-word overlap with the description, not a real topical match
+  assert.equal(await service.match("user:a", "history archive summary sessions"), "");
+  assert.equal(await service.match("user:a", "bash ls /tmp use when"), "");
+  // genuine match: explicit full skill name
+  assert.match(await service.match("user:a", "brain-query"), /BODY-BRAIN/);
+});
+
+test("single name words in pure diagnostics do not inject unrelated skills, explicit invocation still does", async t => {
+  const { home, catalog, service } = await fixture(t);
+  await mkdir(path.join(home, "skills", "bc"), { recursive: true });
+  await writeFile(path.join(home, "skills", "bc", "SKILL.md"), "---\nname: fritz-brain-compile\ndescription: Promote raw captures into compiled knowledge articles for the service.\n---\nBODY-COMPILE\n");
+  await catalog.refresh();
+  for (const q of ["bash systemctl status brain service", "grep compile error src", "read brain.log service compile", "fritz"]) assert.equal(await service.match("user:a", q), "", q);
+  assert.match(await service.match("user:a", "run fritz-brain-compile now"), /BODY-COMPILE/);
+});
+
+test("worker-learned recipes persist in the owning conversation scope and stay isolated from other conversations", async t => {
+  const home = await mkdtemp(path.join(os.tmpdir(), "adaptive-owner-"));
+  t.after(() => rm(home, { recursive: true, force: true }));
+  const catalog = new SkillCatalog(path.join(home, "index.json"), () => [path.join(home, "skills")]);
+  await catalog.refresh();
+  const parents: Record<string, string> = { "dispatch:exec1:tok": "matrix:!room", "subagent:s1": "dispatch:exec1:tok" };
+  const owner = (key: string) => learningOwner(key, k => parents[k]);
+  const service = new AdaptiveSkills(home, home, catalog, owner);
+  service.begin("dispatch:exec1:tok");
+  const receipt = service.observe("dispatch:exec1:tok", "call-1", "bash", false).match(/[a-f0-9]{24}/)![0];
+  await service.save("dispatch:exec1:tok", { name: "table-check", description: "Verify table column extraction", procedure: "Inspect column boundaries after extracting a table. Compare the first and last row before accepting the extraction.", evidence: [receipt], expectedRevision: null });
+  service.end("dispatch:exec1:tok");
+  // A later worker (nested subagent) and the owning conversation see the recipe.
+  for (const key of ["subagent:s1", "matrix:!room"]) {
+    service.begin(key);
+    assert.match(await service.match(key, "run table-check"), /column boundaries/, key);
+    service.end(key);
+  }
+  // Unrelated conversations and unknown workers stay isolated (no global scope opening).
+  for (const key of ["matrix:!other", "dispatch:unknown:tok"]) {
+    service.begin(key);
+    assert.equal(await service.match(key, "run table-check"), "", key);
+    service.end(key);
+  }
+});
+
+test("learningOwner resolves bounded worker chains and never rewrites conversation keys", () => {
+  const chain: Record<string, string> = { "matrix:a": "matrix:b", "dispatch:x:t": "dispatch:x:t" };
+  assert.equal(learningOwner("matrix:a", k => chain[k]), "matrix:a");
+  assert.equal(learningOwner("dispatch:x:t", k => chain[k]), "dispatch:x:t");
+  const loop = (k: string) => k === "subagent:a" ? "subagent:b" : "subagent:a";
+  assert.match(learningOwner("subagent:a", loop), /^subagent:/);
 });
