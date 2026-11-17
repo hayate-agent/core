@@ -72,7 +72,11 @@ export function installAdaptiveSkillHooks(pi: ExtensionAPI, adaptive: AdaptiveSk
     if (event.toolName === "plugin_skill_learn") return;
     // SDK tool_call has no context-injection result. A bounded block carries reference
     // data before execution; a retry still traverses ordinary approvals and guards.
-    const reference = await adaptive.match(sessionKey, `${event.toolName} ${JSON.stringify(event.input).slice(0, 2048)}`, report);
+    // Tool names/arguments (commands, paths) are model-generated, not operator intent: only an
+    // explicit skill discovery query may trigger a reference.
+    const query = event.toolName === "plugin_skill_search" && typeof (event.input as any)?.query === "string" ? (event.input as any).query : "";
+    if (!query) return;
+    const reference = await adaptive.match(sessionKey, query, report);
     if (reference) return { block: true, reason: `Relevant skill reference loaded before action. Consider it then retry if still authorized.${reference}` };
   });
   pi.on("tool_result", event => {
