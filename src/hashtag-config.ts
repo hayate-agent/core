@@ -12,8 +12,10 @@ export function validateHashtagConfig(value: unknown): asserts value is HashtagC
     throw Error(`Invalid hashtag.${key}`);
   }
 }
-/** Metadata has one explicit model override; otherwise use Main, never a role
- * chain. Legacy modelRoles.hashtag remains parseable, but no longer selects it. */
-export function hashtagModel(settings: { hashtag?: HashtagConfig; model?: string }): string | undefined {
-  return settings.hashtag?.model ?? settings.model;
+/** Hashtag model chain: hashtag.model, else the explicit Basic model
+ * (modelRoles.roles.basic, when roles are enabled), else Main of the current
+ * scope (effective settings incl. overlay). Thinking is always off at the call site. */
+export function hashtagModel(settings: { hashtag?: HashtagConfig; model?: string; modelRoles?: { enabled: boolean; roles?: { basic?: { model?: string } } } }): string | undefined {
+  const basic = settings.modelRoles?.enabled ? settings.modelRoles.roles?.basic?.model : undefined;
+  return settings.hashtag?.model ?? basic ?? settings.model;
 }

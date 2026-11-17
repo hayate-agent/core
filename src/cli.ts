@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { hashtagModel } from "./hashtag-config.js";
 import { reasoningEffortNoneModels } from "./product-paths.js";
 import { BUILD_INFO } from "./build-info.js";
 import { readSoftwareVersions } from "./component-versions.js";
@@ -338,7 +339,7 @@ async function main(argv: string[]): Promise<void> {
     }, key => resolveLanguage(settings.effective().language, { kind: "conversation", sessionKey: key }));
   const effectiveModels = () => {
     const values = settings.effective();
-    return { model: values.model, thinking: values.thinking, reviewModel: values.review?.model ?? values.model, reviewThinking: values.review?.thinking ?? "medium", hashtagModel: values.hashtag?.model ?? values.model };
+    return { model: values.model, thinking: values.thinking, reviewModel: values.review?.model ?? values.model, reviewThinking: values.review?.thinking ?? "medium", hashtagModel: hashtagModel(values) };
   };
   const updateReviewDefaults = () => {
     reviewSettings.model = effectiveModels().reviewModel;

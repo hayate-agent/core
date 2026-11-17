@@ -33,7 +33,7 @@ Restart activates it. There is no general ESM hot reload.
 
 **Migration:** `modelRoles.roles.hashtag` remains parseable for old installations,
 but no longer selects classification. Move its model to `hashtag.model`, or remove
-it to inherit Main. `modelRoles.enabled`, dispatcher and reviewer settings do not
+it. Order: `hashtag.model`, else Basic (`modelRoles.roles.basic`, optional, if roles are enabled), else Main. Dispatcher and reviewer settings do not
 change this rule. Hashtag thinking is always `off`, not inherited from those roles.
 
 The CLI uses one startup factory and the normal plugin service registry for both
