@@ -46,7 +46,8 @@ umbrella bundles must fit. An oversized bundle is omitted, never inherited unsee
 The in-memory cache holds at most 128 exact bounded-context/model results; plugin
 results and execution authority are not cached.
 
-The default model attempt has a two-second budget with cancellation. Failure or an
+The default model attempt has a two-second budget with cancellation. Metadata
+inference always uses thinking `off`, independent of Main's thinking setting. Failure or an
 invalid response yields `topic-clarification`, so the real user turn can proceed
 without requesting a resend. This neutral label is not a completion/checker bypass.
 The semantic protocol selects an included candidate id and explicitly opts into
