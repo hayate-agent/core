@@ -53,6 +53,27 @@ new delegation hierarchy. Existing configured model/context budgets still apply.
 The intended small local base-context target is not a claim that arbitrary
 operator instructions or direct MCP schemas now satisfy a verified token ceiling.
 
+## Stable request prefix
+
+In ordinary Main/worker conversations, per-run host instructions (task revision,
+provenance, language, recalled memory and the changing `MEMORY.md` artifact
+reference) are appended as a hidden, persisted `harness-run-context` message at the current
+conversation boundary, not substituted into the leading system prompt. Working
+memory is snapshotted once per host run; SDK-step capture remains active but does
+not rewrite the next request's prefix. The `MEMORY.md` reference is refreshed for
+the next run; even an artifact-storage failure keeps its raw historical fallback
+out of the system prompt. OpenAI-compatible backends that fold later
+system messages into the head therefore retain the unchanged conversation prefix
+across tool calls, host continuations and session resumption.
+
+The stable system policy identifies the latest run context as host-authored, not
+operator input or new authority. Earlier contexts remain historical; an empty new
+context clears previous per-run instructions. Memory stays untrusted reported
+data. Native/external history, exact operator messages, live tool authorization
+and cancellation guards are unchanged. Actual persona, tool or compaction changes
+can still invalidate the prefix; this does not promise a particular backend cache
+hit rate or change provider capability flags.
+
 ## Working result protocol and accumulation
 
 The runtime injects one source-owned result protocol into ordinary Main,
