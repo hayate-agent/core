@@ -55,7 +55,7 @@ test('pending wait -> shell status charge -> exhaustion -> blocked next and dura
   assert.equal(task.termination, 'productive_budget_exhausted');
   assert.match(task.next!, /Dependency complete/);
   assert.equal(f.channel.sent.length, 1);
-  assert.match(f.channel.sent[0].text, /Action budget exhausted/);
+  assert.match(f.channel.sent[0].text, /could not make progress.*continue/i);
   const sessions = JSON.parse(JSON.stringify(f.h.snapshotSessions()));
   await f.h.stop(0);
   const r = new FakeRuntime(); const h = new Harness({ completionCheck: confirmNonproductive, runtime: r, now: () => 181000 });
@@ -122,7 +122,7 @@ test('later completed dependency is consumed once at exhausted depth without wor
     assert.equal(consumed, 1);
     assert.equal(store.list(key).length, 1);
     assert.equal(h.state(key).task!.depth, 20);
-    assert.equal(channel.sent.filter(s => s.text.includes('Action budget exhausted')).length, 1);
+    assert.equal(channel.sent.filter(s => /could not make progress.*continue/i.test(s.text)).length, 1);
   } finally { await h.stop(0); }
 });
 
