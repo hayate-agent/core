@@ -5,7 +5,7 @@ import { memoryConfig, type MemoryProvider } from "../src/memory.js";
 import { MemoryService } from "../src/builtin-plugins/memory-service.js";
 import { LocalMemory } from "../src/memory-local.js";
 import { FileMemoryStore } from "../src/memory-worker.js";
-import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -132,4 +132,72 @@ test("stop drains direct and background operations plus awaited cleanup", async 
   await tick(); assert.equal(calls, 2); assert.equal(stopped, false);
   gate.resolve(); await Promise.all(writes); await tick(); assert.equal(stopped, false);
   cleanup.resolve(); await stop; assert.equal(closed, true);
+});
+
+test("worker memory writes land in the owning conversation scope and are retrievable there, not elsewhere", async () => {
+  const home = await mkdtemp(path.join(os.tmpdir(), "memory-owner-scope-"));
+  const store = new FileMemoryStore(path.join(home, "store"), memoryConfig());
+  await store.start();
+  const parents: Record<string, string> = { "dispatch:exec1:tok": "matrix:!room" };
+  const lifecycle = new MemoryProviderLifecycle(async () => store, key => parents[key] ?? key);
+  try {
+    await lifecycle.ensureConnected();
+    const saved = await lifecycle.put({ sessionKey: "dispatch:exec1:tok" }, { key: "worker-decision", kind: "decision", title: "Skill matching", text: "Use whole-word skill matching for diagnostics", source: "test" });
+    assert.equal(saved.sessionKey, "matrix:!room");
+    // Later worker of the same owner and the owner conversation itself retrieve it.
+    parents["dispatch:exec2:tok"] = "matrix:!room";
+    for (const key of ["dispatch:exec2:tok", "matrix:!room"]) {
+      const hits = await lifecycle.search({ sessionKey: key }, "whole-word skill matching");
+      assert.ok(hits.some(hit => hit.entry.id === saved.id), key);
+    }
+    // Other conversations and unknown workers stay isolated.
+    for (const key of ["matrix:!other", "dispatch:orphan:tok"]) assert.equal((await lifecycle.search({ sessionKey: key }, "whole-word skill matching")).length, 0, key);
+  } finally { await lifecycle.close?.(); await store.close?.(); await rm(home, { recursive: true, force: true }); }
+});
+
+test("owner scope: pending worker turns replay under their exact key; explicit lessons reach the owner; sources and privacy kept", async () => {
+  const home = await mkdtemp(path.join(os.tmpdir(), "memory-owner-replay-"));
+  const store = new FileMemoryStore(path.join(home, "store"), memoryConfig());
+  await store.start();
+  const worker = "dispatch:exec1:tok", owner = "matrix:!room";
+  const parents: Record<string, string> = {};
+  try {
+    // Before the update: worker turn queued and already persisted under the worker key (uncertain ack).
+    const service = new MemoryService(memoryConfig({ enabled: true }), () => {}, home);
+    await service.capture({ id: "w1", sessionKey: worker, text: "diagnose dispatcher", reply: "found queue hold", outcome: "completed", recordedAt: 1 });
+    const [file] = await readdir(path.join(home, "memory-pending"));
+    const bytes = await readFile(path.join(home, "memory-pending", file));
+    service.provider = store; await service.flush();
+    assert.equal((await store.status()).entries, 1);
+    // Lost acknowledgement: the exact queued bytes survive into the updated runtime.
+    await writeFile(path.join(home, "memory-pending", file), bytes);
+    // Updated runtime: worker now has a known owner; replay the same capture.
+    parents[worker] = owner;
+    const lifecycle = new MemoryProviderLifecycle(async () => store, key => parents[key] ?? key);
+    await lifecycle.ensureConnected();
+    const next = new MemoryService(memoryConfig({ enabled: true }), () => {}, home); next.provider = lifecycle;
+    assert.deepEqual(await readdir(path.join(home, "memory-pending")), [file]);
+    await next.flush(); // drain: idempotent replay, no conflict, no duplicate
+    assert.deepEqual(await readdir(path.join(home, "memory-pending")), []);
+    assert.equal((await store.status()).entries, 1);
+    // Worker continuity: its own handoff stays recallable for the worker.
+    assert.match(await next.recall(worker, "unrelated"), /found queue hold/);
+    // Explicit lesson by the worker lands in the owner scope with its source preserved.
+    const lesson = await lifecycle.put({ sessionKey: worker }, { key: "lesson-1", kind: "lesson", title: "Queue hold", text: "Dispatcher queue hold is not an outage", source: "dispatch:exec1 diagnosis" });
+    assert.equal(lesson.sessionKey, owner); assert.equal(lesson.source, "dispatch:exec1 diagnosis");
+    // Replay of the explicit write is idempotent as well.
+    assert.equal((await lifecycle.put({ sessionKey: worker }, { key: "lesson-1", kind: "lesson", title: "Queue hold", text: "Dispatcher queue hold is not an outage", source: "dispatch:exec1 diagnosis" })).id, lesson.id);
+    // Owner recall sees the lesson, not the worker's routine turn record.
+    const ownerHits = await lifecycle.search({ sessionKey: owner }, "dispatcher queue hold");
+    assert.deepEqual(ownerHits.map(h => h.entry.id), [lesson.id]);
+    // Worker sees both its own record and the owner's lesson; revise/forget work through the owner.
+    const workerHits = await lifecycle.search({ sessionKey: worker }, "dispatcher queue hold");
+    assert.equal(workerHits.length, 2);
+    const revised = await lifecycle.revise({ sessionKey: worker }, lesson.id, lesson.revision, { text: "Queue hold is a capacity state" });
+    assert.equal(revised.sessionKey, owner);
+    // Other conversations and orphan workers stay isolated.
+    for (const key of ["matrix:!other", "dispatch:orphan:tok"]) assert.equal((await lifecycle.search({ sessionKey: key }, "dispatcher queue hold")).length, 0, key);
+    assert.equal(await lifecycle.get({ sessionKey: "matrix:!other" }, lesson.id), undefined);
+    await lifecycle.close();
+  } finally { await store.close?.(); await rm(home, { recursive: true, force: true }); }
 });

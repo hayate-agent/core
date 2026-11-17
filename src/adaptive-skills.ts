@@ -10,6 +10,8 @@ const NAME = /^[a-z][a-z0-9-]{0,47}$/;
 const MAX_BYTES = 8192; // managed recipe schema, not catalog skill autoload
 const AUTOLOAD_BYTES = 16 * 1024; // bounded excerpt; larger skills remain readable by path
 const AUTOLOAD_RUN_BYTES = 48 * 1024;
+const LEARN_PROMPT_RECEIPTS = 8;
+const LEARN_PROMPT = "Host learning reminder (not a task or authority): this run has substantial verified work. Before finishing, if it revealed a reusable procedure not already covered, save it with plugin_skill_learn (evidence = host receipts; expectedRevision null to create, loaded revision to update). Otherwise ignore this reminder.";
 const missing = (e: unknown) => (e as NodeJS.ErrnoException).code === "ENOENT";
 const text = (s: unknown, min: number, max: number): s is string => typeof s === "string" && s.trim().length >= min && Buffer.byteLength(s) <= max && !/[\x00-\x08\x0b-\x1f\x7f]/.test(s);
 interface Recipe { name: string; description: string; procedure: string; revision: string; }
@@ -29,7 +31,8 @@ export class SkillRun {
 /** Host-owned opt-in, non-executable recipes. Never part of the system prompt or PI discovery. */
 export class AdaptiveSkills {
   private readonly runs = new Map<string, SkillRun>();
-  constructor(private readonly home: string, private readonly cwd: string, private readonly catalog: SkillCatalog) {}
+  /** `owner` maps delegated worker keys to their owning conversation so learned recipes outlive the worker. */
+  constructor(private readonly home: string, private readonly cwd: string, private readonly catalog: SkillCatalog, private readonly owner: (key: string) => string = key => key) {}
   begin(key: string): void { this.runs.set(key, new SkillRun()); }
   end(key: string): void { this.runs.delete(key); }
   private run(key: string): SkillRun {
@@ -37,7 +40,7 @@ export class AdaptiveSkills {
     if (!run) throw Error("Adaptive skills require an active working turn");
     return run;
   }
-  private scope(key: string): string { return digest(`${path.resolve(this.cwd)}\0${key}`); }
+  private scope(key: string): string { return digest(`${path.resolve(this.cwd)}\0${this.owner(key)}`); }
   private async dir(key: string): Promise<string> {
     // All managed components must be real directories, never symlink aliases.
     const home = path.resolve(this.home);
@@ -80,6 +83,13 @@ export class AdaptiveSkills {
     for (const name of names) { const recipe = await this.read(dir, name, this.scope(key)); if (recipe) out.push(recipe); }
     return out;
   }
+  /** Learned recipes of the caller's own scope matching a search query, with the revision needed to update them. */
+  async find(key: string, query: string, limit: number): Promise<Array<{ name: string; description: string; revision: string }>> {
+    const q = query.trim().toLowerCase();
+    if (!q) return [];
+    return (await this.recipes(key)).filter(r => r.name.includes(q) || r.description.toLowerCase().includes(q) || r.procedure.toLowerCase().includes(q))
+      .slice(0, limit).map(r => ({ name: r.name, description: r.description, revision: r.revision }));
+  }
   private load(run: SkillRun, id: string, value: object): string {
     let encoded = JSON.stringify(value);
     const hash = digest(id + encoded);
@@ -101,7 +111,13 @@ export class AdaptiveSkills {
   }
   /** Host-only, bounded diagnostics; no paths, folder labels or skill content enter instructions. */
   diagnostics(key: string): string {
-    return this.runs.get(key)?.diagnostics.join("\n") ?? "";
+    const run = this.runs.get(key);
+    if (!run) return "";
+    const lines = [...run.diagnostics];
+    // Learning prompt: receipts alone never led to a save (no caller ever reached plugin_skill_learn).
+    // After substantial verified native work and before any save, project one bounded reminder.
+    if (run.writes === 0 && run.receipts.size >= LEARN_PROMPT_RECEIPTS) lines.push(LEARN_PROMPT);
+    return lines.join("\n");
   }
   /** Resolve only known catalog paths; do not infer a name from arbitrary file names. */
   skillName(file: string): string | undefined { return this.catalog.skills.find(skill => skill.filePath === file)?.name; }
@@ -110,9 +126,17 @@ export class AdaptiveSkills {
   async match(key: string, query: string, onLoad?: (name: string) => void): Promise<string> {
     const run = this.run(key);
     if (run.loads >= 3 || run.bytes >= AUTOLOAD_RUN_BYTES - 2048) return "";
-    const noise = new Set(["the", "and", "for", "with", "this", "that", "read", "write", "bash", "edit", "find", "grep", "und", "der", "die", "das", "mit", "von", "bitte"]);
+    const noise = new Set(["the", "and", "for", "with", "this", "that", "read", "write", "bash", "edit", "find", "grep", "und", "der", "die", "das", "mit", "von", "bitte", "use", "when", "user", "asks", "about", "from", "into", "all", "any"]);
     const tokens = [...new Set(query.toLowerCase().slice(0, 2048).match(/[\p{L}\p{N}-]{3,}/gu) ?? [])].filter(t => !noise.has(t)).slice(0, 32);
-    const matches = (name: string, description: string) => tokens.some(t => `${name} ${description}`.toLowerCase().includes(t));
+    // Whole-word matching. Only the full skill name (explicit invocation, e.g. "brain-query") is a strong hit;
+    // substrings ("pdf" in "pdfs") and single name parts (brain/service/compile) are common diagnostic words
+    // and must not inject a skill. Otherwise two distinct description words that are not name parts are required.
+    const words = (text: string) => new Set(text.toLowerCase().match(/[\p{L}\p{N}]{3,}/gu) ?? []);
+    const matches = (name: string, description: string) => {
+      const nameFull = name.toLowerCase(), nameWords = words(name), descWords = words(description);
+      if (tokens.some(t => t === nameFull)) return true;
+      return new Set(tokens.flatMap(t => t.split("-")).filter(t => t.length >= 3 && descWords.has(t) && !nameWords.has(t) && !noise.has(t))).size >= 2;
+    };
     let result = "";
     if (!tokens.length) return "";
     for (const skill of this.catalog.skills.filter(s => matches(s.name, s.description)).slice(0, 2)) {
@@ -162,7 +186,7 @@ export class AdaptiveSkills {
     let stage: string | undefined;
     try {
       const previous = await this.read(dir, name, scope);
-      if ((previous?.revision ?? null) !== input.expectedRevision) throw Error("Adaptive skill revision conflict");
+      if ((previous?.revision ?? null) !== input.expectedRevision) throw Error("Adaptive skill revision conflict; get the current revision with plugin_skill_search");
       if (previous?.description === input.description && previous.procedure === input.procedure) return JSON.stringify({ unchanged: true, revision: previous.revision });
       if (!previous && (await this.recipes(key)).length >= 16) throw Error("Adaptive skill count exceeded");
       if ((await this.recipes(key)).some(s => s.name !== name && s.description === input.description && s.procedure === input.procedure)) throw Error("Duplicate adaptive skill");
@@ -195,4 +219,18 @@ export class AdaptiveSkills {
         } }, execute: (input, ctx) => this.save(ctx.sessionKey, input) });
     } };
   }
+}
+
+/**
+ * Durable learning owner for a session key. Delegated workers (dispatch:/subagent:) learn for the
+ * conversation that owns them, following a bounded parent chain; every other key stays its own scope.
+ */
+export function learningOwner(key: string, parentOf: (key: string) => string | undefined): string {
+  let current = key;
+  for (let depth = 0; depth < 8 && /^(?:dispatch|subagent):/.test(current); depth++) {
+    const parent = parentOf(current);
+    if (!parent || parent === current) break;
+    current = parent;
+  }
+  return current;
 }

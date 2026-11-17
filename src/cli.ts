@@ -84,7 +84,7 @@ import { loopManagementPlugin } from "./loop-management-plugin.js";
 import { OverlayUpdater } from "./update.js";
 import { SkillUpdates } from "./skill-updates.js";
 import { skillSearchPlugin } from "./skill-search-plugin.js";
-import { AdaptiveSkills } from "./adaptive-skills.js";
+import { AdaptiveSkills, learningOwner } from "./adaptive-skills.js";
 import { ImprovementController } from "./improvement.js";
 import nightlyDefault from "./builtin-plugins/nightly-default.js";
 import { nightlyStrategyHolder } from "./nightly-strategy.js";
@@ -364,6 +364,7 @@ async function main(argv: string[]): Promise<void> {
     return runtimeReviewer(runtime, "supervisor").review(prompt, pair.model, pair.thinking ?? "low", signal);
   } });
   let contextParent: (key: string) => string | undefined = () => undefined;
+  const learningScope = (key: string) => learningOwner(key, contextParent);
   const executionContexts = new ExecutionContexts(path.join(config.home, "execution-contexts.json"), config.cwd, key => contextParent(key));
   await executionContexts.load();
   const cwdFor = (key: string) => executionContexts.get(key).cwd;
@@ -378,7 +379,7 @@ async function main(argv: string[]): Promise<void> {
       return harness.withForegroundWork(() => executionContexts.bind(key, context));
     },
   });
-  const adaptiveSkills = config.skills.adaptive !== false ? new AdaptiveSkills(config.home, config.cwd, skillCatalog) : undefined;
+  const adaptiveSkills = config.skills.adaptive !== false ? new AdaptiveSkills(config.home, config.cwd, skillCatalog, learningScope) : undefined;
   const runtime = new PiRuntime({
     modelWorkKeyFile: path.join(config.home, "model-work-key.pem"),
     localModelScheduling: config.localModelScheduling,
@@ -835,7 +836,7 @@ async function main(argv: string[]): Promise<void> {
     }), subagentPlugin(subagents,async()=>{await persist();}), ...(reloadableTools ? [reloadableToolsPlugin(reloadableTools)] : []), wasmToolsPlugin(config.home, config.wasmTools ?? []), continuationPlugin(harness), loopManagementPlugin(harness, key => {
       const input = harness.sessions.get(key)?.current;
       return !!input && (input.source === "api" || input.source === "channel" && (input.replyTo?.channel === "console" || !!input.sender && admins.includes(input.sender)));
-    }), improvementPlugin(improvement!), protectedContentPlugin(protectedContent), gatewayManagerPlugin(gatewayManager, settings), messagePlugin(config.home, gatewayManager), conversationPolicyPlugin(settings, harness), policyManagerPlugin(policyManager, settings), extensionManagerPlugin(extensionManager, settings), gatewayPlugin(settings, harness), contextPlugin(maintenance, settings), ...(config.memory.enabled ? [memoryPlugin(memory), ...(config.memory.consolidation ? [memoryConsolidationHost(config.memory.consolidation, runtime, memory, log)] : [])] : []), skillSearchPlugin(skillCatalog), ...(adaptiveSkills ? [adaptiveSkills.plugin()] : []), ...reviewEngine.plugins], [settings.desired().gatewayPlugins?.webui?.module].filter((value): value is string => typeof value === "string"));
+    }), improvementPlugin(improvement!), protectedContentPlugin(protectedContent), gatewayManagerPlugin(gatewayManager, settings), messagePlugin(config.home, gatewayManager), conversationPolicyPlugin(settings, harness), policyManagerPlugin(policyManager, settings), extensionManagerPlugin(extensionManager, settings), gatewayPlugin(settings, harness), contextPlugin(maintenance, settings), ...(config.memory.enabled ? [memoryPlugin(memory), ...(config.memory.consolidation ? [memoryConsolidationHost(config.memory.consolidation, runtime, memory, log)] : [])] : []), skillSearchPlugin(skillCatalog, adaptiveSkills ? (key, q, n) => adaptiveSkills.find(key, q, n) : undefined), ...(adaptiveSkills ? [adaptiveSkills.plugin()] : []), ...reviewEngine.plugins], [settings.desired().gatewayPlugins?.webui?.module].filter((value): value is string => typeof value === "string"));
   // Registration may happen during plugin activation; reject an unresolved name before admitting work.
   void plugins.validators.current;
   void plugins.dispatchDecisions.current;
@@ -918,7 +919,7 @@ async function main(argv: string[]): Promise<void> {
     const factory = config.memory.provider === "local" ? undefined : plugins.memoryProviders.get(config.memory.provider);
     if (config.memory.provider !== "local" && !factory) throw Error("Unknown memory provider");
     return factory ? factory({ home: config.home, config: config.memory }) : LocalMemory.open(config.home, config.memory);
-  });
+  }, learningScope);
   if (config.memory.enabled) memory.provider = memoryProvider;
   const connectMemory = async () => {
     if (!config.memory.enabled) return;

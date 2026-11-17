@@ -7,6 +7,12 @@ import { memoryConfig, type MemoryConfig, type MemoryContext, type MemoryEntry, 
 
 const hash = (s: string) => createHash("sha256").update(s).digest("hex");
 const idPattern = /^[a-f0-9]{64}$/;
+const MAINTENANCE_INTERVAL_MS = 3600000;
+const MAINTENANCE_BATCH = 500;
+// maxEntries bounds active knowledge; archived records stay on disk for historical search and are
+// bounded by maxIndexBytes plus this hard file ceiling, so maintenance actually frees write budget.
+const FILE_CEILING_FACTOR = 4;
+const isActive = (e: MemoryEntry) => e.state === "active";
 const words = (s: string) => [...new Set(s.toLocaleLowerCase().match(/[\p{L}\p{N}_-]{2,}/gu) ?? [])];
 function validDate(value: unknown): boolean { return value === undefined || (typeof value === "string" && Number.isFinite(Date.parse(value))); }
 function validate(e: MemoryEntry): void {
@@ -54,6 +60,8 @@ export class FileMemoryStore implements MemoryProvider {
   private stopped = false;
   private dirty = false;
   private lastScan?: string;
+  private lastMaintenance?: string;
+  private maintenanceAt = 0;
   private error?: string;
   private semanticError = false;
   private queue = Promise.resolve();
@@ -70,7 +78,7 @@ export class FileMemoryStore implements MemoryProvider {
       const file = path.join(this.dir, "index.json");
       if ((await lstat(file)).size > this.config.maxIndexBytes) throw Error("Memory snapshot exceeds configured budget");
       const snapshot = JSON.parse(await readFile(file, "utf8"));
-      if (snapshot.version !== 1 || !Array.isArray(snapshot.rows) || snapshot.rows.length > this.config.maxEntries) throw Error("Invalid memory snapshot");
+      if (snapshot.version !== 1 || !Array.isArray(snapshot.rows) || snapshot.rows.length > this.config.maxEntries * FILE_CEILING_FACTOR) throw Error("Invalid memory snapshot");
       for (const row of snapshot.rows as Row[]) {
         validate(row.entry);
         if (row.vector && (!Array.isArray(row.vector) || row.vector.length > 8192 || row.vector.some((n) => !Number.isFinite(n)))) throw Error("Invalid vector snapshot");
@@ -123,6 +131,7 @@ export class FileMemoryStore implements MemoryProvider {
     // network access while holding the serialized write queue.
     setImmediate(() => { void this.embedPending(); });
   }
+  private activeCount(): number { let n = 0; for (const row of this.rows.values()) if (isActive(row.entry)) n++; return n; }
   private removeTerms(id: string): void {
     const old = this.rows.get(id);
     if (old) for (const term of words(old.entry.title + " " + old.entry.text)) {
@@ -153,7 +162,7 @@ export class FileMemoryStore implements MemoryProvider {
         if (existing.entry.sessionKey !== ctx.sessionKey || existing.inputHash !== inputHash) throw Error("Memory idempotency conflict");
         return existing.entry;
       }
-      if (this.rows.size >= this.config.maxEntries) throw Error("Memory entry budget exceeded");
+      if (this.activeCount() >= this.config.maxEntries || this.rows.size >= this.config.maxEntries * FILE_CEILING_FACTOR) throw Error("Memory entry budget exceeded");
       const now = new Date().toISOString();
       const entry: MemoryEntry = { id, revision: randomUUID(), sessionKey: ctx.sessionKey, title: input.title, text: input.text,
         kind: input.kind ?? "note", verification: "reported", source: input.source ?? ctx.sessionKey, createdAt: now, updatedAt: now,
@@ -174,6 +183,7 @@ export class FileMemoryStore implements MemoryProvider {
       if (row.entry.revision !== revision) throw Error("Memory revision conflict");
       if (!patch || Object.keys(patch).some((k) => !["state", "text", "reviewAfter", "expiresAt"].includes(k))) throw Error("Invalid memory patch");
       const entry = { ...row.entry, ...patch, revision: randomUUID(), updatedAt: new Date().toISOString() };
+      if (isActive(entry) && !isActive(row.entry) && this.activeCount() >= this.config.maxEntries) throw Error("Memory entry budget exceeded");
       const contentHash = hash(entry.title + "\n" + entry.text);
       await this.write({ ...row, entry, contentHash, ...(contentHash !== row.contentHash ? { vector: undefined, model: undefined } : {}) });
       return entry;
@@ -254,7 +264,7 @@ export class FileMemoryStore implements MemoryProvider {
   reindex(): Promise<void> {
     return this.serial(async () => {
       const names = (await readdir(this.entriesDir)).filter((n) => /^[a-f0-9]{64}\.md$/.test(n));
-      if (names.length > this.config.maxEntries) throw Error("Memory entry budget exceeded");
+      if (names.length > this.config.maxEntries * FILE_CEILING_FACTOR) throw Error("Memory entry budget exceeded");
       const next = new Map<string, Row>(); let bytes = 64; let invalid = 0;
       for (const name of names) {
         try { const row = await this.read(name.slice(0, -3)); if (row) { bytes += this.rowCost(row); if (bytes > this.config.maxIndexBytes) throw Error("budget"); next.set(row.entry.id, row); } }
@@ -264,6 +274,8 @@ export class FileMemoryStore implements MemoryProvider {
       this.rows = next; this.indexCost = bytes;
       if (changed) { this.rebuildTerms(); this.dirty = true; }
       await this.snapshot(); this.lastScan = new Date().toISOString(); this.error = invalid ? `${invalid} invalid memory files excluded` : undefined;
+      // Hourly content maintenance rides on the existing scan owner: no second scheduler or writer.
+      if (Date.now() - this.maintenanceAt >= MAINTENANCE_INTERVAL_MS) await this.maintainLocked(Date.now());
       setImmediate(() => { void this.embedPending(); });
     }).catch((err) => { this.error = (err as Error).message; throw err; });
   }
@@ -306,8 +318,37 @@ export class FileMemoryStore implements MemoryProvider {
       }
     }
   }
+  /** Archive review-due, never-recalled automatic turn records. The newest record per session
+   * (handoff continuity), explicit notes/lessons/decisions, sources, verification and scopes are kept;
+   * archived files stay on disk and remain reachable through historical search. */
+  maintain(now = Date.now()): Promise<number> { return this.serial(() => this.maintainLocked(now)); }
+  private async maintainLocked(now: number): Promise<number> {
+    this.maintenanceAt = now;
+    const newest = new Map<string, Row>();
+    for (const row of this.rows.values()) {
+      if (row.entry.kind !== "operation" || row.entry.state !== "active") continue;
+      const seen = newest.get(row.entry.sessionKey);
+      if (!seen || row.entry.createdAt > seen.entry.createdAt) newest.set(row.entry.sessionKey, row);
+    }
+    let archived = 0;
+    for (const row of [...this.rows.values()]) {
+      if (archived >= MAINTENANCE_BATCH) break;
+      const { entry } = row;
+      if (entry.kind !== "operation" || entry.state !== "active" || newest.get(entry.sessionKey) === row || row.usage?.count) continue;
+      if (!entry.reviewAfter || Date.parse(entry.reviewAfter) > now) continue;
+      try {
+        const current = await this.read(entry.id);
+        if (!current || current.entry.revision !== entry.revision) continue; // manual edit since scan: leave it
+        await this.write({ ...current, usage: row.usage, entry: { ...current.entry, state: "archived", revision: randomUUID(), updatedAt: new Date(now).toISOString() } });
+        archived++;
+      } catch { this.error = "Memory maintenance incomplete; retrying next hour"; break; }
+    }
+    if (archived) await this.snapshot().catch(() => { this.error = "Memory maintenance snapshot unavailable"; });
+    this.lastMaintenance = new Date(now).toISOString();
+    return archived;
+  }
   async status(): Promise<MemoryStatus> {
-    return { provider: "local", entries: this.rows.size, indexed: this.rows.size, ready: Boolean(this.lastScan || this.rows.size),
+    return { provider: "local", entries: this.rows.size, indexed: this.rows.size, ready: Boolean(this.lastScan || this.rows.size), lastMaintenance: this.lastMaintenance,
       semantic: !this.config.embedding ? "disabled" : this.semanticError || [...this.rows.values()].some((r) => !r.vector || r.model !== this.modelKey()) ? "degraded" : "ready", lastScan: this.lastScan, error: this.error };
   }
   async close(): Promise<void> { this.stopped = true; clearInterval(this.timer); await this.serial(() => this.snapshot()); }
