@@ -31,18 +31,10 @@ test("Main gets direct-answer guidance independently of dispatcher state without
   for (const dispatcherEnabled of [false, true]) for (const dispatcherReady of [false, true]) {
     const text = capabilityContext({ ...facts, dispatcherEnabled, dispatcherReady, selectedTools: [],
       dispatcherWorkers: { capacity: 4, active: 4, queued: 9 } });
-    if (dispatcherEnabled && dispatcherReady) {
-      assert.match(text, /Main may use its available tools directly/);
-      assert.match(text, /delegation is not mandatory/);
-      assert.match(text, /requestId=<stable logical task id>/);
-      assert.match(text, /worker actually executing the same work concurrently/);
-      assert.match(text, /blocked, stalled or failed worker is not by itself a reason to prevent Main from taking over/);
-    } else {
-      assert.match(text, /delegation is optional, not a prerequisite/);
-      assert.match(text, /use your available tools yourself/);
-      assert.match(text, /not a single exclusive execution slot/);
-      assert.match(text, /grants no unavailable tools, permissions, review exemptions/);
-    }
+    assert.match(text, /Main may use its available tools directly/);
+    assert.match(text, /delegation is optional, not a prerequisite/);
+    assert.doesNotMatch(text, /Submit with|requestId=|Blocked dispatcher resume|resume-paused|single exclusive execution slot/);
+    assert.equal(data(text).preferredDelegationRoute, "unavailable", "hidden tools are not a usable delegation route");
     assert.equal(data(text).dispatcher.exposed, false);
     assert.deepEqual(data(text).dispatcher.workers, { capacity: 4, active: 4, queued: 9 });
   }
@@ -50,6 +42,19 @@ test("Main gets direct-answer guidance independently of dispatcher state without
     const text = capabilityContext({ ...facts, sessionKey });
     assert.doesNotMatch(text, /Main execution:/);
     assert.equal(data(text).dispatcher.sessionAllowed, false);
+  }
+});
+
+test("dispatcher and recovery operation prose is absent even when their tools are registered", () => {
+  for (const dispatcherEnabled of [false, true]) for (const dispatcherReady of [false, true]) {
+    for (const selectedTools of [undefined, [], ["plugin_dispatch_recovery"]]) {
+      const text = capabilityContext({ ...facts, dispatcherEnabled, dispatcherReady, selectedTools,
+        registeredTools: [...facts.registeredTools, "plugin_dispatch_recovery"] });
+      assert.doesNotMatch(text, /Submit with|Blocked dispatcher resume|resume-paused|fingerprint|requestId=|event-driven host scheduler/);
+      const parsed = data(text);
+      assert.equal(parsed.dispatcher.sessionAllowed, dispatcherEnabled && dispatcherReady && selectedTools === undefined);
+      assert.equal(parsed.recovery.exposed, selectedTools === undefined || selectedTools.includes("plugin_dispatch_recovery"));
+    }
   }
 });
 
@@ -71,7 +76,7 @@ test("selected review instructions and fresh capability facts reach working turn
     assert.doesNotMatch(opts[0].instructions!,/ALWAYS vertical slices|ALWAYS KISS/);
     assert.match(opts[0].instructions!,/Dedicated review is mandatory/);
     assert.match(opts[0].instructions!,/Main may use its available tools directly/);
-    assert.match(opts[1].instructions!,/delegation is not mandatory/);
+    assert.match(opts[1].instructions!,/delegation is optional/);
     assert.equal(data(opts[0].instructions!).revision,1);
     assert.equal(data(opts[1].instructions!).revision,2);
     assert.doesNotMatch(opts[1].instructions!,/ALWAYS vertical slices|ALWAYS KISS/);

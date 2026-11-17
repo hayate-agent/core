@@ -64,8 +64,8 @@ test("actual SDK requests: Main and children receive excerpts, children skip his
       assert.match(sent, /paginated tool\/session archive/);
       assert.match(sent, /Do NOT automatically open every artifact/);
       assert.match(sent, /Group(?:ed)? results still belong to their individual calls/);
-      assert.match(sent, /Repeated status calls without a new event add no progress/);
-      assert.match(sent, /A blocked, stopped or failed worker does not by itself prevent Main from taking over/);
+      assert.doesNotMatch(sent, /Dispatcher work is asynchronous|For submit provide|Repeated status calls without a new event/,
+        'parent dispatcher operation is not part of the shared evidence contract');
       assert.doesNotMatch(sent, /Never create a duplicate task/);
       assert.match(sent, /Never rerun a completed or uncertain operation merely to recover its output/);
       assert.doesNotMatch(sent, /OLD-MEMORY/, 'Main and workers reference historical overlays instead of injecting the full file');
