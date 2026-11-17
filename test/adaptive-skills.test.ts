@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, mkdir, writeFile, readFile, readdir, rm, symlink, rename } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { skillSearchPlugin } from "../src/skill-search-plugin.js";
 import { AdaptiveSkills, learningOwner } from "../src/adaptive-skills.js";
 import { SkillCatalog } from "../src/skill-catalog.js";
 import { installAdaptiveSkillHooks } from "../src/runtime/pi.js";
@@ -323,4 +324,38 @@ test("learning reminder appears only after substantial verified work, per run an
   assert.equal(await service.match("user:b", "table-check"), "");
   service.end("user:a");
   assert.equal(service.diagnostics("user:a"), ""); // drained run leaves no reminder
+});
+
+test("full learning path: verified work -> reminder -> create -> later run finds own recipe with revision via search -> revision-bound update", async t => {
+  const { catalog, service, input } = await fixture(t);
+  const tools = new Map<string, any>();
+  await skillSearchPlugin(catalog, (key, q, n) => service.find(key, q, n)).activate({ registerTool(tool: any) { tools.set(tool.name, tool); } } as any);
+  const search = tools.get("plugin_skill_search");
+  const receipts = [input.evidence[0]];
+  for (let n = 0; n < 7; n++) receipts.push(service.observe("user:a", `verified-${n}`, "read", false).match(/[a-f0-9]{24}/)![0]);
+  assert.match(service.diagnostics("user:a"), /plugin_skill_learn/);
+  await assert.rejects(service.save("user:a", { ...input, evidence: ["not-a-host-receipt"] }), /./); // no blind save without receipts
+  const created = JSON.parse((await service.save("user:a", { ...input, evidence: receipts.slice(0, 1) })).split("\n")[0]);
+  assert.equal(created.action, "created");
+  service.end("user:a");
+
+  // Later owner run: search returns the own recipe with its revision; another scope sees nothing.
+  service.begin("user:a"); service.begin("user:b");
+  const found = await search.execute({ query: "column" }, { sessionKey: "user:a" });
+  assert.match(found, /Learned recipes/);
+  assert.match(found, new RegExp(created.revision));
+  assert.doesNotMatch(await search.execute({ query: "column" }, { sessionKey: "user:b" }), /table-check/);
+  const listed = JSON.parse(found.slice(found.indexOf("[")));
+  const receipt = service.observe("user:a", "later-verified", "bash", false).match(/[a-f0-9]{24}/)![0];
+  const update = { ...input, procedure: input.procedure + " Re-run on a second sample table.", evidence: [receipt] };
+  await assert.rejects(service.save("user:a", { ...update, expectedRevision: null }), /revision conflict.*plugin_skill_search/);
+  const updated = JSON.parse((await service.save("user:a", { ...update, expectedRevision: listed[0].revision })).split("\n")[0]);
+  assert.equal(updated.action, "updated");
+  assert.notEqual(updated.revision, created.revision);
+  await assert.rejects(service.save("user:a", { ...update, procedure: update.procedure + " x" }), /write budget/); // attempts are bounded per run
+  service.end("user:a"); service.begin("user:a");
+  const fresh = service.observe("user:a", "next-run", "bash", false).match(/[a-f0-9]{24}/)![0];
+  await assert.rejects(service.save("user:a", { ...update, procedure: update.procedure + " x", evidence: [fresh], expectedRevision: created.revision }), /revision conflict/);
+  assert.match(await service.match("user:a", "table-check"), /second sample table/); // updated recipe is what loads
+  service.end("user:a"); service.end("user:b");
 });

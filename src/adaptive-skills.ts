@@ -83,6 +83,13 @@ export class AdaptiveSkills {
     for (const name of names) { const recipe = await this.read(dir, name, this.scope(key)); if (recipe) out.push(recipe); }
     return out;
   }
+  /** Learned recipes of the caller's own scope matching a search query, with the revision needed to update them. */
+  async find(key: string, query: string, limit: number): Promise<Array<{ name: string; description: string; revision: string }>> {
+    const q = query.trim().toLowerCase();
+    if (!q) return [];
+    return (await this.recipes(key)).filter(r => r.name.includes(q) || r.description.toLowerCase().includes(q) || r.procedure.toLowerCase().includes(q))
+      .slice(0, limit).map(r => ({ name: r.name, description: r.description, revision: r.revision }));
+  }
   private load(run: SkillRun, id: string, value: object): string {
     let encoded = JSON.stringify(value);
     const hash = digest(id + encoded);
@@ -179,7 +186,7 @@ export class AdaptiveSkills {
     let stage: string | undefined;
     try {
       const previous = await this.read(dir, name, scope);
-      if ((previous?.revision ?? null) !== input.expectedRevision) throw Error("Adaptive skill revision conflict");
+      if ((previous?.revision ?? null) !== input.expectedRevision) throw Error("Adaptive skill revision conflict; get the current revision with plugin_skill_search");
       if (previous?.description === input.description && previous.procedure === input.procedure) return JSON.stringify({ unchanged: true, revision: previous.revision });
       if (!previous && (await this.recipes(key)).length >= 16) throw Error("Adaptive skill count exceeded");
       if ((await this.recipes(key)).some(s => s.name !== name && s.description === input.description && s.procedure === input.procedure)) throw Error("Duplicate adaptive skill");

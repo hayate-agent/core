@@ -1,6 +1,9 @@
 import type { SkillCatalog } from "./skill-catalog.js";
 import type { PluginModule } from "./plugins.js";
 
+/** Own-scope learned recipes; supplied by AdaptiveSkills so a later run can find and revise them. */
+export type LearnedRecipeSearch = (sessionKey: string, query: string, limit: number) => Promise<Array<{ name: string; description: string; revision: string }>>;
+
 /**
  * Late skill discovery: instead of injecting every skill's metadata into the
  * prompt each turn, the model can query this lightweight tool to find matching
@@ -8,7 +11,7 @@ import type { PluginModule } from "./plugins.js";
  * task calls for the named skill. Search results provide the exact catalog path
  * so the agent can read the matching skill without guessing or scanning roots.
  */
-export function skillSearchPlugin(catalog: SkillCatalog): PluginModule {
+export function skillSearchPlugin(catalog: SkillCatalog, learned?: LearnedRecipeSearch): PluginModule {
   return { apiVersion: 1, activate(api) {
     api.registerTool({
       name: "plugin_skill_search",
@@ -22,7 +25,7 @@ export function skillSearchPlugin(catalog: SkillCatalog): PluginModule {
         required: ["query"],
         additionalProperties: false,
       },
-      async execute(input) {
+      async execute(input, context) {
         // Skills may be created or edited by normal tools during a session.
         // Search must reflect the current sources, not just the startup snapshot.
         await catalog.refresh();
@@ -32,8 +35,14 @@ export function skillSearchPlugin(catalog: SkillCatalog): PluginModule {
           .filter((s) => q.length > 0 && (s.name.toLowerCase().includes(q) || s.description.toLowerCase().includes(q)))
           .slice(0, limit)
           .map((s) => ({ name: s.name, description: s.description, filePath: s.filePath }));
+        // Learned recipes stay in the caller's own scope; never another conversation's.
+        const recipes = learned && q ? await learned(context.sessionKey, q, limit).catch(() => []) : [];
+        const learnedText = recipes.length
+          ? `\nLearned recipes (your scope; update with plugin_skill_learn using this revision as expectedRevision):\n${JSON.stringify(recipes, null, 2)}`
+          : "";
+        if (!hits.length && learnedText) return learnedText.slice(1);
         return hits.length
-          ? `Matching skills:\n${JSON.stringify(hits, null, 2)}\nRead the named SKILL.md at its filePath for full instructions; automatic loading is not guaranteed.`
+          ? `Matching skills:\n${JSON.stringify(hits, null, 2)}\nRead the named SKILL.md at its filePath for full instructions; automatic loading is not guaranteed.${learnedText}`
           : "No matching skills. Try broader keywords from the task (e.g. 'web', 'search', 'test', 'pdf').";
       },
     });
