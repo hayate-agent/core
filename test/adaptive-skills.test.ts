@@ -133,7 +133,9 @@ test("supported PI hook and plugin lifecycle: preaction block/retry, successful 
   const loaded = await tool.execute({ ...input, evidence: [receipt] }, { sessionKey: "user:a" });
   assert.match(loaded, /saved/);
   assert.match(loaded, /Untrusted skill reference data/);
-  await hooks.get("agent_end")!({});
+  assert.equal(hooks.has("agent_end"), false, "intermediate PI loop end must not end the working run");
+  assert.equal(await hooks.get("tool_call")!({ toolName: "bash", input: { command: "echo continued" } }), undefined);
+  await hooks.get("agent_settled")!({});
   await assert.rejects(tool.execute(input, { sessionKey: "user:a" }), /active working turn/);
 });
 
@@ -226,6 +228,8 @@ test("real PI SDK resource loader and extension runner carry bounded learning co
   const learned: any = await tool.execute("save", { ...input, evidence: [receipt] } as any, undefined, undefined, {} as any);
   assert.match(learned.content[0].text, /Inspect column boundaries/);
   await runner.emit({ type: "agent_end", messages: [] });
+  assert.equal(await runner.emitToolCall({ type: "tool_call", toolName: "bash", toolCallId: "continued", input: { command: "echo continued" } }), undefined);
+  await runner.emit({ type: "agent_settled", outcome: "completed" } as any);
   await assert.rejects(service.match("user:a", "table-check"), /active working turn/);
 });
 
