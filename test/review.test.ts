@@ -84,8 +84,8 @@ test("untracked file bodies cannot forge another file boundary in the fingerprin
   await writeFile(path.join(cwd, "empty.ts"), "");
   await writeFile(path.join(cwd, "ü.ts"), "ä");
   const c = await captureChangeset(cwd, "HEAD");
-  assert.match(c.diff, /Untracked file "empty.ts" \(0 bytes\)\n\n/);
-  assert.match(c.diff, /Untracked file "ü.ts" \(2 bytes\)\nä\n/);
+  assert.match(c.diff, /Untracked file "empty.ts" \(0 bytes, mode 100644\)\n\n/);
+  assert.match(c.diff, /Untracked file "ü.ts" \(2 bytes, mode 100644\)\nä\n/);
   assert.deepEqual(c.files, ["a.ts", "empty.ts", "x.ts", "y.ts", "ü.ts"]);
 });
 

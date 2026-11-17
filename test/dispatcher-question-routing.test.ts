@@ -58,6 +58,15 @@ test("question receipt retains original Main mandate and is durable after outbox
   assert.equal(calls, 1);
 });
 
+test("answering a question invalidates the host turn's subsequent tool authority", async t => {
+  const f = await fixture(t);
+  const bridge = new DispatcherRuntime(f.harness, f.store);
+  bridge.guardHostEvent("main", f.input);
+  await f.store.answer("main", f.child.id, f.input.hostEvent!.question!.id, "Continue with the retained evidence");
+  assert.throws(() => bridge.guardHostEvent("main", f.input), /no longer belongs|no longer awaits/);
+  assert.equal(f.harness.resultMandate(f.input), undefined);
+});
+
 for (const drift of ["foreign", "event", "question", "text", "expired", "stopped", "answered"])
   test(`question receipt rejects ${drift}`, async t => {
     const f = await fixture(t);
