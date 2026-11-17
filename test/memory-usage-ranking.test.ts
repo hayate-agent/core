@@ -135,3 +135,34 @@ test("archived records free the active entry budget across restart; replay stays
     await assert.rejects(store.revise(ctx, archived.id, archived.revision, { state: "active" }), /entry budget/);
   } finally { await store.close(); await rm(dir, { recursive: true, force: true }); }
 });
+
+test("graceful drain: close settles queued writes and an in-flight maintenance run before returning; reopened store has both", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "memory-drain-"));
+  const ctx = { sessionKey: "matrix:a" };
+  const old = new Date(Date.now() - 8 * 86400000).toISOString();
+  const store = new FileMemoryStore(dir, memoryConfig({ scanSeconds: 3600 }));
+  try {
+    await store.start();
+    const stale = await store.put(ctx, { key: "d1", kind: "operation", title: "turn d1", text: "routine", reviewAfter: old });
+    await new Promise(r => setTimeout(r, 5));
+    await store.put(ctx, { key: "d2", kind: "operation", title: "turn d2", text: "routine", reviewAfter: old });
+    // Queue a write and a maintenance run without awaiting them, then close immediately.
+    const settled: string[] = [];
+    const write = store.put(ctx, { key: "queued", kind: "lesson", title: "queued lesson", text: "written during shutdown" }).then(e => { settled.push("write"); return e; });
+    const maint = store.maintain(Date.now()).then(n => { settled.push("maintain"); return n; });
+    await store.close();
+    settled.push("close");
+    assert.deepEqual(settled, ["write", "maintain", "close"]);
+    const queued = await write;
+    assert.equal(await maint, 1);
+    // Cleanup: closing again is harmless and durable state survives a restart.
+    await store.close();
+    const reopened = new FileMemoryStore(dir, memoryConfig({ scanSeconds: 3600 }));
+    await reopened.start(); await reopened.reindex();
+    try {
+      assert.equal((await reopened.get(ctx, queued.id))?.text, "written during shutdown");
+      assert.equal((await reopened.get(ctx, stale.id))?.state, "archived");
+      assert.equal(await reopened.get({ sessionKey: "matrix:b" }, queued.id), undefined);
+    } finally { await reopened.close(); }
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
