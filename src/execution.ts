@@ -207,7 +207,7 @@ export class ExecutionStore {
   }
   private now(): number { return this.retention.now?.() ?? Date.now(); }
   /** Configured automatic worker retry budget; invalid or missing values fall back to the default. */
-  private retryCap(): number {
+  workerRecoveryLimit(): number {
     const value = this.retention.workerRetryMax;
     const resolved = typeof value === "function" ? value() : value;
     return typeof resolved === "number" && Number.isSafeInteger(resolved) && resolved >= 1 ? resolved : 12;
@@ -1201,7 +1201,7 @@ export class ExecutionStore {
         : task.assessmentHold ? "Aufgabe wartet auf eine externe Voraussetzung. Ohne neue Informationen keine weiteren automatischen Prüfungen; bisherige Ergebnisse bleiben erhalten."
         : code === "assessment-stalled" ? message(resolveLanguage({}, { kind: "conversation", language: task.dependency?.anchor?.language }), "dispatcher.assessmentStalled")
         : code === "deadline-expired" ? `${task.status}: deadline-expired`
-        : task.diagnosticCode === "retry-exhausted" ? `${task.status}: retry-exhausted; automatische Wiederanläufe beendet nach ${this.retryCap()} Versuchen. Manuelle Intervention erforderlich: Aufgabe explizit fortsetzen oder abbrechen.`
+        : task.diagnosticCode === "retry-exhausted" ? `${task.status}: retry-exhausted; automatische Wiederanläufe beendet nach ${this.workerRecoveryLimit()} Versuchen. Manuelle Intervention erforderlich: Aufgabe explizit fortsetzen oder abbrechen.`
         : task.status,
         !!task.assessmentHold && (priorHold?.state !== task.assessmentHold.state || priorHold?.step !== task.assessmentHold.step));
     });
@@ -1264,7 +1264,7 @@ export class ExecutionStore {
     const prior = task.workerRetry?.attempts ?? 0;
     // Cap bounds total worker attempts (initial run + retries): once the next
     // attempt would exceed the budget, hold the task for manual intervention.
-    if (prior + 1 >= this.retryCap()) {
+    if (prior + 1 >= this.workerRecoveryLimit()) {
       task.status = task.intent ? "blocked" : "paused";
       task.diagnosticCode = "retry-exhausted";
       delete task.workerRetry;
