@@ -107,3 +107,31 @@ test("maintenance runs from the existing scan owner at most hourly and never con
     await store.close(); // drain: close waits for the serial queue
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
+
+test("archived records free the active entry budget across restart; replay stays idempotent; reactivation is still bounded", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "memory-budget-"));
+  const ctx = { sessionKey: "one" };
+  const past = new Date(Date.now() - 86400000).toISOString();
+  let store = new FileMemoryStore(dir, memoryConfig({ maxEntries: 3 }));
+  try {
+    await store.start();
+    const old = [];
+    for (const key of ["t1", "t2", "t3"]) old.push(await store.put(ctx, { key, kind: "operation", title: `turn ${key}`, text: "routine", reviewAfter: past }));
+    await assert.rejects(store.put(ctx, { key: "lesson", kind: "lesson", title: "lesson", text: "durable" }), /entry budget/);
+    assert.equal(await store.maintain(Date.now()), 2); // newest turn kept for handoff
+    const lesson = await store.put(ctx, { key: "lesson", kind: "lesson", title: "lesson", text: "durable" });
+    // Restart + reindex: archived files are loaded, not rejected as over-budget, and stay historical.
+    await store.close();
+    store = new FileMemoryStore(dir, memoryConfig({ maxEntries: 3 }));
+    await store.start(); await store.reindex();
+    assert.equal((await store.status()).entries, 4);
+    assert.equal((await store.put(ctx, { key: "lesson", kind: "lesson", title: "lesson", text: "durable" })).id, lesson.id); // replay
+    assert.equal((await store.search(ctx, "turn", { historical: true })).length, 3);
+    assert.equal((await store.search({ sessionKey: "other" }, "lesson")).length, 0);
+    const another = await store.put(ctx, { key: "n2", kind: "note", title: "note", text: "x" });
+    assert.ok(another.id);
+    await assert.rejects(store.put(ctx, { key: "n3", kind: "note", title: "note3", text: "x" }), /entry budget/);
+    const archived = (await store.search(ctx, "turn", { historical: true })).find(h => h.entry.state === "archived")!.entry;
+    await assert.rejects(store.revise(ctx, archived.id, archived.revision, { state: "active" }), /entry budget/);
+  } finally { await store.close(); await rm(dir, { recursive: true, force: true }); }
+});
