@@ -128,9 +128,9 @@ export class AdaptiveSkills {
     if (run.loads >= 3 || run.bytes >= AUTOLOAD_RUN_BYTES - 2048) return "";
     const noise = new Set(["the", "and", "for", "with", "this", "that", "read", "write", "bash", "edit", "find", "grep", "und", "der", "die", "das", "mit", "von", "bitte", "use", "when", "user", "asks", "about", "from", "into", "all", "any"]);
     const tokens = [...new Set(query.toLowerCase().slice(0, 2048).match(/[\p{L}\p{N}-]{3,}/gu) ?? [])].filter(t => !noise.has(t)).slice(0, 32);
-    // Whole-word matching. Substrings ("pdf" in "pdfs", "lint" in "linting") and single name parts
-    // (brain/service/compile) are common diagnostic words and must not inject a skill. Only the full
-    // skill name (explicit invocation) is a strong hit; otherwise two distinct non-name description words.
+    // Whole-word matching. Only the full skill name (explicit invocation, e.g. "brain-query") is a strong hit;
+    // substrings ("pdf" in "pdfs") and single name parts (brain/service/compile) are common diagnostic words
+    // and must not inject a skill. Otherwise two distinct description words that are not name parts are required.
     const words = (text: string) => new Set(text.toLowerCase().match(/[\p{L}\p{N}]{3,}/gu) ?? []);
     const matches = (name: string, description: string) => {
       const nameFull = name.toLowerCase(), nameWords = words(name), descWords = words(description);
