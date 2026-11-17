@@ -404,14 +404,14 @@ export class ExecutionStore {
         ["paused", "blocked", "ready"].includes(task.status) ? { automaticRetryAt: task.workerRetry.nextAt } : {}) });
   }
   /** Exact host-owned question receipt, never an arbitrary host-input mandate. */
-  questionAllowed(input: import("./types.js").Inbound): boolean {
+  questionAllowed(input: import("./types.js").Inbound, activeAnsweredTurn = false): boolean {
     const receipt = input.hostEvent?.question;
     if (input.source !== "host" || !receipt || !receipt.eventId || !receipt.id ||
         input.id !== `dispatch-event:${receipt.eventId}`) return false;
     const task = this.data.executions.find(item => item.id === input.hostEvent!.executionId && item.parent === input.sessionKey);
     const question = task?.question;
     return !!task && !!question && question.id === receipt.id && question.eventId === receipt.eventId &&
-      question.answer === undefined && task.status === "paused" && !task.parentStopped && !task.ownershipHold &&
+      (question.answer === undefined ? task.status === "paused" : activeAnsweredTurn && task.status !== "cancelled") && !task.parentStopped && !task.ownershipHold &&
       this.executionTaskAllowed(task) &&
       (task.dependency?.expiresAt === undefined || task.dependency.expiresAt > this.now()) &&
       (!task.intent || question.retainedAssessment === true) &&

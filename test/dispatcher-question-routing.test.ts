@@ -58,13 +58,19 @@ test("question receipt retains original Main mandate and is durable after outbox
   assert.equal(calls, 1);
 });
 
-test("answering a question invalidates the host turn's subsequent tool authority", async t => {
+test("answer preserves only the admitted host turn's original mandate, not replayed receipts", async t => {
   const f = await fixture(t);
   const bridge = new DispatcherRuntime(f.harness, f.store);
+  f.harness.sessions.get("main")!.current = f.input;
   bridge.guardHostEvent("main", f.input);
   await f.store.answer("main", f.child.id, f.input.hostEvent!.question!.id, "Continue with the retained evidence");
-  assert.throws(() => bridge.guardHostEvent("main", f.input), /no longer belongs|no longer awaits/);
-  assert.equal(f.harness.resultMandate(f.input), undefined);
+  assert.equal(f.store.questionAllowed(f.input), false, "answered receipt cannot be admitted again");
+  bridge.guardHostEvent("main", f.input);
+  assert.equal(f.harness.resultMandate(f.input)?.taskId, f.parent.id);
+  assert.equal(f.harness.resultMandate(structuredClone(f.input)), undefined, "replay is not the current turn");
+  await f.store.control(f.child.id, "cancel");
+  assert.throws(() => bridge.guardHostEvent("main", f.input), /no longer belongs/);
+  f.harness.sessions.get("main")!.current = undefined;
 });
 
 for (const drift of ["foreign", "event", "question", "text", "expired", "stopped", "answered"])
