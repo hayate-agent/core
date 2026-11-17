@@ -61,5 +61,5 @@ export class InboxLedger {
 }
 
 export function idsOf(input: Inbound): string[] {
-  return input.parts?.map((p) => p.id) ?? (input.id ? [input.id] : []);
+  return input.parts?.length ? input.parts.map((p) => p.id) : input.id ? [input.id] : [];
 }
