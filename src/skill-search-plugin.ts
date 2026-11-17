@@ -31,10 +31,12 @@ export function skillSearchPlugin(catalog: SkillCatalog, learned?: LearnedRecipe
         await catalog.refresh();
         const q = String(input.query).trim().toLowerCase();
         const limit = Math.max(1, Math.min(20, Number(input.limit) || 8));
-        const hits = catalog.skills
-          .filter((s) => q.length > 0 && (s.name.toLowerCase().includes(q) || s.description.toLowerCase().includes(q)))
-          .slice(0, limit)
-          .map((s) => ({ name: s.name, description: s.description, filePath: s.filePath }));
+        const hits: Array<{ name: string; description: string; filePath: string }> = [];
+        if (q) for (const s of catalog.skills) {
+          if (!s.name.toLowerCase().includes(q) && !s.description.toLowerCase().includes(q)) continue;
+          hits.push({ name: s.name, description: s.description, filePath: s.filePath });
+          if (hits.length >= Math.trunc(limit)) break;
+        }
         // Learned recipes stay in the caller's own scope; never another conversation's.
         const recipes = learned && q ? await learned(context.sessionKey, q, limit).catch(() => []) : [];
         const learnedText = recipes.length
