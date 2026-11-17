@@ -814,7 +814,8 @@ export function installCommands(ctx: CommandContext): void {
     ctx.admins.includes(actor.slice(actor.indexOf(":") + 1));
   ctx.harness.commandHandler = async (input) => {
     const reset = naturalBudgetReset(input.text);
-    if (reset) {
+    const resetActor = input.replyTo?.channel === "console" ? "console:local" : `${input.replyTo?.channel}:${input.sender}`;
+    if (reset && (!reset.simple || ctx.harness.hasBudgetHeldTask(input.sessionKey, reset.taskId) || ctx.harness.hasBudgetGrantForInput(input, resetActor))) {
       // No openAdmin fallback: only an actual channel accept with identified admin provenance.
       if (!ctx.harness.isAcceptingChannelInput(input) || !(input.replyTo?.channel === "console" ||
           !!input.sender && ctx.admins.includes(input.sender))) {
@@ -823,7 +824,7 @@ export function installCommands(ctx: CommandContext): void {
       }
       try {
         reply(ctx, input, await ctx.harness.requestNaturalBudgetReset(input,
-          input.replyTo?.channel === "console" ? "console:local" : `${input.replyTo?.channel}:${input.sender}`, reset.taskId));
+          resetActor, reset.taskId));
       } catch (error) {
         reply(ctx, input, `Budget reset failed because ${error instanceof Error ? error.message : String(error)}`);
       }

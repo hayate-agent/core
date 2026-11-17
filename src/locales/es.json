@@ -4,7 +4,7 @@
   "context.compacted": "♻️ Contexto compactado.",
   "task.cancelled": "⏹️ Cancelado.",
   "task.failed": "❌ Falló.",
-  "task.budget": "Tarea: {original}\nSiguiente: {next}\nPresupuesto de acciones agotado: 20 repeticiones sin nueva evidencia del sistema. El trabajo queda pausado; las comprobaciones de dependencias siguen disponibles hasta su plazo.\nUn administrador autenticado puede usar /task-budget inspect {session} {id} y el procedimiento documentado reset-resume. Se mantienen los bloqueos y plazos existentes.",
+  "task.budget": "No he podido avanzar en: {original}. Responde «continuar» para intentarlo de nuevo. Si hay varias tareas pausadas, preguntaré cuál.",
   "task.noNext": "No hay un siguiente paso seguro registrado; es necesario revisar.",
   "lifecycle.ready": "✅ {agent}: Iniciado y listo.",
   "lifecycle.restarted": "✅ {agent}: Reinicio completado; listo de nuevo.",

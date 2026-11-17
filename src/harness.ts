@@ -855,6 +855,18 @@ export class Harness {
     return { token: createHash("sha256").update(JSON.stringify(task)).digest("hex"), task: structuredClone(task) };
   }
 
+  /** A plain "continue" remains ordinary conversation when nothing is held. */
+  hasBudgetHeldTask(key: string, taskId?: string): boolean {
+    const s = this.sessions.get(key);
+    return !!s && this.tasks(s).some(t => (!taskId || t.id === taskId) &&
+      t.state === "blocked" && t.termination === "productive_budget_exhausted" && t.explicitBlocked === false);
+  }
+  hasBudgetGrantForInput(input: Inbound, actor: string): boolean {
+    if (!input.id) return false;
+    const request = createHash("sha256").update(JSON.stringify([input.sessionKey, input.id, actor])).digest("hex");
+    return !!this.sessions.get(input.sessionKey)?.operatorBudgetGrants?.some(grant => grant.request === request);
+  }
+
   /** Host command ingress only; deliberately not exposed as a model tool. */
   async requestNaturalBudgetReset(input: Inbound, actor: string, taskId?: string): Promise<string> {
     if (!this.isAcceptingChannelInput(input) || !this.operatorBudgetActorAllowed?.(actor)) throw Error("Authenticated operator ingress required");
@@ -866,7 +878,7 @@ export class Harness {
     if (prior) return prior.result ?? "Budget reset scheduled for the next idle boundary.";
     const candidates = this.tasks(s).filter(t => taskId ? t.id === taskId :
       t.state === "blocked" && t.termination === "productive_budget_exhausted" && t.explicitBlocked === false);
-    if (candidates.length !== 1) return "Which task should I reset? Please give its task ID.";
+    if (candidates.length !== 1) return `Which task should I continue? Reply “continue task <ID>”. ${candidates.slice(0, 5).map(t => `${t.id}: ${t.original.replace(/\s+/g, " ").slice(0, 100)}`).join("; ")}`;
     const task = candidates[0];
     const grant: OperatorBudgetGrant = { request, taskId: task.id, expected: this.taskBudgetStatus(s.key, task.id).token,
       actor, issuedAt: this.now(), deadline: this.now() + 5 * 60_000,
@@ -898,7 +910,7 @@ export class Harness {
           }
           continue;
         }
-        const success = `Budget reset performed: ${grant.taskId}; continuation authorized within existing limits.`;
+        const success = `Continuing the existing task: ${grant.taskId}. Previously completed effects will not be repeated blindly.`;
         try {
           if (!this.operatorBudgetActorAllowed?.(grant.actor)) throw Error("Operator permission revoked");
           if (this.now() >= grant.deadline) throw Error("Operator grant expired");
