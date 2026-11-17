@@ -110,6 +110,74 @@ test("stalled answered assessment creates one durable task-bound notification wi
 });
 
 
+test("a later answered assessment question produces its own stalled notice", async t => {
+  const home = await mkdtemp(path.join(os.tmpdir(), "stalled-new-question-"));
+  t.after(() => rm(home, { recursive: true, force: true }));
+  const store = new ExecutionStore(path.join(home, "executions.json")); await store.load();
+  const task = await store.submit("parent", "req", "original", "sequential");
+  const first = await store.claim(task.id); await store.intent(task.id, first.token!, "effect", "unsafe");
+  const checkpoint = JSON.stringify({ outcomes: [], assessment: { index: 0, reply: "report", mainClarification: true } });
+  await store.checkpoint(task.id, first.token!, checkpoint);
+  await store.ask(task.id, first.token!, "First question", true);
+  await store.answer("parent", task.id, store.list()[0]!.question!.id, "First answer");
+  const second = await store.claim(task.id, { strategy: "sequential", version: 1, replaySafe: false, reconcile: true });
+  await store.fail(task.id, second.token!, "assessment-stalled");
+  const old = store.events().find(e => e.type === "assessment-stalled")!; await store.ack(old.id);
+  // Simulate a legitimately reconciled claim, preserving the same effect intent.
+  const storage = new PartitionedJson(store.file, { executions: 1, events: 1, turns: 1, waitAuthorityDenials: 1 });
+  const data = await storage.load(); const row = (data!.executions as any[]).find(e => e.id === task.id);
+  row.status = "ready"; row.recoveryGrant = { action: "continue", restarts: row.restarts };
+  await storage.save(data!, true);
+  const fresh = new ExecutionStore(store.file); await fresh.load();
+  const third = await fresh.claim(task.id, { strategy: "sequential", version: 1, replaySafe: false, reconcile: true });
+  await fresh.checkpoint(task.id, third.token!, checkpoint);
+  await fresh.ask(task.id, third.token!, "Second question", true);
+  assert.equal(fresh.list()[0]!.assessmentStalledEventId, undefined);
+  await fresh.answer("parent", task.id, fresh.list()[0]!.question!.id, "Second answer");
+  const fourth = await fresh.claim(task.id, { strategy: "sequential", version: 1, replaySafe: false, reconcile: true });
+  await fresh.fail(task.id, fourth.token!, "assessment-stalled");
+  const notice = fresh.events().find(e => e.type === "assessment-stalled")!;
+  assert.ok(notice); assert.notEqual(notice.id, old.id);
+  assert.equal(fresh.list()[0]!.intent?.key, "effect");
+});
+
+test("startup repairs a stalled receipt from an older question episode once", async t => {
+  const home = await mkdtemp(path.join(os.tmpdir(), "stale-stalled-")); t.after(() => rm(home, { recursive: true, force: true }));
+  const file = path.join(home, "executions.json"), store = new ExecutionStore(file); await store.load();
+  const task = await store.submit("parent", "req", "original", "sequential");
+  const first = await store.claim(task.id); await store.intent(task.id, first.token!, "effect", "unsafe");
+  await store.checkpoint(task.id, first.token!, JSON.stringify({ outcomes: [], assessment: { index: 0, reply: "report", mainClarification: true } }));
+  await store.ask(task.id, first.token!, "Current question", true); await store.answer("parent", task.id, store.list()[0]!.question!.id, "Current answer");
+  const next = await store.claim(task.id, { strategy: "sequential", version: 1, replaySafe: false, reconcile: true });
+  await store.fail(task.id, next.token!, "assessment-stalled");
+  const storage = new PartitionedJson(file, { executions: 1, events: 1, turns: 1, waitAuthorityDenials: 1 });
+  const data = await storage.load(); const row = (data!.executions as any[]).find(e => e.id === task.id);
+  row.assessmentStalledEventId = "old-event"; row.assessmentStalledQuestionId = "old-question"; data!.events = [];
+  await storage.save(data!, true);
+  const fresh = new ExecutionStore(file); await fresh.load(); await fresh.recover(new Map()); await fresh.recover(new Map());
+  const notices = fresh.events().filter(e => e.type === "assessment-stalled");
+  assert.equal(notices.length, 1); assert.notEqual(notices[0]!.id, "old-event");
+  assert.equal(fresh.list()[0]!.assessmentStalledQuestionId, fresh.list()[0]!.question!.id);
+  assert.equal(fresh.list()[0]!.intent?.key, "effect");
+});
+
+test("startup preserves legacy unbound receipt rather than inventing a duplicate", async t => {
+  const home = await mkdtemp(path.join(os.tmpdir(), "legacy-receipt-")); t.after(() => rm(home, { recursive: true, force: true }));
+  const file = path.join(home, "executions.json"), store = new ExecutionStore(file); await store.load();
+  const task = await store.submit("parent", "req", "original", "sequential");
+  const first = await store.claim(task.id); await store.intent(task.id, first.token!, "effect", "unsafe");
+  await store.checkpoint(task.id, first.token!, JSON.stringify({ outcomes: [], assessment: { index: 0, reply: "report", mainClarification: true } }));
+  await store.ask(task.id, first.token!, "Question", true); await store.answer("parent", task.id, store.list()[0]!.question!.id, "Answer");
+  const next = await store.claim(task.id, { strategy: "sequential", version: 1, replaySafe: false, reconcile: true });
+  await store.fail(task.id, next.token!, "assessment-stalled");
+  const notice = store.events().find(e => e.type === "assessment-stalled")!; await store.ack(notice.id);
+  const storage = new PartitionedJson(file, { executions: 1, events: 1, turns: 1, waitAuthorityDenials: 1 });
+  const data = await storage.load(); delete (data!.executions as any[]).find(e => e.id === task.id).assessmentStalledQuestionId; await storage.save(data!, true);
+  const fresh = new ExecutionStore(file); await fresh.load(); await fresh.recover(new Map());
+  assert.equal(fresh.events().filter(e => e.type === "assessment-stalled").length, 0);
+  assert.equal(fresh.list()[0]!.assessmentStalledEventId, notice.id);
+});
+
 test("startup reconstructs only eligible legacy exhausted assessment notice once", async t => {
   const home = await mkdtemp(path.join(os.tmpdir(), "legacy-stalled-")); t.after(() => rm(home, { recursive: true, force: true }));
   const file = path.join(home, "executions.json"); const store = new ExecutionStore(file); await store.load();

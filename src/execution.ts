@@ -135,6 +135,8 @@ export interface Execution {
   question?: { id: string; text: string; answer?: string; retainedAssessment?: boolean; eventId?: string };
   /** Durable receipt for the current stalled-assessment notification. */
   assessmentStalledEventId?: string;
+  /** Question episode represented by the stalled notification. */
+  assessmentStalledQuestionId?: string;
   /** Parent stop permanently revokes result delivery as well as execution. */
   parentStopped?: boolean;
   /** Unknown legacy ancestry after a task-scoped stop: evidence retained, no replay. */
@@ -391,7 +393,10 @@ export class ExecutionStore {
     // Retain the exact question event after outbox acknowledgement. The durable
     // Main inbox must remain verifiable across that acknowledgement and restart.
     if (type === "question" && task.question) task.question.eventId = id;
-    if (type === "assessment-stalled") task.assessmentStalledEventId = id;
+    if (type === "assessment-stalled") {
+      task.assessmentStalledEventId = id;
+      task.assessmentStalledQuestionId = task.question?.id;
+    }
     draft.events.push({ id, executionId: task.id, parent: task.parent, type, text, status: task.status,
       ...(attention ? { requiresAttention: true } : {}),
       ...(type === "status" && !task.parentStopped && !(task.question && task.question.answer === undefined) &&
@@ -903,6 +908,11 @@ export class ExecutionStore {
           throw Error("Retained assessment checkpoint required");
       }
       if (typeof text !== "string" || !text.trim() || text.length > 8000) throw Error("Invalid question");
+      // A new question starts a distinct assessment episode. The previous
+      // stalled receipt belongs to the old question and must not suppress a
+      // later notification for this one. This does not release the intent.
+      delete task.assessmentStalledEventId;
+      delete task.assessmentStalledQuestionId;
       task.question = { id: randomUUID(), text, ...(retainedAssessment ? { retainedAssessment: true } : {}) };
       task.status = "paused";
       delete task.workerRetry;
@@ -1313,7 +1323,8 @@ export class ExecutionStore {
         // Reconstruct one durable parent notice for the historical retry-loop
         // signature. No claim, assessment, effect or authorization is changed.
         if (enabled(task) && task.status === "blocked" && ["retry-exhausted", "assessment-stalled"].includes(task.diagnosticCode ?? "") &&
-            task.question?.retainedAssessment && task.question.answer !== undefined && task.intent && !task.assessmentStalledEventId &&
+            task.question?.retainedAssessment && task.question.answer !== undefined && task.intent &&
+            (!task.assessmentStalledEventId || task.assessmentStalledQuestionId !== undefined && task.assessmentStalledQuestionId !== task.question.id) &&
             !task.parentStopped && !task.ownershipHold && task.recoveryEnrollment === "current" && this.executionTaskAllowed(task) &&
             (task.dependency?.expiresAt === undefined || task.dependency.expiresAt > this.now())) {
           this.event(draft, task, "assessment-stalled", "Retained assessment needs parent attention");
