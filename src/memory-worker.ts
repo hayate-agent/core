@@ -7,6 +7,8 @@ import { memoryConfig, type MemoryConfig, type MemoryContext, type MemoryEntry, 
 
 const hash = (s: string) => createHash("sha256").update(s).digest("hex");
 const idPattern = /^[a-f0-9]{64}$/;
+const MAINTENANCE_INTERVAL_MS = 3600000;
+const MAINTENANCE_BATCH = 500;
 const words = (s: string) => [...new Set(s.toLocaleLowerCase().match(/[\p{L}\p{N}_-]{2,}/gu) ?? [])];
 function validDate(value: unknown): boolean { return value === undefined || (typeof value === "string" && Number.isFinite(Date.parse(value))); }
 function validate(e: MemoryEntry): void {
@@ -54,6 +56,8 @@ export class FileMemoryStore implements MemoryProvider {
   private stopped = false;
   private dirty = false;
   private lastScan?: string;
+  private lastMaintenance?: string;
+  private maintenanceAt = 0;
   private error?: string;
   private semanticError = false;
   private queue = Promise.resolve();
@@ -264,6 +268,8 @@ export class FileMemoryStore implements MemoryProvider {
       this.rows = next; this.indexCost = bytes;
       if (changed) { this.rebuildTerms(); this.dirty = true; }
       await this.snapshot(); this.lastScan = new Date().toISOString(); this.error = invalid ? `${invalid} invalid memory files excluded` : undefined;
+      // Hourly content maintenance rides on the existing scan owner: no second scheduler or writer.
+      if (Date.now() - this.maintenanceAt >= MAINTENANCE_INTERVAL_MS) await this.maintainLocked(Date.now());
       setImmediate(() => { void this.embedPending(); });
     }).catch((err) => { this.error = (err as Error).message; throw err; });
   }
@@ -306,8 +312,37 @@ export class FileMemoryStore implements MemoryProvider {
       }
     }
   }
+  /** Archive review-due, never-recalled automatic turn records. The newest record per session
+   * (handoff continuity), explicit notes/lessons/decisions, sources, verification and scopes are kept;
+   * archived files stay on disk and remain reachable through historical search. */
+  maintain(now = Date.now()): Promise<number> { return this.serial(() => this.maintainLocked(now)); }
+  private async maintainLocked(now: number): Promise<number> {
+    this.maintenanceAt = now;
+    const newest = new Map<string, Row>();
+    for (const row of this.rows.values()) {
+      if (row.entry.kind !== "operation" || row.entry.state !== "active") continue;
+      const seen = newest.get(row.entry.sessionKey);
+      if (!seen || row.entry.createdAt > seen.entry.createdAt) newest.set(row.entry.sessionKey, row);
+    }
+    let archived = 0;
+    for (const row of [...this.rows.values()]) {
+      if (archived >= MAINTENANCE_BATCH) break;
+      const { entry } = row;
+      if (entry.kind !== "operation" || entry.state !== "active" || newest.get(entry.sessionKey) === row || row.usage?.count) continue;
+      if (!entry.reviewAfter || Date.parse(entry.reviewAfter) > now) continue;
+      try {
+        const current = await this.read(entry.id);
+        if (!current || current.entry.revision !== entry.revision) continue; // manual edit since scan: leave it
+        await this.write({ ...current, usage: row.usage, entry: { ...current.entry, state: "archived", revision: randomUUID(), updatedAt: new Date(now).toISOString() } });
+        archived++;
+      } catch { this.error = "Memory maintenance incomplete; retrying next hour"; break; }
+    }
+    if (archived) await this.snapshot().catch(() => { this.error = "Memory maintenance snapshot unavailable"; });
+    this.lastMaintenance = new Date(now).toISOString();
+    return archived;
+  }
   async status(): Promise<MemoryStatus> {
-    return { provider: "local", entries: this.rows.size, indexed: this.rows.size, ready: Boolean(this.lastScan || this.rows.size),
+    return { provider: "local", entries: this.rows.size, indexed: this.rows.size, ready: Boolean(this.lastScan || this.rows.size), lastMaintenance: this.lastMaintenance,
       semantic: !this.config.embedding ? "disabled" : this.semanticError || [...this.rows.values()].some((r) => !r.vector || r.model !== this.modelKey()) ? "degraded" : "ready", lastScan: this.lastScan, error: this.error };
   }
   async close(): Promise<void> { this.stopped = true; clearInterval(this.timer); await this.serial(() => this.snapshot()); }
