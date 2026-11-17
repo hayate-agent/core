@@ -76,13 +76,24 @@ hit rate or change provider capability flags.
 
 ## Working result protocol and accumulation
 
-The runtime injects one source-owned result protocol into ordinary Main,
+The runtime injects one source-owned evidence protocol into ordinary Main,
 Dispatcher-worker and Subagent system context, refreshed by the same persona
 path as the working call. It distinguishes raw/structured receipts, excerpts,
 worker-authored findings and independent verification; explains targeted
 artifact reads and nested codemode filtering; and prohibits result-retrieval
-replays. It also explains required Dispatcher submit arguments and yielding
-for asynchronous results instead of an unchanged status-polling tool loop.
+replays. It contains no parent Dispatcher operation instructions.
+
+The Dispatcher scheduler is host code, not a Main model conversation. Its
+optional planner uses a separate tool-free planning prompt; execution workers
+use their own sessions, compact worker guidance and the operator persona rather
+than Main's full foundation/history. Main receives only short optional-delegation
+guidance and current capability facts. Dispatcher submission and asynchronous
+waiting instructions travel with the `plugin_dispatch` tool description (also
+when discovered on demand); recovery details remain on the recovery tool. They
+are not repeated in every system prompt or run context when the tools are absent.
+Neither Dispatcher workers nor Subagents advertise the parent-only dispatch tool,
+matching its existing rejection of calls from either child role.
+Explicit operator-authored persona instructions are not rewritten by this split.
 Existing authority, mandatory report formats and tool guards are not changed.
 
 Workers may supply `hayate-task-report-v1` JSON with string arrays `findings`,

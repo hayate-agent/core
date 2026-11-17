@@ -13,7 +13,7 @@ import type { AdaptiveSkills } from "../adaptive-skills.js";
 import { toolGuardDenialReason } from "../tool-guard-error.js";
 import { childDeniedTools } from "../child-tools.js";
 import { compactContext, compactTaskReport, compactAccumulatedToolContext, retainContext, contextArtifactDirectory, COMPACT_WORKER_PROMPT } from "../context-artifacts.js";
-import { CONTEXT_RESULT_CONTRACT } from "../context-contract.js";
+import { CONTEXT_RESULT_CONTRACT, DISPATCH_TOOL_GUIDANCE } from "../context-contract.js";
 import { OPERATOR_AUTHORITY } from "../operator-authority.js";
 import { localModel, localContextBudget, essentialPluginTools, compactSkillCatalog, materializeSkillCatalog } from "../local-context.js";
 import { workerCompactionSettings, contextCompactionSettings } from "../worker-context.js";
@@ -919,7 +919,8 @@ export class PiRuntime implements AgentRuntime {
           factory: (pi) => {
             for (const tool of boundTools) {
               pi.registerTool({
-                name: tool.name, label: tool.name, description: tool.description,
+                name: tool.name, label: tool.name,
+                description: tool.name === "plugin_dispatch" ? `${tool.description}\n${DISPATCH_TOOL_GUIDANCE}` : tool.description,
                 ...(deferred && !essentialPluginTools.has(tool.name) ? { exposure: "deferred" as const } : {}),
                 // JSON Schema is the runtime-neutral contract; SDK consumes the same schema.
                 parameters: tool.parameters as import("@earendil-works/pi-coding-agent").ToolDefinition["parameters"],
