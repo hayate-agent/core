@@ -1889,7 +1889,7 @@ export class Harness {
         .map(t => ({ id: t.id, text: t.original.slice(0, 2000), tags: [...t.anchor!.outputTags!] }));
       // Reuse the persisted, bounded conversation evidence; metadata only, not
       // a mandate selector. Do not include queued/unprocessed channel inputs.
-      tags = await this.opts.topicLabeler(input.text, candidates, structuredClone(s.completionRecent ?? []));
+      tags = await this.opts.topicLabeler(input.text, candidates, structuredClone(s.completionRecent ?? []), undefined, { model: s.session?.status().model });
     }
     input.outputTags = tags;
     input.completionAnchor = { id: randomUUID(), task: input.text, receivedAt: this.now(), language: input.language, languageContext: "conversation", replyTo: structuredClone(input.replyTo), outputTags: tags,

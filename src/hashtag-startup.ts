@@ -11,8 +11,8 @@ export function createHashtagStartup(runtime: AgentRuntime, settings: SettingsSe
   const backend = runtimeReviewer(runtime, "hashtag");
   return {
     topicLabeler: fastTopicLabeler(backend,
-      () => topicModelChain(undefined, settings.effective().model, settings.effective().hashtag?.model),
+      scopeMain => topicModelChain(settings.effective().modelRoles, scopeMain ?? settings.effective().model, settings.effective().hashtag?.model),
       plugins.services, HASHTAG_ATTEMPT_MS, () => settings.effective().hashtag?.provider),
-    plugin: tagsOnlyHashtagPlugin(backend, () => hashtagModel(settings.effective())),
+    plugin: tagsOnlyHashtagPlugin(backend, scopeMain => hashtagModel({ ...settings.effective(), model: scopeMain ?? settings.effective().model })),
   };
 }

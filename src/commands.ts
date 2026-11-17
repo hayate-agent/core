@@ -554,7 +554,7 @@ export const COMMANDS: Command[] = [
     run: (args, input, ctx) => globalSetting("reviewModel", args.trim(), input, ctx),
   },
   {
-    name: "hashtag-model", help: "Instance metadata model: <provider/model|reset> (otherwise Main; thinking off)",
+    name: "hashtag-model", help: "Instance metadata model: <provider/model|reset> (otherwise modelRoles.roles.basic, then Main of the scope; thinking off)",
     run: (args, input, ctx) => globalSetting("hashtagModel", args.trim(), input, ctx),
   },
   {
