@@ -119,7 +119,7 @@ export interface Inbound {
 export interface TurnOptions {
   /** Local inference scheduling hint, never execution authority or permission. */
   modelWork?: "interactive" | "background";
-  /** Extra system instructions for this turn only. */
+  /** Extra host instructions for this turn only; runtime preserves their host provenance. */
   instructions?: string;
   /** "provider/model". */
   model?: string;
