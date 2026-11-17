@@ -209,12 +209,12 @@ test("startup factory propagates caller cancellation to held metadata runtime ab
   assertMetadata(f.runtime.metadata[0]!, "fixture/main");
 });
 
-test("real Harness metadata deadline aborts/disposes held runtime and admits business input with neutral metadata", { timeout: 10000 }, async t => {
+test("real Harness metadata deadline aborts/disposes held runtime and admits business input with neutral metadata", { timeout: 15000 }, async t => {
   const f = await fixture(t); f.runtime.holding = true;
   await f.harness.accept(msg("held metadata must not drop input"));
   await f.runtime.entered.promise;
   await f.runtime.disposed.promise;
-  // The production 2s deadline, not a sleep/release pretending successful cancellation.
+  // The production 10s deadline, not a sleep/release pretending successful cancellation.
   await f.harness.drained();
   assert.equal(f.runtime.metadata[0]!.aborts, 1);
   assert.equal(f.runtime.metadata[0]!.disposals, 1);

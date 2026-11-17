@@ -116,19 +116,21 @@ export function topicModelChain(_roles: ModelRoles | undefined, main: string | u
   return [hashtagModel({ hashtag: { model }, model: main })];
 }
 
+export const HASHTAG_ATTEMPT_MS = 10_000;
+
 /** Optional startup module uses the SAME service dispatch, not another registry. */
 export function tagsOnlyHashtagPlugin(backend: AssessmentBackend, model: () => string | undefined): PluginModule {
   return { apiVersion: 1, activate(api) {
-    const label = semanticTopicLabeler(backend, model, 2000, false, true);
+    const label = semanticTopicLabeler(backend, model, HASHTAG_ATTEMPT_MS, false, true);
     api.registerService("topic-labeler-tags-only", 1, { label });
   } };
 }
 
-/** Bounded 2s attempts, max three for compatibility with existing callers;
+/** Bounded attempts, max three for compatibility with existing callers;
  * production supplies one configured metadata model. Legacy override failure
  * may fall back to the default; explicitly selected services fail neutral. */
 export function fastTopicLabeler(backend: AssessmentBackend, models: () => Array<string | undefined>,
-  services?: PluginServices, attemptMs = 2000, provider: () => string | undefined = () => undefined): TopicLabeler {
+  services?: PluginServices, attemptMs = HASHTAG_ATTEMPT_MS, provider: () => string | undefined = () => undefined): TopicLabeler {
   const cache = new Map<string, string[]>();
   return async (text, candidates, recent = [], signal) => {
     if (signal?.aborted) return ["topic-clarification"];
