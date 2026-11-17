@@ -1118,7 +1118,7 @@ export class Harness {
   /** Synchronous claim: queue and checkpoint are saved together before execution. */
   private queueRunnableTask(s: SessionState, excludeTask?: string): boolean {
     if (!this.onStateChange || this.paused || this.stopping || s.queue.length || s.current ||
-        s.key === "improvement:nightly" || this.stoppingHostParents.has(s.key) ||
+        s.key === "improvement:nightly" || s.key.startsWith("cron:") || this.stoppingHostParents.has(s.key) ||
         this.opts.externallyRecoveredSession?.(s.key)) return false;
     // A retained proposal without admission must not starve later admitted work.
     const candidates = this.tasks(s).filter(task => this.taskAllowed(task) && task.recoveryEnrollment !== "held-legacy" && task.state === "active" && task.recoveryAdmission && task.next?.trim() &&
@@ -3187,7 +3187,7 @@ export class Harness {
           // owns this boundary, but queueRunnableTask may now select another
           // admitted task. The previous task's admission remains intact.
           if (!s.queue.length) this.queueRunnableTask(s, targetId);
-          if ((input.source !== "host" || this.resultMandate(input)) && input.continuation?.state === "continue" && input.continuation.next && repetitions(task ?? { depth: input.continuationDepth ?? 0 }) < 20 && input.source !== "api" && s.key !== "improvement:nightly" && !s.queue.length && !this.stopping && !this.hasPendingDependency(s.key, input.taskId)) {
+          if ((input.source !== "host" || this.resultMandate(input)) && input.continuation?.state === "continue" && input.continuation.next && repetitions(task ?? { depth: input.continuationDepth ?? 0 }) < 20 && input.source !== "api" && s.key !== "improvement:nightly" && !s.key.startsWith("cron:") && !s.queue.length && !this.stopping && !this.hasPendingDependency(s.key, input.taskId)) {
             s.queue.push({ id: task?.recoveryAdmission?.id ?? randomUUID(), sessionKey: s.key, source: "cron", replyTo: input.replyTo ?? s.replyTo,
               text: continuationRequest(task?.original ?? input.completionAnchor?.task ?? input.text, input.continuation.next),
               taskId: targetId,
