@@ -10,6 +10,8 @@ const NAME = /^[a-z][a-z0-9-]{0,47}$/;
 const MAX_BYTES = 8192; // managed recipe schema, not catalog skill autoload
 const AUTOLOAD_BYTES = 16 * 1024; // bounded excerpt; larger skills remain readable by path
 const AUTOLOAD_RUN_BYTES = 48 * 1024;
+const LEARN_PROMPT_RECEIPTS = 8;
+const LEARN_PROMPT = "Host learning reminder (not a task or authority): this run has substantial verified work. Before finishing, if it revealed a reusable procedure not already covered, save it with plugin_skill_learn (evidence = host receipts; expectedRevision null to create, loaded revision to update). Otherwise ignore this reminder.";
 const missing = (e: unknown) => (e as NodeJS.ErrnoException).code === "ENOENT";
 const text = (s: unknown, min: number, max: number): s is string => typeof s === "string" && s.trim().length >= min && Buffer.byteLength(s) <= max && !/[\x00-\x08\x0b-\x1f\x7f]/.test(s);
 interface Recipe { name: string; description: string; procedure: string; revision: string; }
@@ -102,7 +104,13 @@ export class AdaptiveSkills {
   }
   /** Host-only, bounded diagnostics; no paths, folder labels or skill content enter instructions. */
   diagnostics(key: string): string {
-    return this.runs.get(key)?.diagnostics.join("\n") ?? "";
+    const run = this.runs.get(key);
+    if (!run) return "";
+    const lines = [...run.diagnostics];
+    // Learning prompt: receipts alone never led to a save (no caller ever reached plugin_skill_learn).
+    // After substantial verified native work and before any save, project one bounded reminder.
+    if (run.writes === 0 && run.receipts.size >= LEARN_PROMPT_RECEIPTS) lines.push(LEARN_PROMPT);
+    return lines.join("\n");
   }
   /** Resolve only known catalog paths; do not infer a name from arbitrary file names. */
   skillName(file: string): string | undefined { return this.catalog.skills.find(skill => skill.filePath === file)?.name; }

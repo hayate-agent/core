@@ -305,3 +305,22 @@ test("learningOwner resolves bounded worker chains and never rewrites conversati
   const loop = (k: string) => k === "subagent:a" ? "subagent:b" : "subagent:a";
   assert.match(learningOwner("subagent:a", loop), /^subagent:/);
 });
+
+test("learning reminder appears only after substantial verified work, per run and scope, and stops after a save", async t => {
+  const { service, input } = await fixture(t);
+  assert.doesNotMatch(service.diagnostics("user:a"), /plugin_skill_learn/); // one receipt: no prompt
+  const receipts = [input.evidence[0]];
+  for (let n = 0; n < 7; n++) receipts.push(service.observe("user:a", `work-${n}`, "bash", false).match(/[a-f0-9]{24}/)![0]);
+  service.observe("user:a", "failed", "bash", true); // errors are not evidence
+  assert.match(service.diagnostics("user:a"), /plugin_skill_learn/);
+  service.begin("user:b");
+  assert.equal(service.diagnostics("user:b"), ""); // other private scope unaffected
+  assert.match(await service.save("user:a", { ...input, evidence: receipts.slice(0, 2) }), /"saved":true/);
+  assert.doesNotMatch(service.diagnostics("user:a"), /plugin_skill_learn/);
+  // The saved recipe is usable in the same owner scope on a later run and invisible elsewhere.
+  service.end("user:a"); service.begin("user:a");
+  assert.match(await service.match("user:a", "table-check"), /Inspect column boundaries/);
+  assert.equal(await service.match("user:b", "table-check"), "");
+  service.end("user:a");
+  assert.equal(service.diagnostics("user:a"), ""); // drained run leaves no reminder
+});
