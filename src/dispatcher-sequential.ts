@@ -519,6 +519,7 @@ export function sequentialStrategy(deps: SequentialDeps): DispatcherStrategy {
           if (typeof reviewer === "string") return false;
           const backend = runtimeReviewer(runtime, "supervisor");
           const schedulingPrompt = readyStepPrompt({ task: task.input, completedHistory: retained.planHistory, expiresAt: task.dependency?.expiresAt, decisions,
+            mainClarification: task.question?.answer, parentReconciliation: task.parentContinuation,
             outcomes: retained.outcomes, blocked: { step, reply, evidence },
             candidates: candidates.map(({ candidate, position }) => ({ number: position + 1, ...candidate })) });
           await authorize();
@@ -648,7 +649,7 @@ Correctable vs blocked: a worker "blocked" claim or evidence shortfall that rest
           // particular, old correctable evidence requests must not starve an
           // explicit parent follow-up while endlessly refining the deferred step.
           // This second independent decision admits only exact existing work.
-          if (verdict?.state === "continue" && state.appliedFollowUps?.length && await selectReadyStep()) continue work;
+          if (verdict?.state === "continue" && await selectReadyStep()) continue work;
           if (verdict?.state === "completed" && claimed === "complete") break;
           if (claimed === "complete") status = undefined;
           // An empty report still needs a final report; a nonempty blocked report

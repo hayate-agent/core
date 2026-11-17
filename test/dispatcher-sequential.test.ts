@@ -201,6 +201,23 @@ test("fresh parent evidence reopens a stalled assessment without replaying the s
   assert.ok(resumed.settledEffect, "effect is settled only after independent completion");
 });
 
+test("answered clarification is included in independent readiness assessment", async t => {
+  let readyCalls = 0;
+  const f = await setup(t, {
+    plan: steps(["implementation", "high"], ["review", "medium"]),
+    worker: () => "retained report\nSTEP-STATUS: complete",
+    verdict: '{"state":"uncertain"}',
+    ready: async () => { readyCalls++; return '{"state":"blocked"}'; },
+  });
+  const task = await f.run("Implement and review");
+  await f.dispatcher.answer("parent", task.id, task.question!.id, "Fresh clarification: independent review is the next safe action");
+  await f.dispatcher.waitForExecution(task.id);
+  assert.ok(readyCalls >= 2);
+  const requests = f.calls.review.filter(prompt => prompt.startsWith("Select at most ONE"));
+  assert.match(requests.at(-1)!, /Fresh clarification: independent review is the next safe action/);
+  assert.equal(f.calls.worker.length, 1, "uncertain readiness never starts the candidate");
+});
+
 test("new parent evidence that remains uncertain cannot settle or replay an effect", async t => {
   const f = await setup(t, { worker: () => "Receipt created\nSTEP-STATUS: complete", tools: () => 1,
     verdict: () => '{"state":"uncertain"}' });
@@ -272,6 +289,20 @@ test("inconclusive step permits separately admitted original plan work without r
   const reload = new ExecutionStore(env.file); await reload.load();
   assert.deepEqual(state(reload.list()[0]!.checkpoint).assessment!.failure, { cause: "uncertain", reason: "Receipt remains ambiguous" });
   assert.equal(state(task.checkpoint).outcomes.length, 1);
+});
+
+test("continue verdict assesses separately ready work instead of repeatedly correcting the held step", async t => {
+  const env = await setup(t, {
+    plan: steps(["implementation", "high"], ["independent review", "medium"]),
+    ready: '{"state":"continue","next":"2"}',
+    worker: prompt => prompt.includes("STEP 1/2:\nindependent review") ? "review completed\nSTEP-STATUS: complete" : "implementation report\nSTEP-STATUS: complete",
+    verdict: prompt => JSON.parse(prompt.slice(prompt.lastIndexOf("DATA: ") + 6)).reply.includes("implementation report") ? '{"state":"continue","next":"Reconcile current report"}' : '{"state":"completed"}',
+  });
+  const task = await env.run("Implement and independently review the existing change.");
+  assert.equal(env.calls.worker.filter(call => call.prompt.includes("STEP 1/2:\nindependent review")).length, 1, "the separately admitted review runs exactly once");
+  assert.match(env.calls.worker[1]!.prompt, /STEP 1\/2:\nindependent review/);
+  assert.match(env.calls.worker[1]!.prompt, /independent review/);
+  assert.ok(state(task.checkpoint).outcomes.some(outcome => outcome.result.includes("review completed")));
 });
 
 test("blocked verification does not strand independently admitted same-role publication or replay its settled worker", async t => {
@@ -928,7 +959,8 @@ test("five independent validator continuations resume the SAME step before any s
   const task = await env.run("two steps");
   assert.equal(task.status, "completed");
   assert.equal(env.calls.worker.length, 7);
-  assert.equal(env.calls.review.length, 7);
+  assert.equal(env.calls.review.filter(prompt => !prompt.startsWith("Select at most ONE")).length, 7);
+  assert.equal(env.calls.review.filter(prompt => prompt.startsWith("Select at most ONE")).length, 5);
   for (const call of env.calls.worker.slice(1, 6)) {
     assert.match(call.prompt, /^CONTINUE STEP 1\/2/);
     assert.equal(call.model, "p/cheap");
