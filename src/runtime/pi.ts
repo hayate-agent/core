@@ -23,7 +23,7 @@ import { modelWorkClass } from "../model-work-class.js";
 import { LocalModelAdmission, validateLocalModelScheduling, type LocalModelScheduling } from "../local-model-admission.js";
 import { DISPATCH_PLAN_SYSTEM_PROMPT } from "../planner-http.js";
 import { MaintenanceError, maintenanceStep, type MaintenanceStage } from "../context-maintenance.js";
-import type { PruningPolicy, ToolResultProjector } from "../tool-result-pruning.js";
+import { projectToolResultPrefixes, type PruningPolicy, type ToolResultProjector } from "../tool-result-pruning.js";
 import { nativeCompaction, type CompactionStrategy } from "../compaction.js";
 import type { SessionProvider, SessionRecord, SessionSummary } from "../sessions.js";
 import type { PluginTool } from "../plugins.js";
@@ -1013,7 +1013,7 @@ export class PiRuntime implements AgentRuntime {
               }));
               const policy = this.opts.pruning?.();
               if (policy) messages = await compactAccumulatedToolContext(artifactDirectory, messages, policy);
-              if (policy && this.opts.projectToolResults) return { messages: this.opts.projectToolResults(messages, policy) };
+              if (policy && this.opts.projectToolResults) messages = projectToolResultPrefixes(messages, policy, this.opts.projectToolResults);
               return messages.some((message, index) => message !== event.messages[index]) ? { messages } : undefined;
             });
             pi.on("before_agent_start", async (event) => {
