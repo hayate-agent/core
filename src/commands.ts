@@ -815,7 +815,7 @@ export function installCommands(ctx: CommandContext): void {
   ctx.harness.commandHandler = async (input) => {
     const reset = naturalBudgetReset(input.text);
     const resetActor = input.replyTo?.channel === "console" ? "console:local" : `${input.replyTo?.channel}:${input.sender}`;
-    if (reset && (!reset.simple || ctx.harness.hasBudgetHeldTask(input.sessionKey, reset.taskId) || ctx.harness.hasBudgetGrantForInput(input, resetActor))) {
+    if (reset && (!reset.simple || !!reset.taskId || ctx.harness.hasBudgetHeldTask(input.sessionKey, reset.taskId) || ctx.harness.hasBudgetGrantForInput(input, resetActor))) {
       // No openAdmin fallback: only an actual channel accept with identified admin provenance.
       if (!ctx.harness.isAcceptingChannelInput(input) || !(input.replyTo?.channel === "console" ||
           !!input.sender && ctx.admins.includes(input.sender))) {

@@ -20,7 +20,9 @@ for (const explicit of [true, false]) test(`silent terminal rechecks are bounded
     await h.submit({ ...msg("Repair and verify"), progressId: "progress:original" }); await h.drained();
     const task = h.state("mem:room1").task!;
     assert.equal(turns, 2); assert.equal(checks, 2);
-    assert.equal(ch.sent.length, 0, "NO_REPLY must not become a progress completion bubble");
+    assert.equal(ch.sent.length, 1, "the host must explain the stalled task, not publish a silent completion");
+    assert.match(ch.sent[0]!.text, /continue/i);
+    assert.doesNotMatch(ch.sent[0]!.text, /NO_REPLY/);
     assert.equal(task.state, "blocked", "do not ratify an unverified completion claim");
     assert.equal(task.supervisorDecision?.silentCompletionRecheck, "exhausted");
     assert.equal(task.recoveryRetry, undefined);
@@ -30,6 +32,30 @@ for (const explicit of [true, false]) test(`silent terminal rechecks are bounded
       restored.recoverTasks(); await restored.drained();
       assert.equal(turns, 2, "the bounded hold survives restart");
     } finally { await restored.stop(1000); }
+  } finally { await h.stop(1000); }
+});
+
+test("silent continuation stalls early and is explicitly resumable", async () => {
+  let turns = 0, h!: Harness;
+  const runtime = new FakeRuntime(() => {
+    turns++;
+    h.planContinuation("mem:room1", { state: "continue", next: "Implement the outstanding change" });
+    return "NO_REPLY";
+  });
+  h = new Harness({ runtime, tickMs: 60000, completionCheck: async () => ({ state: "continue", next: "Implement the outstanding change" }) });
+  h.addChannel(new MemoryChannel()); h.onStateChange = async () => {};
+  try {
+    await h.submit(msg("Implement the requested change")); await h.drained();
+    const task = h.state("mem:room1").task!;
+    assert.equal(turns, 2);
+    assert.equal(task.termination, "productive_budget_exhausted");
+    assert.equal(task.explicitBlocked, false);
+    assert.equal(task.next, "Implement the outstanding change");
+    const { token } = h.taskBudgetStatus("mem:room1", task.id);
+    await h.controlTaskBudget("mem:room1", task.id, "reset-resume", token, "operator-continue", "mem:owner");
+    assert.equal(task.state, "active");
+    assert.equal(task.repetition?.repetitions, 0);
+    assert.equal(task.recoveryAdmission?.next, "Implement the outstanding change");
   } finally { await h.stop(1000); }
 });
 

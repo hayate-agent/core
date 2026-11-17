@@ -878,6 +878,7 @@ export class Harness {
     if (prior) return prior.result ?? "Budget reset scheduled for the next idle boundary.";
     const candidates = this.tasks(s).filter(t => taskId ? t.id === taskId :
       t.state === "blocked" && t.termination === "productive_budget_exhausted" && t.explicitBlocked === false);
+    if (taskId && !this.hasBudgetHeldTask(s.key, taskId)) return "This task is not paused for a resumable host stall. No task was changed.";
     if (candidates.length !== 1) return `Which task should I continue? Reply “continue task <ID>”. ${candidates.slice(0, 5).map(t => `${t.id}: ${t.original.replace(/\s+/g, " ").slice(0, 100)}`).join("; ")}`;
     const task = candidates[0];
     const grant: OperatorBudgetGrant = { request, taskId: task.id, expected: this.taskBudgetStatus(s.key, task.id).token,
@@ -3137,6 +3138,13 @@ export class Harness {
           task.recoveryAssessment = undefined;
           task.recoveryRetry = undefined;
           task.explicitBlocked = plan?.state === "blocked";
+          // A repeated tool-free silent continuation is a host-detected stall,
+          // not an operator or semantic block. Reuse the existing durable,
+          // operator-resumable stall path rather than starting another loop.
+          if (this.supervisorDecisions.get(input)?.silentCompletionRecheck === "exhausted") {
+            task.repetition = { version: 1, repetitions: 20, attempts: task.repetition?.attempts ?? 0, evidence: task.repetition?.evidence ?? [] };
+            task.explicitBlocked = false;
+          }
           if ((task.state === "active" || task.state === "blocked") && repetitions(task) >= 20) {
             task.next ??= retainedNext;
             task.state = "blocked";
@@ -3592,14 +3600,17 @@ export class Harness {
             !independentlyResolved && plan?.state === "continue" && typeof plan.next === "string" && plan.next.trim() && plan.next.length <= 4000) {
           // An explicit progress verdict keeps PR185's milestone/replay semantics.
           independentlyResolved = true;
-          const silentTerminal = reply === NO_REPLY && (!checkpoint || checkpoint.state === "completed");
+          // A tool-free silent continuation can repeat indefinitely just like a
+          // silent terminal proposal. The live-dependency wait case was handled
+          // above; do not mistake a running child for a stalled continuation.
+          const silentTerminal = reply === NO_REPLY && (!checkpoint || checkpoint.state === "completed" || checkpoint.state === "continue") && workTools === 0 && pendingWorkTools === 0;
           const previous = this.tasks(s).find(task => task.id === input.taskId)?.supervisorDecision;
           if (silentTerminal && previous?.silentCompletionRecheck === "admitted" && workTools === 0 && pendingWorkTools === 0) {
             // The first independent recheck remains valid. A second silent
             // terminal result with no work must not start another identical
             // verification cycle, and is not proof the mandate is complete.
             silentCompletionRecheck = "exhausted";
-            input.continuation = { state: "blocked" };
+            input.continuation = { state: "blocked", next: plan.next };
           } else {
             silentCompletionRecheck = silentTerminal ? "admitted" : undefined;
             input.continuation = plan;
