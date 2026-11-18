@@ -29,10 +29,11 @@ continuing the newest unrelated occurrence. Context handover updates the binding
 A failed initial binding save yields to the existing host retry tick, not a tight
 retry loop or a synthetic completed turn. A missing bound transcript fails closed.
 
-For pre-upgrade unfinished tasks without an exact transcript ID, the host preserves
-the shared context instead of guessing or clearing it. Fresh rotation is deferred
-while such work remains unsettled. Existing archives and effect evidence are not
-removed. Script-only jobs retain their existing no-model behavior.
+For pre-upgrade unfinished tasks without an exact transcript ID, the host first
+binds all such tasks to the exact existing shared transcript, with one durable
+publication barrier before a new occurrence rotates it. Recovery can reopen that
+retained context; old blocked work does not force every new occurrence to inherit
+its history. Existing archives and effect evidence are not removed. Script-only jobs retain their existing no-model behavior.
 
 The next fresh occurrence gets at most 2,000 characters of the last completed
 result as explicitly untrusted comparison data, not a renewed instruction. This

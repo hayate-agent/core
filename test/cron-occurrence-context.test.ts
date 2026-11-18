@@ -79,14 +79,25 @@ test("failed cron binding save is retried before prompting the same transcript",
   assert.equal(runtime.history.size, 1);
 });
 
-test("legacy unfinished cron prevents destructive fresh rotation", async t => {
+test("legacy unfinished cron is durably bound before fresh rotation",  async t => {
   const runtime = new RetainedRuntime();
   const old = await runtime.open("cron:status");
   const h = new Harness({ runtime, completionCheck: async () => ({ state: "completed" }) });
-  h.onStateChange = async () => {}; t.after(() => h.stop(0));
+  let boundBeforeRotation = false;
+  h.onStateChange = async () => {
+    const legacy = h.state("cron:status").tasks?.find(task => task.id === "legacy");
+    if (legacy?.runtimeSessionId) {
+      assert.equal(legacy.runtimeSessionId, old.status().sessionId);
+      boundBeforeRotation = true;
+    }
+  }; t.after(() => h.stop(0));
+  const open = runtime.open.bind(runtime);
+  runtime.open = async (key, options) => { if (options?.fresh) assert(boundBeforeRotation); return open(key, options); };
   h.state("cron:status").session = old;
   h.restoreSessions([{ key: "cron:status", tasks: [{ id: "legacy", original: "Unfinished old work", state: "blocked", depth: 0 }] }]);
   await new Scheduler(h, { timezone: "UTC" }).runJob(job); await h.waitForSessionIdle("cron:status");
-  assert.equal(runtime.opened.length, 1);
-  assert.equal(runtime.sessions.get("cron:status")!.status().sessionId, old.status().sessionId);
+  assert.equal(runtime.opened.length, 2);
+  assert.notEqual(runtime.sessions.get("cron:status")!.status().sessionId, old.status().sessionId);
+  assert.equal(h.snapshotSessions()[0].tasks![0].runtimeSessionId, old.status().sessionId);
+  assert(runtime.history.has(old.status().sessionId));
 });
