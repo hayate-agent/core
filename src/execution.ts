@@ -1,4 +1,5 @@
 import { enrollTask, operatorTransition, commitTaskOutcome, expireInactiveTasks, validateTaskBook, taskOpen, type TaskBook, type TaskRef, type TaskOutcome, type CoreTask, type TaskReceipt, taskDigest, renderTask } from "./task-lifecycle.js";
+import { validCronCheckpoint } from "./cron-checkpoint.js";
 import { executionMetadata, type ExecutionMetadata } from "./builtin-plugins/execution-metadata.js";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, stat } from "node:fs/promises";
@@ -163,6 +164,7 @@ export interface TurnSettlement {
   taskPresentation?: { to: import("./types.js").Address };
   repetition?: import("./repetition-budget.js").RepetitionBudget;
   cronOutput?: string;
+  cronCheckpoint?: import("./cron-checkpoint.js").CronCheckpoint;
   /** Observation only; never grants completion or continuation authority. */
   scheduledSilence?: { taskId: string; ref: TaskRef };
   outbox: import("./delivery/outbox.js").OutboxEntry[];
@@ -455,6 +457,7 @@ export class ExecutionStore {
         settlement.outbox.some(entry => !entry || entry.sessionKey !== sessionKey || typeof entry.id !== "string" ||
           typeof entry.text !== "string" || !entry.to || typeof entry.to.channel !== "string" || typeof entry.to.target !== "string" ||
           (entry.outcome !== undefined && !["completed", "failed", "cancelled"].includes(entry.outcome)))) throw Error("Invalid turn settlement");
+    if (settlement.cronCheckpoint !== undefined && !validCronCheckpoint(settlement.cronCheckpoint)) throw Error("Invalid settled cron checkpoint");
     const plan = settlement.continuation;
     if (plan !== undefined && (!plan || !["continue", "waiting", "blocked", "completed"].includes(plan.state) ||
         (plan.state === "continue" && (typeof plan.next !== "string" || !plan.next.trim() || plan.next.length > 4000)) ||
@@ -529,7 +532,7 @@ export class ExecutionStore {
     });
   }
   private stoppedSettlement(settlement: TurnSettlement): TurnSettlement {
-    return { ...settlement, scheduledSilence: undefined, continuation: undefined, outbox: settlement.outbox.map(entry => ({
+    return { ...settlement, cronCheckpoint: undefined, scheduledSilence: undefined, continuation: undefined, outbox: settlement.outbox.map(entry => ({
       ...entry, text: "⏹️ Abgebrochen. Bereits ausgeführte Seiteneffekte prüfen.", outcome: "cancelled",
     })) };
   }

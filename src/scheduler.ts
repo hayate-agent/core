@@ -227,7 +227,7 @@ export class Scheduler {
     const replyTo = to === "home" ? this.harness.home : to;
     const text = `${job.prompt}\n\n(Scheduled job "${job.name}". If there is nothing worth reporting, reply exactly ${NO_REPLY}.)`;
     const id = `owner-cron:${createHash("sha256").update(JSON.stringify([name, requestId])).digest("hex")}`;
-    await this.harness.accept({ id, sessionKey: `cron:${name}`, text, source: "cron", language: languageTag(this.opts.language?.(job) ?? job.language ?? "en"), replyTo });
+    await this.harness.accept({ id, cronScope: this.scope(job, job.prompt!), sessionKey: `cron:${name}`, text, source: "cron", language: languageTag(this.opts.language?.(job) ?? job.language ?? "en"), replyTo });
   }
 
   setEnabled(name: string, enabled: boolean): boolean {
@@ -240,6 +240,9 @@ export class Scheduler {
     return true;
   }
 
+  private scope(job: CronJob, prompt: string): string {
+    return createHash("sha256").update(JSON.stringify([job, prompt])).digest("hex");
+  }
   private baseDir(): string {
     return this.opts.jobsFile ? path.dirname(this.opts.jobsFile) : process.cwd();
   }
@@ -312,12 +315,13 @@ export class Scheduler {
     let prompt = job.prompt ?? "";
     if (job.prompt_file) prompt = await readFile(path.resolve(this.baseDir(), job.prompt_file), "utf8");
     this.assertOccurrence(job, signal);
+    const cronScope = this.scope(job, prompt);
     if (scriptOut) prompt += `\n\n## Script output\n\n${scriptOut}`;
     if (!prompt.trim()) return;
     prompt += `\n\n(Scheduled job "${job.name}". If there is nothing worth reporting, reply exactly ${NO_REPLY}.)`;
     if (metadata) {
       metadata.original = prompt;
-      await this.harness.accept({ id: metadata.runId, sessionKey: `cron:${job.name}`, text: prompt, source: "cron", language, replyTo: to, cronReport: metadata });
-    } else this.harness.enqueue({ sessionKey: `cron:${job.name}`, text: prompt, source: "cron", language, replyTo: to });
+      await this.harness.accept({ id: metadata.runId, cronScope, sessionKey: `cron:${job.name}`, text: prompt, source: "cron", language, replyTo: to, cronReport: metadata });
+    } else this.harness.enqueue({ cronScope, sessionKey: `cron:${job.name}`, text: prompt, source: "cron", language, replyTo: to });
   }
 }

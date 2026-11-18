@@ -28,10 +28,14 @@ export interface Inbound {
   sessionKey: string;
   text: string;
   source: InputSource;
+  /** Set only by authenticated external API ingress, not synthetic API work. */
+  operatorIngress?: true;
   /** Explicitly admitted loop occurrence, durably retained independently of timer ticks. */
   explicitLoopRun?: boolean;
   /** Host event identity for authority checks; event data never grants continuation. */
   hostEvent?: { executionId: string; question?: { id: string; eventId: string }; assessmentStalled?: { eventId: string } };
+  /** Host scheduler fingerprint; model text cannot establish source scope. */
+  cronScope?: string;
   /** Trusted scheduler metadata; output never expands the configured follow-up scope. */
   cronReport?: { job: string; runId: string; createdAt: number; audience: "agent" | "user";
     original: string; authorization?: string; maxTasks: number; output?: string; completedOutput?: string };
