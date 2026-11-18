@@ -56,6 +56,8 @@ export class FilesystemSessionProvider implements SessionProvider {
     return record;
   }
   save(record: SessionRecord, expectedRevision: number): Promise<SessionRecord> {
+    // The checkpoint belongs to this call, not to later caller mutations while queued.
+    record = structuredClone(record);
     const task = this.writing.catch(() => {}).then(async () => {
       const current = await this.load(record.id);
       if (current.revision !== expectedRevision || current.key !== record.key) throw new Error("Session revision conflict");
