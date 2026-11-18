@@ -46,6 +46,32 @@ for (const changed of [false, true]) test(`silent waiting with ${changed ? "chan
   } finally { await h.stop(0); }
 });
 
+for (const advanced of [false, true]) test(`silent external wait with reworded checker next, progress=${advanced}`, async () => {
+  let turns = 0, now = 1000;
+  const runtime = new FakeRuntime((_text, key) => {
+    turns++;
+    h.planContinuation(key, turns > 2 ? { state: "completed" } : { state: "waiting", next: "Await authentic Support reply", wait: {
+      reason: "Support has not replied", retryAfterMs: 60000, deadline: 301000,
+    } });
+    return turns > 2 ? "Verified result" : NO_REPLY;
+  });
+  const h = new Harness({ runtime, now: () => now, tickMs: 60000, completionCheck: async () => turns > 2
+    ? { state: "completed" } : { state: "continue", next: `Reconcile Support evidence, revision ${turns}`,
+      ...(advanced ? { progress: { advanced: true, reason: "Independent new verification" } } : {}) } });
+  h.addChannel(new MemoryChannel()); h.onStateChange = async () => {};
+  try {
+    await h.submit(msg("Wait for Support and incorporate its result")); await h.drained();
+    assert.equal(turns, advanced ? 3 : 2);
+    const task = h.snapshotSessions()[0].task!;
+    assert.equal(task.state, advanced ? "completed" : "waiting");
+    if (!advanced) {
+      assert.equal(task.wait?.nextAt, 61000);
+      await h.tick(); await h.drained(); assert.equal(turns, 2, "no model polling before the real wait boundary");
+      now = 61001; await h.tick(); await h.drained(); assert.equal(turns, 3, "existing bounded wake remains usable");
+    }
+  } finally { await h.stop(0); }
+});
+
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
