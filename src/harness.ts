@@ -3313,12 +3313,14 @@ export class Harness {
     let workTools = 0;
     let pendingWorkTools = 0;
     let receiptsComplete = true;
+    let onlyReadTools = true;
     await typingCh?.typing?.(to!, true).catch(() => undefined);
     const onEvent = (event: TurnEvent) => {
           activity.event(event);
           // Control-plane nudges are not work results; keep bounded assessor context below.
           if (event.type === 'tool' && !event.name.startsWith('plugin_dispatch') &&
               !['plugin_task_continuation', 'plugin_context_maintenance', 'plugin_worker_tasks', 'plugin_task_priority', 'plugin_tasks'].includes(event.name)) {
+            if (!['read', 'grep', 'find', 'ls'].includes(event.name)) onlyReadTools = false;
             if (event.phase === 'start') pendingWorkTools++;
             else {
               pendingWorkTools = Math.max(0, pendingWorkTools - 1);
@@ -3672,9 +3674,21 @@ export class Harness {
           // A tool-free silent continuation can repeat indefinitely just like a
           // silent terminal proposal. The live-dependency wait case was handled
           // above; do not mistake a running child for a stalled continuation.
+          const currentTask = this.tasks(s).find(task => task.id === input.taskId);
+          const previous = currentTask?.supervisorDecision;
+          // A repeated silent waiting proposal after the same completed read
+          // results is not fresh work. Require the exact retained receipt and
+          // identical supervisor instruction; any changed results, write tool,
+          // pending call or independently assessed progress keeps continuation.
+          const repeatedRead = workTools > 0 && onlyReadTools && receiptsComplete && pendingWorkTools === 0 &&
+            currentTask?.repetition?.evidence.includes(`tool:${workReceipts.copy().digest('hex')}`);
+          const repeatedWait = reply === NO_REPLY && checkpoint?.state === "waiting" && repeatedRead &&
+            previous?.proposal === "waiting" && previous.verdict === "continue" &&
+            currentTask?.next?.trim() === plan.next.trim() && !plan.progress?.advanced;
           const silentTerminal = reply === NO_REPLY && (!checkpoint || checkpoint.state === "completed" || checkpoint.state === "continue") && workTools === 0 && pendingWorkTools === 0;
-          const previous = this.tasks(s).find(task => task.id === input.taskId)?.supervisorDecision;
-          if (silentTerminal && previous?.silentCompletionRecheck === "admitted" && workTools === 0 && pendingWorkTools === 0) {
+          if (repeatedWait) {
+            input.continuation = checkpoint;
+          } else if (silentTerminal && previous?.silentCompletionRecheck === "admitted" && workTools === 0 && pendingWorkTools === 0) {
             // The first independent recheck remains valid. A second silent
             // terminal result with no work must not start another identical
             // verification cycle, and is not proof the mandate is complete.
