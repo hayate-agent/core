@@ -1,5 +1,7 @@
 import { mcpLanguageInstructions, type LanguagePolicy } from "../language.js";
 import { retainedSessionFile } from "./retained-session-file.js";
+import { createBoundedReadTool } from "./bounded-read.js";
+import { isBoundedReadResult } from "../bounded-read-result.js";
 import { checkpointNativeSession } from "./native-session-checkpoint.js";
 import { HANDOVER_SEED_BYTES } from "../recovery-evidence.js";
 import { executionMetadata } from "../builtin-plugins/execution-metadata.js";
@@ -917,6 +919,7 @@ export class PiRuntime implements AgentRuntime {
         {
           name: "hayate-agent-plugin-tools",
           factory: (pi) => {
+            pi.registerTool(createBoundedReadTool(cwd));
             for (const tool of boundTools) {
               pi.registerTool({
                 name: tool.name, label: tool.name,
@@ -995,7 +998,7 @@ export class PiRuntime implements AgentRuntime {
               }
               // Nested calls belong to codemode/scripts: let them filter the full
               // result before the outer model-facing result is shortened.
-              if (event.parentToolCallId) return;
+              if (event.parentToolCallId || isBoundedReadResult(event)) return;
               const text = event.content.map(part => part.type === "text" ? part.text : "").join("\n");
               const excerpt = await compactContext(artifactDirectory, text, "Tool evidence");
               if (excerpt === text) return;
@@ -1007,7 +1010,7 @@ export class PiRuntime implements AgentRuntime {
               // native archives or dropping tool/call pairs. New results already
               // arrive as excerpts and take the cheap unchanged path.
               let messages = await Promise.all(event.messages.map(async message => {
-                if (message.role !== "toolResult") return message;
+                if (message.role !== "toolResult" || isBoundedReadResult(message)) return message;
                 const text = message.content.map(part => part.type === "text" ? part.text : "").join("\n");
                 const excerpt = await compactContext(artifactDirectory, text, "Tool evidence");
                 return excerpt === text ? message : { ...message, content: [{ type: "text" as const, text: excerpt }, ...message.content.filter(part => part.type !== "text")] };

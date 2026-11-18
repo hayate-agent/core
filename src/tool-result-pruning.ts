@@ -1,3 +1,5 @@
+import { isBoundedReadResult } from "./bounded-read-result.js";
+
 export interface PruningPolicy {
   enabled: boolean;
   /** Approximate tool-text budget, estimated conservatively from UTF-8 bytes / 4. */
@@ -19,6 +21,7 @@ export interface ProjectionMessage {
   toolCallId?: string;
   toolName?: string;
   isError?: boolean;
+  details?: unknown;
   content?: unknown;
 }
 
@@ -37,7 +40,7 @@ export function projectToolResultPrefixes<T extends ProjectionMessage>(messages:
       !part || part.type !== "text" || typeof part.text !== "string")) continue;
     const text = message.content.map(part => part.text).join("\n");
     bytes += Buffer.byteLength(text, "utf8");
-    if (bytes < policy.proactivePruneTokens * 4 || text.length < policy.minResultChars || message.isError) continue;
+    if (bytes < policy.proactivePruneTokens * 4 || text.length < policy.minResultChars || message.isError || isBoundedReadResult(message)) continue;
     // Existing strategy implementations support a zero protected suffix. This
     // is internal only; public policy validation still requires keepRecent >= 1.
     const result = project(messages.slice(0, i + 1), { ...policy, keepRecent: 0 })[i];

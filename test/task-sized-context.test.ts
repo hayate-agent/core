@@ -24,18 +24,19 @@ test("actual SDK requests: Main and children receive excerpts, children skip his
     if (value === undefined) delete process.env[key]; else process.env[key] = value;
   } });
   const models = await ModelRuntime.create({ refreshOnCreate: false });
+  await models.setRuntimeApiKey("bounded-fixture", "fixture");
   const requests: any[] = [];
   const source = "source header\n" + "large read evidence\n".repeat(1500) + "ERROR: preserve exact failure\n";
   const file = path.join(home, "evidence.txt"); await writeFile(file, source);
   models.registerProvider("bounded-fixture", {
-    api: "openai-completions", baseUrl: "https://offline.invalid", apiKey: "offline",
+    api: "openai-completions", baseUrl: "https://fixture.invalid",
     models: [{ id: "model", name: "Fixture", reasoning: false, input: ["text"], contextWindow: 131072, maxTokens: 4096, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }],
     streamSimple: (model, context) => {
       requests.push(structuredClone(context));
       const toolResult = [...context.messages].reverse().find((m: any) => m.role === "toolResult");
       const stream = createAssistantMessageEventStream();
       const message: any = { role: "assistant", api: model.api, provider: model.provider, model: model.id,
-        content: toolResult ? [{ type: "text", text: "Read completed; source reports an error, not a verified successful effect. Details retained." }]
+        content: toolResult ? [{ type: "text", text: "Read completed; bounded source range is not a verified successful effect. Missing evidence must be retrieved." }]
           : [{ type: "toolCall", id: "read-evidence", name: "read", arguments: { path: file } }],
         stopReason: toolResult ? "stop" : "toolUse", timestamp: Date.now(),
         usage: { input: 100, output: 20, totalTokens: 120, cacheRead: 0, cacheWrite: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } };
@@ -53,7 +54,7 @@ test("actual SDK requests: Main and children receive excerpts, children skip his
     const wrapped: any = await runtime.open(key);
     const start = requests.length, beforeRecall = recalls;
     try {
-      assert.match(await wrapped.prompt("Read the evidence and return the finding, not a dump."), /source reports an error/);
+      assert.match(await wrapped.prompt("Read the evidence and return the finding, not a dump."), /Missing evidence must be retrieved/);
       assert.equal(requests.length - start, 2, "one tool request plus final response; no summarization model request");
       const sent = JSON.stringify(requests[start]);
       assert.match(sent, /do not publish/);
@@ -81,10 +82,15 @@ test("actual SDK requests: Main and children receive excerpts, children skip his
       const result: any = requests[start + 1].messages.find((m: any) => m.role === "toolResult");
       assert.equal(result.isError, false, "read succeeded; source error is not a fabricated tool failure");
       const excerpt = result.content.map((c: any) => c.text ?? "").join("\n");
-      assert(excerpt.length < 4000); assert.match(excerpt, /ERROR: preserve exact failure/);
-      const retained = await readFile(originalPath(excerpt), "utf8"); assert.equal(retained, source);
-      const detail = await wrapped.session.getToolDefinition("read").execute("detail", { path: originalPath(excerpt), offset: 1, limit: 1 });
-      assert.match(detail.content[0].text, /source header/);
+      assert(excerpt.length < 4000); assert.match(excerpt, /^\[Read range:/);
+      assert.match(excerpt, /source header/);
+      assert.doesNotMatch(excerpt, /ERROR: preserve exact failure/, "a range must not imply that unseen tail evidence was read");
+      const metadata = JSON.parse(excerpt.slice("[Read range: ".length, excerpt.indexOf("\n") - 1));
+      assert.equal(await readFile(metadata.source, "utf8"), source);
+      assert(metadata.next, "unread source stays accessible through original cursor");
+      const detail = await wrapped.session.getToolDefinition("read").execute("detail", { path: metadata.source, offset: 1500, limit: 4 });
+      assert.match(detail.content[0].text, /ERROR: preserve exact failure/);
+      assert.doesNotMatch(detail.content[0].text, /omitted/);
     } finally { await wrapped.dispose(); }
   }
   const largeReport = "Findings\n" + "worker report\n".repeat(3000) + "uncertain remote commit\nSTEP-STATUS: blocked: reconcile";
