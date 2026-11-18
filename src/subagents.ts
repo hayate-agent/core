@@ -92,25 +92,41 @@ export class Subagents {
     await this.revokeChildren(parent);
     for (const record of this.list(parent)) await this.cancel(parent, record.id);
   }
+  private revocationSavePending = false;
+  private revocationQueue: Promise<void> = Promise.resolve();
   async cancelTaskChildren(parent: string, taskId: string): Promise<void> {
-    const records = this.list(parent);
-    const bound = records.filter(record => record.parentTaskId === taskId);
-    const children = bound.filter(record => !["completed", "failed"].includes(record.state));
-    const unscoped = records.filter(record => !record.parentTaskId && record.state !== "cancelled");
-    // No child exists in this scope. The parent's persisted stop fence is
-    // authoritative; do not resave the whole host for every childless old task.
-    // Existing children still always cross the original durable save barrier,
-    // including retry after a prior save failure and before any runtime abort.
-    if (!bound.length && !unscoped.length) return;
-    for (const child of bound) this.records.get(child.id)!.parentStopped = true;
-    for (const child of children) this.records.get(child.id)!.state = "cancelled";
-    // Never guess that a legacy child belongs to this task, nor silently keep
-    // executing after its possible mandate was stopped. Retain it under a
-    // durable ownership hold instead of cancelling unrelated work.
-    for (const child of unscoped) this.records.get(child.id)!.ownershipHold = "unscoped-parent-stop";
-    await this.save();
-    for (const child of children) await this.cancel(parent, child.id);
-    for (const child of unscoped) await this.harness.sessions.get(child.sessionKey)?.session?.abort();
+    return this.cancelStoppedTasks([{ parent, taskId }]);
+  }
+  /** Reconcile all retained stops with one host publication barrier. Terminal
+   * legacy children already held on disk are evidence, not repeated save work. */
+  cancelStoppedTasks(stops: readonly { parent: string; taskId: string }[]): Promise<void> {
+    const snapshot = stops.map(({ parent, taskId }) => ({ parent, taskId }));
+    const next = this.revocationQueue.catch(() => {}).then(() => this.publishStoppedTasks(snapshot));
+    this.revocationQueue = next;
+    return next;
+  }
+  private async publishStoppedTasks(stops: readonly { parent: string; taskId: string }[]): Promise<void> {
+    const scopes = new Map<string, Set<string>>();
+    for (const { parent, taskId } of stops) { const ids = scopes.get(parent) ?? new Set<string>(); ids.add(taskId); scopes.set(parent, ids); }
+    const bound: SubagentRecord[] = [], unscoped: SubagentRecord[] = [];
+    for (const record of this.records.values()) {
+      const ids = scopes.get(record.parent); if (!ids) continue;
+      if (record.parentTaskId && ids.has(record.parentTaskId)) {
+        if (!record.parentStopped) { record.parentStopped = true; this.revocationSavePending = true; }
+        if (!["completed", "failed"].includes(record.state)) {
+          if (record.state !== "cancelled") { record.state = "cancelled"; this.revocationSavePending = true; }
+          bound.push(record);
+        }
+      } else if (!record.parentTaskId && record.state !== "cancelled") {
+        if (record.ownershipHold !== "unscoped-parent-stop") { record.ownershipHold = "unscoped-parent-stop"; this.revocationSavePending = true; }
+        if (!["completed", "failed"].includes(record.state)) unscoped.push(record);
+      }
+    }
+    // An unsuccessful save leaves the pending obligation set even though the
+    // in-memory markers already changed. Never abort before that retry succeeds.
+    if (this.revocationSavePending) { await this.save(); this.revocationSavePending = false; }
+    for (const record of bound) await this.cancel(record.parent, record.id);
+    for (const record of unscoped) await this.harness.sessions.get(record.sessionKey)?.session?.abort();
   }
   /** Never resubmit an orphaned start: its acceptance may already have had effects. */
   async reconcile(enabled: (parent: string) => boolean = () => true): Promise<void> {

@@ -523,8 +523,13 @@ async function main(argv: string[]): Promise<void> {
       await stopDispatcherParent(executions, key, dispatcher);
       await subagents.cancelChildren(key);
     },
-    taskStopped: async (key, taskId, preexistingUnscoped) => {
-      if (dispatcher) await dispatcher.cancelTask(key, taskId, preexistingUnscoped);
+    stoppedTasksReconciled: async stops => {
+      dispatcher?.stopRevokedTasks(stops);
+      await subagents.cancelStoppedTasks(stops);
+    },
+    taskStopped: async (key, taskId) => {
+      // Harness already committed the exact ledger fence before this callback.
+      dispatcher?.stopRevokedTasks([{ parent: key, taskId }]);
       await subagents.cancelTaskChildren(key, taskId);
     },
     // Nightly owns dispatcher evidence directly, including retained pre-upgrade inbox events.

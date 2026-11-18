@@ -30,6 +30,44 @@ test("78 childless stopped mandates reconcile without rewriting ledger or host s
   assert.equal(harness.pendingInputs().length, 0);
 });
 
+test("Peter-shaped 624 stops with five completed held children require no host capture or ledger clone", async t => {
+  const { store, saves } = await fixture(t); let captures = 0, clones = 0;
+  const h = new Harness({ runtime: new FakeRuntime(), executionStore: store,
+    stoppedTasksReconciled: stops => subagents.cancelStoppedTasks(stops) });
+  const subagents = new Subagents(h, async () => { captures++; });
+  subagents.restore(Array.from({ length: 5 }, (_, i) => ({ ...child(`held-${i}`), ownershipHold: "unscoped-parent-stop" as const })));
+  h.restoreSessions([{ key: "parent", tasks: Array.from({ length: 624 }, (_, i) => ({
+    id: `stopped-${i}`, original: "Retained original " + "x".repeat(26000), state: "stopped" as const, depth: 0,
+  })) }]);
+  const original = globalThis.structuredClone;
+  globalThis.structuredClone = ((value: unknown, options?: StructuredSerializeOptions) => { clones++; return original(value, options); }) as typeof structuredClone;
+  const start = performance.now();
+  try { await h.reconcileStoppedTasks(); } finally { globalThis.structuredClone = original; }
+  t.diagnostic(`624 stop reconciliation: ${(performance.now() - start).toFixed(2)}ms; clones=${clones}; captures=${captures}`);
+  assert.equal(saves(), 0); assert.equal(captures, 0); assert.equal(clones, 0);
+  assert.equal(subagents.snapshot().length, 5);
+  assert.equal(h.state("parent").tasks!.length, 624);
+});
+
+test("bulk stop observes queued submissions, preserves uncertain effects and retries failed writes", async t => {
+  const { store, file, storage } = await fixture(t);
+  const pending = store.submit("parent", "bound", "No replay", "fixture", 1, { taskId: "stop", original: "No replay", depth: 0 });
+  await store.cancelTasks([{ parent: "parent", taskId: "stop" }]);
+  const bound = await pending;
+  assert.equal(store.list()[0].status, "cancelled");
+  assert.equal(store.events().some(event => event.executionId === bound.id), false);
+  const legacy = await store.submit("parent", "legacy", "Unknown effects", "fixture");
+  const save = storage.save.bind(storage); let fail = true;
+  storage.save = async (...args: unknown[]) => { if (fail) throw Error("bulk write failed"); return save(...args); };
+  await assert.rejects(store.cancelTasks([{ parent: "parent", taskId: "stop" }]), /bulk write failed/);
+  assert.equal(store.list().find(task => task.id === legacy.id)!.ownershipHold, undefined);
+  fail = false; await store.cancelTasks([{ parent: "parent", taskId: "stop" }]);
+  const restored = new ExecutionStore(file); await restored.load();
+  assert.equal(restored.list().find(task => task.id === legacy.id)!.ownershipHold, "unscoped-parent-stop");
+  storage.assertWritable = () => { throw Error("owner lost"); };
+  await assert.rejects(store.cancelTasks([]), /owner lost/);
+});
+
 test("no-op revocation still joins prior accepted writes and commits actual cancellation once", async t => {
   const { store, file, saves } = await fixture(t);
   const submitted = store.submit("parent", "original", "Original accepted work", "fixture");
@@ -73,6 +111,27 @@ test("task-scoped legacy holds are committed and preserved, never converted to r
 const child = (id: string, task?: string): SubagentRecord => ({ id, parent: "parent", parentTaskId: task,
   sessionKey: `subagent:${id}`, state: "completed", expiresAt: 1,
   handover: { task: "Original", context: "Retained", constraints: "No replay", expectedResult: "Evidence", acceptance: "Verified", model: "p/m", thinking: "off" } });
+
+test("overlapping revocations cannot clear another child's pending save barrier", async () => {
+  let release!: () => void, saves = 0, savedB = false;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const h = new Harness({ runtime: new FakeRuntime() });
+  const manager = new Subagents(h, async () => {
+    const hasB = manager.get("parent", "b").ownershipHold === "unscoped-parent-stop";
+    if (++saves === 1) await gate;
+    if (hasB) savedB = true;
+  });
+  manager.restore([{ ...child("a"), parent: "first" }, { ...child("b"), state: "running" }]);
+  const runtime = await h.sessionFor("subagent:b");
+  runtime.abort = async () => { assert(savedB, "B must be durable before abort"); };
+  const first = manager.cancelStoppedTasks([{ parent: "first", taskId: "stop-a" }]);
+  await new Promise(resolve => setImmediate(resolve));
+  const second = manager.cancelStoppedTasks([{ parent: "parent", taskId: "stop-b" }]);
+  const third = manager.cancelStoppedTasks([{ parent: "parent", taskId: "stop-b" }]);
+  assert.equal(manager.get("parent", "b").ownershipHold, undefined, "second mutation waits behind first publication");
+  release(); await Promise.all([first, second, third]);
+  assert.equal(saves, 2); assert(savedB);
+});
 
 test("other scoped subagents cause no write; matching and unscoped children retain durable revocation barriers", async () => {
   const harness = new Harness({ runtime: new FakeRuntime(), tickMs: 60000 }); let saves = 0, fail = false;
