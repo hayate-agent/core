@@ -37,10 +37,26 @@ its history. Existing archives and effect evidence are not removed. Script-only 
 
 The next fresh occurrence gets at most 2,000 characters of the last completed
 result as explicitly untrusted comparison data, not a renewed instruction. This
-is a result capsule, **not** a complete semantic source/delta cursor; a job that
-needs exact issue/PR/source watermarks must persist those explicitly. Relevant
-working-memory recall remains independently bounded. This change does not promise
-a 5k total provider request, a fixed token saving or live latency improvement.
+is a result capsule, **not** a complete semantic source/delta cursor. Configured
+jobs additionally receive a small `plugin_cron_checkpoint` source/work record:
+exact source IDs/locators, observed cursor/time, unfinished items and evidence
+references. Successful tool names can be preloaded from the currently permitted
+catalog rather than rediscovered. Removed tools and host guards remain effective.
+
+The checkpoint is staged, then published through the existing successful turn
+settlement. A failed/interrupted turn does not advance it. A settled turn whose
+report archival fails recovers its checkpoint without replaying the model/effects.
+Each occurrence retains its configuration hash and revision basis; an old
+unfinished occurrence cannot overwrite a newer occurrence's checkpoint. A changed
+job is explicitly labelled for reconciliation rather than silently reusing its
+cursor. Pending items are not delivery receipts: successful fetches do not imply
+all items were handled, and no unchanged-source shortcut skips semantic/time-based
+duties. Bounds reject oversized checkpoints rather than silently dropping items;
+use exact retained evidence references for larger backlogs. This is a general
+agent mechanism, not a source-specific incremental adapter.
+
+Relevant working-memory recall remains independently bounded. This change does
+not promise a 5k total provider request, fixed token saving or live latency gain.
 
 ## Existing per-agent host maintenance owners
 
@@ -60,5 +76,36 @@ These loops do not require Main to supervise housekeeping:
 Semantic consolidation/report analysis may use configured independent inference.
 Mechanical checks do not constitute authorization for autonomous prompt, policy,
 Cron or memory optimization. This patch adds neither a new polling agent nor an
-RPC service. Redundant semantic Main completion continuations remain a separate
-optimization: they are not claimed fixed by changing the host's event loop.
+RPC service. Overlapping report maintenance ticks coalesce into one existing
+host pass; stop signals processors before draining that pass. Memory already has
+its own single-flight durable backlog/retry owner, so no duplicate loop is added.
+
+## Event-owned waits
+
+While an eligible owned execution is ready/running, Main's persisted wait does
+not cause periodic model calls to ask for its status. Dispatcher result, question
+and assessment-attention events use the existing durable inbox and stable IDs.
+Result acceptance is independent of the model's suggested polling window;
+original task expiry, stop, ownership and semantic admission still apply. External
+conditions without an owned worker retain the existing bounded wait mechanism.
+This removes live-worker polling, not all semantic completion verification.
+
+## Durable operator corrections
+
+`plugin_operator_rules` retains exact clauses and original ingress provenance in
+`<agent-home>/operator-rules/rules.json`, separately from historical memories and
+learned recipes. Only an authentic current authorized operator input may mutate
+it; child/cron/synthetic API work cannot. Authenticated external API ingress is
+marked by the host, not model arguments. A separate semantic decision checks
+enduring intent, attribution, negation, qualifiers and conflict replacement;
+unavailable/invalid decisions do not publish. Original text and revision checks
+remain enforced mechanically, including cancellation before atomic publication.
+
+Main, scheduled sessions and delegated children receive the current rule book at
+each run boundary in host tail context. Rules supersede contradictory recipes or
+historical summaries, not higher-priority constraints or current corrections, and
+grant no permissions. A persisted rule is not proof that an external document or
+skill was corrected. Existing historical prose is retained, not silently rewritten.
+There is no automatic import of assistant-written `binding` claims. Existing
+corrections need authentic source-based acquisition; this change is not a blanket
+migration of old conversations or a hardcoded receipt-language policy.

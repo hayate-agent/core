@@ -42,6 +42,19 @@ test("failed activation stops all registered processors once, including when one
   await host.stop(); assert.equal(stopped.length, 2);
 });
 
+test("host report maintenance coalesces overlapping ticks and drains before shutdown", async () => {
+  const registry = new ReportProcessingRegistry();
+  let calls = 0, release!: () => void, stopped = false;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  registry.register("slow", { record: async () => {}, context: async () => "", tick: async () => { calls++; await held; }, stop: async () => { stopped = true; release(); } });
+  registry.select("slow");
+  const first = registry.tick(), second = registry.tick();
+  assert.equal(first, second);
+  await Promise.resolve(); assert.equal(calls, 1);
+  await registry.stop(); await first;
+  assert.equal(stopped, true); await registry.tick(); assert.equal(calls, 1);
+});
+
 test("registry validates implementations and fails closed without a selected sink", async () => {
   const registry = new ReportProcessingRegistry();
   await assert.rejects(registry.record({ source: "cron", sessionKey: "cron:x", text: "x" }, "report"), /No report processor/);

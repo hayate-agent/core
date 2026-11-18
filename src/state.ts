@@ -28,6 +28,7 @@ export interface PersistedSession {
   resetPending?: boolean;
   resetSources?: string[];
   sourceOwner?: string;
+  cronCheckpoint?: import("./cron-checkpoint.js").CronCheckpoint;
   loop?: Recurring;
   goal?: Goal;
 }

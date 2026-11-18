@@ -115,6 +115,10 @@ export interface PiRuntimeOptions {
   /** Settled SDK response/tool boundary; never an additional inference call. */
   captureStep?: (key: string, step: { id: string; reply: string; tools: number; failed: boolean }) => Promise<void>;
   recallStep?: (key: string) => Promise<string>;
+  /** Exact host-retained operator preferences, applied to all working roles. */
+  operatorInstructions?: () => string | Promise<string>;
+  /** Tool names only from the owning cron checkpoint; current catalog/guards win. */
+  knownTools?: (key: string) => readonly string[];
   sessionProvider?: () => SessionProvider | undefined;
   compaction?: () => CompactionStrategy;
   compactionOwner?: () => "harness" | "agent";
@@ -971,6 +975,7 @@ export class PiRuntime implements AgentRuntime {
               return { message: { customType: "harness-run-context", display: false,
                 content: `Current Hayate host runtime context (not operator input; replaces earlier run context):\n${JSON.stringify({
                   instructions: slot.instructions ?? "", mcpInstructions: slot.mcpInstructions ?? "",
+                  operatorPreferences: await this.opts.operatorInstructions?.() ?? "",
                   historicalWorkingMemory: workingMemory, personaHistory: personaHistoryContext,
                 })}` } };
             });
@@ -1169,6 +1174,11 @@ export class PiRuntime implements AgentRuntime {
     };
     const toolUse = new Map<string, number>(); let toolClock = 0;
     let previousActive = new Set(session.getActiveToolNames());
+    const knownTools = () => new Set((this.opts.knownTools?.(sessionKey) ?? []).filter(name => session.getAllTools().some(tool => tool.name === name)));
+    const preloadKnownTools = () => {
+      if (!deferred) return;
+      session.setActiveToolsByName([...new Set([...session.getActiveToolNames(), ...knownTools()])]);
+    };
     let localToolMode: boolean | undefined;
     const trimDiscoveredTools = () => {
       if (!deferred) return;
@@ -1181,7 +1191,7 @@ export class PiRuntime implements AgentRuntime {
         localToolMode = false; previousActive = new Set(session.getActiveToolNames()); return;
       }
       if (localToolMode !== true) {
-        session.setActiveToolsByName([...active.filter(name => !discoverable.has(name)), "tool_search"]);
+        session.setActiveToolsByName([...active.filter(name => !discoverable.has(name) || knownTools().has(name)), "tool_search"]);
         toolUse.clear(); previousActive = new Set(session.getActiveToolNames()); localToolMode = true; return;
       }
       for (const name of active) if (discoverable.has(name) && !previousActive.has(name)) toolUse.set(name, ++toolClock);
@@ -1209,6 +1219,7 @@ export class PiRuntime implements AgentRuntime {
     // configured model only after they are bound.
     await session.bindExtensions({});
     if (deferred) session.setActiveToolsByName([...session.getActiveToolNames(), "tool_search"]);
+    preloadKnownTools();
     settingsManager.applyOverrides({ compaction: { enabled: this.opts.compactionOwner?.() === "agent" } });
     let saving: Promise<void> = Promise.resolve();
     const checkpoint = provider && record ? (): Promise<void> => {
@@ -1317,6 +1328,7 @@ export class PiRuntime implements AgentRuntime {
         appliedModelRevision = this.modelRevision;
       }
       if (!options.ephemeral && cwd === this.opts.cwd && this.opts.skillContext) skillContext = await this.opts.skillContext();
+      preloadKnownTools(); // Catalog reload must finish before restoring known permitted tools.
       // Reload reads project/global defaults again. Reassert the selected owner before
       // a working or advisory prompt can enter the SDK's intra-tool loop.
       settingsManager.applyOverrides({ compaction: { enabled: this.opts.compactionOwner?.() === "agent" } });

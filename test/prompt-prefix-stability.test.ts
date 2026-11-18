@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
@@ -15,7 +15,7 @@ import type { LanguagePolicy } from "../src/language.js";
 const { convertMessages } = await import(new URL("api/openai-completions.js", import.meta.resolve("@earendil-works/pi-ai")).href);
 
 for (const external of [false, true]) test(`dynamic host context preserves the wire prefix (${external ? "external" : "native"} sessions)`, async t => {
-  const home = await mkdtemp(path.join(os.tmpdir(), "prefix-stability-"));
+  const home = await realpath(await mkdtemp(path.join(os.tmpdir(), "prefix-stability-")));
   const previous = { HOME: process.env.HOME, PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR };
   process.env.HOME = home; process.env.PI_CODING_AGENT_DIR = path.join(home, "agent");
   t.after(async () => {
@@ -32,7 +32,7 @@ for (const external of [false, true]) test(`dynamic host context preserves the w
   // Offline fixture only: streamSimple below never opens an HTTP connection.
   await models.setRuntimeApiKey("prefix-fixture", "fixture");
   models.registerProvider("prefix-fixture", {
-    api: "openai-completions", baseUrl: "https://offline.invalid",
+    api: "openai-completions", baseUrl: "https://fixture.invalid",
     models: [{ id: "model", name: "Prefix fixture", reasoning: false, input: ["text"], contextWindow: 131072, maxTokens: 4096,
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }],
     streamSimple: (model, context) => {
@@ -50,6 +50,7 @@ for (const external of [false, true]) test(`dynamic host context preserves the w
   const runtime = new PiRuntime({ cwd: home, sessionsDir: path.join(home, "sessions"), skillPaths: [], tools: ["plugin_observe"], model: "prefix-fixture/model",
     personaSections: async () => ["Exact operator constraint: do not deploy.", ...(personaMemory ? [`# Persona overlay: MEMORY.md\n${personaMemory}`] : [])], approvals: { mode: "off", tools: [] },
     mcp: { enabled: true }, language: () => language,
+    operatorInstructions: () => "Exact durable operator preference: receipts ALWAYS English; chat may remain German.",
     ...(external ? { sessionProvider: () => provider } : {}),
     recallStep: async () => { recalls++; if (failRecall) throw Error("optional memory unavailable"); return memory; },
     captureStep: async () => { captures++; memory = "MEMORY-UPDATED: effects still unknown"; personaMemory = "PERSONA-MEMORY-UPDATED: outcome still unverified"; },
@@ -70,6 +71,8 @@ for (const external of [false, true]) test(`dynamic host context preserves the w
       assert.doesNotMatch(wrapped.session.systemPrompt, /TASK-REVISION|MEMORY-FIRST|MEMORY-UPDATED|Persona\/history index|"tickets":"de"/);
       const first = JSON.stringify(wire[beforeWire]), second = JSON.stringify(wire[beforeWire + 1]);
       assert.match(first, /TASK-REVISION-ONE/); assert.match(second, /TASK-REVISION-ONE/);
+      assert.match(first, /receipts ALWAYS English/); assert.match(second, /receipts ALWAYS English/);
+      assert.doesNotMatch(wrapped.session.systemPrompt, /Exact durable operator preference/);
       if (key === "main") {
         assert.match(first, /MEMORY-FIRST/); assert.match(second, /MEMORY-FIRST/);
         assert.doesNotMatch(second, /MEMORY-UPDATED/, "step capture must not rewrite context on the next tool iteration");
