@@ -3401,14 +3401,24 @@ export class Harness {
       checkExpiry();
       if (!this.preparedTurn.delete(input)) await this.opts.beforeTurn?.(input);
       const cronTask = s.key.startsWith("cron:") ? this.tasks(s).find(task => task.id === input.taskId) : undefined;
-      // Legacy unfinished occurrences have no transcript identity. Until settled,
-      // retain the shared context rather than guessing which transcript is theirs.
-      const legacyOpen = this.tasks(s).some(task => task !== cronTask && !["completed", "stopped"].includes(task.state) && !task.runtimeSessionId);
+      const legacyTasks = this.tasks(s).filter(task => task !== cronTask && !["completed", "stopped"].includes(task.state) && !task.runtimeSessionId);
+      // Before rotating the shared pre-upgrade context, bind every unfinished
+      // legacy occurrence to that exact retained transcript. Never abandon it.
+      if (cronTask && !cronTask.runtimeSessionId && legacyTasks.length && input.source === "cron" &&
+          input.continuationDepth === undefined && !input.waitCheck && !input.waitRecheck && !this.restoredTaskInputs.has(input)) {
+        const previous = await this.sessionFor(s.key);
+        for (const task of legacyTasks) { task.runtimeSessionId = previous.status().sessionId; this.cronBindingPending.add(task); }
+      }
+      const pendingBindings = this.tasks(s).filter(task => this.cronBindingPending.has(task));
+      if (pendingBindings.length) {
+        try { await this.onStateChange?.(); } catch { throw CRON_BINDING_YIELD; }
+        for (const task of pendingBindings) this.cronBindingPending.delete(task);
+      }
       if (cronTask?.runtimeSessionId && s.session?.status().sessionId !== cronTask.runtimeSessionId) {
         await s.session?.dispose(); s.session = undefined;
         s.session = await this.runtime.open(s.key, { sessionId: cronTask.runtimeSessionId });
       }
-      const freshCron = !!cronTask && !cronTask.runtimeSessionId && !legacyOpen && input.source === "cron" &&
+      const freshCron = !!cronTask && !cronTask.runtimeSessionId && input.source === "cron" &&
         input.continuationDepth === undefined && !input.waitCheck && !input.waitRecheck && !this.restoredTaskInputs.has(input);
       let session = await this.sessionFor(s.key, freshCron);
       if (cronTask && !cronTask.runtimeSessionId) {
