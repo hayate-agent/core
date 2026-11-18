@@ -80,8 +80,9 @@ export function selectHashtagContext(conversation: string, tags: string[], index
   // Newest indexed first; index order breaks ties. Multiple tags form one union.
   for (let i = index.length - 1; i >= 0 && references.length < 8; i--) {
     const ref = index[i];
+    if (!tags.includes(ref.tag)) continue;
     const key = JSON.stringify([ref.sessionId, ref.messageId]);
-    if (!tags.includes(ref.tag) || seen.has(key)) continue;
+    if (seen.has(key)) continue;
     seen.add(key);
     references.push({ ...ref });
   }
