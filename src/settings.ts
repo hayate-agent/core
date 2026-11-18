@@ -86,7 +86,7 @@ function validate(value: unknown, defaults: Partial<ContextPolicy> = {}, pruning
       pruningPolicy({ ...pruningDefaults, ...item });
     } else if (key === "contextMaintenance") {
       if (!item || typeof item !== "object" || Array.isArray(item)) throw new Error("Invalid context policy overlay");
-      const allowed = ["compactionOwner", "enabled", "workerContextTokens", "mainContextTokens", "localModels", "localMainContextTokens", "localWorkerContextTokens", "checkEveryTurns", "assessPercent", "compactPercent", "cooldownTurns", "autoHandover"];
+      const allowed = ["compactionOwner", "enabled", "workerContextTokens", "mainContextTokens", "localModels", "localMainContextTokens", "localWorkerContextTokens", "checkEveryTurns", "assessPercent", "compactPercent", "cooldownTurns", "autoHandover", "handoverSummaryTimeoutMs"];
       if (Object.keys(item).some((k) => !allowed.includes(k))) throw new Error("Unsupported context setting");
       contextPolicy({ ...defaults, ...item });
     } else if (key === "skills") {

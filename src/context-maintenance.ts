@@ -25,12 +25,16 @@ export interface ContextPolicy {
   compactPercent: number;
   cooldownTurns: number;
   autoHandover: boolean;
+  /** Total bounded allowance for admission, generation and cleanup of an independent retrospective. */
+  handoverSummaryTimeoutMs?: number;
 }
 export const defaultContextPolicy: ContextPolicy = {
-  compactionOwner: "harness", enabled: true, workerContextTokens: 131072, mainContextTokens: 131072, localModels: [], checkEveryTurns: 5, assessPercent: 60, compactPercent: 75, cooldownTurns: 5, autoHandover: true,
+  compactionOwner: "harness", enabled: true, workerContextTokens: 131072, mainContextTokens: 131072, localModels: [], checkEveryTurns: 5, assessPercent: 60, compactPercent: 75, cooldownTurns: 5, autoHandover: true, handoverSummaryTimeoutMs: 120000,
 };
 export function contextPolicy(input: Partial<ContextPolicy> = {}): ContextPolicy {
   const policy = { ...defaultContextPolicy, ...input };
+  if (!Number.isSafeInteger(policy.handoverSummaryTimeoutMs) || policy.handoverSummaryTimeoutMs! < 1000 || policy.handoverSummaryTimeoutMs! > 120000)
+    throw new Error("Invalid handover summary timeout (1000–120000 milliseconds)");
   if (!["harness", "agent"].includes(policy.compactionOwner!)) throw new Error("Invalid compaction owner");
   if (!Number.isSafeInteger(policy.workerContextTokens) || policy.workerContextTokens! < 8192) throw new Error("Invalid worker context token budget");
   if (!Number.isSafeInteger(policy.mainContextTokens) || policy.mainContextTokens! < 8192) throw new Error("Invalid main context token budget");
@@ -299,7 +303,7 @@ export class ContextMaintenance {
           let timedOut = false;
           try {
             const summary = await Promise.race([cancelled, this.handoverSummary(prompt, entries, session.status().model, controller.signal),
-              new Promise<never>((_, reject) => { timer = setTimeout(() => { timedOut = true; controller.abort(); reject(Error("summary deadline")); }, 30000); })]);
+              new Promise<never>((_, reject) => { timer = setTimeout(() => { timedOut = true; controller.abort(); reject(Error("summary deadline")); }, this.policy().handoverSummaryTimeoutMs ?? 120000); })]);
             if (!summary.trim() || summary.length > 64000) { summaryStatus = "invalid"; throw Error("Invalid retrospective"); }
             summaryStatus = "generated";
             return summary;
