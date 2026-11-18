@@ -26,6 +26,26 @@ for (const decision of ["continue", "waiting"] as const) test(`semantic ${decisi
     } else assert.equal(task.wait?.nextAt, 61000);
   } finally { await h.stop(0); }
 });
+for (const changed of [false, true]) test(`silent waiting with ${changed ? "changed" : "identical"} read evidence`, async () => {
+  let turns = 0, h!: Harness;
+  const runtime = new FakeRuntime((_text, key) => {
+    turns++;
+    if (turns > 2) { h.planContinuation(key, { state: "completed" }); return "Work completed"; }
+    const event = runtime.sessions.get(key)!.options.at(-1)!.onEvent;
+    event?.({ type: "tool", phase: "start", name: "read", callId: `r${turns}` });
+    event?.({ type: "tool", phase: "end", name: "read", callId: `r${turns}`, detail: changed ? `result ${turns}` : "same result" });
+    h.planContinuation(key, { state: "waiting", next: "Await clarification" }); return NO_REPLY;
+  });
+  h = new Harness({ runtime, tickMs: 60000, completionCheck: async () => turns <= 2
+    ? { state: "continue", next: "Inspect retained task" } : { state: "completed" } });
+  h.addChannel(new MemoryChannel()); h.onStateChange = async () => {};
+  try {
+    await h.submit(msg("Original task")); await h.drained();
+    assert.equal(turns, changed ? 3 : 2);
+    if (!changed) { assert.equal(h.snapshotSessions()[0]!.task!.state, "waiting"); await h.tick(); await h.drained(); assert.equal(turns, 2); }
+  } finally { await h.stop(0); }
+});
+
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
