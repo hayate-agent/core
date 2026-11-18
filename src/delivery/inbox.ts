@@ -48,7 +48,7 @@ export class InboxLedger {
     const out: Inbound[] = [];
     const added = new Set<Inbound>();
     const add = (input: Inbound) => {
-      if (replayable(input) && !added.has(input)) (added.add(input), out.push(input));
+      if (!added.has(input) && replayable(input)) (added.add(input), out.push(input));
     };
     for (const input of this.handoff) add(input);
     for (const s of sessions) {
