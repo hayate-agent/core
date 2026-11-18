@@ -42,6 +42,7 @@ export function resolveLanguage(policy: LanguagePolicy = {}, scope: LanguageScop
 export type MessageKey = keyof typeof en;
 const catalogs: Record<string, Record<MessageKey, string>> = { en, de, es, ru };
 export function catalogLanguage(locale: string): string {
+  if (typeof locale === "string" && Object.hasOwn(catalogs, locale)) return locale;
   const tag = languageTag(locale);
   return Object.hasOwn(catalogs, tag) ? tag : Object.hasOwn(catalogs, tag.split("-")[0]) ? tag.split("-")[0] : "en";
 }
