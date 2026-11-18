@@ -9,7 +9,7 @@ import { executionMetadata } from "../builtin-plugins/execution-metadata.js";
  * PI runtime adapter. The only module that imports the PI SDK.
  */
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai/compat";
-import { MAX_MODEL_INPUT_TOKENS, modelInputEstimate, modelInputLimit } from "../model-input-budget.js";
+import { modelInputEstimate, modelInputLimit } from "../model-input-budget.js";
 import { reasoningEffortNoneModels as reasoningEffortNoneModelsFromEnv } from "../product-paths.js";
 import type { AdaptiveSkills } from "../adaptive-skills.js";
 import { toolGuardDenialReason } from "../tool-guard-error.js";
@@ -1161,7 +1161,7 @@ export class PiRuntime implements AgentRuntime {
       const child = options.ephemeral || sessionKey.startsWith("cron:") || sessionKey.startsWith("api:cron-") || childDeniedTools(sessionKey).length > 0;
       const local = localModel(policy, key);
       const configured = child ? policy?.workerContextTokens ?? this.opts.workerContextTokens?.() ?? 131072 : policy?.mainContextTokens ?? 131072;
-      const budget = Math.min(MAX_MODEL_INPUT_TOKENS, localContextBudget(configured, child, local, policy));
+      const budget = modelInputLimit(localContextBudget(configured, child, local, policy), model.contextWindow, model.maxTokens);
       const bounded = policy ? contextCompactionSettings(model.contextWindow, baseline, budget)
         : options.ephemeral ? undefined : workerCompactionSettings(sessionKey, model.contextWindow, baseline, this.opts.workerContextTokens?.());
       // Native SDK checks use provider usage plus trailing-message estimates,
