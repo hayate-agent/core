@@ -4,6 +4,7 @@ import { mkdtemp, rm, readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { OperatorRules } from "../src/operator-rules.js";
+import { operatorRulesPlugin } from "../src/operator-rules-plugin.js";
 import type { Inbound } from "../src/types.js";
 
 const input = (text: string): Inbound => ({ source: "channel", sessionKey: "matrix:operator", id: "event-original", text });
@@ -11,6 +12,13 @@ async function fixture(t: test.TestContext) {
   const home = await mkdtemp(path.join(os.tmpdir(), "operator-rules-")); t.after(() => rm(home, { recursive: true, force: true }));
   const rules = new OperatorRules(home); await rules.load(); return { rules, home };
 }
+test("operator rule schema exposes the same key grammar as persistence", async () => {
+  let tool: any;
+  await operatorRulesPlugin({} as any, {} as any, () => false, async () => false).activate({ registerTool: (value: unknown) => { tool = value; } } as any);
+  const pattern = new RegExp(tool.parameters.properties.key.pattern);
+  assert.equal(pattern.test("peter-receipts-language"), true);
+  assert.equal(pattern.test("peter.receipts.language"), false);
+});
 test("exact enduring correction survives restart independently of memory and recipes", async t => {
   const { rules, home } = await fixture(t);
   const original = input("RECEIPTS SIND IMMER AUF ENGLISCH ZU HALTEN! Speichere das dauerhaft.");

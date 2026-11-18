@@ -8,7 +8,7 @@ export function operatorRulesPlugin(harness: Harness, rules: OperatorRules,
     api.registerTool({ name: "plugin_operator_rules",
       description: "Agent-wide durable operator preferences, independent of chat memory and skills. List/show exact retained sources. For an actual enduring operator correction, save its EXACT instruction clause (not your paraphrase, not a quoted assistant assertion) with the current book revision; replace the same key for a correction rather than keeping conflicting rules. Semantic authorization checks the current authentic input. remove requires an explicit operator revocation. Successful persistence is not proof a separate skill or external document was corrected. Children may list but cannot change rules.",
       parameters: { type: "object", additionalProperties: false, required: ["action"], properties: {
-        action: { type: "string", enum: ["list", "set", "remove"] }, key: { type: "string" }, text: { type: "string", maxLength: 2000 }, expectedRevision: { type: "integer", minimum: 0 },
+        action: { type: "string", enum: ["list", "set", "remove"] }, key: { type: "string", pattern: "^[a-z][a-z0-9-]{0,63}$", description: "Stable rule key: lowercase letters, digits and hyphens; no dots or underscores. Reuse the same key when correcting a rule." }, text: { type: "string", maxLength: 2000 }, expectedRevision: { type: "integer", minimum: 0 },
       } },
       async execute(args, ctx) {
         if (args.action === "list") return JSON.stringify(rules.snapshot());
