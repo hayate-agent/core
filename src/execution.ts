@@ -357,10 +357,13 @@ export class ExecutionStore {
     }
     this.loaded = true;
   }
-  private mutate<T>(fn: (draft: Ledger) => T | Promise<T>, shouldCommit?: () => boolean): Promise<T> {
+  private mutate<T>(fn: (draft: Ledger) => T | Promise<T>, shouldCommit?: () => boolean, unchanged?: (data: Ledger) => boolean): Promise<T> {
     const next = this.queue.catch(() => {}).then(async () => {
       if (!this.loaded) throw Error("Execution store not loaded");
       this.storage.assertWritable();
+      // Only void idempotent mutations use this predicate, inside the queue and
+      // after ownership validation. Do not clone the ledger for a proven no-op.
+      if (unchanged?.(this.data)) return undefined as T;
       // Dependency snapshots are immutable host-owned evidence. Clone mutable
       // ledger state, but share frozen dependencies rather than copying tens of
       // MB on every status/turn barrier. Preserve exact key order for fences.
@@ -1141,6 +1144,33 @@ export class ExecutionStore {
       }
       this.event(draft, task, "result", result);
     });
+  }
+  /** One startup fence for all retained stops, not one full ledger clone per task. */
+  cancelTasks(stops: readonly { parent: string; taskId: string; preexistingUnscoped?: readonly string[] }[]): Promise<void> {
+    const scopes = new Map<string, typeof stops[number][]>();
+    for (const stop of stops) {
+      if (!stop.taskId.trim()) return Promise.reject(Error("Task identity required"));
+      const rows = scopes.get(stop.parent) ?? []; rows.push(stop); scopes.set(stop.parent, rows);
+    }
+    const apply = (data: Ledger, write: boolean): boolean => {
+      let changed = false;
+      const revoked = new Set<string>();
+      for (const task of data.executions) {
+        const rows = scopes.get(task.parent); if (!rows) continue;
+        if (task.dependency?.taskId && rows.some(row => row.taskId === task.dependency!.taskId)) {
+          revoked.add(task.id);
+          changed ||= task.parentStopped !== true || !["completed", "cancelled"].includes(task.status) || task.terminalAt == null || task.token !== undefined;
+          if (write) { task.parentStopped = true; if (!["completed", "cancelled"].includes(task.status)) task.status = "cancelled"; task.terminalAt ??= this.now(); delete task.token; }
+        } else if (!task.dependency?.taskId && task.status !== "cancelled" && rows.some(row => !row.preexistingUnscoped?.includes(task.id))) {
+          changed ||= task.ownershipHold !== "unscoped-parent-stop" || task.status === "ready" || task.recoveryReason == null;
+          if (write) { task.ownershipHold = "unscoped-parent-stop"; if (task.status === "ready") task.status = "blocked"; task.recoveryReason ??= "Legacy execution ancestry held after a task-scoped parent stop; inspect ownership before retrying."; }
+        }
+      }
+      changed ||= data.events.some(event => revoked.has(event.executionId));
+      if (write) data.events = data.events.filter(event => !revoked.has(event.executionId));
+      return changed;
+    };
+    return this.mutate(data => { apply(data, true); }, undefined, data => !apply(data, false));
   }
   cancelTask(parent: string, taskId: string, preexistingUnscoped: readonly string[] = []): Promise<void> {
     if (!taskId.trim()) return Promise.reject(Error("Task identity required"));

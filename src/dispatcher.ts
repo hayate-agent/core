@@ -185,6 +185,17 @@ export class Dispatcher {
       if (task.dependency?.taskId === taskId || task.ownershipHold) this.active.get(task.id)?.abort.abort();
     void this.kick().catch(this.report);
   }
+  /** Ledger revocation was committed by the host bulk reconciliation. Notify
+   * live owners without cloning/revoking that same ledger once per old task. */
+  stopRevokedTasks(stops: readonly { parent: string; taskId: string }[]): void {
+    const scopes = new Map<string, Set<string>>();
+    for (const stop of stops) { const ids = scopes.get(stop.parent) ?? new Set<string>(); ids.add(stop.taskId); scopes.set(stop.parent, ids); }
+    for (const task of this.store.list()) {
+      const ids = scopes.get(task.parent);
+      if (ids && (task.dependency?.taskId && ids.has(task.dependency.taskId) || task.ownershipHold)) this.active.get(task.id)?.abort.abort();
+    }
+    void this.kick().catch(this.report);
+  }
   /** Also called by host retry ticks; no model calls are used to poll task status. */
   kick(): Promise<void> {
     if (this.stopped || !this.recovered || this.admissionFenced()) return Promise.resolve();
