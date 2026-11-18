@@ -6,6 +6,9 @@ import os from "node:os";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import { PiRuntime } from "../src/runtime/pi.js";
+import { AdaptiveSkills } from "../src/adaptive-skills.js";
+import { SkillCatalog } from "../src/skill-catalog.js";
+import { isBoundedReadResult } from "../src/bounded-read-result.js";
 import { pruningPolicy } from "../src/tool-result-pruning.js";
 import { pruneToolResults } from "../src/builtin-plugins/tool-result-projector.js";
 import { FilesystemSessionProvider } from "../src/sessions.js";
@@ -37,7 +40,9 @@ for (const external of [false, true]) test(`bounded middle-file reads survive ac
       assert.match(actual, /^\[Read range:/);
       assert.doesNotMatch(actual, /omitted|excerpt|duplicate/i);
       assert.equal(actual, readText || actual); readText = actual;
-      assert.equal(actual.split("\n").slice(1).join("\n"), text.split("\n").slice(149, 156).join("\n") + "\n");
+      assert.equal(actual.split("\nHost skill evidence receipt:")[0].split("\n").slice(1).join("\n"), text.split("\n").slice(149, 156).join("\n") + "\n");
+      assert.match(actual, /Host skill evidence receipt:/);
+      assert(isBoundedReadResult(range), "host skill receipt must not invalidate bounded range protection");
     }
     const next = results.length;
     let call: any;
@@ -50,7 +55,8 @@ for (const external of [false, true]) test(`bounded middle-file reads survive ac
     const stream = createAssistantMessageEventStream();
     queueMicrotask(() => { stream.push({ type: "done", reason: message.stopReason, message }); stream.end(); }); return stream;
   } });
-  const runtime = new PiRuntime({ cwd: home, sessionsDir: path.join(home, "sessions"), model: "bounded-fixture/model", tools: ["read", "plugin_fill"], skillPaths: [],
+  const adaptiveSkills = new AdaptiveSkills(home, home, new SkillCatalog(path.join(home, "skills-index.json"), () => []));
+  const runtime = new PiRuntime({ adaptiveSkills, cwd: home, sessionsDir: path.join(home, "sessions"), model: "bounded-fixture/model", tools: ["read", "plugin_fill"], skillPaths: [],
     pruning: () => pruningPolicy({ proactivePruneTokens: 1, minResultChars: 600, maxResultChars: 256 }), projectToolResults: pruneToolResults,
     ...(external ? { sessionProvider: () => provider } : {}), personaSections: async () => ["Exact operator rule: do not deploy."],
     approvals: { mode: "off", tools: [] }, pluginTools: () => [{ name: "plugin_fill", description: "Synthetic prior evidence", parameters: { type: "object", properties: {} },
