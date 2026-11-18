@@ -445,8 +445,13 @@ async function main(argv: string[]): Promise<void> {
       const current = harness.sessions.get(key)?.current;
       if (current?.source === "host") {
         if (!current.hostEvent) throw new ToolGuardError("authority_revoked", "Host event authority unavailable");
-        if (!dispatchRuntime) throw new ToolGuardError("dispatcher_unavailable", "Host result dispatcher unavailable");
-        dispatchRuntime.guardHostEvent(key, current);
+        if (current.hostEvent.nativeSubagent) {
+          if (!subagents.resultExecution(current) || !harness.resultMandate(current))
+            throw new ToolGuardError("authority_revoked", "Native child result no longer belongs to this mandate");
+        } else {
+          if (!dispatchRuntime) throw new ToolGuardError("dispatcher_unavailable", "Host result dispatcher unavailable");
+          dispatchRuntime.guardHostEvent(key, current);
+        }
         guardResultOrchestration(harness, key, tool, input);
       }
       await plugins.policies.beforeTool(cwdFor(key), tool, input);
@@ -541,7 +546,10 @@ async function main(argv: string[]): Promise<void> {
     },
     // Nightly owns dispatcher evidence directly, including retained pre-upgrade inbox events.
     // It must never become a new LLM turn through the generic host-result lane.
-    hostEventAllowed: input => input.sessionKey !== "improvement:nightly" && !!dispatchRuntime?.hostEventAllowed(input),
+    hostEventAllowed: input => input.sessionKey !== "improvement:nightly" && (input.hostEvent?.nativeSubagent
+      ? !!subagents.resultExecution(input) : !!dispatchRuntime?.hostEventAllowed(input)),
+    nativeSubagentExecution: input => subagents.resultExecution(input),
+    pendingNativeSubagent: (key, taskId) => subagents.pending(key, taskId),
     // Reserve this namespace even with dispatch disabled: stale opaque turns
     // must be reconciled through the ledger, not replayed by Harness startup.
     externallyRecoveredSession: key => key.startsWith("dispatch:"),
@@ -961,7 +969,8 @@ async function main(argv: string[]): Promise<void> {
     if (!harness.stopping && !harness.updateFenced) void harness.withForegroundWork(() => plugins.reportProcessing.tick()).catch(() => log("[cron] report processing deferred"));
   }, 30000);
   cronReportTimer.unref();
-  const policyTimer = setInterval(() => { void policyManager.tick().catch(() => {}); void extensionManager.tick().catch(() => {}); }, 1000);
+  const policyTimer = setInterval(() => { void policyManager.tick().catch(() => {}); void extensionManager.tick().catch(() => {});
+    if (hostAdmissionReady) void subagents.flushResults(sessionEnabled).catch(() => log("[subagents] result inbox acceptance pending")); }, 1000);
   policyTimer.unref();
   const memoryTimer = config.memory.enabled ? setInterval(() => { void connectMemory().then(() => memory.flush()).catch(() => log("[memory] capture backlog retained")); }, 30000) : undefined;
   memoryTimer?.unref();

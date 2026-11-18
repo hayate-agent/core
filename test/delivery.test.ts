@@ -20,6 +20,16 @@ test("seen window evicts oldest unpinned ids; restored ids stay until a checkpoi
   assert.deepEqual(w.ids(new Set(["e"])), ["d", "f"]);
 });
 
+test("explicit restored owner pins survive another channel checkpoint until their own acknowledgement", () => {
+  const w = new SeenWindow(2);
+  w.restore(["native-result", "old"]); w.pin(["native-result"]);
+  w.unpin(["matrix-checkpoint"]);
+  for (const id of ["one", "two", "three"]) w.mark(id);
+  assert.equal(w.has("native-result"), true);
+  w.unpin(["native-result"]); w.mark("four");
+  assert.equal(w.has("native-result"), false);
+});
+
 test("outbox: barrier holds blocked entries until a save succeeds; permanent errors are parked", async () => {
   const sent: string[] = [];
   const parked: string[] = [];
