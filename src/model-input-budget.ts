@@ -11,8 +11,10 @@ export function modelInputEstimate(messages: readonly unknown[]): number {
 export function modelInputLimit(configured: number, contextWindow: number, outputTokens: number): number {
   if (!Number.isSafeInteger(configured) || configured < 1) throw Error("Invalid model input budget");
   if (!Number.isSafeInteger(outputTokens) || outputTokens < 0) throw Error("Invalid model output budget");
-  const budget = Math.min(MAX_MODEL_INPUT_TOKENS, configured);
-  // Unknown physical capacity stays unknown; the host cap still applies.
+  // The operator's role/local budget is authoritative. The historical default
+  // is not an additional hard ceiling on explicitly configured larger budgets.
+  const budget = configured;
+  // Unknown physical capacity stays unknown; the configured budget still applies.
   return Number.isSafeInteger(contextWindow) && contextWindow > 0
     ? Math.max(0, Math.min(budget, contextWindow - outputTokens)) : budget;
 }
