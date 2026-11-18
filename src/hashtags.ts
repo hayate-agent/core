@@ -47,7 +47,15 @@ export function labelOutput(text: string, tags?: readonly string[]): string {
   if (!text || !tags?.length) return text;
   const prefix = [...new Set(tags)].sort().map(tag => `#${tag}`).join(" ") + " · ";
   // Replace model/worker-generated envelope labels rather than accumulating them.
-  return prefix + text.replace(/^(?:#[a-zA-Z][a-zA-Z0-9]*(?:-[a-zA-Z0-9]+)*\s+)+·\s*/g, "");
+  const label = /#[a-zA-Z][a-zA-Z0-9]*(?:-[a-zA-Z0-9]+)*\s+/y;
+  let end = 0;
+  while (label.exec(text)) end = label.lastIndex;
+  if (end > 0 && text[end] === "·") {
+    end++;
+    while (end < text.length && /\s/.test(text[end])) end++;
+    return prefix + text.slice(end);
+  }
+  return prefix + text;
 }
 
 export function hashtagReferences(sessionId: string, text: string, entries: ArchiveEntry[], date: string, previousIds: Set<string>, assignedTags?: readonly string[]): HashtagReference[] {
