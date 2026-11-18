@@ -33,7 +33,7 @@ export interface Inbound {
   /** Explicitly admitted loop occurrence, durably retained independently of timer ticks. */
   explicitLoopRun?: boolean;
   /** Host event identity for authority checks; event data never grants continuation. */
-  hostEvent?: { executionId: string; question?: { id: string; eventId: string }; assessmentStalled?: { eventId: string } };
+  hostEvent?: { executionId: string; nativeSubagent?: true; question?: { id: string; eventId: string }; assessmentStalled?: { eventId: string } };
   /** Host scheduler fingerprint; model text cannot establish source scope. */
   cronScope?: string;
   /** Trusted scheduler metadata; output never expands the configured follow-up scope. */

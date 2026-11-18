@@ -108,6 +108,9 @@ export interface HarnessOptions {
   stoppedTasksReconciled?: (stops: readonly { parent: string; taskId: string }[]) => Promise<void>;
   /** Revalidate queued host data immediately before execution, including after restart. */
   hostEventAllowed?: (input: Inbound) => boolean;
+  /** Native children retain their own durable result owner, not a dispatcher claim. */
+  nativeSubagentExecution?: (input: Inbound) => import("./execution.js").Execution | undefined;
+  pendingNativeSubagent?: (key: string, taskId?: string) => boolean;
   /** Externally owned workers must recover through their own durable ledger, never inbox replay. */
   externallyRecoveredSession?: (sessionKey: string) => boolean;
   /** Trusted installation deadline, independent of model continuation plans. */
@@ -881,6 +884,7 @@ export class Harness {
   }
 
   private hasPendingDependency(key: string, taskId?: string): boolean {
+    if (this.opts.pendingNativeSubagent?.(key, taskId)) return true;
     const store = this.opts.executionStore;
     const s = this.sessions.get(key);
     const task = taskId && s ? this.tasks(s).find(t => t.id === taskId) : undefined;
@@ -1270,12 +1274,17 @@ export class Harness {
       expiresAt: deadlines.length ? Math.min(...deadlines) : undefined, anchor: structuredClone(task.anchor) };
   }
 
+  private hostExecution(input: Inbound): import("./execution.js").Execution | undefined {
+    return input.hostEvent?.nativeSubagent ? this.opts.nativeSubagentExecution?.(input)
+      : this.opts.executionStore?.list(input.sessionKey).find(e => e.id === input.hostEvent?.executionId);
+  }
+
   /** Resolve scope from the live parent, not a child's historical checkpoint.
    * Operator clarification and continuation may replace task IDs or depth;
    * result text and caller-supplied anchors never grant authority. */
   resultMandate(input: Inbound): import("./execution.js").Execution["dependency"] {
     if (input.source !== "host" || input.sessionKey.startsWith("dispatch:") || input.sessionKey.startsWith("subagent:")) return;
-    const execution = this.opts.executionStore?.list(input.sessionKey).find(e => e.id === input.hostEvent?.executionId);
+    const execution = this.hostExecution(input);
     const session = this.sessions.get(input.sessionKey);
     // A retained task owns its worker even after an intervening question or
     // completion checkpoint. Only explicit stop/expiry revoke that provenance;
@@ -2780,7 +2789,7 @@ export class Harness {
         if (input.source === "host") {
           // Routing is execution provenance, independent of current parent authority.
           // Legacy records fall back to home, never the latest conversation topic.
-          const execution = this.opts.executionStore?.list(s.key).find(e => e.id === input.hostEvent?.executionId);
+          const execution = this.hostExecution(input);
           input.replyTo = structuredClone(executionTarget(execution, this.home));
           if (this.opts.taskLifecycle?.enabled && execution?.dependency?.taskRef && !this.opts.executionStore!.taskIsOpen(execution.dependency.taskRef)) {
             // Historical evidence is deliverable, never a new model/worker turn.
@@ -2789,6 +2798,11 @@ export class Harness {
             s.current = undefined; s.unsaved = true; await this.onStateChange?.(); continue;
           }
           const mandate = this.resultMandate(input);
+          // A native result may lose authority while durably queued (expiry,
+          // stop, task closure). Never erase its scope then run an unscoped turn.
+          if (input.hostEvent?.nativeSubagent && !mandate) {
+            s.current = undefined; s.unsaved = true; await this.onStateChange?.(); continue;
+          }
           input.taskId = mandate?.taskId;
           input.taskRef = structuredClone(mandate?.taskRef);
           input.completionAnchor = structuredClone(mandate?.anchor);
@@ -2853,7 +2867,7 @@ export class Harness {
         // Resolve only the exact stored assignment. Host results must not inherit
         // the current parent task (which may have changed since dispatch).
         const execution = input.source === "host"
-          ? this.opts.executionStore?.list(s.key).find(task => task.id === input.hostEvent?.executionId)
+          ? this.hostExecution(input)
           : this.opts.executionStore?.list().find(task => s.key === `dispatch:${task.id}:${task.token}`);
         input.outputTags = (input.source === "host" || s.key.startsWith("dispatch:"))
           ? structuredClone(execution?.dependency?.anchor?.outputTags)
@@ -3034,7 +3048,7 @@ export class Harness {
           // A substep report cannot close a mandate while owned children are
           // still executing/queued. Settled blocked children are different:
           // their preserved holds do not prevent an independently assessed end.
-          const liveChild = this.opts.executionStore?.list(s.key).some(child =>
+          const liveChild = this.opts.pendingNativeSubagent?.(s.key, task.id) || this.opts.executionStore?.list(s.key).some(child =>
             ["ready", "running"].includes(child.status) && this.mayDependOn(child, task.id, task));
           const orderPlan = this.opts.taskLifecycle?.enabled && input.taskRef
             ? this.opts.executionStore!.coreTask(input.taskRef.id)?.plan : undefined;
@@ -3243,7 +3257,7 @@ export class Harness {
     this.turnAbort.set(s.key, abort);
     const checkExpiry = () => {
       this.guardTaskAuthority(input);
-      if (input.source === "host" && (this.stoppingHostParents.has(s.key) || !this.opts.hostEventAllowed?.(input) || (input.taskId !== undefined && !this.resultMandate(input)))) {
+      if (input.source === "host" && (this.stoppingHostParents.has(s.key) || !this.opts.hostEventAllowed?.(input) || ((input.taskId !== undefined || input.hostEvent?.nativeSubagent) && !this.resultMandate(input)))) {
         s.cancelling = input;
         throw Error("Host event authority revoked");
       }
@@ -3855,7 +3869,7 @@ export class Harness {
       // Authentic task expiry remains enforced by the original path below.
       const eventOwned = this.opts.executionStore?.list(s.key).filter(e => this.mayDependOn(e, task.id, task) &&
         !e.parentStopped && !e.ownershipHold && ["ready", "running"].includes(e.status));
-      if (task.state === "waiting" && eventOwned?.length &&
+      if (task.state === "waiting" && (eventOwned?.length || this.opts.pendingNativeSubagent?.(s.key, task.id)) &&
           (task.expiresAt === undefined || at < task.expiresAt)) continue;
       if (this.hasPendingDependency(s.key, task.id) &&
           !(task.state === "waiting" && task.expiresAt !== undefined && at >= task.expiresAt) &&
