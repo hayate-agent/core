@@ -97,9 +97,34 @@ test("stalled independent summary times out into an archive-backed fresh session
   const old = { status: () => ({ sessionId: "old" }), archiveEntries: () => [] } as unknown as RuntimeSession;
   await m.request("chat", { action: "handover", preserve: "approved task", resume: "remaining work" });
   const result = m.beforeTurn("chat", old, async () => ({ status: () => ({ sessionId: "fresh" }) }) as RuntimeSession);
-  await ready; t.mock.timers.tick(30000); await result;
+  await ready; t.mock.timers.tick(120000); await result;
   assert.equal(signal.aborted, true); assert.equal((await m.status("chat")).sessionId, "fresh");
   assert.equal(await m.recoveryStatus("chat"), undefined);
+});
+
+test("healthy retrospective beyond thirty seconds retains generated evidence and full archive", async t => {
+  const home = await homeFor(t); let started!: () => void, aborted = false;
+  const ready = new Promise<void>(resolve => { started = resolve; });
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const entries = [{ id: "receipt", role: "toolResult", text: "Verified item; uncertain delivery remains pending" }];
+  const m = new ContextMaintenance(home, () => contextPolicy(), undefined, Date.now, async (_instructions, _entries, _model, signal) => {
+    signal.addEventListener("abort", () => { aborted = true; }); started();
+    await new Promise(resolve => setTimeout(resolve, 45000));
+    return "CURRENT STATE AND NEXT STEPS: retain verified receipt; reconcile uncertain delivery without replay";
+  });
+  const old = { status: () => ({ sessionId: "old" }), archiveEntries: () => entries } as unknown as RuntimeSession;
+  await m.request("chat", { action: "handover", preserve: "batch receipts", resume: "next distinct item" });
+  const result = m.beforeTurn("chat", old, async () => ({ status: () => ({ sessionId: "fresh" }) }) as RuntimeSession);
+  await ready; t.mock.timers.tick(45000); await result;
+  const state = await m.status("chat"); assert.equal(aborted, false); assert.equal(state.handover?.summaryStatus, "generated");
+  const archive = await m.archives.load("chat", state.handover!.archiveId!);
+  assert.deepEqual(archive.entries, entries); assert.match(archive.retrospective, /uncertain delivery/);
+});
+
+test("handover summary timeout is bounded and validates explicit shorter allowances", () => {
+  assert.equal(contextPolicy().handoverSummaryTimeoutMs, 120000);
+  assert.equal(contextPolicy({ handoverSummaryTimeoutMs: 30000 }).handoverSummaryTimeoutMs, 30000);
+  for (const value of [0, 999, 120001, NaN, Infinity, 1.5]) assert.throws(() => contextPolicy({ handoverSummaryTimeoutMs: value }), /summary timeout/);
 });
 
 test("interrupting a read-only handover summary waits briefly, never installs an uncertainty hold", async t => {

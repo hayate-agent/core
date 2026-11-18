@@ -41,8 +41,8 @@ for (const changed of [false, true]) test(`silent waiting with ${changed ? "chan
   h.addChannel(new MemoryChannel()); h.onStateChange = async () => {};
   try {
     await h.submit(msg("Original task")); await h.drained();
-    assert.equal(turns, changed ? 3 : 2);
-    if (!changed) { assert.equal(h.snapshotSessions()[0]!.task!.state, "waiting"); await h.tick(); await h.drained(); assert.equal(turns, 2); }
+    assert.equal(turns, 2, "different reads alone must not override a repeated silent wait");
+    assert.equal(h.snapshotSessions()[0]!.task!.state, "waiting"); await h.tick(); await h.drained(); assert.equal(turns, 2);
   } finally { await h.stop(0); }
 });
 
@@ -69,6 +69,50 @@ for (const advanced of [false, true]) test(`silent external wait with reworded c
       await h.tick(); await h.drained(); assert.equal(turns, 2, "no model polling before the real wait boundary");
       now = 61001; await h.tick(); await h.drained(); assert.equal(turns, 3, "existing bounded wake remains usable");
     }
+  } finally { await h.stop(0); }
+});
+
+for (const advanced of [false, true]) test(`Minerva: changing history/status/shell evidence with reworded next, progress=${advanced}`, async () => {
+  let turns = 0, h!: Harness;
+  const runtime = new FakeRuntime((_text, key) => {
+    turns++;
+    const event = runtime.sessions.get(key)!.options.at(-1)!.onEvent;
+    for (const name of ["plugin_session_history", "plugin_dispatch", "bash"]) {
+      const callId = `${name}-${turns}`;
+      event?.({ type: "tool", phase: "start", name, callId });
+      event?.({ type: "tool", phase: "end", name, callId, detail: `${name} probe ${turns}: dependency still unavailable` });
+    }
+    h.planContinuation(key, turns > 2 ? { state: "completed" } : { state: "waiting", next: `Await Mail/Slack recovery; retained evidence ${turns}` });
+    return turns > 2 ? "Verified business result" : NO_REPLY;
+  });
+  h = new Harness({ runtime, tickMs: 60000, completionCheck: async () => turns > 2 ? { state: "completed" } : {
+    state: "continue", next: `Reconcile retained mail evidence, variant ${turns}`,
+    ...(advanced ? { progress: { advanced: true, reason: "Verified new delivery receipt" } } : {}),
+  } });
+  h.addChannel(new MemoryChannel()); h.onStateChange = async () => {};
+  try {
+    await h.submit(msg("Restore requested Mail/Slack reports without replaying uncertain deliveries")); await h.drained();
+    assert.equal(turns, advanced ? 3 : 2);
+    assert.equal(h.snapshotSessions()[0]!.task!.state, advanced ? "completed" : "waiting");
+    if (!advanced) { await h.tick(); await h.drained(); assert.equal(turns, 2); }
+  } finally { await h.stop(0); }
+});
+
+test("Odo: productive silent batch continuations are not treated as waiting", async () => {
+  let turns = 0, h!: Harness;
+  const runtime = new FakeRuntime((_text, key) => {
+    turns++;
+    const event = runtime.sessions.get(key)!.options.at(-1)!.onEvent;
+    event?.({ type: "tool", phase: "start", name: "bash", callId: `batch-${turns}` });
+    event?.({ type: "tool", phase: "end", name: "bash", callId: `batch-${turns}`, detail: `Verified next batch item ${turns}` });
+    h.planContinuation(key, turns < 5 ? { state: "continue", next: `Reconcile batch item ${turns + 1}` } : { state: "completed" });
+    return turns < 5 ? NO_REPLY : "Batch verified";
+  });
+  h = new Harness({ runtime, tickMs: 60000, completionCheck: async () => turns < 5
+    ? { state: "continue", next: `Reconcile batch item ${turns + 1}` } : { state: "completed" } });
+  h.addChannel(new MemoryChannel()); h.onStateChange = async () => {};
+  try { await h.submit(msg("Process authorized batch with exact receipts")); await h.drained();
+    assert.equal(turns, 5); assert.equal(h.snapshotSessions()[0]!.task!.state, "completed");
   } finally { await h.stop(0); }
 });
 
