@@ -1,7 +1,7 @@
 import { mcpLanguageInstructions, type LanguagePolicy } from "../language.js";
 import { retainedSessionFile } from "./retained-session-file.js";
 import { createBoundedReadTool } from "./bounded-read.js";
-import { isBoundedReadResult } from "../bounded-read-result.js";
+import { boundedReadDetails, isBoundedReadResult } from "../bounded-read-result.js";
 import { checkpointNativeSession } from "./native-session-checkpoint.js";
 import { HANDOVER_SEED_BYTES } from "../recovery-evidence.js";
 import { executionMetadata } from "../builtin-plugins/execution-metadata.js";
@@ -83,7 +83,15 @@ export function installAdaptiveSkillHooks(pi: ExtensionAPI, adaptive: AdaptiveSk
   });
   pi.on("tool_result", event => {
     const receipt = adaptive.observe(sessionKey, event.toolCallId, event.toolName, event.isError);
-    if (receipt) return { content: [...event.content, { type: "text" as const, text: receipt }] };
+    if (receipt) {
+      if (isBoundedReadResult(event)) {
+        // Re-attest only a previously verified range after this host-owned suffix.
+        // Untrusted tool text cannot acquire range protection via a receipt.
+        const text = event.content.map(part => part.type === "text" ? part.text : "").join("\n") + receipt;
+        return { content: [{ type: "text" as const, text }], structuredContent: text, details: boundedReadDetails(text) };
+      }
+      return { content: [...event.content, { type: "text" as const, text: receipt }] };
+    }
   });
 }
 
