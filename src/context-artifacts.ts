@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { isBoundedReadResult } from "./bounded-read-result.js";
 import { lstat, mkdir, realpath, readFile } from "node:fs/promises";
 import path from "node:path";
 import { writeFileDurable } from "./durable.js";
@@ -88,7 +89,7 @@ export async function compactAccumulatedToolContext<T extends ProjectionMessage>
   for (const { index, text } of candidates) {
     // Count ORIGINAL prefix bytes, not the shrinking result or a future suffix.
     bytes += Buffer.byteLength(text, "utf8");
-    if (bytes <= budget || text.length < 512) continue;
+    if (bytes <= budget || text.length < 512 || isBoundedReadResult(messages[index]!)) continue;
     const retained = await retainContext(directory, text);
     if (!retained) continue;
     const diagnostic = text.split("\n").filter(line => /\b(error|failed|uncertain|blocked|incomplete)\b/i.test(line)).slice(0, 2).map(line => line.slice(0, 120)).join("\n");

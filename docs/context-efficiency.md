@@ -130,6 +130,29 @@ existing frontier-Main behavior are unchanged. Own reasoning/tool-argument delta
 also update bounded activity metadata without exporting private reasoning; an
 open connection or another request's computation is never counted as progress.
 
+## Targeted Read ranges
+
+The ordinary `read` tool reuses the SDK's path resolution, access checks, image
+handling and cancellation. Text results return at most 3,000 Unicode codepoints
+plus a source path/hash, exact start/end cursors, total line count and `next`
+arguments. `offset`/`limit` still select original file lines; optional `charOffset`
+is a zero-based codepoint position within the starting line, so even a single
+very long line can be read without shell fallbacks or missing text. This is a
+bounded tool output, not a total prompt-token ceiling or an evidence summary.
+
+These host-generated small ranges carry native result metadata with a matching
+result hash. They remain exact through per-result, accumulated-budget and plugin
+projection, including native/external session reopening. A file's own prose cannot
+opt into this treatment. Other tools, errors, images and legacy results retain
+their existing behavior. Old range snapshots do not depend on the current file;
+new reads report a changed source hash rather than silently joining versions.
+
+Choose the missing fact first, locate the relevant lines, then read that range.
+Do not blindly page the full source or reread an excerpt to recover omitted
+middle evidence. The range is complete only for its cursor interval, not proof
+that omitted parts contain nothing relevant. This prevents automatic re-pruning
+of targeted evidence; it does not prohibit a model from making redundant calls.
+
 ## Opt-in real-model probe
 
 ```sh
