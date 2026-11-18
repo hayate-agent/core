@@ -3591,9 +3591,14 @@ export class Harness {
           // pending call or independently assessed progress keeps continuation.
           const repeatedRead = workTools > 0 && onlyReadTools && receiptsComplete && pendingWorkTools === 0 &&
             currentTask?.repetition?.evidence.includes(`tool:${workReceipts.copy().digest('hex')}`);
-          const repeatedWait = reply === NO_REPLY && checkpoint?.state === "waiting" && repeatedRead &&
+          // Reworded checker instructions are not a new external event. After
+          // one independently admitted recheck, a silent wait with no work must
+          // remain dormant rather than manufacture more turns (and context
+          // rotations) while waiting for an operator/third-party response.
+          const idleWait = workTools === 0 && pendingWorkTools === 0;
+          const repeatedWait = reply === NO_REPLY && checkpoint?.state === "waiting" &&
             previous?.proposal === "waiting" && previous.verdict === "continue" &&
-            currentTask?.next?.trim() === plan.next.trim() && !plan.progress?.advanced;
+            (idleWait || repeatedRead && currentTask?.next?.trim() === plan.next.trim()) && !plan.progress?.advanced;
           const silentTerminal = reply === NO_REPLY && (!checkpoint || checkpoint.state === "completed" || checkpoint.state === "continue") && workTools === 0 && pendingWorkTools === 0;
           if (repeatedWait) {
             input.continuation = checkpoint;
