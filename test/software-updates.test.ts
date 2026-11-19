@@ -280,5 +280,11 @@ test("WebUI activation is explicit and fail-closed: enabled module activates, di
     assert.equal(await webuiActivatedFromHome(home), true);
     await writeFile(path.join(home, "settings.local.yaml"), "gatewayPlugins:\n  webui:\n    module: file:///x/webui.js\n    disabled: true\n");
     assert.equal(await webuiActivatedFromHome(home), false);
+    // Startup must not fail on an overlay the runtime itself tolerates.
+    await writeFile(path.join(home, "settings.local.yaml"), "gatewayPlugins: [unterminated\n  : : :\n");
+    assert.equal(await webuiActivatedFromHome(home), false, "malformed overlay is not activation and does not throw");
+    await rm(path.join(home, "settings.local.yaml"));
+    await mkdir(path.join(home, "settings.local.yaml"));
+    assert.equal(await webuiActivatedFromHome(home), false, "unreadable overlay is not activation and does not throw");
   } finally { await rm(home, { recursive: true, force: true }); }
 });
