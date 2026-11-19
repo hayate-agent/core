@@ -46,6 +46,22 @@ export function softwareUpdatePolicy(value: SoftwareUpdateConfig = {}): Software
     ...(value.variant !== undefined ? { variant: value.variant === null ? null : variantPolicy(value.variant) } : {}) };
 }
 
+/** Explicit activation only (fail closed): a configured webui gateway module that is not disabled. Baseline-only WebUI is not enough. */
+export function webuiActivated(gatewayPlugins: Record<string, { module?: string; disabled?: boolean }> | undefined): boolean {
+  const override = gatewayPlugins?.webui;
+  return !override?.disabled && typeof override?.module === "string" && override.module.length > 0;
+}
+
+/** Reads the same local overlay the runtime SettingsService uses; missing file means not activated. */
+export async function webuiActivatedFromHome(home: string): Promise<boolean> {
+  const { readFile } = await import("node:fs/promises");
+  const { parse } = await import("yaml");
+  let raw: unknown;
+  try { raw = parse(await readFile(path.join(home, "settings.local.yaml"), "utf8")); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return false; throw error; }
+  return webuiActivated((raw as { gatewayPlugins?: Record<string, { module?: string; disabled?: boolean }> } | null)?.gatewayPlugins);
+}
+
 export function containerRuntime(): boolean {
   return process.env.HAYATE_RUNTIME_KIND === "container" || !!process.env.KUBERNETES_SERVICE_HOST || existsSync("/.dockerenv") || existsSync("/run/.containerenv");
 }
@@ -108,7 +124,8 @@ export class NativeSoftwareUpdates {
   private readonly abort = new AbortController();
   constructor(readonly home: string, readonly policy: SoftwareUpdatePolicy,
     private readonly notify: (event: "available" | "prepared", detail: string) => void,
-    private readonly runCommand: UpdateCommand = updateCommand, private readonly external = containerRuntime(), readonly baseline?: string) {
+    private readonly runCommand: UpdateCommand = updateCommand, private readonly external = containerRuntime(), readonly baseline?: string,
+    readonly webuiEnabled = false) {
     this.directory = path.join(home, "software-updates");
   }
   private command(command: string, args: string[], cwd: string, env?: NodeJS.ProcessEnv): Promise<string> {
@@ -230,7 +247,7 @@ export class NativeSoftwareUpdates {
         const checkout = path.join(this.directory, `variant-${randomUUID()}`); await mkdir(checkout, { mode: 0o700 });
         try { variant = await resolveVariant(this.policy.variant, checkout, (cmd, args, cwd, env) => this.command(cmd, args, cwd, env)); }
         finally { await rm(checkout, { recursive: true, force: true }); }
-        if (variant.patches.some(p => p.component === "webui")) {
+        if (variant.patches.some(p => p.component === "webui") && !this.webuiEnabled) {
           stage = "WebUI variant requires its explicit frontend deployment owner";
           throw Error("WebUI variant is not activated by the native Core owner");
         }
