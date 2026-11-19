@@ -52,14 +52,14 @@ for (const external of [false, true]) test(`tool budget projection preserves the
     session.session.settingsManager.setCompactionEnabled(false);
     try {
       assert.match(await session.prompt("Collect synthetic observations, then summarize findings without replay."), /Unknown remote effects/);
-      target = 20;
+      target = 20; previousWire = undefined; // a new host run replaces the run snapshot by design
       await session.prompt("Collect two more observations.");
       const id = session.status().sessionId;
       await session.dispose();
       session = await runtime.open(key);
       session.session.settingsManager.setCompactionEnabled(false);
       assert.equal(session.status().sessionId, id);
-      target = 22;
+      target = 22; previousWire = undefined;
       await session.prompt("Resume with two more observations.");
       assert.equal(session.session.sessionManager.getEntries().filter((e: any) => e.type === "message" && e.message.role === "toolResult").length, 22);
     } finally { await session.dispose(); }

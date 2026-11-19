@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { AgentSession } from "@earendil-works/pi-coding-agent";
+import { AgentSession, SessionManager } from "@earendil-works/pi-coding-agent";
 import { PiSession, toTurnEvent, boundedMaintenance } from "../src/runtime/pi.js";
 
 import type { LanguagePolicy } from "../src/language.js";
@@ -12,6 +12,8 @@ const B = { provider: "p", id: "b" };
 function fakeAgentSession() {
   const s = {
     model: A as unknown,
+    sessionManager: SessionManager.inMemory(),
+    refreshContext() {},
     thinkingLevel: "high",
     messages: [] as unknown[],
     prompts: [] as string[],

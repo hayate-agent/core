@@ -1,3 +1,4 @@
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -185,7 +186,7 @@ test("admin roles -> actual ephemeral PI clamp -> separate durable classifier/st
   const agents: any[] = []; let opens = 0;
   const runtime = { modelPreflight: async () => ({ available: true, thinkingSupported: true }), models: async () => [{ ref: "p/a" }, { ref: "p/b" }], async open(_key: string, options: any) {
     opens++; assert.equal(options.ephemeral, true); assert.equal(options.assessmentPurpose, "dispatch-complexity");
-    const agent: any = { model: A, thinkingLevel: "medium", messages: [],
+    const agent: any = { model: A, thinkingLevel: "medium", messages: [], sessionManager: SessionManager.inMemory(), refreshContext() {},
       setModel: async (m: any) => { agent.model = m; agent.thinkingLevel = m === B ? "off" : "medium"; },
       setThinkingLevel: (v: string) => { agent.thinkingLevel = agent.model === B ? "off" : v; },
       subscribe: () => () => {}, prompt: async () => {}, waitForIdle: async () => {},
