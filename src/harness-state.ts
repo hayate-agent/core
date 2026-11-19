@@ -16,7 +16,8 @@ export interface PendingApproval {
 }
 
 export interface Recurring {
-  /** Persistent identity for exact owner-control authorization. */
+  /** Persistent identity: exact owner-control authorization and recurring single-flight ownership.
+   * Legacy schedules acquire one before their next tick. */
   sourceId?: string;
   prompt: string;
   everyMs: number;
@@ -57,6 +58,8 @@ export interface DurableTask {
   runtimeSessionId?: string;
   /** Host-configured source identity inherited by occurrence continuations. */
   cronScope?: string;
+  /** Exact host recurring source/configuration owning this unfinished mandate. */
+  recurringSource?: string;
   /** Compare-and-set basis prevents an old unfinished occurrence replacing newer work. */
   cronCheckpointRevision?: number;
   /** Bounded result capsule only; full transcript/effect evidence stays retained. */

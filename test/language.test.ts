@@ -88,7 +88,7 @@ test("startup default English and explicit German are delivery-only, not model-g
 test("Cron language validation and admission preserve exact job preference independent of system", async () => {
   assert.throws(() => parseJobs('jobs:\n- name: x\n  schedule: "0 * * * *"\n  language: "../de"'));
   const queued: Inbound[] = [];
-  const harness = { enqueue: (input: Inbound) => queued.push(input), withForegroundWork: (work: () => Promise<void>) => work() } as unknown as Harness;
+  const harness = { recurringWorkHeld: () => false, accept: async (input: Inbound) => { queued.push(input); }, withForegroundWork: (work: () => Promise<void>) => work() } as unknown as Harness;
   const scheduler = new Scheduler(harness, { timezone: "UTC", language: job => job.language ?? "de" });
   await scheduler.runJob({ name: "one", schedule: "0 * * * *", prompt: "Check weather", language: "es", deliver: "local" });
   await scheduler.runJob({ name: "two", schedule: "0 * * * *", prompt: "Check weather", deliver: "local" });

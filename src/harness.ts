@@ -708,6 +708,26 @@ export class Harness {
     }
   }
 
+  /** Timer admission shared by the scheduler BEFORE scripts and by the pump.
+   * Host source identity only; never infer ownership from matching prose. */
+  recurringWorkHeld(key: string, source: string, includeQueued = true): boolean {
+    const s = this.sessions.get(key);
+    return !!s && (includeQueued && (s.current?.recurringSource === source || s.queue.some(input => input.recurringSource === source)) || this.tasks(s).some(task => {
+      if (task.recurringSource !== source) return false;
+      const order = task.taskRef && this.opts.executionStore?.coreTask(task.taskRef.id);
+      // Without a durable core task or an assessor nothing could ever release an
+      // unfinished state, so it cannot own the source.
+      return !["completed", "stopped"].includes(task.state) && (!!task.taskRef || !!this.opts.completionCheck) ||
+        // A completed occurrence releases the source; an operator-closed or unresolved
+        // STOPPED one keeps its explicit disposition and is never silently reopened.
+        task.taskRef && (!order || order.operatorStatus === "unresolved" || task.state === "stopped" && order.operatorStatus !== "open") ||
+        this.opts.pendingNativeSubagent?.(key, task.id) ||
+        this.opts.executionStore?.list(key).some(e =>
+          (!e.dependency?.taskId || e.dependency.taskId === task.id) &&
+          (!["completed", "cancelled"].includes(e.status) || !!e.intent || !!e.ownershipHold));
+    }));
+  }
+
   proposeTaskPlan(key: string, plan: TaskTodo[]): void {
     const input = this.sessions.get(key)?.current;
     if (!input?.taskRef || !this.opts.taskLifecycle?.enabled || /^(dispatch|subagent):/.test(key)) throw Error("Current core task required");
@@ -1913,7 +1933,7 @@ export class Harness {
     // API's reply. Queued API requests still receive foreground queue priority.
     const separateApiTurn = input.source === "api" || s.current?.source === "api" ||
       !!input.attachments?.length || !!s.current?.attachments?.length;
-    if (s.running && !separateApiTurn && !this.maintenanceForeground.has(input) && (yieldToOperator || (input.source !== "host" && s.current?.source !== "host"))) {
+    if (s.running && !input.recurringSource && !separateApiTurn && !this.maintenanceForeground.has(input) && (yieldToOperator || (input.source !== "host" && s.current?.source !== "host"))) {
       if ((yieldToOperator || this.busyMode === "steer") && s.session && s.current) {
         const turn = s.current;
         // Durable before the runtime sees it: held in `handoff` (part of every inbox snapshot)
@@ -2842,6 +2862,13 @@ export class Harness {
           }
         }
         if (this.duplicateRepairs.has(s.key)) break;
+        // A timer occurrence is a wake-up, not another grant to replay an
+        // unfinished mandate. Do not adopt its text as a continuation or reset
+        // the owner's wait, depth, effect custody, approval or stop fences.
+        if (input.recurringSource && !input.taskId && this.recurringWorkHeld(s.key, input.recurringSource, false)) {
+          s.queue.shift(); s.unsaved = true;
+          continue;
+        }
         s.queue.shift();
         if (input.source === "host" && (this.stoppingHostParents.has(s.key) || !this.opts.hostEventAllowed?.(input))) {
           s.unsaved = true;
@@ -2878,7 +2905,8 @@ export class Harness {
           !input.taskId && !input.waitCheck && !input.waitRecheck && input.continuationDepth === undefined &&
           !/^(dispatch|subagent):/.test(s.key) && !this.opts.externallyRecoveredSession?.(s.key);
         if ((input.source === "channel" && !(input.continuationDepth ?? 0)) || freshHostWork) {
-          // Every new scheduled/API occurrence owns a fresh mandate. Never
+          // Independent occurrences own fresh mandates. Recurring wake-ups
+          // with unfinished source-owned work were coalesced above; never
           // inherit session.task or a prior occurrence's completion/expiry.
           input.taskId = input.taskId ?? input.id ?? randomUUID();
           if (freshHostWork) input.completionAnchor = { id: input.taskId, task: input.text,
@@ -2886,6 +2914,7 @@ export class Harness {
           const existing = this.tasks(s).find(task => task.id === input.taskId);
           s.tasks = this.tasks(s);
           const assigned: DurableTask = existing ?? { recoveryEnrollment: "current", id: input.taskId, original: input.text, state: "active", depth: 0, anchor: input.completionAnchor,
+            recurringSource: input.recurringSource, cronScope: input.cronScope,
             // A restored input without a retained task cannot establish which
             // executions predated its original acceptance. Keep that case fenced.
             ...(!this.restoredTaskInputs.has(input) ? this.preexistingUnscoped(s.key) : {}) };
@@ -3998,19 +4027,23 @@ export class Harness {
       }
       if (s.queue.length || s.outbox.length || s.unsaved) { void this.pump(s); continue; }
       if (s.loop && !this.loopOwnerControls.has(s.key) && !s.loop.paused && at >= s.loop.nextAt) {
+        s.loop.sourceId ??= randomUUID();
+        const recurringSource = `loop:${s.loop.sourceId}`;
         s.loop.nextAt = at + s.loop.everyMs;
         if (s.loop.remaining !== undefined && --s.loop.remaining <= 0) {
           const prompt = s.loop.prompt;
           s.loop = undefined;
-          this.enqueue({ sessionKey: s.key, text: prompt, source: "loop" });
+          this.enqueue({ sessionKey: s.key, text: prompt, source: "loop", recurringSource });
         } else {
-          this.enqueue({ sessionKey: s.key, text: s.loop.prompt, source: "loop" });
+          this.enqueue({ sessionKey: s.key, text: s.loop.prompt, source: "loop", recurringSource });
         }
         continue;
       }
       if (s.heartbeat && !s.heartbeat.paused && at >= s.heartbeat.nextAt) {
+        s.heartbeat.sourceId ??= randomUUID();
         s.heartbeat.nextAt = at + s.heartbeat.everyMs;
         this.enqueue({
+          recurringSource: `heartbeat:${s.heartbeat.sourceId}`,
           sessionKey: s.key,
           text: `${s.heartbeat.prompt}\n\n(Heartbeat. If there is nothing worth saying, reply exactly ${NO_REPLY}.)`,
           source: "heartbeat",

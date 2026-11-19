@@ -98,6 +98,7 @@ export class Scheduler {
   private readonly resettingNames = new Set<string>();
   private readonly resettingParents = new Set<string>();
   private resetGeneration = 0;
+  private readonly preparingSources = new Set<string>();
 
   private creator(job: CronJob): string | undefined {
     const origin = job.origin;
@@ -261,7 +262,7 @@ export class Scheduler {
         await this.harness.onStateChange?.();
       }
       this.assertOccurrence(job, abort.signal);
-      await this.runJobForeground(job, abort.signal);
+      await this.runJobForeground(job, abort.signal, explicit);
     });
     const active = this.active.get(job.name) ?? new Set(); this.active.set(job.name, active);
     const task = { creator: this.creator(job), abort, done }; active.add(task);
@@ -275,9 +276,20 @@ export class Scheduler {
       throw Error("Origin conversation reset; old occurrence revoked");
   }
 
-  private async runJobForeground(job: CronJob, signal: AbortSignal): Promise<void> {
+  private async runJobForeground(job: CronJob, signal: AbortSignal, explicit: boolean): Promise<void> {
     this.assertOccurrence(job, signal);
     const language = languageTag(this.opts.language?.(job) ?? job.language ?? "en");
+    let prompt = job.prompt ?? "";
+    if (job.prompt_file) prompt = await readFile(path.resolve(this.baseDir(), job.prompt_file), "utf8");
+    this.assertOccurrence(job, signal);
+    const cronScope = this.scope(job, prompt);
+    const recurringSource = explicit ? undefined : `cron:${job.name}:${cronScope}`;
+    // Reserve synchronously before any configured script can produce effects.
+    // Keep this claim through durable turn acceptance; the pump then owns it.
+    if (recurringSource && (this.preparingSources.has(recurringSource) ||
+        this.harness.recurringWorkHeld(`cron:${job.name}`, recurringSource))) return;
+    if (recurringSource) this.preparingSources.add(recurringSource);
+    try {
     let scriptOut = "";
     if (job.script) {
       const scriptsDir = this.opts.scriptsDir ?? path.join(this.baseDir(), "scripts");
@@ -312,16 +324,13 @@ export class Scheduler {
       return;
     }
 
-    let prompt = job.prompt ?? "";
-    if (job.prompt_file) prompt = await readFile(path.resolve(this.baseDir(), job.prompt_file), "utf8");
-    this.assertOccurrence(job, signal);
-    const cronScope = this.scope(job, prompt);
     if (scriptOut) prompt += `\n\n## Script output\n\n${scriptOut}`;
     if (!prompt.trim()) return;
     prompt += `\n\n(Scheduled job "${job.name}". If there is nothing worth reporting, reply exactly ${NO_REPLY}.)`;
     if (metadata) {
       metadata.original = prompt;
-      await this.harness.accept({ id: metadata.runId, cronScope, sessionKey: `cron:${job.name}`, text: prompt, source: "cron", language, replyTo: to, cronReport: metadata });
-    } else this.harness.enqueue({ cronScope, sessionKey: `cron:${job.name}`, text: prompt, source: "cron", language, replyTo: to });
+      await this.harness.accept({ id: metadata.runId, cronScope, recurringSource, sessionKey: `cron:${job.name}`, text: prompt, source: "cron", language, replyTo: to, cronReport: metadata });
+    } else await this.harness.accept({ id: randomUUID(), cronScope, recurringSource, sessionKey: `cron:${job.name}`, text: prompt, source: "cron", language, replyTo: to });
+    } finally { if (recurringSource) this.preparingSources.delete(recurringSource); }
   }
 }
