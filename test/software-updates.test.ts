@@ -236,3 +236,19 @@ test("containers/disabled updates do not execute native git/npm or select cached
     }
   } finally { await rm(home, { recursive: true, force: true }); }
 });
+
+test("WebUI activation is explicit and fail-closed: enabled module activates, disabled or unconfigured does not", async () => {
+  const { webuiActivated, webuiActivatedFromHome } = await import("../src/software-updates.js");
+  assert.equal(webuiActivated({ webui: { module: "file:///x/webui.js" } }), true);
+  assert.equal(webuiActivated({ webui: { module: "file:///x/webui.js", disabled: true } }), false);
+  assert.equal(webuiActivated({ webui: { disabled: false } }), false, "baseline-only WebUI is not explicit activation");
+  assert.equal(webuiActivated(undefined), false);
+  const home = await mkdtemp(path.join(os.tmpdir(), "webui-activation-"));
+  try {
+    assert.equal(await webuiActivatedFromHome(home), false, "missing settings file stays fail-closed");
+    await writeFile(path.join(home, "settings.local.yaml"), "gatewayPlugins:\n  webui:\n    module: file:///x/webui.js\n");
+    assert.equal(await webuiActivatedFromHome(home), true);
+    await writeFile(path.join(home, "settings.local.yaml"), "gatewayPlugins:\n  webui:\n    module: file:///x/webui.js\n    disabled: true\n");
+    assert.equal(await webuiActivatedFromHome(home), false);
+  } finally { await rm(home, { recursive: true, force: true }); }
+});
