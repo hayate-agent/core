@@ -139,3 +139,12 @@ references that durable report rather than duplicating it into `prior` and
 recreating a checkpoint overflow. Completion likewise consumes the budgeted
 report, not the larger pre-projection variable; original transcripts/effect
 identities remain untouched.
+
+## Duplicate retirement waits for the turn boundary
+
+`retire-scheduled-duplicate` no longer fails while the conversation is busy. It
+validates the exact pair and revisions, reserves the session (the pump yields at
+its next turn boundary, nothing is interrupted), waits for the running turn to
+settle (bounded, default 10 min), re-reads the exact pair and then retires only
+the duplicate. Custody, native child, stop/reset and uncertain-effect fences are
+checked again after the wait; the keeper's normal progress does not invalidate it.

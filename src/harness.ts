@@ -667,34 +667,57 @@ export class Harness {
   }
   private readonly duplicateRepairs = new Set<string>();
 
+  /** Wait (bounded) until the conversation's pump has returned at a turn boundary. */
+  private async settleSessionForRepair(key: string, waitMs: number): Promise<void> {
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      await Promise.race([this.waitForSessionIdle(key), new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(Error("Duplicate repair boundary or custody changed")), waitMs);
+      })]);
+    } finally { if (timer) clearTimeout(timer); }
+  }
+
   /** Exact same-UID operator repair, never semantic/prose auto-deduplication.
    * Retire only a proven scheduled duplicate; keep both durable checkpoints and
    * all evidence. A current turn/child must settle first, never cut across effects. */
   async retireScheduledDuplicate(key: string, duplicateId: string, keeperId: string,
-    expectedRevision: number, keeperRevision: number, requestId: string): Promise<void> {
+    expectedRevision: number, keeperRevision: number, requestId: string, boundaryWaitMs = 600_000): Promise<void> {
     const store = this.opts.executionStore, s = this.sessions.get(key);
     if (!this.opts.taskLifecycle?.enabled || !store || !s || duplicateId === keeperId) throw Error("Duplicate repair unavailable");
-    const duplicate = this.tasks(s).find(task => task.taskRef?.id === duplicateId);
-    const keeper = this.tasks(s).find(task => task.taskRef?.id === keeperId);
-    const order = store.coreTask(duplicateId), kept = store.coreTask(keeperId);
-    if (!duplicate || !keeper || !order || !kept || !order.scheduled || !kept.scheduled ||
-        order.original !== kept.original || duplicate.original !== keeper.original || duplicate.original !== order.original ||
-        keeper.state === "stopped" || keeper.state === "completed" || keeper.recoveryEnrollment === "held-legacy" ||
-        keeper.expiresAt !== undefined && keeper.expiresAt <= this.now() || !store.taskIsOpen(keeper.taskRef!)) throw Error("Exact open scheduled pair required");
+    const exactPair = () => {
+      const duplicate = this.tasks(s).find(task => task.taskRef?.id === duplicateId);
+      const keeper = this.tasks(s).find(task => task.taskRef?.id === keeperId);
+      const order = store.coreTask(duplicateId), kept = store.coreTask(keeperId);
+      if (!duplicate || !keeper || !order || !kept || !order.scheduled || !kept.scheduled ||
+          order.original !== kept.original || duplicate.original !== keeper.original || duplicate.original !== order.original ||
+          keeper.state === "stopped" || keeper.state === "completed" || keeper.recoveryEnrollment === "held-legacy" ||
+          keeper.expiresAt !== undefined && keeper.expiresAt <= this.now() || !store.taskIsOpen(keeper.taskRef!)) throw Error("Exact open scheduled pair required");
+      return { duplicate, keeper, order, kept };
+    };
+    const { duplicate, keeper, order } = exactPair();
     const receipt = order.receipts.find(r => r.id === requestId);
     const reason = `Operator-requested duplicate retirement; not business completion. Keeper ${keeperId}. All checkpoints, receipts and uncertain effects retained; keeper must reconcile journals before further effects.`;
     if (receipt) {
       if (receipt.kind !== "operator-close" || receipt.reason !== reason) throw Error("Duplicate repair receipt conflict");
       return;
     }
-    if (order.revision !== expectedRevision || kept.revision !== keeperRevision || !store.taskIsOpen(duplicate.taskRef!) ||
-        s.current || s.prompting || s.stopPending || s.resetPending || this.duplicateRepairs.has(key) ||
-        this.opts.pendingNativeSubagent?.(key, duplicate.id) || this.opts.pendingNativeSubagent?.(key, keeper.id) ||
-        store.list(key).some(e => (!e.dependency?.taskId || [duplicate.id, keeper.id].includes(e.dependency.taskId)) &&
-          (!['completed', 'cancelled'].includes(e.status) || !!e.intent))) throw Error("Duplicate repair boundary or custody changed");
+    if (order.revision !== expectedRevision || exactPair().kept.revision !== keeperRevision || !store.taskIsOpen(duplicate.taskRef!) ||
+        this.duplicateRepairs.has(key) || this.stopping) throw Error("Duplicate repair boundary or custody changed");
+    // Reserve first: the pump yields at its next turn boundary while reserved, so a
+    // conversation that continues on its own still reaches a quiet point. Nothing
+    // is interrupted; the current turn settles, then everything is verified again.
     this.duplicateRepairs.add(key);
     try {
-      await store.retireScheduledDuplicate(key, duplicate.taskRef!, keeper.taskRef!, expectedRevision, keeperRevision, requestId, reason,
+      await this.settleSessionForRepair(key, boundaryWaitMs);
+      // The duplicate's revision is what the operator authorized and must be unchanged.
+      // Only the keeper, which keeps working, may have advanced during the wait.
+      const now = exactPair();
+      if (now.order.revision !== expectedRevision || now.kept.revision < keeperRevision || s.current || s.prompting || s.stopPending || s.resetPending || this.stopping ||
+          !store.taskIsOpen(duplicate.taskRef!) ||
+          this.opts.pendingNativeSubagent?.(key, duplicate.id) || this.opts.pendingNativeSubagent?.(key, keeper.id) ||
+          store.list(key).some(e => (!e.dependency?.taskId || [duplicate.id, keeper.id].includes(e.dependency.taskId)) &&
+            (!['completed', 'cancelled'].includes(e.status) || !!e.intent))) throw Error("Duplicate repair boundary or custody changed");
+      await store.retireScheduledDuplicate(key, duplicate.taskRef!, keeper.taskRef!, expectedRevision, now.kept.revision, requestId, reason,
         () => !s.current && !s.prompting && !s.stopPending && !s.resetPending &&
           !this.opts.pendingNativeSubagent?.(key, duplicate.id) && !this.opts.pendingNativeSubagent?.(key, keeper.id));
       await this.onStateChange?.();
