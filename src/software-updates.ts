@@ -20,14 +20,19 @@ export interface SoftwareUpdateConfig {
   checkEverySeconds?: number;
   sources?: Partial<Record<SoftwareComponent, SoftwareUpdateSource>>;
   variant?: VariantPolicy | null;
+  /** Argv (no shell) that restarts the separately supervised, activated agent WebUI after a new selection. */
+  webuiRestart?: string[];
 }
 export interface SoftwareUpdatePolicy {
   enabled: boolean; autoInstall: boolean; checkEverySeconds: number;
   sources: Record<SoftwareComponent, Required<SoftwareUpdateSource>>;
   variant?: VariantPolicy | null;
+  webuiRestart?: string[];
 }
 export function softwareUpdatePolicy(value: SoftwareUpdateConfig = {}): SoftwareUpdatePolicy {
-  if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).some(k => !["enabled", "autoInstall", "checkEverySeconds", "sources", "variant"].includes(k))) throw Error("Invalid softwareUpdates");
+  if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).some(k => !["enabled", "autoInstall", "checkEverySeconds", "sources", "variant", "webuiRestart"].includes(k))) throw Error("Invalid softwareUpdates");
+  if (value.webuiRestart !== undefined && (!Array.isArray(value.webuiRestart) || !value.webuiRestart.length || value.webuiRestart.length > 32 ||
+      value.webuiRestart.some(a => typeof a !== "string" || !a.length || a.length > 1000 || a.includes("\0")))) throw Error("softwareUpdates.webuiRestart must be a non-empty argv string array");
   for (const key of ["enabled", "autoInstall"] as const) if (value[key] !== undefined && typeof value[key] !== "boolean") throw Error(`softwareUpdates.${key} must be boolean`);
   const checkEverySeconds = value.checkEverySeconds ?? 3600;
   if (!Number.isSafeInteger(checkEverySeconds) || checkEverySeconds < 60 || checkEverySeconds > 604800) throw Error("softwareUpdates.checkEverySeconds must be 60..604800");
@@ -43,6 +48,7 @@ export function softwareUpdatePolicy(value: SoftwareUpdateConfig = {}): Software
     sources[component] = { repository: source.repository, branch };
   }
   return { enabled: value.enabled ?? true, autoInstall: value.autoInstall ?? true, checkEverySeconds, sources,
+    ...(value.webuiRestart ? { webuiRestart: [...value.webuiRestart] } : {}),
     ...(value.variant !== undefined ? { variant: value.variant === null ? null : variantPolicy(value.variant) } : {}) };
 }
 
@@ -445,6 +451,22 @@ export class NativeSoftwareUpdates {
     await this.publishCurrent(this.prepared);
     this.selection = this.prepared; this.prepared = undefined;
     await this.save({ phase: "activated", detail: "Old runtime exited; replacement installation selected", selection: this.selection, pendingSelection: undefined });
+    await this.restartWebui();
+  }
+  /** The activated agent WebUI follows the new selection via its operator-configured
+   * service manager. Disabled/unconfigured WebUI is never touched; a failure keeps
+   * the committed Core selection and is reported in status. */
+  private async restartWebui(): Promise<void> {
+    const argv = this.policy.webuiRestart;
+    if (!this.webuiEnabled || !argv || this.stopped) return;
+    const session = Object.fromEntries(["XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS"]
+      .flatMap(name => process.env[name] ? [[name, process.env[name]!]] : []));
+    try {
+      await this.runCommand(argv[0]!, argv.slice(1), this.directory, session, AbortSignal.any([this.abort.signal, AbortSignal.timeout(60000)]));
+      await this.save({ detail: "Old runtime exited; replacement installation selected; activated WebUI restarted" });
+    } catch {
+      await this.save({ detail: "Old runtime exited; replacement installation selected; activated WebUI restart failed" });
+    }
   }
   entrypoint(original: string): string {
     return this.selection ? path.join(this.directory, "releases", this.selection.release, "core/dist/cli.js") : original;

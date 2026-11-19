@@ -7,7 +7,7 @@ import { NativeSoftwareUpdates, softwareUpdatePolicy, updateCommand, type Update
 import { defaultConfig } from "../src/config.js";
 
 const revisions = { core: "a".repeat(40), plugins: "b".repeat(40), webui: "c".repeat(40) };
-async function fixture(options: { vendored?: boolean; tags?: string; history?: string; metadataFailure?: boolean } = {}) {
+async function fixture(options: { vendored?: boolean; tags?: string; history?: string; metadataFailure?: boolean; webuiRestart?: string[]; webuiEnabled?: boolean } = {}) {
   const home = await mkdtemp(path.join(os.tmpdir(), "hy-update-"));
   const events: string[] = [], commands: Array<{ command: string; args: string[]; cwd: string; env?: NodeJS.ProcessEnv }> = [];
   let fail = "";
@@ -42,8 +42,8 @@ async function fixture(options: { vendored?: boolean; tags?: string; history?: s
     }
     return "";
   };
-  const policy = softwareUpdatePolicy();
-  const owner = new NativeSoftwareUpdates(home, policy, (event, detail) => events.push(event + ":" + detail), command, false);
+  const policy = softwareUpdatePolicy(options.webuiRestart ? { webuiRestart: options.webuiRestart } : {});
+  const owner = new NativeSoftwareUpdates(home, policy, (event, detail) => events.push(event + ":" + detail), command, false, undefined, options.webuiEnabled ?? false);
   await owner.open();
   const settled = async (expected: string = "prepared") => {
     for (let n = 0; n < 300; n++) {
@@ -70,6 +70,36 @@ test("startup defaults: hourly automatic checks, GitHub sources, one 60s restart
   assert.equal(defaultConfig({ lifecycle: { restartTimeoutSeconds: 12 } }).lifecycle?.restartTimeoutSeconds, 12);
   for (const invalid of [0, -1, NaN, Infinity, 1.5, 3601]) assert.throws(() => defaultConfig({ lifecycle: { restartTimeoutSeconds: invalid } }));
   for (const invalid of [-1, NaN, Infinity, 3601]) assert.throws(() => defaultConfig({ loop: { drainSeconds: invalid } as any }));
+});
+
+test("activated agent WebUI is restarted natively after selection; disabled or unconfigured WebUI is untouched", async () => {
+  const restart = ["systemctl", "--user", "try-restart", "hayate-webui.service"];
+  for (const [webuiEnabled, webuiRestart, expected] of [[true, restart, 1], [false, restart, 0], [true, undefined, 0]] as const) {
+    const f = await fixture({ webuiEnabled, webuiRestart: webuiRestart ? [...webuiRestart] : undefined });
+    try {
+      await f.owner.request("update"); assert.equal((await f.settled()).phase, "prepared");
+      assert.equal(f.commands.filter(c => c.command === "systemctl").length, 0, "no WebUI restart before old runtime exits");
+      await f.owner.afterExit();
+      const calls = f.commands.filter(c => c.command === "systemctl");
+      assert.equal(calls.length, expected);
+      if (expected) {
+        assert.deepEqual(calls[0]!.args, restart.slice(1));
+        const current = await readFile(path.join(f.home, "software-updates/selected.json"), "utf8");
+        assert.ok(current, "selection is committed before the WebUI restart");
+        assert.match(f.owner.snapshot().detail, /activated WebUI restarted/);
+      }
+      assert.equal(f.owner.snapshot().phase, "activated");
+    } finally { await f.cleanup(); }
+  }
+  const f = await fixture({ webuiEnabled: true, webuiRestart: ["systemctl", "--user", "try-restart", "broken-webui.service"] });
+  try {
+    await f.owner.request("update"); assert.equal((await f.settled()).phase, "prepared"); f.fail("broken-webui.service");
+    await f.owner.afterExit();
+    assert.equal(f.owner.snapshot().phase, "activated", "WebUI restart failure must not roll back or fail the Core selection");
+    assert.match(f.owner.snapshot().detail, /activated WebUI restart failed/);
+    assert.match(f.owner.entrypoint("original"), /core\/dist\/cli.js$/);
+  } finally { await f.cleanup(); }
+  for (const invalid of [[], "systemctl", [""], [1]]) assert.throws(() => softwareUpdatePolicy({ webuiRestart: invalid as any }), /webuiRestart/);
 });
 
 test("all sources configurable without inheriting internal forge defaults; invalid refs/embedded secrets rejected", () => {
