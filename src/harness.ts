@@ -1387,12 +1387,14 @@ export class Harness {
     // active turn. Never extend this to queued or replayed host receipts.
     const activeQuestion = !!input.hostEvent?.question && session?.current === input &&
       !!this.opts.executionStore?.questionAllowed(input, true);
+    const activeStalled = !!input.hostEvent?.assessmentStalled && session?.current === input &&
+      !!this.opts.executionStore?.assessmentStalledAllowed(input, true);
     const eventAllowed = input.hostEvent?.question
       ? this.opts.executionStore?.questionAllowed(input) || activeQuestion
-      : input.hostEvent?.assessmentStalled ? this.opts.executionStore?.assessmentStalledAllowed(input)
+      : input.hostEvent?.assessmentStalled ? this.opts.executionStore?.assessmentStalledAllowed(input) || activeStalled
       : execution?.status === "completed";
     if (!task || !this.taskAllowed(task) || task.recoveryEnrollment === "held-legacy" || task.original !== execution?.dependency?.original || !eventAllowed || !execution || execution.parentStopped ||
-        this.stoppingHostParents.has(input.sessionKey) || (!activeQuestion && !this.opts.hostEventAllowed?.(input)) ||
+        this.stoppingHostParents.has(input.sessionKey) || (!activeQuestion && !activeStalled && !this.opts.hostEventAllowed?.(input)) ||
         !task.id || !task.original.trim() ||
         !["active", "waiting", "blocked"].includes(task.state) || !Number.isSafeInteger(task.depth) || task.depth < 0 || !Number.isSafeInteger(repetitions(task)) ||
         (expiresAt !== undefined && (!Number.isSafeInteger(expiresAt) || expiresAt <= this.now()))) return;
