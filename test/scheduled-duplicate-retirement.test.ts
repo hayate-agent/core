@@ -107,3 +107,55 @@ test("owner socket validates exact bounded duplicate retirement frames", async (
   await assert.rejects(executionControlRequest({} as any, { ...frame, extra: true }, undefined, undefined, undefined, retire));
   await assert.rejects(executionControlRequest(undefined, frame, undefined, undefined, undefined, retire));
 });
+
+test("retirement waits for a running turn at its natural boundary instead of rejecting, then proceeds", async t => {
+  const f = await fixture(t);
+  const s = f.h.state(f.key);
+  let finishTurn!: () => void, started!: () => void;
+  const turnGate = new Promise<void>(r => { finishTurn = r; });
+  const turnStarted = new Promise<void>(r => { started = r; });
+  const runtime = f.h.opts.runtime as FakeRuntime;
+  const originalOpen = runtime.open.bind(runtime);
+  runtime.open = async (...args: Parameters<FakeRuntime["open"]>) => {
+    const session = await originalOpen(...args);
+    const prompt = session.prompt.bind(session);
+    session.prompt = async (...p: Parameters<typeof prompt>) => { started(); await turnGate; return prompt(...p); };
+    return session;
+  };
+  s.queue.push({ id: "foreground", source: "channel", sessionKey: f.key, text: "ongoing", taskId: f.tasks[0].id, taskRef: f.tasks[0].taskRef });
+  const pumping = (f.h as any).pump(s) as Promise<void>;
+  await turnStarted;
+  assert.ok(s.current || s.prompting, "a turn is genuinely in flight");
+  let settled = false;
+  const repair = f.run().then(() => { settled = true; });
+  await new Promise(r => setTimeout(r, 30));
+  assert.equal(settled, false, "retirement does not cut across the running turn");
+  assert.equal(f.store.coreTask(f.duplicate.id)!.operatorStatus, "open");
+  finishTurn(); await pumping; await repair;
+  assert.equal(f.store.coreTask(f.duplicate.id)!.operatorStatus, "done");
+  assert.equal(f.store.coreTask(f.keeper.id)!.operatorStatus, "open");
+});
+
+test("retirement after the boundary wait refuses a duplicate whose authorized revision changed meanwhile", async t => {
+  const f = await fixture(t);
+  const s = f.h.state(f.key);
+  let finishTurn!: () => void, started!: () => void;
+  const turnGate = new Promise<void>(r => { finishTurn = r; });
+  const turnStarted = new Promise<void>(r => { started = r; });
+  const runtime = f.h.opts.runtime as FakeRuntime;
+  const originalOpen = runtime.open.bind(runtime);
+  runtime.open = async (...args: Parameters<FakeRuntime["open"]>) => {
+    const session = await originalOpen(...args);
+    const prompt = session.prompt.bind(session);
+    session.prompt = async (...p: Parameters<typeof prompt>) => { started(); await turnGate; return prompt(...p); };
+    return session;
+  };
+  s.queue.push({ id: "foreground", source: "channel", sessionKey: f.key, text: "ongoing", taskId: f.tasks[0].id, taskRef: f.tasks[0].taskRef });
+  const pumping = (f.h as any).pump(s) as Promise<void>;
+  await turnStarted;
+  const repair = f.run(); const rejected = assert.rejects(repair);
+  await new Promise(r => setTimeout(r, 30));
+  await f.store.decideTask(f.tasks[1].taskRef, f.duplicate.revision, "operator-clarify", "clarify", "Operator changed the duplicate meanwhile");
+  finishTurn(); await pumping; await rejected;
+  assert.equal(f.store.coreTask(f.duplicate.id)!.operatorStatus, "open");
+});
