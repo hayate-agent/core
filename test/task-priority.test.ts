@@ -14,6 +14,12 @@ import type { PluginAPI, PluginTool } from "../src/plugins.js";
 
 const key = "mem:room1";
 const tick = () => new Promise(resolve => setTimeout(resolve, 5));
+// Durable row/manifest commits must finish, not win a sub-second CI timing race.
+async function waitUntil(predicate: () => boolean): Promise<void> {
+  const deadline = Date.now() + 10000;
+  while (!predicate() && Date.now() < deadline) await tick();
+  assert.ok(predicate(), "dispatcher did not reach the expected state within 10s");
+}
 const task = (id: string, priority: DurableTask["priority"] = "normal"): DurableTask => ({ id, original: `authorized ${id}`, state: "active", depth: 0,
   priority, next: "verify independent work", recoveryEnrollment: "current", anchor: { id, task: `authorized ${id}`, receivedAt: 1 } });
 const admission = (t: DurableTask) => ({ ...t, recoveryAdmission: { id: `task:${t.id}:1`, depth: 1, original: t.original, next: t.next! } });
@@ -76,7 +82,7 @@ test("independent priority intent validation fails closed and receives only oper
 });
 
 test("durable queued Dispatcher requests inherit priority, overlap at capacity and preserve non-preemption", async t => {
-  const dir = await mkdtemp(path.join(os.tmpdir(), "task-priority-")); t.after(() => rm(dir, { recursive: true, force: true }));
+  const dir = await mkdtemp(path.join(os.tmpdir(), "task-priority-"));
   const store = new ExecutionStore(path.join(dir, "executions.json")); await store.load();
   const started: string[] = [], releases = new Map<string, () => void>();
   const strategy: DispatcherStrategy = { name: "parallel-test", version: 1, replaySafe: true, execute: async request => {
@@ -86,11 +92,11 @@ test("durable queued Dispatcher requests inherit priority, overlap at capacity a
     await store.submit(key, id, id, strategy.name, 1, { taskId: id, original: `authorized ${id}`, depth: 0, priority });
   const reloaded = new ExecutionStore(path.join(dir, "executions.json")); await reloaded.load();
   assert.equal(reloaded.list().find(t => t.input === "high")!.dependency!.priority, "high");
-  const dispatcher = new Dispatcher(reloaded, strategy, 2, async () => {}, error => { throw error; }); t.after(() => { releases.forEach(release => release()); return dispatcher.stop(); });
-  await dispatcher.start(); for (let i = 0; i < 20 && started.length < 2; i++) await tick();
+  const dispatcher = new Dispatcher(reloaded, strategy, 2, async () => {}, error => { throw error; }); t.after(async () => { releases.forEach(release => release()); await dispatcher.stop(); await reloaded.drain(); await rm(dir, { recursive: true, force: true }); });
+  await dispatcher.start(); await waitUntil(() => started.length === 2);
   assert.deepEqual(started, ["high", "normal"]); assert.equal(dispatcher.workers.active, 2);
   assert.equal(started.includes("low"), false);
-  releases.get("normal")!(); for (let i = 0; i < 30 && started.length < 3; i++) await tick();
+  releases.get("normal")!(); await waitUntil(() => started.length === 3);
   assert.deepEqual(started, ["high", "normal", "low"]); assert.equal(dispatcher.workers.active, 2, "urgent running worker was not preempted");
   releases.get("high")!(); releases.get("low")!(); await dispatcher.stop();
 });
@@ -110,10 +116,10 @@ test("restart coordinates two retained parent tasks while their independent work
   }), completionCheck: async input => input.continuationDepth ? { state: "waiting" } : { state: "continue", next: "delegate bounded independent work" } });
   restore(h, [task("A"), task("B")]);
   dispatcher = new Dispatcher(store, strategy, 2, async () => {}, error => { throw error; }, parent => h.dependencyCheckpoint(parent));
-  t.after(async () => { await h.stop(0); releases.forEach(release => release()); await dispatcher.stop(); await store.drain(); await rm(dir, { recursive: true, force: true }); });
+  t.after(async () => { await h.stop(0, 10000); releases.forEach(release => release()); await dispatcher.stop(); await store.drain(); await rm(dir, { recursive: true, force: true }); });
   await dispatcher.start();
   await h.recoverTasks(); h.releaseRestored();
-  for (let i = 0; i < 50 && workers.length < 2; i++) await tick();
+  await waitUntil(() => workers.length === 2);
   assert.deepEqual(workers, ["A", "B"]); assert.equal(dispatcher.workers.active, 2);
   assert.equal(h.state(key).tasks!.find(t => t.id === "A")!.state, "waiting");
   releases.forEach(release => release()); await dispatcher.stop();

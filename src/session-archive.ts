@@ -33,7 +33,11 @@ export class SessionArchives {
   }
   async load(key: string, id: string): Promise<SessionArchive> {
     const archive = JSON.parse(await readFile(this.file(key, id), "utf8"));
-    if (archive.version !== 1 || archive.id !== id || !Array.isArray(archive.entries)) throw new Error("Invalid session archive");
+    if (!archive || archive.version !== 1 || archive.id !== id || !Array.isArray(archive.entries) ||
+        archive.entries.some((entry: unknown) => !entry || typeof entry !== "object" || Array.isArray(entry) ||
+          typeof (entry as ArchiveEntry).id !== "string" || typeof (entry as ArchiveEntry).role !== "string" ||
+          typeof (entry as ArchiveEntry).text !== "string" ||
+          ((entry as ArchiveEntry).truncated !== undefined && typeof (entry as ArchiveEntry).truncated !== "boolean"))) throw new Error("Invalid session archive");
     return archive;
   }
   async link(key: string, id: string, targetSessionId: string): Promise<void> {
@@ -66,7 +70,7 @@ export class SessionArchives {
       // Summaries and archived roles are explicitly untrusted context.
       entries.unshift({ id: `${archive.id}:summary`, role: "archive-summary", text: archive.retrospective },
         ...archive.entries.slice(-48).map(entry => ({ ...entry, id: `${archive.id}:${entry.id}`, role: `archive-${entry.role}` })));
-      if (archive.entries.length > 48) incomplete = true;
+      if (archive.entries.length > 48 || archive.entries.some(entry => entry.truncated)) incomplete = true;
       target = archive.sourceSessionId;
       if (depth === 3 && archives.some(item => item.targetSessionId === target)) incomplete = true;
     }
@@ -86,7 +90,8 @@ export class SessionArchives {
       retrospectiveTruncated: archive.retrospective.length > charOffset + 1500,
       forwardTruncated: archive.forward.length > charOffset + 1500,
     });
-    const entries = options.query ? archive.entries.filter((e: ArchiveEntry) => e.text.toLowerCase().includes(options.query!.toLowerCase())) : archive.entries;
+    const query = options.query?.toLowerCase();
+    const entries = query ? archive.entries.filter((e: ArchiveEntry) => e.text.toLowerCase().includes(query)) : archive.entries;
     return JSON.stringify({ id, sourceSessionId: archive.sourceSessionId, total: entries.length, offset, entries: entries.slice(offset, offset + limit).map((e: ArchiveEntry) => ({ ...e, text: e.text.slice(charOffset, charOffset + 1500), charOffset, totalChars: e.text.length, truncated: e.text.length > charOffset + 1500 })) });
   }
 }

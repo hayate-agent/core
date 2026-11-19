@@ -68,7 +68,7 @@ export function matrixOptionsFromEnv(env: NodeJS.ProcessEnv, home: string): Matr
     accessToken: env.MATRIX_ACCESS_TOKEN,
     mediaDir: env.MATRIX_MEDIA_DIR || path.join(home, "matrix-media"),
     mediaMaxBytes: env.MATRIX_MEDIA_MAX_BYTES === undefined ? undefined : Number(env.MATRIX_MEDIA_MAX_BYTES),
-    nativeActivity: truthy(env.MATRIX_NATIVE_ACTIVITY, false),
+    nativeActivity: truthy(env.MATRIX_NATIVE_ACTIVITY, true),
     nativeActivityCoalesceMs: Number(env.MATRIX_NATIVE_ACTIVITY_COALESCE_MS ?? 1000),
     progress: env.MATRIX_PROGRESS === undefined ? undefined : progressMode(env.MATRIX_PROGRESS),
     statusReactions: env.MATRIX_STATUS_REACTIONS === undefined ? undefined : truthy(env.MATRIX_STATUS_REACTIONS, false),

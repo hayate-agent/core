@@ -20,9 +20,12 @@ export function prefix(text: string, limit: number): string {
  * explicitly incomplete legacy text. IDs are never shortened or invented. */
 export function projectObservation(text: string, role: string, limit: number): { text: string; truncated: boolean; totalChars: number } {
   const result = (value: string, truncated: boolean) => ({ text: value, truncated, totalChars: text.length });
-  if (text.length <= limit) return result(text, false);
   let payload: Record<string, any> | undefined;
   try { payload = JSON.parse(text); } catch { /* Do not repair legacy JSON. */ }
+  if (text.length <= limit) {
+    const known = payload?.type === "toolCall" || payload?.type === "toolResult" || payload?.type === "assistantBlocks";
+    return result(text, known && payload?.truncated === true);
+  }
   const tool = (value: Record<string, any>, size: number): object => {
     const call = value.type === "toolCall";
     const ids = call ? [value.id, value.name] : [value.toolCallId, value.toolName];
@@ -90,13 +93,20 @@ export function renderCompletionPrompt(strategy: CompletionPrompt, input: Inboun
   // original mandate, saved next/technical state, worker outcomes, then recent
   // messages (newest first). Shortened sections are named in `truncated`.
   const retained = input.completionContext?.retained;
-  const kept = retained && { original: "", technical: retained.technical, ...(retained.runtime ? { runtime: retained.runtime } : {}), truncated: [] as string[],
+  const kept = retained && { original: "", technical: retained.technical, ...(retained.order ? { order: retained.order } : {}), ...(retained.runtime ? { runtime: retained.runtime } : {}), truncated: [] as string[],
     ...(retained.savedNext !== undefined ? { savedNext: "" } : {}),
     ...(retained.parentReconciliation !== undefined ? { parentReconciliation: "" } : {}),
     recentMessages: [] as NonNullable<typeof retained.recentMessages>,
     ...(retained.workers ? { workers: { ...retained.workers, items: [] as typeof retained.workers.items } } : {}) };
   if (retained && kept) {
     projected.completionContext!.retained = kept;
+    // Original operator amendments and the plan are authority constraints, not
+    // expendable history. Never return the earlier bare fallback without them.
+    if (kept.order) {
+      const required = render(projected, response);
+      if (!fitsCompletionPrompt(required)) return undefined;
+      accepted = required;
+    }
     const mark = (section: string) => { if (!kept.truncated.includes(section)) kept.truncated.push(section); };
     if (!fit(retained.original.length, size => { kept.original = prefix(retained.original, size); })) kept.original = "";
     if (kept.original.length < retained.original.length) mark("original");

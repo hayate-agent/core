@@ -16,8 +16,11 @@ export function decisionState(request: ValidatorRequest): string | undefined {
       /(?:authorization\s*[=:]|bearer\s+[a-z0-9._~+\/-]+|(?:api[_-]?key|password|secret|token)\s*[=:]\s*\S+|-----BEGIN [^-]*PRIVATE KEY-----)/i.test(state)) return;
   return state;
 }
+// Keep routine evidence prefill bounded independently of the raw transport
+// ceiling. Compatible hosts project optional observations; exact authority and
+// expiry must still fit intact, otherwise assessment remains unavailable.
 function adapter(host: PluginAPI, dispatcher: boolean): ValidatorProvider & { requiresModel: false; maxPromptBytes: number } {
-  return { apiVersion: 1, version: 1, name: dispatcher ? TYPESAFE_DISPATCHER : TYPESAFE_VALIDATOR, requiresModel: false, maxPromptBytes: TYPESAFE_STATE_BYTES,
+  return { apiVersion: 1, version: 1, name: dispatcher ? TYPESAFE_DISPATCHER : TYPESAFE_VALIDATOR, requiresModel: false, maxPromptBytes: 24000,
     async assess(request) {
       const permitted = () => !request.signal.aborted && !!request.authorization.task.trim() &&
         (request.authorization.expiresAt === undefined || (Number.isSafeInteger(request.authorization.expiresAt) && request.authorization.expiresAt > request.now()));
@@ -31,11 +34,16 @@ function adapter(host: PluginAPI, dispatcher: boolean): ValidatorProvider & { re
       if (dispatcher && !ready && !request.input.id?.startsWith("validate:")) return;
       const bank = ready ? READY_BANK : dispatcher ? DISPATCH_BANK : COMPLETION_BANK;
       let transportFailure: { cause: string; status?: number } | undefined;
+      let uncertainDetail: { reason: "low_confidence" | "model_uncertain"; choice: string; confidence: number } | undefined;
       const choice = await (service.implementation as TypeSafeAPI).choose(bank, state, request.signal, detail => {
         if (detail?.cause === "timeout" || detail?.cause === "provider_error") transportFailure = {
           cause: detail.cause,
           ...(Number.isInteger(detail.status) && detail.status! >= 400 && detail.status! <= 599 ? { status: detail.status } : {}),
         };
+      }, detail => {
+        if ((detail?.reason === "low_confidence" || detail?.reason === "model_uncertain") &&
+            typeof detail.choice === "string" && Object.hasOwn(bank.choices, detail.choice) &&
+            typeof detail.confidence === "number" && Number.isFinite(detail.confidence) && detail.confidence >= 0 && detail.confidence <= 1) uncertainDetail = detail;
       });
       if (!permitted()) return;
       if (transportFailure) {
@@ -45,7 +53,12 @@ function adapter(host: PluginAPI, dispatcher: boolean): ValidatorProvider & { re
           ? { code: "ETIMEDOUT" } : transportFailure.status ? { status: transportFailure.status } : {});
       }
       if (!choice) return;
-      if (choice === "unknown" || choice === "none") return { state: "uncertain" };
+      if (choice === "unknown" || choice === "none") {
+        const detail = uncertainDetail;
+        return { state: "uncertain", reason: detail
+          ? `TypeSafe ${detail.reason}; selected ${detail.choice}, confidence ${detail.confidence}. No textual rationale provided.`
+          : "TypeSafe returned uncertainty without a textual rationale." };
+      }
       if (ready) {
         const number = /^step_([1-6])$/.exec(choice)?.[1];
         return number ? { state: "continue", next: number } : undefined;

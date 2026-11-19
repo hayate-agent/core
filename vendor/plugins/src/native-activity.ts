@@ -38,8 +38,13 @@ export class NativeActivityDelivery {
     } else if (this.tools.size < 128 || this.tools.has(turn)) this.tools.set(turn, active);
     const prefix = `${s.role === "dispatcher-classifier" ? "Dispatcher classifier" : s.role === "worker" ? "Worker" : "Main"} · ${Math.floor(s.elapsedMs / 1000)}s · ${activityExecutionLabel(s.execution, s.executionState ?? (s.phase === "starting" ? "pending" : "unavailable"))}`;
     const tool = event.tool;
+    // Optional during rolling upgrades: old Core ActivityEvent has no resource field.
+    const resource = (event as ActivityEvent & { resource?: { kind: "skill" | "memory"; action: "loaded" | "recalled" | "created" | "updated"; name?: string; locale?: string; label?: string } }).resource;
+    const toolLabel = (name: string) => name.startsWith("mcp__") || ["list_mcp_resources", "list_mcp_resource_templates", "read_mcp_resource"].includes(name) ? `MCP · ${name}`
+      : name === "plugin_memory" ? `Memory · ${name}` : name.startsWith("plugin_skill_") ? `Skill · ${name}` : name;
     const detail = terminal ? s.phase
-      : tool ? `Werkzeug ${tool.name}${active.size > 1 ? ` (+${active.size - 1} aktiv)` : ""}: ${tool.state}`
+      : resource ? (resource.label ?? (resource.kind === "skill" ? "Skill-Referenz geladen (Anwendung nicht bestätigt)" : "Arbeitsgedächtnis abgerufen"))
+      : tool ? `Werkzeug ${toolLabel(tool.name)}${active.size > 1 ? ` (+${active.size - 1} aktiv)` : ""}: ${tool.state}`
       : active.size ? `Werkzeug ${[...new Set(active.values())].join(", ")}: running`
       : `${s.phase} · ${s.activity}${event.kind === "alive" ? " · weiterhin aktiv (Host)" : ""}`;
     // One stable reference per originating input (else per dispatched task, else per turn):
@@ -53,7 +58,7 @@ export class NativeActivityDelivery {
     lines.set(turn, `${taskContextLabel(s.parent ?? s.id, s.outputTags)} · ${prefix} · ${detail}`);
     if (lines.size > 8) lines.delete(lines.keys().next().value!);
     this.queue(bubble, to, [...lines.values()].join("\n"));
-    if (tool?.state === "started") void this.flush().catch(() => undefined);
+    if (tool?.state === "started" || resource) void this.flush().catch(() => undefined);
   }
   metadata(to: Address, id: string, state: string): void {
     if (!["ready", "running", "paused", "blocked", "completed", "cancelled", "waiting for operator"].includes(state)) return;

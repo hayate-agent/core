@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { open, rename, unlink, link } from "node:fs/promises";
+import { open, rename, unlink, link, mkdir } from "node:fs/promises";
 import path from "node:path";
 
 /**
@@ -59,6 +59,20 @@ export async function appendFileDurable(file: string, data: string, mode = 0o600
     await fh.close();
   }
   await syncDir(path.dirname(file)); // a newly created file must survive power loss too
+}
+
+/** Publish a directory entry durably before files inside it become references in
+ * another directory. mkdir({recursive:true}) alone does not fsync its parents. */
+export async function mkdirDurable(dir: string): Promise<void> {
+  try { await mkdir(dir, { mode: 0o700 }); }
+  catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") {
+      await mkdirDurable(path.dirname(dir));
+      await mkdir(dir, { mode: 0o700 }).catch(error => { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; });
+    } else if (code !== "EEXIST") throw error;
+  }
+  await syncDirStrict(path.dirname(dir));
 }
 
 /** Authority storage must not acknowledge an unsupported directory fsync. */

@@ -67,6 +67,16 @@ test("task and delegated-step extraction parity and persisted continuation compa
   }
 });
 
+test("validator carries only an event-bound optional plan proposal", async () => {
+  const registry = new ValidatorRegistry(); registry.register(legacyLLMProvider); registry.select("legacy-llm");
+  const i = { ...input(), executionTurnId: "outcome-1" };
+  const todos = [{ id: "verify", title: "Verify result", kind: "verification", status: "open", sourceId: "operator" }];
+  const run = (basisEventId: string) => assessCompletion({ review: async () => JSON.stringify({ state: "completed", taskPlan: { basisEventId, todos } }) },
+    i, "report", grant, signal(), undefined, () => 1000, completionPrompt, undefined, 1000, registry);
+  assert.deepEqual(await run("outcome-1"), { state: "completed", taskPlan: { basisEventId: "outcome-1", todos } });
+  assert.deepEqual(await run("other-outcome"), { state: "completed" });
+});
+
 test("custom providers cannot bypass host authorization, API, stop, deadline or checkpoint fences", async () => {
   const r = new ValidatorRegistry(); let calls = 0;
   r.register({ ...provider(), async assess() { calls++; return { state: "completed" }; } }); r.select("dedicated");

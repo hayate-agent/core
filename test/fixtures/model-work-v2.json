@@ -1,0 +1,15 @@
+{
+  "publicKey": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAAhHPE0c9Nv5Gwc08QGUOGQ7dOop6z1olBF6smkzhfM0=\n-----END PUBLIC KEY-----\n",
+  "headers": {
+    "x-hayate-model-work": "interactive",
+    "x-hayate-qos-expires": "2000000000000",
+    "x-hayate-qos-key": "f59311392c16b3391c31c236fb6cf154331742241a404780c13140f408f06d54",
+    "x-hayate-qos-model": "homelab/qwen3.8-flash-next",
+    "x-hayate-qos-nonce": "26afd605-ec87-4bba-abea-ddb569bfb8e0",
+    "x-hayate-qos-request": "79b2c46ae0cce4f7af90461f8eabf83c6371cd2f2e760d0ca3f9a3dd01f60583",
+    "x-hayate-qos-signature": "2fOU9oVRHf1lktf66ECXb7XILvIUPGChzNys1y9ThT1abpXY5teTiYRQq4iOIk75NO7JjF1MJKeXDHedgqPhCA"
+  },
+  "method": "POST",
+  "path": "/v1/chat/completions",
+  "body": "{\"model\":\"homelab/qwen3.8-flash-next\",\"messages\":[{\"role\":\"user\",\"content\":\"Grüße 🐈\\nquoted \\\" text \\\\ path\"}],\"tools\":[{\"type\":\"function\",\"function\":{\"name\":\"inspect\",\"parameters\":{\"type\":\"object\",\"properties\":{\"model\":{\"type\":\"string\"},\"🐈\":{\"minimum\":0.7},\"𐀀\":{\"default\":null},\"\":{\"default\":true}}}}}],\"temperature\":0.7,\"max_tokens\":12,\"seed\":0}"
+}

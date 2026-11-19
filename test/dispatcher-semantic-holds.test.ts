@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { mkdtemp, rm, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { readExecutionLedgerFixture } from "./execution-ledger-fixture.js";
 import os from "node:os";
 import path from "node:path";
 import { ExecutionStore, ExecutionAssessmentHold } from "../src/execution.js";
@@ -46,7 +47,7 @@ for (const diagnostic of ["runtime-failure", "retry-exhausted"] as const) test(`
   await store.intent(task.id, claim.token!, "step:original", "unsafe");
   await store.checkpoint(task.id, claim.token!, "retained worker evidence");
   await store.fail(task.id, claim.token!, "runtime-failure");
-  const ledger = JSON.parse(await readFile(file, "utf8"));
+  const ledger = await readExecutionLedgerFixture(file);
   Object.assign(ledger.executions[0], { diagnosticCode: diagnostic, assessmentHold: { state: "blocked", step: 0 }, workerRetry: { attempts: 11, nextAt: 1001 } });
   await writeFile(file, JSON.stringify(ledger));
   const reload = new ExecutionStore(file, { now: () => 999999 }); await reload.load();
@@ -59,7 +60,7 @@ for (const diagnostic of ["runtime-failure", "retry-exhausted"] as const) test(`
   assert.deepEqual(reload.list()[0], held);
 });
 
-test("a new child request ID cannot bypass a stagnant parent mandate; another mandate remains runnable", async t => {
+test("a stalled child does not prevent a new execution; its own hold remains unchanged", async t => {
   const home = await mkdtemp(path.join(os.tmpdir(), "semantic-submit-"));
   t.after(() => rm(home, { recursive: true, force: true }));
   const store = new ExecutionStore(path.join(home, "executions.json")); await store.load();
@@ -67,10 +68,12 @@ test("a new child request ID cannot bypass a stagnant parent mandate; another ma
   const task = await store.submit("parent", "first", "inspect", "sequential", 1, mandate);
   const claim = await store.claim(task.id);
   await store.fail(task.id, claim.token!, "assessment-stalled");
-  await assert.rejects(store.submit("parent", "replacement", "reworded inspection", "sequential", 1, mandate), /execution-held/);
+  const held = store.list().find(row => row.id === task.id);
+  await store.submit("parent", "replacement", "reworded inspection", "sequential", 1, mandate);
+  assert.deepEqual(store.list().find(row => row.id === task.id), held);
   assert.equal((await store.submit("parent", "first", "inspect", "sequential", 1, mandate)).id, task.id);
   await store.submit("parent", "independent", "other work", "sequential", 1, { ...mandate, taskId: "another-task" });
-  assert.equal(store.list().length, 2);
+  assert.equal(store.list().length, 3);
 });
 
 test("internal dispatcher events never reach ordinary chat, even with Matrix cron continuation parents", () => {

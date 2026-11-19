@@ -1,25 +1,17 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import { test } from "node:test";
-import { guardDispatcherMain } from "../src/dispatcher-main-guard.js";
-import { toolGuardDenialReason } from "../src/tool-guard-error.js";
+import { capabilityContext } from "../src/capability-context.js";
 
-for (const tool of ["bash", "write", "edit"]) test(`enabled dispatcher prohibits Main takeover using ${tool}`, () => {
-  for (const key of ["matrix:room", "plugin:workspaces:room", "console:main"]) {
-    assert.throws(() => guardDispatcherMain(key, tool, true), error => {
-      assert.match(toolGuardDenialReason(error), /^dispatcher_required:/); return true;
-    });
-    assert.doesNotThrow(() => guardDispatcherMain(key, tool, false));
-  }
-  assert.doesNotThrow(() => guardDispatcherMain("dispatch:execution:token", tool, true));
-});
-
-test("Main cannot bypass dispatcher routing by starting a standalone subagent", () => {
-  assert.throws(() => guardDispatcherMain("matrix:room", "plugin_subagent", true, { action: "start" }));
-  assert.doesNotThrow(() => guardDispatcherMain("matrix:room", "plugin_subagent", true, { action: "result" }));
-  assert.throws(() => guardDispatcherMain("improvement:nightly", "bash", true));
-});
-
-test("Main retains read/search and dispatcher orchestration", () => {
-  for (const tool of ["read", "grep", "find", "ls", "plugin_dispatch", "plugin_task_continuation"])
-    assert.doesNotThrow(() => guardDispatcherMain("matrix:room", tool, true));
+test("ready dispatcher does not install a Main-only shell or edit guard", async () => {
+  const cli = await readFile(new URL("../src/cli.ts", import.meta.url), "utf8");
+  assert.doesNotMatch(cli, /guardDispatcherMain/);
+  assert.match(cli, /subagents\.guardTool\(key, tool\)/);
+  assert.match(cli, /dispatchRuntime\?\.guardTool\(key, tool\)/);
+  const guidance = capabilityContext({ revision: 1, sessionKey: "console:main", selectedTools: undefined,
+    registeredTools: ["plugin_dispatch", "bash", "edit", "write"], dispatcherEnabled: true,
+    dispatcherReady: true, reviewInstructions: "" });
+  assert.match(guidance, /Main may use its available tools directly/);
+  assert.match(guidance, /delegation is optional/);
+  assert.doesNotMatch(guidance, /Submit with|requestId=|Blocked dispatcher resume/);
 });

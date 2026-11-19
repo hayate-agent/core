@@ -33,7 +33,7 @@ Restart activates it. There is no general ESM hot reload.
 
 **Migration:** `modelRoles.roles.hashtag` remains parseable for old installations,
 but no longer selects classification. Move its model to `hashtag.model`, or remove
-it to inherit Main. `modelRoles.enabled`, dispatcher and reviewer settings do not
+it. Order: `hashtag.model`, else Basic (`modelRoles.roles.basic`, optional, if roles are enabled), else Main. Dispatcher and reviewer settings do not
 change this rule. Hashtag thinking is always `off`, not inherited from those roles.
 
 The CLI uses one startup factory and the normal plugin service registry for both
@@ -46,7 +46,8 @@ umbrella bundles must fit. An oversized bundle is omitted, never inherited unsee
 The in-memory cache holds at most 128 exact bounded-context/model results; plugin
 results and execution authority are not cached.
 
-The default model attempt has a two-second budget with cancellation. Failure or an
+The default model attempt has a two-second budget with cancellation. Metadata
+inference always uses thinking `off`, independent of Main's thinking setting. Failure or an
 invalid response yields `topic-clarification`, so the real user turn can proceed
 without requesting a resend. This neutral label is not a completion/checker bypass.
 The semantic protocol selects an included candidate id and explicitly opts into

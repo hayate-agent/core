@@ -1,5 +1,6 @@
 import { validateHashtagConfig, type HashtagConfig } from "./hashtag-config.js";
 import { validateLanguagePolicy } from "./language.js";
+import { validateLocalModelScheduling, type LocalModelScheduling } from "./local-model-admission.js";
 import { readFile } from "node:fs/promises";
 import { agentHome, configurationFile } from "./product-paths.js";
 import path from "node:path";
@@ -37,6 +38,8 @@ export interface HarnessConfig {
   timezone: string;
   model?: string;
   thinking?: string;
+  /** Startup-owned opt-in concurrency for explicitly local model refs. */
+  localModelScheduling?: LocalModelScheduling[];
   /** Trusted local startup engine module; selects policy and tools together. */
   reviewEngine?: string;
   contextStrategy?: string;
@@ -63,6 +66,8 @@ export interface HarnessConfig {
   typeSafeDecisions?: import("./builtin-plugins/typesafe-api-plugin.js").TypeSafeAPIConfig;
   /** Infrastructure-owned semantic continuation grants, keyed by exact conversation. */
   completionCheck?: { provider?: string | false; authorizations?: Record<string, import("./completion-check.js").CompletionAuthorization>; timeoutMs?: number };
+  /** No invented default inactivity period; explicit operator policy only. */
+  taskLifecycle?: { inactivityMs?: number };
   /** Explicit installation review selections, before normalization adds defaults. */
   reviewOverrides?: { model?: string; thinking?: string };
   modelRoles?: ModelRoles;
@@ -124,6 +129,7 @@ export interface HarnessConfig {
 
 export function defaultConfig(overrides: Partial<HarnessConfig> = {}): HarnessConfig {
   if (overrides.language !== undefined) validateLanguagePolicy(overrides.language);
+  if (overrides.localModelScheduling !== undefined) validateLocalModelScheduling(overrides.localModelScheduling);
   if (overrides.tools !== undefined && (!Array.isArray(overrides.tools) ||
       overrides.tools.some((name) => typeof name !== "string" || !/^[a-zA-Z0-9_][a-zA-Z0-9_.:-]*$/.test(name)))) {
     throw new Error("tools must be an array of literal tool names (or [] for no tools)");
@@ -140,6 +146,7 @@ export function defaultConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
   }
   if (overrides.reportProcessing !== undefined && (typeof overrides.reportProcessing !== "string" || !/^[a-z][a-z0-9_-]*$/.test(overrides.reportProcessing))) throw Error("Invalid reportProcessing");
   if (overrides.autoReloadToolPlugins !== undefined && typeof overrides.autoReloadToolPlugins !== "boolean") throw Error("autoReloadToolPlugins must be a boolean");
+  if (overrides.taskLifecycle?.inactivityMs !== undefined && (!Number.isSafeInteger(overrides.taskLifecycle.inactivityMs) || overrides.taskLifecycle.inactivityMs < 60000)) throw Error("taskLifecycle.inactivityMs must be an integer >= 60000");
   if (overrides.completionCheck?.provider !== undefined && overrides.completionCheck.provider !== false &&
       (typeof overrides.completionCheck.provider !== "string" || !/^[a-z][a-z0-9-]{0,79}$/.test(overrides.completionCheck.provider))) throw Error("Invalid completionCheck.provider");
   if (overrides.completionCheck?.timeoutMs !== undefined && (!Number.isSafeInteger(overrides.completionCheck.timeoutMs) ||
@@ -188,6 +195,7 @@ export function defaultConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
     timezone: overrides.timezone ?? process.env.TZ ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
     model: overrides.model,
     thinking: overrides.thinking,
+    localModelScheduling: overrides.localModelScheduling,
     reviewOverrides: { model: overrides.review?.model, thinking: overrides.review?.thinking },
     review: reviewConfig(overrides.review),
     reviewEngine: overrides.reviewEngine,
@@ -203,6 +211,7 @@ export function defaultConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
     protectedContent: overrides.protectedContent,
     skillUpdateSource: overrides.skillUpdateSource,
     completionCheck: overrides.completionCheck,
+    taskLifecycle: overrides.taskLifecycle,
     typeSafeDecisions: overrides.typeSafeDecisions,
     modelRoles: overrides.modelRoles,
     hashtag: overrides.hashtag,
@@ -226,7 +235,7 @@ export function defaultConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
         overlaysDir: path.resolve(home, instructionPaths([overrides.persona.overlaysDir])[0]!),
       }),
     },
-    skills: { paths: [path.join(home, "skills")], context: "auto", ...overrides.skills },
+    skills: { paths: [path.join(home, "skills")], context: "auto", adaptive: true, ...overrides.skills },
     language: { default: "en", ...overrides.language },
     cron: { jobsFile: path.join(home, "cron", "jobs.yaml"), ...overrides.cron },
     loop,

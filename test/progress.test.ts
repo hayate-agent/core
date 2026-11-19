@@ -15,7 +15,7 @@ test("off emits nothing; reduced summarizes tools without outputs", async () => 
     p.event({type:"tool",phase:"end",name:"bash",detail:"private result"});
     p.event({type:"tool",phase:"start",name:"bash"});
     await p.finish();
-    assert.deepEqual(sent, mode === "off" ? [] : ["⏳ bash gestartet\n\n✓ bash beendet\n\n⏳ bash gestartet"]);
+    assert.deepEqual(sent, mode === "off" ? [] : ["⏳ bash started\n\n✓ bash completed\n\n⏳ bash started"]);
   }
 });
 test("full progress never reads MCP arguments or results, but retains status", async () => {
@@ -29,8 +29,8 @@ test("full progress never reads MCP arguments or results, but retains status", a
   }
   p.event({ type: "tool", phase: "end", name: "bash", detail: "ordinary output" });
   await p.finish();
-  assert.match(sent.join("\n"), /⏳ mcp__fritz_brain__brain_search/);
-  assert.match(sent.join("\n"), /⚠ mcp__fritz_brain__brain_search/);
+  assert.match(sent.join("\n"), /⏳ MCP · mcp__fritz_brain__brain_search/);
+  assert.match(sent.join("\n"), /⚠ MCP · mcp__fritz_brain__brain_search/);
   assert.match(sent.join("\n"), /ordinary output/);
 });
 
@@ -81,7 +81,7 @@ test("blocked delivery coalesces heartbeat backlog and retains the final batch",
   release();
   await finishing;
   assert.equal(sent.length, 2, "retain only in-flight and latest pending batch");
-  assert.match(sent[1], /✓ bash beendet/);
+  assert.match(sent[1], /✓ bash completed/);
 });
 
 test("a failed blocked send still drains the latest batch", async (t) => {
@@ -100,7 +100,7 @@ test("a failed blocked send still drains the latest batch", async (t) => {
   reject(new Error("offline"));
   await finishing;
   assert.equal(sent.length, 2);
-  assert.match(sent[1], /✓ bash beendet/);
+  assert.match(sent[1], /✓ bash completed/);
   p.event({ type: "tool", phase: "start", name: "ignored" });
   t.mock.timers.tick(2000);
   await p.finish();
@@ -122,6 +122,6 @@ test("full bounds output and events; telemetry failures do not reject finish", a
  for(let i=0;i<5;i++) p.event({type:"tool",phase:"start",name:"read"});
  for(let i=0;i<4;i++) p.event({type:"tool",phase:"end",name:"read",error:i===0});
  p.event({type:"tool",phase:"end",name:"read"}); await p.finish();
- const text=sent.join("\n"); assert.equal((text.match(/read gestartet/g)||[]).length,1);
- assert.equal((text.match(/read beendet/g)||[]).length,1); assert.match(text,/⚠ read beendet/);
+ const text=sent.join("\n"); assert.equal((text.match(/read started/g)||[]).length,1);
+ assert.equal((text.match(/read failed/g)||[]).length,1); assert.match(text,/⚠ read failed/);
  });

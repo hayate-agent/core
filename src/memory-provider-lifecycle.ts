@@ -1,4 +1,4 @@
-import type { MemoryProvider } from "./memory.js";
+import type { MemoryContext, MemoryProvider } from "./memory.js";
 
 /** Stable provider identity for tools, orchestration and background capture.
  * Reconnect is exclusive: drain/close before opening the same backing store.
@@ -14,7 +14,19 @@ export class MemoryProviderLifecycle implements MemoryProvider {
   private changing = false;
   private cleanupFailed = false;
 
-  constructor(private readonly open: () => Promise<MemoryProvider>) {}
+  /** `scope` maps delegated worker keys to their owning conversation; unrelated sessions stay isolated.
+   * Explicit lessons/decisions/notes are stored with the owner. Automatic turn records (`operation`)
+   * keep their exact session key, so pending replay ids, handoff pointers and worker continuity stay
+   * unchanged. Workers read their own scope plus their owner's scope, never any other. */
+  constructor(private readonly open: () => Promise<MemoryProvider>, private readonly scope: (key: string) => string = key => key) {}
+  private owner(context: MemoryContext): MemoryContext | undefined {
+    const sessionKey = typeof context?.sessionKey === "string" ? this.scope(context.sessionKey) : context?.sessionKey;
+    return sessionKey === context?.sessionKey ? undefined : { ...context, sessionKey };
+  }
+  private async target(p: MemoryProvider, context: MemoryContext, id: string): Promise<MemoryContext> {
+    const owner = this.owner(context);
+    return owner && !(await p.get(context, id)) ? owner : context;
+  }
 
   get capabilities(): MemoryProvider["capabilities"] {
     return this.current?.capabilities ?? { semantic: false, revisions: true };
@@ -70,11 +82,22 @@ export class MemoryProviderLifecycle implements MemoryProvider {
     return this.stopping;
   }
 
-  put: MemoryProvider["put"] = (...args) => this.call(p => p.put(...args));
-  get: MemoryProvider["get"] = (...args) => this.call(p => p.get(...args));
-  search: MemoryProvider["search"] = (...args) => this.call(p => p.search(...args));
-  revise: MemoryProvider["revise"] = (...args) => this.call(p => p.revise(...args));
-  forget: MemoryProvider["forget"] = (...args) => this.call(p => p.forget(...args));
+  put: MemoryProvider["put"] = (context, entry) =>
+    this.call(p => p.put(entry?.kind === "operation" ? context : this.owner(context) ?? context, entry));
+  get: MemoryProvider["get"] = (context, id) => this.call(async p => {
+    const owner = this.owner(context);
+    return (await p.get(context, id)) ?? (owner ? p.get(owner, id) : undefined);
+  });
+  search: MemoryProvider["search"] = (context, query, options) => this.call(async p => {
+    const own = await p.search(context, query, options);
+    const owner = this.owner(context);
+    if (!owner) return own;
+    const merged = [...own];
+    for (const hit of await p.search(owner, query, options)) if (!merged.some(h => h.entry.id === hit.entry.id)) merged.push(hit);
+    return merged.sort((a, b) => b.score - a.score).slice(0, options?.limit ?? 5);
+  });
+  revise: MemoryProvider["revise"] = (context, id, ...args) => this.call(async p => p.revise(await this.target(p, context, id), id, ...args));
+  forget: MemoryProvider["forget"] = (context, id, ...args) => this.call(async p => p.forget(await this.target(p, context, id), id, ...args));
   status: MemoryProvider["status"] = () => this.call(p => p.status());
   reindex: MemoryProvider["reindex"] = () => this.call(p => p.reindex());
 }

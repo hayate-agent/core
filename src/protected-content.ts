@@ -9,8 +9,8 @@ export class ProtectedContent {
   constructor(home: string, config?: ProtectedContentConfig) {
     if (config && (!Array.isArray(config.files) || config.files.length > 256)) throw Error("Invalid protectedContent.files");
     this.files = (config?.files ?? []).map((file) => {
-      if (!file || typeof file.path !== "string" || !file.path.trim() || !/^[a-f0-9]{64}$/.test(file.sha256)) throw Error("Invalid protected content pin");
-      return { path: path.resolve(home, file.path), sha256: file.sha256 };
+      if (!file || typeof file.path !== "string" || !file.path.trim() || typeof file.sha256 !== "string" || !/^[a-f0-9]{64}$/i.test(file.sha256)) throw Error("Invalid protected content pin");
+      return { path: path.resolve(home, file.path), sha256: file.sha256.toLowerCase() };
     });
     if (new Set(this.files.map((f) => f.path)).size !== this.files.length) throw Error("Duplicate protected content path");
   }

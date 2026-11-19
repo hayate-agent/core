@@ -9,6 +9,17 @@ import { FakeRuntime } from './fakes.js';
 
 const own = { platform: 'matrix', chat_id: 'room', user_id: '@operator' };
 
+async function waitForScript(started: string): Promise<void> {
+ const deadline = Date.now() + 5_000;
+ for (;;) {
+  try { await access(started); return; }
+  catch (error) {
+   if ((error as NodeJS.ErrnoException).code !== 'ENOENT' || Date.now() >= deadline) throw error;
+   await new Promise(resolve => setTimeout(resolve, 10));
+  }
+ }
+}
+
 test('/new pauses creator-bound cron jobs durably and stops their existing session; delivery-only and foreign schedules remain', async () => {
  let scheduler!: Scheduler; let saves = 0;
  const h = new Harness({ runtime: new FakeRuntime(), conversationSourcesReset: async (key, reset) => { await scheduler.resetConversation(key, reset); } });
@@ -41,10 +52,9 @@ test('reset aborts and drains creator-owned script before it can deliver or enqu
  scheduler.jobs = [job];
  let finished = false; const running = scheduler.runJob(job).catch(() => {}).finally(() => { finished = true; });
  try {
-  for (let i = 0; i < 100; i++) { try { await access(started); break; } catch { await new Promise(r => setTimeout(r, 5)); } }
-  await access(started); await scheduler.resetConversation('matrix:room');
+  await waitForScript(started); await scheduler.resetConversation('matrix:room');
   assert.ok(finished); await running; assert.equal(h.pendingInputs().length, 0);
- } finally { scheduler.stop(); await running; await h.stop(0); await rm(home, { recursive: true, force: true }); }
+ } finally { scheduler.stop(); await scheduler.resetConversation('matrix:room'); await running; await h.stop(0); await rm(home, { recursive: true, force: true }); }
 });
 
 test('ambiguous same-name foreign provenance fails closed before pausing an unrelated schedule', async () => {
@@ -103,15 +113,14 @@ test('preflight lease prevents reload-away during parent stop and drains the ori
  h.restoreSessions([{ key: 'cron:owned', tasks: [{ id: 'old-occurrence', state: 'active', original: 'owned', depth: 0 }] }]);
  let drained = false; const running = scheduler.runJob(scheduler.jobs[0]).catch(() => {}).finally(() => { drained = true; });
  try {
-  for (let i=0;i<100;i++) { try { await access(started); break; } catch { await new Promise(r=>setTimeout(r,5)); } }
-  await access(started); const resetting = h.resetSession('matrix:room');
+  await waitForScript(started); const resetting = h.resetSession('matrix:room');
   for (let i=0;i<100&&!entered;i++) await new Promise(r=>setTimeout(r,5)); assert.ok(entered);
   await assert.rejects(scheduler.load(), /reset in progress/);
   assert.equal(scheduler.jobs[0].origin?.chat_id, 'room');
   release(); await resetting; await running;
   assert.ok(drained); assert.equal(h.state('cron:owned').tasks![0].state, 'stopped');
   assert.equal(h.pendingInputs().length, 0);
- } finally { release(); scheduler.stop(); await running; await h.stop(0); await rm(home,{recursive:true,force:true}); }
+ } finally { release(); scheduler.stop(); await h.resetSession('matrix:room'); await running; await h.stop(0); await rm(home,{recursive:true,force:true}); }
 });
 
 
@@ -147,12 +156,11 @@ test('removed definition cannot orphan an active creator-bound occurrence during
  h.restoreSessions([{ key: 'cron:removed', tasks: [{ id: 'old', state: 'active', original: 'removed', depth: 0 }] }]);
  let drained = false; const running = scheduler.runJob(scheduler.jobs[0]).catch(() => {}).finally(() => { drained = true; });
  try {
-  for(let i=0;i<100;i++){try{await access(started);break;}catch{await new Promise(r=>setTimeout(r,5));}}
-  await access(started); await scheduler.load(); assert.equal(scheduler.jobs.length, 0);
+  await waitForScript(started); await scheduler.load(); assert.equal(scheduler.jobs.length, 0);
   await h.resetSession('matrix:room'); await running; assert.ok(drained);
   assert.equal(h.state('cron:removed').tasks![0].state, 'stopped');
   assert.equal(h.pendingInputs().length, 0); assert.equal(scheduler.overrides.get('removed'), false);
- } finally { scheduler.stop(); await running; await h.stop(0); await rm(home,{recursive:true,force:true}); }
+ } finally { scheduler.stop(); await scheduler.resetConversation('matrix:room'); await running; await h.stop(0); await rm(home,{recursive:true,force:true}); }
 });
 
 test('persisted source names are checked against foreign replacement before retry mutation', async () => {

@@ -1,10 +1,15 @@
+import { enrollTask, operatorTransition, commitTaskOutcome, expireInactiveTasks, validateTaskBook, taskOpen, type TaskBook, type TaskRef, type TaskOutcome, type CoreTask, type TaskReceipt, taskDigest, renderTask } from "./task-lifecycle.js";
+import { validCronCheckpoint } from "./cron-checkpoint.js";
 import { executionMetadata, type ExecutionMetadata } from "./builtin-plugins/execution-metadata.js";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
-import { writeFileDurable, syncDirStrict } from "./durable.js";
+import { writeFileDurable, writeFileDurableExclusive, syncDirStrict } from "./durable.js";
+import { PartitionedJson } from "./partitioned-json.js";
 import { ExecutionDependencyStorage, freezeExecutionDependency } from "./execution-dependency-storage.js";
+import { TaskBookStorage } from "./task-book-storage.js";
 import { recoveryBlock, type RecoveryStrategy, type ExecutionRecoveryPolicy } from "./execution-recovery.js";
+import { message, resolveLanguage } from "./language.js";
 
 /** Exact host state fence for evidence-backed parent continuation. */
 export function executionRecoveryHash(task: Readonly<Execution>): string {
@@ -68,7 +73,7 @@ export class ExecutionAssessmentHold extends Error {
 
 /** Retained work made no observed progress; automatic transport retries cannot release it. */
 export class ExecutionAssessmentStalled extends Error {
-  constructor() { super("Prüfung ohne neue Nachweise angehalten. Neue Informationen oder eine ausdrückliche Fortsetzung sind erforderlich; bisherige Ergebnisse bleiben erhalten."); }
+  constructor() { super("Assessment stopped without new evidence. New information or an explicit continuation is required; prior results are retained."); }
 }
 
 export class ExecutionWorkerFailure extends Error {
@@ -81,7 +86,7 @@ export interface Execution {
   recoveryEnrollment?: "current" | "held-legacy";
   id: string;
   /** Host-captured parent mandate; never accepted from model tool arguments. */
-  dependency?: { taskId: string; depth: number; original: string; expiresAt?: number; anchor?: import("./types.js").Inbound["completionAnchor"];
+  dependency?: { taskId: string; depth: number; original: string; expiresAt?: number; anchor?: import("./types.js").Inbound["completionAnchor"]; taskRef?: TaskRef;
     /** Scheduling snapshot; the live durable parent preference takes precedence. */
     priority?: import("./task-priority.js").TaskPriority };
   /** Host-captured address of the submitting turn (room/thread); never from model tool arguments. */
@@ -129,7 +134,11 @@ export interface Execution {
   controlRevision?: number;
   parentContinuation?: { requestId: string; executionHash: string; evidence: string; fingerprint: string; resumedManualPause?: boolean; at: number };
   terminalAt?: number;
-  question?: { id: string; text: string; answer?: string };
+  question?: { id: string; text: string; answer?: string; retainedAssessment?: boolean; eventId?: string };
+  /** Durable receipt for the current stalled-assessment notification. */
+  assessmentStalledEventId?: string;
+  /** Question episode represented by the stalled notification. */
+  assessmentStalledQuestionId?: string;
   /** Parent stop permanently revokes result delivery as well as execution. */
   parentStopped?: boolean;
   /** Unknown legacy ancestry after a task-scoped stop: evidence retained, no replay. */
@@ -142,7 +151,7 @@ export interface ExecutionEvent {
   id: string;
   executionId: string;
   parent: string;
-  type: "accepted" | "status" | "question" | "result";
+  type: "accepted" | "status" | "question" | "assessment-stalled" | "result";
   text: string;
   /** State at event creation, not the potentially newer state at delivery. */
   status?: ExecutionStatus;
@@ -151,14 +160,19 @@ export interface ExecutionEvent {
   requiresAttention?: boolean;
 }
 export interface TurnSettlement {
+  taskOutcome?: TaskOutcome;
+  taskPresentation?: { to: import("./types.js").Address };
   repetition?: import("./repetition-budget.js").RepetitionBudget;
   cronOutput?: string;
+  cronCheckpoint?: import("./cron-checkpoint.js").CronCheckpoint;
+  /** Observation only; never grants completion or continuation authority. */
+  scheduledSilence?: { taskId: string; ref: TaskRef };
   outbox: import("./delivery/outbox.js").OutboxEntry[];
   continuation?: import("./types.js").Inbound["continuation"];
   goal?: import("./harness.js").Goal;
   consumed: string[];
 }
-export interface DurableTurn { id: string; sessionKey: string; state: "running" | "settled"; stopped?: boolean; settlement?: TurnSettlement }
+export interface DurableTurn { id: string; sessionKey: string; state: "running" | "settled"; stopped?: boolean; settlement?: TurnSettlement; scheduledOccurrence?: { taskId: string; ref: TaskRef }; takeoverTaskId?: string; takeoverExecutionIds?: string[] }
 export type WaitAuthorityDenialReason = "ownership" | "cancelled" | "deadline" | "missing-task" | "stopped-task" | "sequence";
 export interface WaitAuthorityDenialReceipt {
   reason: WaitAuthorityDenialReason;
@@ -170,7 +184,7 @@ export interface WaitAuthorityDenialReceipt {
 }
 const waitDenialReasons = ["ownership", "cancelled", "deadline", "missing-task", "stopped-task", "sequence"] as const;
 interface Ledger { version: 1; executions: Execution[]; events: ExecutionEvent[]; turns?: DurableTurn[];
-  waitAuthorityDenials?: WaitAuthorityDenialReceipt[] }
+  waitAuthorityDenials?: WaitAuthorityDenialReceipt[]; taskBook?: TaskBook }
 
 /** One host owns this ledger under the Harness home lock. Mutations become visible
  * only after atomic durable replacement; task transitions and outgoing events share
@@ -179,18 +193,23 @@ export class ExecutionStore {
   private data: Ledger = { version: 1, executions: [], events: [] };
   private queue: Promise<unknown> = Promise.resolve();
   private loaded = false;
-  private legacy?: string;
-  private publicationFailed = false;
+  private readonly storage: PartitionedJson;
   private readonly dependencies: ExecutionDependencyStorage;
+  private readonly taskBooks: TaskBookStorage;
   constructor(private readonly file: string, private readonly retention: {
     now?: () => number;
     protectedExecutions?: () => ReadonlySet<string>;
+    enforceTaskAuthority?: boolean;
     /** Maximum total worker attempts (initial run + retries) per task before a manual-intervention hold. */
     workerRetryMax?: number | (() => number);
-  } = {}) { this.dependencies = new ExecutionDependencyStorage(file); }
+  } = {}) {
+    this.dependencies = new ExecutionDependencyStorage(file);
+    this.taskBooks = new TaskBookStorage(file);
+    this.storage = new PartitionedJson(file, { executions: 1, events: 1, turns: 1, waitAuthorityDenials: 1 });
+  }
   private now(): number { return this.retention.now?.() ?? Date.now(); }
   /** Configured automatic worker retry budget; invalid or missing values fall back to the default. */
-  private retryCap(): number {
+  workerRecoveryLimit(): number {
     const value = this.retention.workerRetryMax;
     const resolved = typeof value === "function" ? value() : value;
     return typeof resolved === "number" && Number.isSafeInteger(resolved) && resolved >= 1 ? resolved : 12;
@@ -214,11 +233,12 @@ export class ExecutionStore {
     if (this.loaded) throw Error("Execution store already loaded");
     try {
       if ((await stat(this.file)).size > 32 * 1024 * 1024) throw Error("Execution ledger size limit exceeded");
-      const raw = await readFile(this.file, "utf8");
-      const stored = JSON.parse(raw);
+      const stored = await this.storage.load();
+      if (!stored) { this.loaded = true; return; }
       if (stored.version !== 1 && stored.version !== 2) throw Error("Unsupported execution ledger");
-      this.legacy = stored.version === 1 ? raw : undefined;
-      const data = (stored.version === 2 ? { ...stored, version: 1, executions: await this.dependencies.hydrate(stored.executions) } : stored) as Ledger;
+      if (stored.taskBook !== undefined && stored.taskBookRef !== undefined) throw Error("Ambiguous task book storage");
+      const data = (stored.version === 2 ? { ...stored, version: 1, executions: await this.dependencies.hydrate(stored.executions as unknown[]) } : stored) as unknown as Ledger & { taskBookRef?: unknown };
+      if (stored.taskBookRef !== undefined) { data.taskBook = await this.taskBooks.hydrate(stored.taskBookRef); delete data.taskBookRef; }
       if (data.version !== 1 || !Array.isArray(data.executions) || !Array.isArray(data.events)) throw Error("Unsupported execution ledger");
       if (data.waitAuthorityDenials !== undefined && (!Array.isArray(data.waitAuthorityDenials) ||
           data.waitAuthorityDenials.length > 100 || data.waitAuthorityDenials.some(r =>
@@ -227,6 +247,7 @@ export class ExecutionStore {
             [r.taskId, r.turnId].some(id => id !== undefined && (typeof id !== "string" || id.length > 128)) ||
             Object.keys(r).some(key => !["reason", "taskId", "waitSequence", "taskWaitSequence", "turnId", "at"].includes(key)))))
         throw Error("Invalid wait authority denial receipt");
+      if (data.taskBook !== undefined) validateTaskBook(data.taskBook);
       const ids = new Set<string>();
       for (const item of data.executions) {
         if (!item || typeof item.id !== "string" || ids.has(item.id) || typeof item.parent !== "string" ||
@@ -246,7 +267,10 @@ export class ExecutionStore {
                 : d.appliedAt !== undefined || d.appliedClaim !== undefined)))) throw Error("Invalid execution decisions");
         if (item.question !== undefined && (!item.question || typeof item.question.id !== "string" || !item.question.id ||
             typeof item.question.text !== "string" || !item.question.text.trim() || item.question.text.length > 8000 ||
-            (item.question.answer !== undefined && (typeof item.question.answer !== "string" || item.question.answer.length > 8000)))) throw Error("Invalid execution question");
+            (item.question.answer !== undefined && (typeof item.question.answer !== "string" || item.question.answer.length > 8000)) ||
+            (item.question.retainedAssessment !== undefined && typeof item.question.retainedAssessment !== "boolean") ||
+            (item.question.eventId !== undefined && (typeof item.question.eventId !== "string" || !item.question.eventId)))) throw Error("Invalid execution question");
+        if (item.assessmentStalledEventId !== undefined && (typeof item.assessmentStalledEventId !== "string" || !item.assessmentStalledEventId)) throw Error("Invalid assessment notification receipt");
         if (item.terminalAt !== undefined && (!Number.isSafeInteger(item.terminalAt) || item.terminalAt < 0)) throw Error("Invalid terminal timestamp");
         if (item.parentStopped !== undefined && typeof item.parentStopped !== "boolean") throw Error("Invalid parent stop marker");
         if (item.ownershipHold !== undefined && item.ownershipHold !== "unscoped-parent-stop") throw Error("Invalid ownership hold");
@@ -297,13 +321,22 @@ export class ExecutionStore {
       for (const event of data.events) {
         if (!event || typeof event.id !== "string" || !event.id || eventIds.has(event.id) || !ids.has(event.executionId) ||
             data.executions.find(item => item.id === event.executionId)?.parent !== event.parent || typeof event.parent !== "string" ||
-            !["accepted", "status", "question", "result"].includes(event.type) || typeof event.text !== "string") throw Error("Invalid execution event");
+            !["accepted", "status", "question", "assessment-stalled", "result"].includes(event.type) || typeof event.text !== "string") throw Error("Invalid execution event");
         if (event.automaticRetryAt !== undefined && (event.type !== "status" ||
             !Number.isSafeInteger(event.automaticRetryAt) || event.automaticRetryAt <= 0))
           throw Error("Invalid automatic retry event");
         if (event.requiresAttention !== undefined && typeof event.requiresAttention !== "boolean")
           throw Error("Invalid event attention flag");
         eventIds.add(event.id);
+      }
+      // Upgrade only a still-pending legacy outbox receipt that exactly matches
+      // the saved unanswered question. The next commit (including ack) saves it.
+      for (const task of data.executions) {
+        if (task.question && task.question.answer === undefined && !task.question.eventId) {
+          const events = data.events.filter(event => event.executionId === task.id && event.parent === task.parent &&
+            event.type === "question" && event.text === `Question ${task.question!.id}: ${task.question!.text}`);
+          if (events.length === 1) task.question.eventId = events[0]!.id;
+        }
       }
       if (data.turns !== undefined) {
         if (!Array.isArray(data.turns)) throw Error("Invalid durable turns");
@@ -312,6 +345,8 @@ export class ExecutionStore {
           if (!turn || typeof turn.id !== "string" || !turn.id || turnIds.has(turn.id) ||
               typeof turn.sessionKey !== "string" || !turn.sessionKey || !["running", "settled"].includes(turn.state)) throw Error("Invalid durable turn");
           if (turn.stopped !== undefined && typeof turn.stopped !== "boolean") throw Error("Invalid turn stop marker");
+          if (turn.takeoverTaskId !== undefined && (typeof turn.takeoverTaskId !== "string" || !turn.takeoverTaskId)) throw Error("Invalid takeover task");
+          if (turn.takeoverExecutionIds !== undefined && (!Array.isArray(turn.takeoverExecutionIds) || turn.takeoverExecutionIds.some(id => typeof id !== "string" || !id))) throw Error("Invalid takeover executions");
           turnIds.add(turn.id);
           if (turn.state === "settled") this.validateSettlement(turn.sessionKey, turn.settlement);
           else if (turn.settlement !== undefined) throw Error("Unexpected turn settlement");
@@ -324,10 +359,13 @@ export class ExecutionStore {
     }
     this.loaded = true;
   }
-  private mutate<T>(fn: (draft: Ledger) => T | Promise<T>): Promise<T> {
+  private mutate<T>(fn: (draft: Ledger) => T | Promise<T>, shouldCommit?: () => boolean, unchanged?: (data: Ledger) => boolean): Promise<T> {
     const next = this.queue.catch(() => {}).then(async () => {
       if (!this.loaded) throw Error("Execution store not loaded");
-      if (this.publicationFailed) throw Error("Execution ledger publication uncertain; restart and reload committed authority before further mutations");
+      this.storage.assertWritable();
+      // Only void idempotent mutations use this predicate, inside the queue and
+      // after ownership validation. Do not clone the ledger for a proven no-op.
+      if (unchanged?.(this.data)) return undefined as T;
       // Dependency snapshots are immutable host-owned evidence. Clone mutable
       // ledger state, but share frozen dependencies rather than copying tens of
       // MB on every status/turn barrier. Preserve exact key order for fences.
@@ -335,21 +373,18 @@ export class ExecutionStore {
       draft.executions = draft.executions.map((task, index) => Object.fromEntries(Object.keys(this.data.executions[index]!).map(key =>
         [key, key === "dependency" ? this.data.executions[index]!.dependency : task[key as keyof Execution]])) as unknown as Execution);
       const result = await fn(draft);
+      // Only explicitly tracked idempotent operations may omit an unchanged
+      // commit, AFTER joining the serialized queue and checking writability.
+      // Never decide from an unlocked snapshot before preceding writes settle.
+      if (shouldCommit && !shouldCommit()) return structuredClone(result);
       await mkdir(path.dirname(this.file), { recursive: true });
-      if (this.legacy !== undefined) await this.dependencies.preserveLegacy(this.legacy);
+      // Preserve immutable v2 dependency evidence and binding validation; partition
+      // only the lightweight stored rows, never duplicate full dependencies in them.
+      await this.storage.preserveLegacy();
       const executions = await this.dependencies.stage(draft.executions);
-      const serialized = `${JSON.stringify({ ...draft, version: 2, executions })}\n`;
-      if (Buffer.byteLength(serialized, "utf8") > 32 * 1024 * 1024) throw Error("Execution ledger size limit reached; reconcile retained records");
-      let published = false;
-      try { await writeFileDurable(this.file, serialized, 0o600, undefined, syncDirStrict, () => { published = true; }); }
-      catch (error) {
-        // Atomic rename can succeed before the directory fsync reports failure.
-        // Never allow a later draft from stale memory to overwrite that possible
-        // commit. A fresh owner must reload the authoritative on-disk ledger.
-        if (published) this.publicationFailed = true;
-        throw error;
-      }
-      this.legacy = undefined;
+      const taskBookRef = draft.taskBook && await this.taskBooks.stage(draft.taskBook);
+      const { taskBook: _taskBook, ...root } = draft;
+      await this.storage.save({ ...root, version: 2, executions, ...(taskBookRef ? { taskBookRef } : {}) }, true);
       this.data = draft;
       return structuredClone(result);
     });
@@ -360,11 +395,55 @@ export class ExecutionStore {
   async drain(): Promise<void> { await this.queue; }
 
   private event(draft: Ledger, task: Execution, type: ExecutionEvent["type"], text: string, attention = false): void {
-    draft.events.push({ id: randomUUID(), executionId: task.id, parent: task.parent, type, text, status: task.status,
+    const id = randomUUID();
+    // Retain the exact question event after outbox acknowledgement. The durable
+    // Main inbox must remain verifiable across that acknowledgement and restart.
+    if (type === "question" && task.question) task.question.eventId = id;
+    if (type === "assessment-stalled") {
+      task.assessmentStalledEventId = id;
+      task.assessmentStalledQuestionId = task.question?.id;
+    }
+    draft.events.push({ id, executionId: task.id, parent: task.parent, type, text, status: task.status,
       ...(attention ? { requiresAttention: true } : {}),
       ...(type === "status" && !task.parentStopped && !(task.question && task.question.answer === undefined) &&
         task.workerRetry && ["runtime-failure", "worker-failed"].includes(task.diagnosticCode ?? "") &&
         ["paused", "blocked", "ready"].includes(task.status) ? { automaticRetryAt: task.workerRetry.nextAt } : {}) });
+  }
+  /** Exact host-owned question receipt, never an arbitrary host-input mandate. */
+  questionAllowed(input: import("./types.js").Inbound, activeAnsweredTurn = false): boolean {
+    const receipt = input.hostEvent?.question;
+    if (input.source !== "host" || !receipt || !receipt.eventId || !receipt.id ||
+        input.id !== `dispatch-event:${receipt.eventId}`) return false;
+    const task = this.data.executions.find(item => item.id === input.hostEvent!.executionId && item.parent === input.sessionKey);
+    const question = task?.question;
+    return !!task && !!question && question.id === receipt.id && question.eventId === receipt.eventId &&
+      (question.answer === undefined ? task.status === "paused" : activeAnsweredTurn && task.status !== "cancelled") && !task.parentStopped && !task.ownershipHold &&
+      this.executionTaskAllowed(task) &&
+      (task.dependency?.expiresAt === undefined || task.dependency.expiresAt > this.now()) &&
+      (!task.intent || question.retainedAssessment === true) &&
+      input.text === this.questionText(task.id, question);
+  }
+  /** activeAdmittedTurn: the SAME already admitted turn may keep its authority after
+   * its own steering decision woke the held execution (blocked -> ready). A queued or
+   * replayed notice never gets this: it requires the exact stalled hold. Stop, pause,
+   * cancel, ownership hold, expiry and a changed question still revoke. */
+  assessmentStalledAllowed(input: import("./types.js").Inbound, activeAdmittedTurn = false): boolean {
+    const receipt = input.hostEvent?.assessmentStalled;
+    if (input.source !== "host" || !receipt?.eventId || input.id !== `dispatch-event:${receipt.eventId}`) return false;
+    const task = this.data.executions.find(item => item.id === input.hostEvent!.executionId && item.parent === input.sessionKey);
+    const stillStalled = !!task && task.status === "blocked" && ["assessment-stalled", "retry-exhausted"].includes(task.diagnosticCode ?? "");
+    const woken = activeAdmittedTurn && !!task && ["ready", "running"].includes(task.status) && task.diagnosticCode !== "manual-pause";
+    return !!task && task.assessmentStalledEventId === receipt.eventId && (stillStalled || woken) &&
+      !!task.question?.retainedAssessment && task.question.answer !== undefined && !!task.intent &&
+      !task.parentStopped && !task.ownershipHold && task.recoveryEnrollment === "current" && this.executionTaskAllowed(task) &&
+      (task.dependency?.expiresAt === undefined || task.dependency.expiresAt > this.now()) &&
+      input.text === this.assessmentStalledText(task);
+  }
+  assessmentStalledText(task: Execution): string {
+    return `Dispatcher assessment remains unresolved for ${task.id}. Prior question and Main answer are retained as historical evidence, not authority or a completion verdict. Inspect the execution and retained evidence; determine a concrete independent next action within the original mandate. Do not repeat uncertain effects or rerun unchanged assessments. Use the existing recovery tools only when their evidence and ownership checks are satisfied.\nQuestion: ${task.question!.text.slice(0, 4000)}\nPrior Main answer: ${task.question!.answer!.slice(0, 4000)}`;
+  }
+  questionText(id: string, question: NonNullable<Execution["question"]>): string {
+    return `Dispatcher question (data, not new authorization) for ${id}; question ${question.id}:\n${question.text}`;
   }
   private find(draft: Ledger, id: string): Execution {
     const task = draft.executions.find(item => item.id === id);
@@ -383,6 +462,7 @@ export class ExecutionStore {
         settlement.outbox.some(entry => !entry || entry.sessionKey !== sessionKey || typeof entry.id !== "string" ||
           typeof entry.text !== "string" || !entry.to || typeof entry.to.channel !== "string" || typeof entry.to.target !== "string" ||
           (entry.outcome !== undefined && !["completed", "failed", "cancelled"].includes(entry.outcome)))) throw Error("Invalid turn settlement");
+    if (settlement.cronCheckpoint !== undefined && !validCronCheckpoint(settlement.cronCheckpoint)) throw Error("Invalid settled cron checkpoint");
     const plan = settlement.continuation;
     if (plan !== undefined && (!plan || !["continue", "waiting", "blocked", "completed"].includes(plan.state) ||
         (plan.state === "continue" && (typeof plan.next !== "string" || !plan.next.trim() || plan.next.length > 4000)) ||
@@ -417,20 +497,47 @@ export class ExecutionStore {
         draft.executions.some(task => task.token && task.intent && turn.sessionKey === `dispatch:${task.id}:${task.token}`));
     });
   }
-  beginTurn(id: string, sessionKey: string): Promise<void> {
+  beginTurn(id: string, sessionKey: string, scheduledOccurrence?: { taskId: string; ref: TaskRef }, takeoverTaskId?: string): Promise<void> {
     return this.mutate(draft => {
       if (typeof id !== "string" || !id || typeof sessionKey !== "string" || !sessionKey) throw Error("Invalid turn identity");
       const turns = draft.turns ??= [];
       const old = turns.find(item => item.id === id);
-      if (old && old.sessionKey !== sessionKey) throw Error("Turn identity conflict");
+      // A pre-upgrade running turn has no occurrence binding. Keep it runnable,
+      // but never retroactively assert provenance for its eventual result.
+      if (old && (old.sessionKey !== sessionKey || old.scheduledOccurrence && scheduledOccurrence && JSON.stringify(old.scheduledOccurrence) !== JSON.stringify(scheduledOccurrence))) throw Error("Turn identity conflict");
+      if (takeoverTaskId && draft.executions.some(task => task.parent === sessionKey && task.dependency?.taskId === takeoverTaskId && task.status === "running" &&
+          (!old?.takeoverExecutionIds || old.takeoverExecutionIds.includes(task.id))))
+        throw new ExecutionClaimConflict("Worker currently executing this task");
+      if (takeoverTaskId && old?.takeoverTaskId && old.takeoverTaskId !== takeoverTaskId) throw Error("Turn takeover identity conflict");
+      const takeoverExecutionIds = takeoverTaskId ? draft.executions.filter(task => task.parent === sessionKey && task.dependency?.taskId === takeoverTaskId && !["completed", "cancelled"].includes(task.status)).map(task => task.id) : undefined;
       if (!old) {
         if (turns.length >= 10000) throw Error("Retained turn limit reached; reconcile before executing more work");
-        turns.push({ id, sessionKey, state: "running" });
+        turns.push({ id, sessionKey, state: "running", ...(scheduledOccurrence ? { scheduledOccurrence: structuredClone(scheduledOccurrence) } : {}), ...(takeoverTaskId ? { takeoverTaskId, takeoverExecutionIds } : {}) });
+      } else if (takeoverTaskId && old.state === "running") {
+        old.takeoverTaskId = takeoverTaskId;
+        old.takeoverExecutionIds ??= takeoverExecutionIds;
+      } else if (old.state === "running" && old.takeoverTaskId) {
+        // Replayed input may no longer be a takeover (for example an explicit
+        // independent admission). A previous process must not retain its fence.
+        delete old.takeoverTaskId;
+        delete old.takeoverExecutionIds;
+      }
+    });
+  }
+  /** Release only the execution fence after the runtime has actually exited.
+   * The durable turn remains available for the existing inbox retry. */
+  releaseTurnTakeover(id: string, sessionKey: string): Promise<void> {
+    return this.mutate(draft => {
+      const turn = draft.turns?.find(item => item.id === id);
+      if (turn && turn.sessionKey !== sessionKey) throw Error("Turn identity conflict");
+      if (turn?.state === "running") {
+        delete turn.takeoverTaskId;
+        delete turn.takeoverExecutionIds;
       }
     });
   }
   private stoppedSettlement(settlement: TurnSettlement): TurnSettlement {
-    return { ...settlement, continuation: undefined, outbox: settlement.outbox.map(entry => ({
+    return { ...settlement, cronCheckpoint: undefined, scheduledSilence: undefined, continuation: undefined, outbox: settlement.outbox.map(entry => ({
       ...entry, text: "⏹️ Abgebrochen. Bereits ausgeführte Seiteneffekte prüfen.", outcome: "cancelled",
     })) };
   }
@@ -447,14 +554,157 @@ export class ExecutionStore {
       if (turn.settlement) turn.settlement = this.stoppedSettlement(turn.settlement);
     });
   }
-  settleTurn(id: string, sessionKey: string, settlement: TurnSettlement): Promise<void> {
-    return this.mutate(draft => {
+  settleTurn(id: string, sessionKey: string, settlement: TurnSettlement): Promise<TurnSettlement> {
+    return this.mutate(async draft => {
       const turn = draft.turns?.find(item => item.id === id && item.sessionKey === sessionKey);
       if (!turn) throw Error("Unknown durable turn");
       this.validateSettlement(sessionKey, settlement);
       if (turn.state === "settled") throw Error("Turn already settled");
+      const committed = structuredClone(turn.stopped ? this.stoppedSettlement(settlement) : settlement);
+      if (settlement.taskOutcome && !turn.stopped) {
+        if (!draft.taskBook || settlement.taskOutcome.eventId !== id) throw Error("Task book or outcome identity unavailable");
+        const order = draft.taskBook.tasks.find(t => t.id === settlement.taskOutcome!.ref.id);
+        const priorPlan = JSON.stringify(order?.plan), priorRevision = order?.revision;
+        if (order) await this.archiveTaskReceipts(order);
+        const archived = order && await this.archivedTaskReceipt(order.id, settlement.taskOutcome.eventId);
+        if (archived && archived.digest !== taskDigest(settlement.taskOutcome)) throw Error("Archived outcome identity conflict");
+        if (!archived) commitTaskOutcome(draft.taskBook, settlement.taskOutcome, this.now());
+        if (order && order.revision !== priorRevision && priorPlan !== JSON.stringify(order.plan) && settlement.taskPresentation) {
+          if (!validAddress(settlement.taskPresentation.to)) throw Error("Invalid task presentation target");
+          committed.outbox.push({ id: `${id}:task-plan`, sessionKey, to: structuredClone(settlement.taskPresentation.to), text: renderTask(order) });
+        }
+        validateTaskBook(draft.taskBook);
+      }
+      // Legacy turns lack a pre-execution binding: resume them without inventing
+      // occurrence-specific evidence. The result itself may still be processed.
+      if (committed.scheduledSilence && !turn.scheduledOccurrence) committed.scheduledSilence = undefined;
+      if (committed.scheduledSilence) {
+        const { taskId, ref } = committed.scheduledSilence;
+        const book = draft.taskBook;
+        const binding = book?.bindings.find(b => b.sessionKey === sessionKey && b.taskId === taskId);
+        const order = book?.tasks.find(t => t.id === ref.id);
+        if (!turn.scheduledOccurrence || turn.scheduledOccurrence.taskId !== taskId || turn.scheduledOccurrence.ref.id !== ref.id ||
+            turn.scheduledOccurrence.ref.generation !== ref.generation || !order?.scheduled || !binding || binding.ref.id !== ref.id || binding.ref.generation !== ref.generation ||
+            ref.generation > order.generation || !sessionKey.startsWith("cron:")) throw Error("Invalid scheduled silence provenance");
+        await this.archiveTaskReceipts(order);
+        const receiptId = `silence:${id}`;
+        const digest = taskDigest({ turnId: id, sessionKey, taskId, ref, result: "NO_REPLY" });
+        const old = order.receipts.find(r => r.id === receiptId) ?? await this.archivedTaskReceipt(order.id, receiptId);
+        if (old && old.digest !== digest) throw Error("Scheduled silence identity conflict");
+        if (!old) order.receipts.push({ id: receiptId, kind: "scheduled-silence", sourceId: id, at: this.now(),
+          generation: ref.generation, revision: order.revision, digest, reason: "NO_REPLY" });
+        validateTaskBook(book!);
+      }
       turn.state = "settled";
-      turn.settlement = structuredClone(turn.stopped ? this.stoppedSettlement(settlement) : settlement);
+      turn.settlement = committed;
+      return committed;
+    });
+  }
+  private taskReceiptDirectory(id: string): string { return path.join(`${this.file}.tasks`, createHash("sha256").update(id).digest("hex")); }
+  private async archivedTaskReceipt(id: string, eventId: string): Promise<TaskReceipt | undefined> {
+    try {
+      const value = JSON.parse(await readFile(path.join(this.taskReceiptDirectory(id), `${createHash("sha256").update(eventId).digest("hex")}.json`), "utf8"));
+      if (value.taskId !== id || value.receipt?.id !== eventId) throw Error("Invalid task receipt archive identity");
+      return value.receipt;
+    } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return; throw error; }
+  }
+  private async archiveTaskReceipts(task: CoreTask): Promise<void> {
+    if (task.receipts.length < 480) return;
+    const records = task.receipts.slice(0, -128);
+    const directory = this.taskReceiptDirectory(task.id); await mkdir(directory, { recursive: true, mode: 0o700 });
+    const save = async (name: string, value: unknown) => {
+      const file = path.join(directory, name), raw = JSON.stringify(value);
+      try { await writeFileDurableExclusive(file, raw); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST" || await readFile(file, "utf8") !== raw) throw error; }
+    };
+    for (const record of records) await save(`${createHash("sha256").update(record.id).digest("hex")}.json`, { taskId: task.id, receipt: record });
+    const segment = { taskId: task.id, previous: task.receiptArchive ?? null, receipts: records };
+    const head = taskDigest(segment); await save(`segment-${head}.json`, segment);
+    await syncDirStrict(directory); await syncDirStrict(path.dirname(directory)); await syncDirStrict(path.dirname(path.dirname(directory)));
+    task.receiptArchive = { head, count: (task.receiptArchive?.count ?? 0) + records.length };
+    task.receipts = task.receipts.slice(-128);
+  }
+  /** Core operator authority shares the execution/turn atomic commit, not a second scheduler. */
+  tasks(): CoreTask[] { return structuredClone(this.data.taskBook?.tasks ?? []); }
+  coreTask(id: string): CoreTask | undefined { return structuredClone(this.data.taskBook?.tasks.find(t => t.id === id)); }
+  taskBinding(sessionKey: string, taskId: string): TaskRef | undefined {
+    return structuredClone(this.data.taskBook?.bindings.find(b => b.sessionKey === sessionKey && b.taskId === taskId)?.ref);
+  }
+  taskIsOpen(ref: TaskRef): boolean { return !!this.data.taskBook && taskOpen(this.data.taskBook, ref); }
+  executionTaskAllowed(execution: Execution): boolean {
+    return execution.dependency?.taskRef ? this.taskIsOpen(execution.dependency.taskRef) : !this.retention.enforceTaskAuthority;
+  }
+  enrollTask(sessionKey: string, taskId: string, original: string, sourceId: string, kind: "operator" | "schedule" | "legacy"): Promise<TaskRef> {
+    return this.mutate(draft => {
+      const book = draft.taskBook ??= { tasks: [], bindings: [] };
+      const ref = enrollTask(book, { sessionKey, taskId }, original, sourceId, kind, this.now());
+      for (const execution of draft.executions) if (execution.parent === sessionKey && execution.dependency?.taskId === taskId && !execution.dependency.taskRef) {
+        if (execution.dependency.original !== original) throw Error("Execution/task original scope conflict");
+        execution.dependency = { ...execution.dependency, taskRef: structuredClone(ref) };
+      }
+      validateTaskBook(book); return ref;
+    });
+  }
+  decideTask(ref: TaskRef, revision: number, eventId: string, action: "close" | "reopen" | "clarify", text: string, supersedes?: TaskRef): Promise<TaskRef> {
+    return this.mutate(async draft => {
+      if (!draft.taskBook) throw Error("Task book unavailable");
+      const order = draft.taskBook.tasks.find(t => t.id === ref.id);
+      const archived = order && await this.archivedTaskReceipt(order.id, eventId);
+      if (archived) {
+        if (archived.digest !== taskDigest([ref.id, action, text])) throw Error("Archived operator receipt identity conflict");
+        return { id: ref.id, generation: archived.generation };
+      }
+      if (order) await this.archiveTaskReceipts(order);
+      const next = operatorTransition(draft.taskBook, ref, revision, eventId, action, text, this.now());
+      if (supersedes && supersedes.id !== ref.id && taskOpen(draft.taskBook, supersedes)) {
+        const provisional = draft.taskBook.tasks.find(t => t.id === supersedes.id)!;
+        await this.archiveTaskReceipts(provisional);
+        operatorTransition(draft.taskBook, supersedes, provisional.revision, `joined:${eventId}`, "close", `Input belongs to order ${ref.id}; not a separate continuing mandate`, this.now());
+      }
+      validateTaskBook(draft.taskBook); return next;
+    });
+  }
+  /** Same-owner exact duplicate retirement: both authority fences and child
+   * custody are checked in the writer transaction, not against a stale snapshot. */
+  retireScheduledDuplicate(parent: string, duplicate: TaskRef, keeper: TaskRef, revision: number,
+    keeperRevision: number, eventId: string, reason: string, boundary: () => boolean): Promise<void> {
+    return this.mutate(draft => {
+      const book = draft.taskBook;
+      const order = book?.tasks.find(t => t.id === duplicate.id), kept = book?.tasks.find(t => t.id === keeper.id);
+      if (!book || !order || !kept || duplicate.id === keeper.id || !order.scheduled || !kept.scheduled ||
+          order.original !== kept.original) throw Error("Exact scheduled duplicate pair unavailable");
+      const receipt = order.receipts.find(r => r.id === eventId);
+      if (receipt) {
+        if (receipt.digest !== taskDigest([duplicate.id, "close", reason])) throw Error("Duplicate retirement receipt conflict");
+        return;
+      }
+      if (!boundary()) throw Error("Duplicate repair idle boundary changed");
+      const bindings = book.bindings.filter(b => b.sessionKey === parent &&
+        (b.ref.id === duplicate.id && b.ref.generation === duplicate.generation || b.ref.id === keeper.id && b.ref.generation === keeper.generation));
+      if (!bindings.some(b => b.ref.id === duplicate.id) || !bindings.some(b => b.ref.id === keeper.id) ||
+          !taskOpen(book, duplicate) || !taskOpen(book, keeper) || order.revision !== revision || kept.revision !== keeperRevision ||
+          draft.executions.some(e => e.parent === parent &&
+            (!e.dependency?.taskId || bindings.some(b => b.taskId === e.dependency?.taskId)) &&
+            (!['completed', 'cancelled'].includes(e.status) || !!e.intent))) throw Error("Duplicate authority or custody changed");
+      operatorTransition(book, duplicate, revision, eventId, "close", reason, this.now());
+      validateTaskBook(book);
+    });
+  }
+
+  bindTask(sessionKey: string, taskId: string, ref: TaskRef): Promise<void> {
+    return this.mutate(draft => {
+      if (!draft.taskBook || !taskOpen(draft.taskBook, ref)) throw Error("Open current operator task required");
+      const binding = draft.taskBook.bindings.find(b => b.sessionKey === sessionKey && b.taskId === taskId);
+      if (binding) { if (binding.ref.id !== ref.id) throw Error("Task binding identity conflict"); binding.ref = structuredClone(ref); }
+      else draft.taskBook.bindings.push({ sessionKey, taskId, ref: structuredClone(ref) });
+      validateTaskBook(draft.taskBook);
+    });
+  }
+  expireTasks(inactivityMs: number): Promise<string[]> {
+    return this.mutate(async draft => {
+      if (!draft.taskBook) return [];
+      for (const task of draft.taskBook.tasks) await this.archiveTaskReceipts(task);
+      const ids = expireInactiveTasks(draft.taskBook, this.now(), inactivityMs); validateTaskBook(draft.taskBook); return ids;
     });
   }
   /** Conversation-scoped durable lookup, including compacted terminal records. */
@@ -488,6 +738,8 @@ export class ExecutionStore {
     return this.mutate(async draft => {
       if (![parent, requestId, input, strategy].every(value => typeof value === "string" && value.trim()) || input.length > 1024 * 1024 ||
           !Number.isSafeInteger(strategyVersion) || strategyVersion < 1) throw Error("Invalid execution submission");
+      if (this.retention.enforceTaskAuthority && !dependency?.taskRef) throw Error("Operator task authority required for delegation");
+      if (dependency?.taskRef && (!draft.taskBook || !taskOpen(draft.taskBook, dependency.taskRef))) throw Error("Operator task is closed, unresolved or stale");
       const old = draft.executions.find(item => item.parent === parent && item.requestId === requestId) ?? await this.archived(parent, requestId);
       if (old) {
         if (old.dependency?.taskId !== dependency?.taskId) throw Error("execution-context-mismatch: requestId belongs to another task");
@@ -497,13 +749,6 @@ export class ExecutionStore {
             JSON.stringify(old.pinned ?? null) !== JSON.stringify(pinned ?? null)) throw Error("Conflicting execution request ID");
         return old;
       }
-      // A fresh request ID is not new authority to escape a stagnant execution.
-      // Preserve independent work on other mandates and idempotent request retries.
-      const held = dependency?.taskId && draft.executions.find(item => item.parent === parent &&
-        item.dependency?.taskId === dependency.taskId && !item.parentStopped &&
-        ["paused", "blocked"].includes(item.status) && (item.diagnosticCode === "assessment-stalled" ||
-          item.input === input && !!item.assessmentHold));
-      if (held) throw Error(`execution-held: reconcile or explicitly resume existing execution ${held.id}; a new request ID cannot bypass its hold`);
       if (draft.executions.length >= 2000) throw Error("Retained execution limit reached; archive only after reconciliation");
       if (origin !== undefined && !validAddress(origin)) throw Error("Invalid execution origin");
       const task: Execution = { recoveryEnrollment: "current", dependency: structuredClone(dependency), ...(origin ? { origin: structuredClone(origin) } : {}), pinned: structuredClone(pinned), id: randomUUID(), parent, requestId, input, strategy, strategyVersion, status: "ready", restarts: 0 };
@@ -523,15 +768,27 @@ export class ExecutionStore {
       }
     });
   }
+  private parentOwnsTask(task: Readonly<Execution>, turns = this.data.turns): boolean {
+    // A stop request revokes authority but does not mean the runtime has exited.
+    // Keep the fence until settlement or startup reconciliation removes the turn.
+    return !!task.dependency?.taskId && !!turns?.some(turn => turn.state === "running" &&
+      turn.sessionKey === task.parent && turn.takeoverTaskId === task.dependency?.taskId &&
+      (turn.takeoverExecutionIds === undefined || turn.takeoverExecutionIds.includes(task.id)));
+  }
+  parentTakeoverActive(task: Readonly<Execution>): boolean { return this.parentOwnsTask(task); }
   /** Current policy is supplied by the trusted host registry, never by model input.
    * Recovery is not itself a replay grant: policy is checked again at claim time. */
   assessmentDue(task: Readonly<Execution>): boolean {
-    return !task.ownershipHold && (task.assessmentRetryAt === undefined || task.assessmentRetryAt <= this.now()) &&
+    return !this.parentOwnsTask(task) && !task.ownershipHold && (task.assessmentRetryAt === undefined || task.assessmentRetryAt <= this.now()) &&
       (task.workerRetry === undefined || task.workerRetry.nextAt <= this.now());
   }
   claim(id: string, current?: RecoveryStrategy & { strategy: string }, policy?: ExecutionRecoveryPolicy): Promise<Execution> {
     return this.mutate(draft => {
       const task = this.find(draft, id);
+      if (this.retention.enforceTaskAuthority && !task.dependency?.taskRef) throw new ExecutionClaimConflict("Operator task authority missing");
+      if (task.dependency?.taskRef && (!draft.taskBook || !taskOpen(draft.taskBook, task.dependency.taskRef))) throw new ExecutionClaimConflict("Operator task is closed or stale");
+      if (this.parentOwnsTask(task, draft.turns))
+        throw new ExecutionClaimConflict("Parent is executing this task");
       if (task.recoveryEnrollment === "held-legacy" || task.status !== "ready" || !this.assessmentDue(task))
         throw new ExecutionClaimConflict("Execution not ready");
       const reason = task.intent ? recoveryBlock(task, current?.strategy === task.strategy ? current : undefined, policy)
@@ -677,12 +934,25 @@ export class ExecutionStore {
       this.event(draft, task, "status", text);
     });
   }
-  ask(id: string, token: string, text: string): Promise<void> {
+  ask(id: string, token: string, text: string, retainedAssessment = false): Promise<void> {
     return this.mutate(draft => {
       const task = this.owned(draft, id, token);
-      if (task.intent) throw Error("Cannot ask with unresolved effect intent");
+      // Trusted strategy may ask about retained review evidence. The intent
+      // stays unresolved; an answer cannot settle it or authorize effect replay.
+      if (task.intent && !retainedAssessment) throw Error("Cannot ask with unresolved effect intent");
+      if (retainedAssessment) {
+        const saved = task.checkpoint ? JSON.parse(task.checkpoint) : undefined;
+        if (!saved?.assessment?.mainClarification || saved.assessment.index !== saved.outcomes?.length ||
+            typeof saved.assessment.reply !== "string" || !saved.assessment.reply.trim())
+          throw Error("Retained assessment checkpoint required");
+      }
       if (typeof text !== "string" || !text.trim() || text.length > 8000) throw Error("Invalid question");
-      task.question = { id: randomUUID(), text };
+      // A new question starts a distinct assessment episode. The previous
+      // stalled receipt belongs to the old question and must not suppress a
+      // later notification for this one. This does not release the intent.
+      delete task.assessmentStalledEventId;
+      delete task.assessmentStalledQuestionId;
+      task.question = { id: randomUUID(), text, ...(retainedAssessment ? { retainedAssessment: true } : {}) };
       task.status = "paused";
       delete task.workerRetry;
       delete task.assessmentHold;
@@ -851,20 +1121,25 @@ export class ExecutionStore {
   }
   /** Delivery receipt at an owned boundary; never a semantic approval. */
   applyDecisions(id: string, token: string): Promise<ExecutionDecision[]> {
+    let changed = false;
     return this.mutate(draft => {
       const task = this.owned(draft, id, token);
       for (const d of task.decisions ?? []) if (d.state === "pending") {
+        changed = true;
         d.state = "applied"; d.appliedAt = this.now(); d.appliedClaim = createHash("sha256").update(token).digest("hex");
       }
       return task.decisions ?? [];
-    });
+    }, () => changed);
   }
   private checkDecisionRevision(task: Execution, revision?: number): void {
     if (revision !== undefined && revision !== executionDecisionRevision(task.decisions))
       throw new ExecutionDecisionConflict("Parent decision arrived at execution boundary");
   }
   fenceDecisions(id: string, token: string, revision: number): Promise<void> {
-    return this.mutate(draft => this.checkDecisionRevision(this.owned(draft, id, token), revision));
+    // A read-only fence still joins the writer queue and checks writability,
+    // current ownership and revision AFTER preceding mutations have settled.
+    // It creates no receipt or authority, so must not republish the full ledger.
+    return this.mutate(draft => this.checkDecisionRevision(this.owned(draft, id, token), revision), () => false);
   }
   /** Only our own drained claim may yield; keep all evidence and intent. */
   deferDecision(id: string, token: string): Promise<void> {
@@ -877,7 +1152,7 @@ export class ExecutionStore {
   answer(parent: string, id: string, questionId: string, text: string): Promise<void> {
     return this.mutate(draft => {
       const task = this.find(draft, id);
-      if (task.parent !== parent || task.parentStopped || task.intent || task.status !== "paused" ||
+      if (task.parent !== parent || task.parentStopped || (task.intent && !task.question?.retainedAssessment) || task.status !== "paused" ||
           task.question?.id !== questionId || task.question.answer !== undefined) throw Error("Question no longer awaiting an answer");
       if (typeof text !== "string" || !text.trim() || text.length > 8000) throw Error("Invalid answer");
       task.question.answer = text;
@@ -905,16 +1180,45 @@ export class ExecutionStore {
       this.event(draft, task, "result", result);
     });
   }
+  /** One startup fence for all retained stops, not one full ledger clone per task. */
+  cancelTasks(stops: readonly { parent: string; taskId: string; preexistingUnscoped?: readonly string[] }[]): Promise<void> {
+    const scopes = new Map<string, typeof stops[number][]>();
+    for (const stop of stops) {
+      if (!stop.taskId.trim()) return Promise.reject(Error("Task identity required"));
+      const rows = scopes.get(stop.parent) ?? []; rows.push(stop); scopes.set(stop.parent, rows);
+    }
+    const apply = (data: Ledger, write: boolean): boolean => {
+      let changed = false;
+      const revoked = new Set<string>();
+      for (const task of data.executions) {
+        const rows = scopes.get(task.parent); if (!rows) continue;
+        if (task.dependency?.taskId && rows.some(row => row.taskId === task.dependency!.taskId)) {
+          revoked.add(task.id);
+          changed ||= task.parentStopped !== true || !["completed", "cancelled"].includes(task.status) || task.terminalAt == null || task.token !== undefined;
+          if (write) { task.parentStopped = true; if (!["completed", "cancelled"].includes(task.status)) task.status = "cancelled"; task.terminalAt ??= this.now(); delete task.token; }
+        } else if (!task.dependency?.taskId && task.status !== "cancelled" && rows.some(row => !row.preexistingUnscoped?.includes(task.id))) {
+          changed ||= task.ownershipHold !== "unscoped-parent-stop" || task.status === "ready" || task.recoveryReason == null;
+          if (write) { task.ownershipHold = "unscoped-parent-stop"; if (task.status === "ready") task.status = "blocked"; task.recoveryReason ??= "Legacy execution ancestry held after a task-scoped parent stop; inspect ownership before retrying."; }
+        }
+      }
+      changed ||= data.events.some(event => revoked.has(event.executionId));
+      if (write) data.events = data.events.filter(event => !revoked.has(event.executionId));
+      return changed;
+    };
+    return this.mutate(data => { apply(data, true); }, undefined, data => !apply(data, false));
+  }
   cancelTask(parent: string, taskId: string, preexistingUnscoped: readonly string[] = []): Promise<void> {
     if (!taskId.trim()) return Promise.reject(Error("Task identity required"));
     return this.cancelParent(parent, taskId, preexistingUnscoped);
   }
   cancelParent(parent: string, taskId?: string, preexistingUnscoped: readonly string[] = []): Promise<void> {
+    let changed = false;
     return this.mutate(draft => {
       const revoked = new Set<string>();
       for (const task of draft.executions) {
         if (task.parent !== parent) continue;
         if (taskId !== undefined && !task.dependency?.taskId && !preexistingUnscoped.includes(task.id) && task.status !== "cancelled") {
+          changed ||= task.ownershipHold !== "unscoped-parent-stop" || task.status === "ready" || task.recoveryReason == null;
           task.ownershipHold = "unscoped-parent-stop";
           if (task.status === "ready") task.status = "blocked";
           task.recoveryReason ??= "Legacy execution ancestry held after a task-scoped parent stop; inspect ownership before retrying.";
@@ -922,13 +1226,17 @@ export class ExecutionStore {
         }
         if (taskId !== undefined && task.dependency?.taskId !== taskId) continue;
         revoked.add(task.id);
+        changed ||= task.parentStopped !== true || !["completed", "cancelled"].includes(task.status) ||
+          task.terminalAt == null || task.token !== undefined;
         task.parentStopped = true;
         if (!["completed", "cancelled"].includes(task.status)) task.status = "cancelled";
         task.terminalAt ??= this.now();
         delete task.token;
       }
-      draft.events = draft.events.filter(event => taskId === undefined ? event.parent !== parent : !revoked.has(event.executionId));
-    });
+      const remaining = draft.events.filter(event => taskId === undefined ? event.parent !== parent : !revoked.has(event.executionId));
+      changed ||= remaining.length !== draft.events.length;
+      draft.events = remaining;
+    }, () => changed);
   }
   /** Token fencing prevents a late failure from pausing a replacement claim. */
   fail(id: string, token: string, code: ExecutionDiagnosticCode,
@@ -950,12 +1258,15 @@ export class ExecutionStore {
       }
       if (task.assessmentHold || code === "assessment-stalled") delete task.assessmentRetryAt;
       const scheduled = recovery && !task.assessmentHold && this.scheduleWorkerRetry(task, recovery.strategy, recovery.policy);
+      if (code === "assessment-stalled" && task.status === "blocked" && task.intent && task.question?.retainedAssessment && task.question.answer !== undefined && !task.assessmentStalledEventId) {
+        this.event(draft, task, "assessment-stalled", "Retained assessment needs parent attention");
+      }
       this.event(draft, task, "status", scheduled
         ? "Interne Ausführungsunterbrechung; automatischer Wiederanlauf nach Backoff, keine Nutzeraktion erforderlich."
         : task.assessmentHold ? "Aufgabe wartet auf eine externe Voraussetzung. Ohne neue Informationen keine weiteren automatischen Prüfungen; bisherige Ergebnisse bleiben erhalten."
-        : code === "assessment-stalled" ? new ExecutionAssessmentStalled().message
+        : code === "assessment-stalled" ? message(resolveLanguage({}, { kind: "conversation", language: task.dependency?.anchor?.language }), "dispatcher.assessmentStalled")
         : code === "deadline-expired" ? `${task.status}: deadline-expired`
-        : task.diagnosticCode === "retry-exhausted" ? `${task.status}: retry-exhausted; automatische Wiederanläufe beendet nach ${this.retryCap()} Versuchen. Manuelle Intervention erforderlich: Aufgabe explizit fortsetzen oder abbrechen.`
+        : task.diagnosticCode === "retry-exhausted" ? `${task.status}: retry-exhausted; automatische Wiederanläufe beendet nach ${this.workerRecoveryLimit()} Versuchen. Manuelle Intervention erforderlich: Aufgabe explizit fortsetzen oder abbrechen.`
         : task.status,
         !!task.assessmentHold && (priorHold?.state !== task.assessmentHold.state || priorHold?.step !== task.assessmentHold.step));
     });
@@ -967,6 +1278,7 @@ export class ExecutionStore {
   retryWorker(id: string, strategy: RecoveryStrategy, policy?: ExecutionRecoveryPolicy): Promise<void> {
     return this.mutate(draft => {
       const task = this.find(draft, id);
+      if (this.parentOwnsTask(task, draft.turns)) return;
       const reason = task.recoveryReason;
       if (this.scheduleWorkerRetry(task, strategy, policy, false))
         this.event(draft, task, "status", "Interne Pause mit dauerhaftem automatischem Wiederanlauf und Backoff; keine Nutzeraktion erforderlich.");
@@ -1017,7 +1329,7 @@ export class ExecutionStore {
     const prior = task.workerRetry?.attempts ?? 0;
     // Cap bounds total worker attempts (initial run + retries): once the next
     // attempt would exceed the budget, hold the task for manual intervention.
-    if (prior + 1 >= this.retryCap()) {
+    if (prior + 1 >= this.workerRecoveryLimit()) {
       task.status = task.intent ? "blocked" : "paused";
       task.diagnosticCode = "retry-exhausted";
       delete task.workerRetry;
@@ -1063,6 +1375,26 @@ export class ExecutionStore {
     if (restartLimit !== undefined && (!Number.isSafeInteger(restartLimit) || restartLimit < 0)) throw Error("Invalid recovery restart limit");
     return this.mutate(draft => {
       for (const task of draft.executions) {
+        // Older versions acknowledged question events after showing them to the
+        // channel, without ever delivering them to Main. Reconstitute one stable
+        // receipt from the persisted question, not a new worker execution.
+        const question = task.question;
+        if (enabled(task) && task.status === "paused" && question && question.answer === undefined &&
+            (!task.intent || question.retainedAssessment === true) && !task.parentStopped && !task.ownershipHold &&
+            task.recoveryEnrollment === "current" && task.diagnosticCode !== "manual-pause" &&
+            this.executionTaskAllowed(task) && (task.dependency?.expiresAt === undefined || task.dependency.expiresAt > this.now()) &&
+            !question.eventId && !draft.events.some(event => event.executionId === task.id && event.type === "question")) {
+          this.event(draft, task, "question", `Question ${question.id}: ${question.text}`);
+        }
+        // Reconstruct one durable parent notice for the historical retry-loop
+        // signature. No claim, assessment, effect or authorization is changed.
+        if (enabled(task) && task.status === "blocked" && ["retry-exhausted", "assessment-stalled"].includes(task.diagnosticCode ?? "") &&
+            task.question?.retainedAssessment && task.question.answer !== undefined && task.intent &&
+            (!task.assessmentStalledEventId || task.assessmentStalledQuestionId !== undefined && task.assessmentStalledQuestionId !== task.question.id) &&
+            !task.parentStopped && !task.ownershipHold && task.recoveryEnrollment === "current" && this.executionTaskAllowed(task) &&
+            (task.dependency?.expiresAt === undefined || task.dependency.expiresAt > this.now())) {
+          this.event(draft, task, "assessment-stalled", "Retained assessment needs parent attention");
+        }
         // Older cores enrolled semantic holds into the transport retry budget.
         // Preserve their evidence without waking them or replaying effects.
         if (enabled(task) && task.assessmentHold && !task.parentStopped && !task.ownershipHold &&
@@ -1155,6 +1487,7 @@ export class ExecutionStore {
       // Preserve intent, worker session, checkpoint, counters and all policy gates.
       // In particular do NOT use resolve()'s policy-bypassing recoveryGrant.
       task.parentContinuation = { requestId, executionHash, evidence, fingerprint, ...(resumePaused ? { resumedManualPause: true } : {}), at: this.now() };
+      delete task.assessmentStalledEventId;
       if (resumePaused) delete task.diagnosticCode;
       (task.resolutions ??= []).push({ actor: parent, action: "continue", evidence, at: this.now() });
       task.status = "ready";

@@ -1,4 +1,6 @@
 import type { TurnEvent } from "../types.js";
+import { resourceUsageLabel } from "../resource-usage-label.js";
+import { message } from "../language.js";
 
 // PI exposes resource helpers without the server-tool namespace prefix.
 const mcpResourceTools = new Set(["list_mcp_resources", "list_mcp_resource_templates", "read_mcp_resource"]);
@@ -33,7 +35,28 @@ export class GatewayProgress {
     }
   }
   event(event: TurnEvent): void {
-    if (this.closed || this.mode === "off" || event.type !== "tool") return;
+    if (this.closed || this.mode === "off") return;
+    if (event.type === "model_queue") {
+      this.pending.push(event.state === "waiting" ? "⏳ Wartet auf lokale Modellkapazität; noch keine eigene Modellaktivität."
+        : event.state === "admitted" ? "Lokale Modellanfrage zugelassen; Anbieterfortschritt noch unbekannt." : "Warten auf lokale Modellkapazität abgebrochen.");
+      this.flush();
+      return;
+    }
+    if (event.type === "resource_usage") {
+      if (this.count >= 50) return;
+      this.count++;
+      this.pending.push(`✓ ${resourceUsageLabel(event)}`);
+      if (!this.scheduled) this.scheduled = setTimeout(() => { this.scheduled = undefined; this.flush(); }, 1500);
+      return;
+    }
+    if (event.type === "compaction") {
+      this.pending.push(event.state === "started" ? "⏳ Kontext wird komprimiert."
+        : event.state === "completed" ? "✓ Kontextkomprimierung abgeschlossen."
+          : `⚠ Kontextkomprimierung ${event.state === "cancelled" ? "abgebrochen" : "fehlgeschlagen"}; Originalkontext bleibt erhalten.`);
+      this.flush();
+      return;
+    }
+    if (event.type !== "tool") return;
     let error = event.error;
     if (event.phase === "start") {
       const active = this.active.get(event.name);
@@ -49,10 +72,14 @@ export class GatewayProgress {
       this.active.delete(event.name);
     }
     if (this.count >= 50) return;
+    const label = event.name.startsWith("mcp__") || mcpResourceTools.has(event.name) ? `MCP · ${event.name}`
+      : event.name === "plugin_memory" ? `Memory · ${event.name}`
+      : event.name.startsWith("plugin_skill_") ? `Skill · ${event.name}` : event.name;
     if (this.mode === "reduced") {
-      this.pending.push(event.phase === "start" ? `⏳ ${event.name} gestartet` : `${error ? "⚠" : "✓"} ${event.name} beendet`);
+      const state = event.phase === "start" ? "usage.tool.started" : error ? "usage.tool.failed" : "usage.tool.completed";
+      this.pending.push(`${event.phase === "start" ? "⏳" : error ? "⚠" : "✓"} ${label} ${message(event.locale ?? "en", state)}`);
     } else {
-      this.pending.push(`${event.phase === "start" ? "⏳" : error ? "⚠" : "✓"} ${event.name}${!event.name.startsWith("mcp__") && !mcpResourceTools.has(event.name) && event.detail ? `\n${event.detail.slice(0, 2000)}` : ""}`);
+      this.pending.push(`${event.phase === "start" ? "⏳" : error ? "⚠" : "✓"} ${label}${!event.name.startsWith("mcp__") && !mcpResourceTools.has(event.name) && event.detail ? `\n${event.detail.slice(0, 2000)}` : ""}`);
     }
     this.count++;
     if (!this.scheduled) this.scheduled = setTimeout(() => { this.scheduled = undefined; this.flush(); }, 1500);

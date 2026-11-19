@@ -1,7 +1,7 @@
 import type { Inbound } from "./types.js";
 import type { AssessmentBackend as ReviewBackend } from "./assessment-backend.js";
 import type { CompletionAuthorization, CompletionPrompt, CompletionDiagnosticSink } from "./validator.js";
-import { ValidatorRegistry } from "./validator.js";
+import { ValidatorRegistry, completionFailureDetail } from "./validator.js";
 import { renderCompletionPrompt } from "./completion-budget.js";
 import { createHash } from "node:crypto";
 import { assessCompletion as validate } from "./builtin-plugins/completion-validator-plugin.js";
@@ -44,7 +44,17 @@ export async function assessCompletion(backend: ReviewBackend, input: Inbound, r
     if (!permitted()) { diagnostic?.("unavailable"); return; }
     // The execution timeout belongs to actual provider work, NOT time spent
     // queued behind already-running workers for shared host model capacity.
-    return validate(backend, input, reply, authorization, signal, model, now, promptStrategy, diagnostic, timeoutMs, provider, prompt);
+    let uncertainty: ReturnType<typeof completionFailureDetail>;
+    const observed = { ...provider, async assess(request: Parameters<typeof provider.assess>[0]) {
+      const result = await provider.assess(request);
+      if (result && typeof result === "object" && !Array.isArray(result)) {
+        const answer = result as Record<string, unknown>;
+        if (answer.state === "uncertain") uncertainty = completionFailureDetail({ cause: "uncertain", reason: answer.reason ?? answer.next ?? "Provider returned uncertainty without a rationale." });
+      }
+      return result;
+    } };
+    return validate(backend, input, reply, authorization, signal, model, now, promptStrategy,
+      (category, detail) => diagnostic?.(category, category === "inconclusive" ? uncertainty : detail), timeoutMs, observed, prompt);
   };
   let result;
   try { result = provider.requiresModel !== false && backend.admit ? await backend.admit(execute, signal) : await execute(); }

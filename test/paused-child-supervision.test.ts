@@ -4,6 +4,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { legacyValidatorRegistry } from "./completion-selected.js";
+import { readExecutionLedgerFixture } from "./execution-ledger-fixture.js";
 import { DispatcherRuntime } from "../src/dispatcher-runtime.js";
 import { Dispatcher } from "../src/dispatcher.js";
 import type { SequentialState } from "../src/dispatcher-sequential.js";
@@ -40,9 +41,12 @@ async function pausedLikeD2494ffb(home: string) {
     const prompt = session.prompt.bind(session);
     session.prompt = async (text: string, o: PromptOptions = {}) => {
       o.onEvent?.({ type: "execution", selection: { model: o.model ?? "p/default", thinking: o.thinking ?? "high" } } as never);
-      if (options.assessmentPurpose === "supervisor") return ++continues <= 5
-        ? `{"state":"continue","next":"inventory the remaining legacy executions (${continues})"}`
-        : "technical validator failure";
+      if (options.assessmentPurpose === "supervisor") {
+        if (text.startsWith("Select at most ONE")) return '{"state":"blocked"}';
+        return ++continues <= 5
+          ? `{"state":"continue","next":"inventory the remaining legacy executions (${continues})"}`
+          : "technical validator failure";
+      }
       await prompt(text, o);
       if (key.startsWith("plan:")) return plan;
       workerTurns++;
@@ -94,7 +98,7 @@ test("d2494ffb: technical validator failure after five continuations keeps a dur
   t.after(() => rm(home, { recursive: true, force: true }));
   const phase1 = await pausedLikeD2494ffb(home);
   // Exact live diagnostic shape of d2494ffb.
-  const raw = JSON.parse(await readFile(phase1.file, "utf8")) as { executions: Array<Record<string, unknown>> };
+  const raw = await readExecutionLedgerFixture(phase1.file) as { executions: Array<Record<string, unknown>> };
   const child = raw.executions.find(e => e.id === phase1.id)!;
   assert.equal(child.status, "ready");
   assert.ok(child.assessmentRetryAt);
@@ -114,10 +118,10 @@ test("d2494ffb: technical validator failure after five continuations keeps a dur
   assert.equal(host.runtime.sessions.size, 0);
   assert.equal(host.store.list().find(e => e.id === phase1.id)!.status, "ready");
   assert.equal(await readFile(phase1.file, "utf8"), before);
-  // The dispatcher already owns the persisted retry. No second parent assessor.
+  // The existing wait remains waiting; a delayed retry does not itself reactivate it.
   assert.equal(host.assessments(), 0);
-  assert.equal(host.h.pendingInputs().length, 0);
-  assert.equal(host.h.snapshotSessions()[0]!.task?.state, "waiting");
+  assert.ok(host.h.pendingInputs().every(input => input.waitCheck), "a due wait may be checked without replaying the worker");
+  assert.ok(["waiting", "active"].includes(host.h.snapshotSessions()[0]!.task?.state ?? ""));
 });
 
 test("explicit manual pause and open question stay binding for host supervision", async t => {

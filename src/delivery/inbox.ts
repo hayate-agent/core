@@ -2,7 +2,7 @@ import type { Inbound } from "../types.js";
 
 /** User, API and cron inputs are replayed after a crash; heartbeat/loop/goal ticks regenerate. */
 export function replayable(i: Inbound): boolean {
-  return i.source === "host" || i.source === "channel" || i.source === "api" || i.source === "cron" || (i.continuationDepth ?? 0) > 0;
+  return i.source === "host" || i.source === "channel" || i.source === "api" || i.source === "cron" || (i.source === "loop" && i.explicitLoopRun === true) || (i.continuationDepth ?? 0) > 0;
 }
 
 /** The parts of a session the inbox snapshot is built from. */
@@ -48,7 +48,7 @@ export class InboxLedger {
     const out: Inbound[] = [];
     const added = new Set<Inbound>();
     const add = (input: Inbound) => {
-      if (replayable(input) && !added.has(input)) (added.add(input), out.push(input));
+      if (!added.has(input) && replayable(input)) (added.add(input), out.push(input));
     };
     for (const input of this.handoff) add(input);
     for (const s of sessions) {
@@ -61,5 +61,5 @@ export class InboxLedger {
 }
 
 export function idsOf(input: Inbound): string[] {
-  return input.parts?.map((p) => p.id) ?? (input.id ? [input.id] : []);
+  return input.parts?.length ? input.parts.map((p) => p.id) : input.id ? [input.id] : [];
 }

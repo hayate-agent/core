@@ -30,6 +30,7 @@ export interface CommandContext {
     source?: (key: import("./model-settings.js").ModelSetting) => string;
     set: (key: import("./model-settings.js").ModelSetting, value?: string) => Promise<void>;
   };
+  gatewaySettings?: () => import("./gateway-settings.js").GatewayConfig | undefined;
   modelRoles?: { get(): import("./model-roles.js").ModelRoles | undefined; set(value: import("./model-roles.js").ModelRoles | undefined): Promise<void> };
   scheduler?: Scheduler;
   updater?: import("./update.js").OverlayUpdater;
@@ -102,6 +103,15 @@ function recurringCommand(kind: "heartbeat" | "loop"): Command["run"] {
         return current
           ? `${kind}: every ${formatInterval(current.everyMs)}${current.paused ? " (paused)" : ""}${current.remaining !== undefined ? `, ${current.remaining} left` : ""}: ${current.prompt}`
           : `no ${kind} set`;
+      case "run": {
+        if (kind !== "loop") return "unknown heartbeat action";
+        if (!ctx.harness.isAcceptingChannelInput(input) || !(input.replyTo?.channel === "console" || !!input.sender && ctx.admins.includes(input.sender))) return "⛔ authenticated admin only";
+        if (!current) return "no loop set";
+        if (current.paused) return "loop paused; not started";
+        if (!input.id) throw Error("Loop run requires a durable input ID");
+        await ctx.harness.runLoopNow(input.sessionKey, input.id);
+        return "loop occurrence accepted";
+      }
       case "pause":
       case "resume":
         if (!current) return `no ${kind} set`;
@@ -448,14 +458,21 @@ export const COMMANDS: Command[] = [
     },
   },
   { name: "heartbeat", aliases: ["hb"], help: "Recurring prompt when idle: every <interval> <prompt> | status | pause | resume | clear", run: recurringCommand("heartbeat") },
-  { name: "loop", aliases: ["proactive"], help: "Re-run a prompt: [interval] <prompt> [--times N] | status | pause | resume | stop", run: recurringCommand("loop") },
+  { name: "loop", aliases: ["proactive"], help: "Re-run a prompt: [interval] <prompt> [--times N] | status | run | pause | resume | stop", run: recurringCommand("loop") },
   {
     name: "status",
-    help: "Show session, model, token and context info",
+    help: "Show installed versions, model and gateway configuration, session and operating settings",
     run: async (_a, input, ctx) => {
       const st = (await ctx.harness.sessionFor(input.sessionKey)).status();
       return [
         `agent: ${ctx.agent} · runtime: ${ctx.harness.runtime.name}`,
+        formatSoftwareVersions(readSoftwareVersions(BUILD_INFO, undefined, ctx.harness.channels.has("webui")), resolveLanguage(ctx.language?.get(), { kind: "system" })),
+        `configured models: ${JSON.stringify(Object.fromEntries(Object.entries(ctx.modelSettings?.get() ?? {}).filter(([key]) => ["model", "thinking", "reviewModel", "reviewThinking", "hashtagModel"].includes(key))))}`,
+        `gateways: ${[...ctx.harness.channels.keys()].join(", ") || "none"} · settings: ${JSON.stringify((() => {
+          const config = ctx.gatewaySettings?.();
+          const safe = (value?: Partial<import("./gateway-settings.js").GatewaySettings>) => ({ progress: value?.progress, statusReactions: value?.statusReactions, recoveryDiagnostics: value?.recoveryDiagnostics });
+          return { ...safe(config), overrides: Object.fromEntries(Object.entries(config?.overrides ?? {}).map(([name, value]) => [name, safe(value)])) };
+        })())}`,
         `session: ${st.sessionId}${st.busy ? " (busy)" : ""}`,
         `model: ${st.model ?? "default"} · reasoning: ${st.thinking ?? "default"}`,
         `messages: ${st.messages ?? "?"} · tokens in/out: ${st.tokens?.input ?? "?"}/${st.tokens?.output ?? "?"}`,
@@ -537,7 +554,7 @@ export const COMMANDS: Command[] = [
     run: (args, input, ctx) => globalSetting("reviewModel", args.trim(), input, ctx),
   },
   {
-    name: "hashtag-model", help: "Instance metadata model: <provider/model|reset> (otherwise Main; thinking off)",
+    name: "hashtag-model", help: "Instance metadata model: <provider/model|reset> (otherwise modelRoles.roles.basic, then Main of the scope; thinking off)",
     run: (args, input, ctx) => globalSetting("hashtagModel", args.trim(), input, ctx),
   },
   {
@@ -636,13 +653,13 @@ export const COMMANDS: Command[] = [
   {
     name: "update",
     admin: true,
-    help: "status | check | install [software]; native Core/Plugins/WebUI update, or apply [skills|cron|all] for local overlays",
+    help: "Check and install updates; check downloads only; install activates a prepared update; status | apply [skills|cron|all]",
     run: async (args, _input, ctx) => {
-      const [action = "status", target = "all", ...extra] = args.trim().split(/\s+/).filter(Boolean);
-      if (["check", "install"].includes(action) || (action === "status" && target === "software")) {
+      const [action = "update", target = "all", ...extra] = args.trim().split(/\s+/).filter(Boolean);
+      if (["update", "check", "install"].includes(action) || (action === "status" && ["software", "all"].includes(target))) {
         if (!["software", "all"].includes(target) || extra.length) throw Error("usage: /update status|check|install [software]");
         if (!ctx.softwareUpdates) throw Error("Native lifecycle owner unavailable");
-        const result = await ctx.softwareUpdates(action as "status" | "check" | "install");
+        const result = await ctx.softwareUpdates(action as "status" | "check" | "install" | "update");
         return `${result.phase}: ${result.detail}${result.requestId ? ` (request ${result.requestId})` : ""}`;
       }
       if (!ctx.updater) throw Error("Overlay updater unavailable");
@@ -797,7 +814,8 @@ export function installCommands(ctx: CommandContext): void {
     ctx.admins.includes(actor.slice(actor.indexOf(":") + 1));
   ctx.harness.commandHandler = async (input) => {
     const reset = naturalBudgetReset(input.text);
-    if (reset) {
+    const resetActor = input.replyTo?.channel === "console" ? "console:local" : `${input.replyTo?.channel}:${input.sender}`;
+    if (reset && (!reset.simple || !!reset.taskId || ctx.harness.hasBudgetHeldTask(input.sessionKey, reset.taskId) || ctx.harness.hasBudgetGrantForInput(input, resetActor))) {
       // No openAdmin fallback: only an actual channel accept with identified admin provenance.
       if (!ctx.harness.isAcceptingChannelInput(input) || !(input.replyTo?.channel === "console" ||
           !!input.sender && ctx.admins.includes(input.sender))) {
@@ -806,7 +824,7 @@ export function installCommands(ctx: CommandContext): void {
       }
       try {
         reply(ctx, input, await ctx.harness.requestNaturalBudgetReset(input,
-          input.replyTo?.channel === "console" ? "console:local" : `${input.replyTo?.channel}:${input.sender}`, reset.taskId));
+          resetActor, reset.taskId));
       } catch (error) {
         reply(ctx, input, `Budget reset failed because ${error instanceof Error ? error.message : String(error)}`);
       }
@@ -821,7 +839,8 @@ export function installCommands(ctx: CommandContext): void {
         if (plugin.admin && !isAdmin(ctx, input)) reply(ctx, input, message(resolveLanguage(ctx.language?.get(), { kind: "system" }), "command.adminOnly"));
         else {
           try {
-            const text = await plugin.run(parsed.args, { sessionKey: input.sessionKey, sender: input.sender, cwd: ctx.cwdFor?.(input.sessionKey),
+            const text = await plugin.run(parsed.args, { sessionKey: input.sessionKey, sender: input.sender, inputId: input.id, source: input.source,
+              operatorAuthorized: ctx.harness.isAcceptingChannelInput(input) && (input.replyTo?.channel === "console" || !!input.sender && ctx.admins.includes(input.sender)), cwd: ctx.cwdFor?.(input.sessionKey),
               ui: input.replyTo?.channel === "console" && input.sessionKey === (ctx.localSessionKey?.() ?? "console:local") ? ctx.pluginUI?.() : undefined });
             if (text) reply(ctx, input, text);
           } catch { reply(ctx, input, `⚠️ /${plugin.name}: plugin command failed (details withheld)`); }

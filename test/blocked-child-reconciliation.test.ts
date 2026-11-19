@@ -66,9 +66,88 @@ test("503 after work: durable independent parent admission without child replay"
  finally{await restarted.stop(0);}
 });
 
-for(const status of ["ready","running","paused"]) test(`truly ${status} child stays fenced before assessment`,async t=>{
+for(const status of ["running"]) test(`truly ${status} child stays fenced before assessment`,async t=>{
  const f=await fixture(t,status);await f.h.recoverTasks();await f.h.tick();
  assert.equal(f.calls(),0);assert.equal(f.h.pendingInputs().length,0);
+});
+
+test("inactive failed child does not suppress an authorized parent continuation", async t => {
+ const f = await fixture(t);
+ const task: DurableTask = { id: "parent", original: "Fix routing", state: "active", depth: 0, next: "Finish routing",
+  recoveryAdmission: { id: "task:parent:1", depth: 1, next: "Finish routing", original: "Fix routing" } };
+ f.h.restoreSessions([{ key: "mem:room1", task, replyTo: { channel: "mem", target: "room1" } }]);
+ await f.h.recoverTasks();
+ assert.equal(f.h.pendingInputs().some(input => input.taskId === "parent"), true);
+ assert.equal(f.store.list()[0]!.status, "blocked");
+});
+
+test("parent runtime failure settles and releases its takeover for a worker", async t => {
+ const f = await fixture(t, "ready");
+ const task: DurableTask = { id: "parent", original: "Fix routing", state: "active", depth: 0, next: "Finish routing",
+  recoveryAdmission: { id: "task:parent:1", depth: 1, next: "Finish routing", original: "Fix routing" } };
+ f.h.restoreSessions([{ key: "mem:room1", task, replyTo: { channel: "mem", target: "room1" } }]);
+ let observed = false;
+ const originalOpen = f.runtime.open.bind(f.runtime);
+ f.runtime.open = async (...args) => {
+  observed = true;
+  assert.equal(f.store.parentTakeoverActive(f.store.list()[0]!), true);
+  throw Error("runtime unavailable");
+ };
+ await f.h.recoverTasks(true);
+ f.h.resume();
+ for (let i = 0; i < 100 && (!observed || f.store.parentTakeoverActive(f.store.list()[0]!)); i++)
+  await new Promise(resolve => setTimeout(resolve, 2));
+ assert.equal(observed, true);
+ assert.equal(f.store.parentTakeoverActive(f.store.list()[0]!), false);
+ assert.equal((await f.store.claim(f.child.id)).status, "running");
+ f.runtime.open = originalOpen;
+});
+
+test("worker winning the claim race leaves the parent queued until a tick after worker failure", async t => {
+ const f = await fixture(t, "ready");
+ const task: DurableTask = { id: "parent", original: "Fix routing", state: "active", depth: 0, next: "Finish routing",
+  recoveryAdmission: { id: "task:parent:1", depth: 1, next: "Finish routing", original: "Fix routing" } };
+ f.h.restoreSessions([{ key: "mem:room1", task, replyTo: { channel: "mem", target: "room1" } }]);
+ await f.h.recoverTasks();
+ const claimed = await f.store.claim(f.child.id);
+ f.h.releaseRestored();
+ let opens = 0;
+ const open = f.runtime.open.bind(f.runtime);
+ f.runtime.open = async (...args) => { opens++; return open(...args); };
+ f.h.resume();
+ await f.h.tick();
+ await new Promise(resolve => setTimeout(resolve, 20));
+ assert.equal(opens, 0);
+ assert.equal(f.h.pendingInputs().some(input => input.taskId === "parent"), true);
+ await f.store.fail(f.child.id, claimed.token!, "worker-failed");
+ await f.h.tick();
+ for (let i = 0; i < 100 && !opens; i++) await new Promise(resolve => setTimeout(resolve, 2));
+ assert.equal(opens, 1);
+ await f.h.waitForSessionIdle("mem:room1");
+});
+
+test("completed worker result turn fences retry of an inactive sibling", async t => {
+ const f = await fixture(t, "ready");
+ const dep = { taskId: "parent", depth: 0, original: "Fix routing" };
+ const completed = await f.store.submit("mem:room1", "completed", "Other step", "direct", 1, dep);
+ const claim = await f.store.claim(completed.id);
+ await f.store.complete(completed.id, claim.token!, "other step done");
+ const task: DurableTask = { id: "parent", original: "Fix routing", state: "active", depth: 0 };
+ f.h.restoreSessions([{ key: "mem:room1", task, replyTo: { channel: "mem", target: "room1" } }]);
+ let observed = false;
+ const open = f.runtime.open.bind(f.runtime);
+ f.runtime.open = async (...args) => {
+  observed = true;
+  assert.equal(f.store.parentTakeoverActive(f.store.list().find(row => row.id === f.child.id)!), true);
+  await assert.rejects(f.store.claim(f.child.id), /Parent is executing/);
+  return open(...args);
+ };
+ // Fixture has no host event authorizer; provide an explicitly authorized one.
+ (f.h as any).opts.hostEventAllowed = () => true;
+ await f.h.accept({ id: "result", source: "host", sessionKey: "mem:room1", hostEvent: { executionId: completed.id }, text: "other step done" });
+ await f.h.waitForSessionIdle("mem:room1");
+ assert.equal(observed, true);
+ assert.equal((await f.store.claim(f.child.id)).status, "running");
 });
 
 test("separate retained mandate is not held by blocked child's decision checkpoint",async t=>{

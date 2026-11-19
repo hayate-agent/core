@@ -32,6 +32,21 @@ test('real Scheduler prompt job supplies a mandate at tool execution, isolated f
  assert.equal(store.list().length,1);assert.ok(store.list()[0]!.dependency?.taskId);
 });
 
+test('real recurring scheduler creates distinct scoped occurrences, never reopens a closed prior occurrence',async t=>{
+ const dir=await mkdtemp(path.join(os.tmpdir(),'cron-core-authority-'));const store=new ExecutionStore(path.join(dir,'executions.json'),Date.now,{enforceTaskAuthority:true});await store.load();
+ const seen:any[]=[];const runtime=new FakeRuntime();let h:Harness;runtime.answer=(_text,key)=>{const i=h.sessions.get(key)!.current!;seen.push(structuredClone(i.taskRef));return 'audit complete';};
+ h=new Harness({runtime,executionStore:store,taskLifecycle:{enabled:true},completionCheck:async()=>({state:'completed'})});h.onStateChange=async()=>{};
+ t.after(async()=>{await h.stop(0);await rm(dir,{recursive:true,force:true});});
+ const scheduler=new Scheduler(h,{timezone:'UTC'});const job={name:'daily',schedule:'0 * * * *',prompt:'Audit configured scope',deliver:'local'};
+ await scheduler.runJob(job);await h.waitForSessionIdle('cron:daily');assert.equal(seen.length,1);
+ const first=store.coreTask(seen[0].id)!;assert.equal(first.scheduled,true);assert.match(first.original,/^Audit configured scope/);
+ await store.decideTask(seen[0],first.revision,'close-first','close','First occurrence done');
+ await scheduler.runJob(job);await h.waitForSessionIdle('cron:daily');assert.equal(seen.length,2);assert.notEqual(seen[0].id,seen[1].id);
+ assert.equal(store.coreTask(seen[0].id)!.operatorStatus,'done');assert.equal(store.taskIsOpen(seen[0]),false);
+ assert.equal(store.coreTask(seen[1].id)!.original,first.original);assert.equal(store.coreTask(seen[1].id)!.scheduled,true);
+ await store.expireTasks(60000);assert.equal(store.coreTask(seen[1].id)!.operatorStatus,'open');
+});
+
 test('held historical task cannot supply a current mandate',async t=>{
  const h=new Harness({runtime:new FakeRuntime()});t.after(()=>h.stop(0));h.restoreSessions([{key:'main',tasks:[{id:'held',original:'old',state:'blocked',depth:0,recoveryEnrollment:'held-legacy'}]}]);h.state('main').current={sessionKey:'main',source:'cron',taskId:'held',text:'old'};
  assert.equal(h.dependencyCheckpoint('main'),undefined);

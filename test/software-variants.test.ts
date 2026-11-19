@@ -80,7 +80,7 @@ test('native reviewed variant prepares, activates only after exit, survives offl
   return updateCommand(cmd,args,cwd,...rest);
  };
  const policy=softwareUpdatePolicy({variant:f.policy,sources:Object.fromEntries(Object.entries(f.bases).map(([c,b]:any)=>[c,{repository:b.repository}]))});
- const owner=new NativeSoftwareUpdates(home,policy,()=>{},command,false);t.after(()=>owner.close());await owner.open();await owner.request('install');
+ const owner=new NativeSoftwareUpdates(home,policy,()=>{},command,false);t.after(()=>owner.close());await owner.open();await owner.request('update');
  for(let i=0;i<500&&!['prepared','failed'].includes(owner.snapshot().phase);i++)await new Promise(r=>setTimeout(r,10));
  assert.equal(owner.snapshot().phase,'prepared',owner.snapshot().detail);assert.equal(owner.entrypoint('original'),'original');
  await owner.afterExit();const entry=owner.entrypoint('original');assert.notEqual(entry,'original');assert.equal(await readFile(path.join(path.dirname(path.dirname(entry)),'value.txt'),'utf8'),'private variant\n');
@@ -101,7 +101,7 @@ test('approval failure after preparation retains bootstrap instead of activating
   if(cmd==='npm'){if(args[0]==='run'&&path.basename(cwd)==='core'){await mkdir(path.join(cwd,'dist'),{recursive:true});await writeFile(path.join(cwd,'dist/cli.js'),'// fixture');await writeFile(path.join(cwd,'dist/launcher.js'),'// fixture');await writeFile(path.join(cwd,'package.json'),'{"version":"1.0.0"}');}return '';}
   if(cmd===process.execPath)return '';return updateCommand(cmd,args,cwd,...rest);
  };
- const policy=softwareUpdatePolicy({variant:f.policy,sources:Object.fromEntries(Object.entries(f.bases).map(([c,b]:any)=>[c,{repository:b.repository}]))});const owner=new NativeSoftwareUpdates(home,policy,()=>{},command,false);t.after(()=>owner.close());await owner.open();await owner.request('install');for(let i=0;i<500&&!['prepared','failed'].includes(owner.snapshot().phase);i++)await new Promise(r=>setTimeout(r,10));assert.equal(owner.snapshot().phase,'prepared',owner.snapshot().detail);await writeFile(f.runner,'tampered');await owner.afterExit();assert.equal(owner.snapshot().phase,'failed');assert.equal(owner.entrypoint('original'),'original');await assert.rejects(readFile(path.join(home,'software-updates/selected.json')),/ENOENT/);
+ const policy=softwareUpdatePolicy({variant:f.policy,sources:Object.fromEntries(Object.entries(f.bases).map(([c,b]:any)=>[c,{repository:b.repository}]))});const owner=new NativeSoftwareUpdates(home,policy,()=>{},command,false);t.after(()=>owner.close());await owner.open();await owner.request('update');for(let i=0;i<500&&!['prepared','failed'].includes(owner.snapshot().phase);i++)await new Promise(r=>setTimeout(r,10));assert.equal(owner.snapshot().phase,'prepared',owner.snapshot().detail);await writeFile(f.runner,'tampered');await owner.afterExit();assert.equal(owner.snapshot().phase,'failed');assert.equal(owner.entrypoint('original'),'original');await assert.rejects(readFile(path.join(home,'software-updates/selected.json')),/ENOENT/);
 });
 
 test('prepared candidate cannot survive a variant policy branch change or a changed recipe on the same branch',async t=>{
@@ -111,7 +111,7 @@ test('prepared candidate cannot survive a variant policy branch change or a chan
   if(cmd===process.execPath)return '';return updateCommand(cmd,args,cwd,...rest);
  };
  const sources=Object.fromEntries(Object.entries(f.bases).map(([c,b]:any)=>[c,{repository:b.repository}]));
- const owner=new NativeSoftwareUpdates(home,softwareUpdatePolicy({sources,variant:f.policy}),()=>{},command,false);await owner.open();await owner.request('install');for(let i=0;i<500&&!['prepared','failed'].includes(owner.snapshot().phase);i++)await new Promise(r=>setTimeout(r,10));assert.equal(owner.snapshot().phase,'prepared',owner.snapshot().detail);
+ const owner=new NativeSoftwareUpdates(home,softwareUpdatePolicy({sources,variant:f.policy}),()=>{},command,false);await owner.open();await owner.request('update');for(let i=0;i<500&&!['prepared','failed'].includes(owner.snapshot().phase);i++)await new Promise(r=>setTimeout(r,10));assert.equal(owner.snapshot().phase,'prepared',owner.snapshot().detail);
  git(f.profile,'checkout','-b','replacement');await writeFile(path.join(f.profile,'variant.json'),JSON.stringify({...f.recipe,patches:[]}));git(f.profile,'add','.');git(f.profile,'commit','-qm','new branch recipe');
  await owner.close();const next=new NativeSoftwareUpdates(home,softwareUpdatePolicy({sources,variant:{...f.policy,branch:'replacement'}}),()=>{},command,false);t.after(()=>next.close());await next.open();assert.notEqual(next.snapshot().phase,'prepared');await next.afterExit();assert.equal(next.entrypoint('original'),'original');await assert.rejects(readFile(path.join(home,'software-updates/selected.json')),/ENOENT/);
  git(f.profile,'checkout','main');await writeFile(path.join(f.profile,'variant.json'),JSON.stringify({...f.recipe,patches:[]}));git(f.profile,'add','.');git(f.profile,'commit','-qm','changed original branch recipe');
@@ -127,7 +127,17 @@ test('container composer binds private sources and emits test-qualified Core and
  const output=path.join(f.tmp,'composed');await composeAgentVariant(f.policy,output);const r=JSON.parse(await readFile(path.join(output,'variant-receipt.json'),'utf8'));assert.equal(r.identity.profile,'fixture-agent');assert.equal(r.review.independent,true);assert.equal(await readFile(path.join(output,'core/value.txt'),'utf8'),'private variant\n');assert.match(await readFile(path.join(output,'core/Dockerfile.variant'),'utf8'),/npm run typecheck && npm run build && npm test/);const coreDocker=await readFile(path.join(output,'core/Dockerfile.variant'),'utf8');assert.match(coreDocker,/apt-get install -y --no-install-recommends git python3 openssl/);assert.ok(coreDocker.indexOf('apt-get install')<coreDocker.indexOf('USER node'),'test prerequisites are installed before dropping builder privileges');assert.ok(coreDocker.indexOf('USER node')<coreDocker.indexOf('npm run typecheck'),'qualification still runs nonroot');assert.ok(coreDocker.indexOf('apt-get install')<coreDocker.lastIndexOf('FROM node'),'test prerequisites belong to builder stage, not the runtime');assert.match(await readFile(path.join(output,'webui/Dockerfile.variant'),'utf8'),/npm test && npm run build/);assert.doesNotMatch(await readFile(path.join(output,'core/Dockerfile.variant.dockerignore'),'utf8'),/^test$/m);assert.equal(await readFile(path.join(output,'core/vendor/plugins/src/example.ts'),'utf8'),'export const fixture=1;');await assert.rejects(composeAgentVariant(f.policy,output),/EEXIST/);
 });
 
-test('native check resolves pinned variant rather than moving shared main and performs no build or activation',async t=>{
- const f=await fixture(t);const home=path.join(f.tmp,'agent-home');let built=false;const command:any=async(cmd:string,args:string[],cwd:string,...rest:any[])=>{if(cmd==='npm')built=true;return updateCommand(cmd,args,cwd,...rest);};
- const owner=new NativeSoftwareUpdates(home,softwareUpdatePolicy({sources:Object.fromEntries(Object.entries(f.bases).map(([c,b]:any)=>[c,{repository:b.repository,branch:'main'}])),variant:f.policy}),()=>{},command,false);t.after(()=>owner.close());await owner.open();await owner.request('check');for(let i=0;i<200&&owner.snapshot().phase==='checking';i++)await new Promise(r=>setTimeout(r,10));const s=owner.snapshot();assert.equal(s.phase,'available');assert.equal(s.plan?.variant?.profile,'fixture-agent');assert.deepEqual(s.plan?.revisions,f.bases&&Object.fromEntries(Object.entries(f.bases).map(([c,b]:any)=>[c,b.revision])));assert.equal(built,false);assert.equal(owner.entrypoint('original'),'original');
+test('native check stages pinned variant rather than moving shared main without activation',async t=>{
+ const f=await fixture(t);const home=path.join(f.tmp,'agent-home');let built=false;
+ // Git/patches/review are real; npm/Node qualification is controlled.
+ const command:any=async(cmd:string,args:string[],cwd:string,...rest:any[])=>{
+  if(cmd==='npm'){
+   built=true;
+   if(args[0]==='run'&&path.basename(cwd)==='core'){await mkdir(path.join(cwd,'dist'),{recursive:true});await writeFile(path.join(cwd,'dist/cli.js'),'// fixture');await writeFile(path.join(cwd,'dist/launcher.js'),'// fixture');await writeFile(path.join(cwd,'package.json'),'{"version":"1.0.0"}');}
+   return '';
+  }
+  if(cmd===process.execPath)return '';
+  return updateCommand(cmd,args,cwd,...rest);
+ };
+ const owner=new NativeSoftwareUpdates(home,softwareUpdatePolicy({sources:Object.fromEntries(Object.entries(f.bases).map(([c,b]:any)=>[c,{repository:b.repository,branch:'main'}])),variant:f.policy}),()=>{},command,false);t.after(()=>owner.close());await owner.open();await owner.request('check');for(let i=0;i<500&&!['prepared','failed'].includes(owner.snapshot().phase);i++)await new Promise(r=>setTimeout(r,10));const s=owner.snapshot();assert.equal(s.phase,'prepared',s.detail);assert.equal(s.plan?.variant?.profile,'fixture-agent');assert.deepEqual(s.plan?.revisions,f.bases&&Object.fromEntries(Object.entries(f.bases).map(([c,b]:any)=>[c,b.revision])));assert.equal(built,true);assert.equal(s.pendingSelection?.installation,'staged');await owner.afterExit();assert.equal(owner.entrypoint('original'),'original');
 });

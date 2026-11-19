@@ -45,7 +45,8 @@ for(const key of ['mem:parent','dispatch:task:claim','subagent:child']) {
  let contexts=[]; expected='FIRST OVERLAY';
  session.agent.streamFunction=(_model,context)=>{
   const snapshot=JSON.stringify(context); contexts.push(snapshot);
-  assert.match(snapshot,new RegExp(expected)); assert.match(snapshot,/OWN SOUL/); assert.match(snapshot,/OWN VOICE/);
+  assert.match(snapshot,new RegExp(expected)); assert.match(snapshot,/OWN SOUL/);
+  assert.match(snapshot,/OWN VOICE/);
   assert.match(session.systemPrompt,new RegExp(expected));
   if(expected!=='FIRST OVERLAY') assert.doesNotMatch(session.systemPrompt,/FIRST OVERLAY/);
   const stream=createAssistantMessageEventStream();

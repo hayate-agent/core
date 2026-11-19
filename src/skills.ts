@@ -42,8 +42,13 @@ async function walk(dir: string, depth: number, out: string[]): Promise<void> {
   }
   for (const e of entries) {
     const p = path.join(dir, e.name);
-    if (e.isFile() && e.name === "SKILL.md") out.push(p);
-    else if ((e.isDirectory() || e.isSymbolicLink()) && depth > 0 && !e.name.startsWith(".") && e.name !== "node_modules") {
+    if (e.name === "SKILL.md" && (e.isFile() || e.isSymbolicLink())) {
+      try {
+        if (e.isFile() || (await stat(p)).isFile()) out.push(p);
+      } catch {
+        /* dangling or inaccessible file symlink */
+      }
+    } else if ((e.isDirectory() || e.isSymbolicLink()) && depth > 0 && !e.name.startsWith(".") && e.name !== "node_modules") {
       try {
         if ((await stat(p)).isDirectory()) await walk(p, depth - 1, out);
       } catch {

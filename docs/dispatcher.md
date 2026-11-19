@@ -1,13 +1,33 @@
 # Optional durable dispatcher
 
+## Startup and restored ingress
+
+The CLI waits for durable structural Dispatcher recovery before releasing restored
+inbox entries, but does not wait for the live scheduling loop to become idle.
+Scheduling can keep receiving new kick requests or wait for claim persistence
+under load; this must not withhold an unrelated accepted Matrix question.
+Each worker still needs its ordinary durable claim, policy, deadline, ownership
+and effect checks. Structural recovery failures still fail startup; scheduling
+failure uses the normal shutdown path, not a bypass or a replay grant.
+
+Repeated startup revocation of a stopped mandate with no changed executions or
+pending revocation events does not rewrite the ledger. It still joins the same
+serialized mutation queue and checks writer ownership; a real cancellation,
+legacy ownership hold, removed event or failed prior save still commits before
+any affected worker is aborted. A childless subagent scope likewise needs no
+whole-host save. This omits redundant writes, not revocation/recovery checks.
+Content-free `[startup]` phase timings distinguish channel startup, improvement
+state, revocations, API receipts, authority migration and Dispatcher structure;
+they are diagnostics, never readiness, work-success or replay permission.
+
 ## Routing and recovery guarantees
 
-With an enabled, ready dispatcher, Main orchestrates; shell execution and file
-mutation (`bash`, `write`, `edit`) run in dispatcher workers. A runtime tool guard
-enforces this even after worker failure. Native read/search and dispatcher status
-remain available to Main. Starting a separate subagent is not a way around this
-routing rule. Main fallback is available only when dispatcher mode is disabled or
-the dispatcher is unavailable.
+With an enabled, ready dispatcher, Main may work directly with available tools or
+submit work to dispatcher workers. Delegation is optional. Main must not duplicate
+a worker actually executing the same work concurrently. A blocked, stalled or
+failed worker does not by itself prevent Main from taking over. Consider available
+results and uncertain effects without inventing a blanket reconciliation gate.
+Existing tool permissions and worker-specific guards remain in force.
 
 Both `worker-failed` (for example a provider EOF) and technical
 `runtime-failure` strategy/validator interruptions have a durable automatic
@@ -63,6 +83,20 @@ Sequential execution yields capacity at committed step boundaries when another
 execution is ready. Round-robin admission lets a queued review run before the
 publisher claims its next step, including with capacity 1. An in-flight worker is
 not preempted and its work is never duplicated to free a slot.
+
+A completed parent mandate is terminal for autonomous result processing. A late
+child result can still be delivered at its original destination, but cannot grant
+new delegation, run completion validation against that closed mandate, or mint a
+Resume admission. If a turn proposes completion while owned children remain
+outstanding, the host retains the parent as waiting instead of closing it and
+later reopening it. A genuinely new operator request owns fresh authority.
+
+An independent `continue` is an admission decision, **not** observed progress.
+Tool-free continuations consume the existing 20-stall allowance unless an
+explicit novel milestone is supplied. Dispatcher/control-tool receipts do not
+reset that allowance: changing retry counters, timestamps or request IDs is not
+new deliverable evidence. Real working-tree changes, novel substantive tool
+results and explicit milestones retain their existing progress semantics.
 
 A model-selected wait deadline bounds polling, **not** the operator mandate.
 Only the task's authentic `expiresAt` limits task authority. While a child is
@@ -163,14 +197,21 @@ not sandboxed workers. Main cannot select replay policy in a tool call.
 
 Direct routing classification is tool-free and is not the delegated worker. If its
 HTTP outcome is interrupted or unknown, the host durably marks the receipt
-`abandoned` and uses the existing configured default worker model. It does not
-repeat the unknown classifier HTTP call. Startup and automatic recovery also
+`abandoned` and selects the explicitly configured `high` worker role, without
+inventing a `high` classification verdict. This keeps unclassified productive
+work off Main when a dedicated worker role is configured; configs without a
+usable high worker role retain their legacy default. A classifier HTTP rejection
+also cannot turn the selected dispatcher/off request into a second request on
+Main's model/thinking pair. It does not repeat an unknown classifier HTTP call. Startup and automatic recovery also
 adopt pre-existing classifier-only pauses, retaining the execution identity and
 receipt, provided the matching direct strategy supports reconciliation and no
 worker effect intent or settled effect exists. Manual pauses, cancellation,
 expired mandates, stopped parents and actual recovery policies remain enforced;
-productive worker effects are never made replay-safe by this fallback. This
-change does not apply to sequential planning or independent validation.
+productive worker effects are never made replay-safe by this fallback. Existing
+worker intents keep their exact stored route; a configuration/fallback change
+never rebinds an already-started execution. Actual selected routes remain visible
+in the intent and worker execution metadata. This change does not apply to
+sequential planning or independent validation.
 
 The new receipt phase requires this Core version to read the ledger. Before
 rolling back to an older version, stop the runtime and use a reviewed compatible
@@ -371,6 +412,31 @@ history fails closed. A fully unfinished window keeps extra directives queued;
 `plugin_dispatch_decisions status` distinguishes recorded directives from actual
 plan admission and exposes active/completed/history counts and queue causes.
 Unsupported, out-of-scope or dependent follow-ups receive no execution admission.
+
+## Foreground response boundaries
+
+The parent queue rechecks foreground priority after asynchronous preparation,
+including the durable turn-start barrier, immediately before a working prompt.
+Already-durable ready operator/API inputs may defer an unstarted background step
+using its original input, turn ID, task binding and admission. Completed
+`beforeTurn` preparation is not repeated. This does not abort or replay a running
+model/tool, preempt an independent child lane, run an uncommitted inbox entry or
+remove a stop, deadline, recovery hold or structural startup barrier.
+
+A finished operator/API answer still crosses its own review, execution-ledger
+settlement, task projection and durable inbox→outbox checkpoint before delivery.
+After that checkpoint, an unrelated retained-task supervisor need not finish
+before the answer is sent. Its bounded supervision still runs before the next
+queued prompt, so a continuous foreground queue cannot starve it. A failed send
+retains the same durable delivery ID for normal retry; no model/effect replay.
+
+Decision revision checks still join the serialized writer queue and check current
+writer/claim ownership after earlier decisions or revocations settle. A read-only
+revision fence does not republish the entire ledger. `applyDecisions` commits
+only an actual pending→applied receipt transition; already-applied/no-decision
+reads do not refresh timestamps or rewrite historical task/effect evidence. Failed
+receipt commits remain pending and must be retried durably. These checks create
+no execution/replay permission and do not replace durable claim/intent fences.
 
 ## Persistence and restart
 

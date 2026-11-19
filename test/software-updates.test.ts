@@ -3,11 +3,11 @@ import { test } from "node:test";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { NativeSoftwareUpdates, softwareUpdatePolicy, type UpdateCommand } from "../src/software-updates.js";
+import { NativeSoftwareUpdates, softwareUpdatePolicy, updateCommand, type UpdateCommand } from "../src/software-updates.js";
 import { defaultConfig } from "../src/config.js";
 
 const revisions = { core: "a".repeat(40), plugins: "b".repeat(40), webui: "c".repeat(40) };
-async function fixture(options: { vendored?: boolean; tags?: string; history?: string; metadataFailure?: boolean } = {}) {
+async function fixture(options: { vendored?: boolean; tags?: string; history?: string; metadataFailure?: boolean; webuiRestart?: string[]; webuiEnabled?: boolean } = {}) {
   const home = await mkdtemp(path.join(os.tmpdir(), "hy-update-"));
   const events: string[] = [], commands: Array<{ command: string; args: string[]; cwd: string; env?: NodeJS.ProcessEnv }> = [];
   let fail = "";
@@ -42,8 +42,8 @@ async function fixture(options: { vendored?: boolean; tags?: string; history?: s
     }
     return "";
   };
-  const policy = softwareUpdatePolicy();
-  const owner = new NativeSoftwareUpdates(home, policy, (event, detail) => events.push(event + ":" + detail), command, false);
+  const policy = softwareUpdatePolicy(options.webuiRestart ? { webuiRestart: options.webuiRestart } : {});
+  const owner = new NativeSoftwareUpdates(home, policy, (event, detail) => events.push(event + ":" + detail), command, false, undefined, options.webuiEnabled ?? false);
   await owner.open();
   const settled = async (expected: string = "prepared") => {
     for (let n = 0; n < 300; n++) {
@@ -56,6 +56,12 @@ async function fixture(options: { vendored?: boolean; tags?: string; history?: s
   return { home, owner, events, commands, command, settled, fail: (value: string) => { fail = value; }, advanceCore: () => { heads.core = "d".repeat(40); }, cleanup: async () => { await owner.close(); await rm(home, { recursive: true, force: true }); } };
 }
 
+test("update command preserves large tag listings and fails rather than silently truncating", async () => {
+  const result = await updateCommand(process.execPath, ["-e", "process.stdout.write('x'.repeat(30000))"], process.cwd());
+  assert.equal(result.length, 30000);
+  await assert.rejects(updateCommand(process.execPath, ["-e", "process.stdout.write('x'.repeat(1100000))"], process.cwd()), /update command failed/);
+});
+
 test("startup defaults: hourly automatic checks, GitHub sources, one 60s restart budget", () => {
   const value = softwareUpdatePolicy();
   assert.equal(value.enabled, true); assert.equal(value.autoInstall, true); assert.equal(value.checkEverySeconds, 3600);
@@ -64,6 +70,36 @@ test("startup defaults: hourly automatic checks, GitHub sources, one 60s restart
   assert.equal(defaultConfig({ lifecycle: { restartTimeoutSeconds: 12 } }).lifecycle?.restartTimeoutSeconds, 12);
   for (const invalid of [0, -1, NaN, Infinity, 1.5, 3601]) assert.throws(() => defaultConfig({ lifecycle: { restartTimeoutSeconds: invalid } }));
   for (const invalid of [-1, NaN, Infinity, 3601]) assert.throws(() => defaultConfig({ loop: { drainSeconds: invalid } as any }));
+});
+
+test("activated agent WebUI is restarted natively after selection; disabled or unconfigured WebUI is untouched", async () => {
+  const restart = ["systemctl", "--user", "try-restart", "hayate-webui.service"];
+  for (const [webuiEnabled, webuiRestart, expected] of [[true, restart, 1], [false, restart, 0], [true, undefined, 0]] as const) {
+    const f = await fixture({ webuiEnabled, webuiRestart: webuiRestart ? [...webuiRestart] : undefined });
+    try {
+      await f.owner.request("update"); assert.equal((await f.settled()).phase, "prepared");
+      assert.equal(f.commands.filter(c => c.command === "systemctl").length, 0, "no WebUI restart before old runtime exits");
+      await f.owner.afterExit();
+      const calls = f.commands.filter(c => c.command === "systemctl");
+      assert.equal(calls.length, expected);
+      if (expected) {
+        assert.deepEqual(calls[0]!.args, restart.slice(1));
+        const current = await readFile(path.join(f.home, "software-updates/selected.json"), "utf8");
+        assert.ok(current, "selection is committed before the WebUI restart");
+        assert.match(f.owner.snapshot().detail, /activated WebUI restarted/);
+      }
+      assert.equal(f.owner.snapshot().phase, "activated");
+    } finally { await f.cleanup(); }
+  }
+  const f = await fixture({ webuiEnabled: true, webuiRestart: ["systemctl", "--user", "try-restart", "broken-webui.service"] });
+  try {
+    await f.owner.request("update"); assert.equal((await f.settled()).phase, "prepared"); f.fail("broken-webui.service");
+    await f.owner.afterExit();
+    assert.equal(f.owner.snapshot().phase, "activated", "WebUI restart failure must not roll back or fail the Core selection");
+    assert.match(f.owner.snapshot().detail, /activated WebUI restart failed/);
+    assert.match(f.owner.entrypoint("original"), /core\/dist\/cli.js$/);
+  } finally { await f.cleanup(); }
+  for (const invalid of [[], "systemctl", [""], [1]]) assert.throws(() => softwareUpdatePolicy({ webuiRestart: invalid as any }), /webuiRestart/);
 });
 
 test("all sources configurable without inheriting internal forge defaults; invalid refs/embedded secrets rejected", () => {
@@ -76,7 +112,7 @@ test("all sources configurable without inheriting internal forge defaults; inval
 test("install is durably scheduled outside command turn; three sources built, no selection before old runtime exits", async () => {
   const f = await fixture();
   try {
-    const queued = await f.owner.request("install"); assert.equal(queued.phase, "checking"); assert.ok(queued.requestId);
+    const queued = await f.owner.request("update"); assert.equal(queued.phase, "checking"); assert.ok(queued.requestId);
     const persisted = JSON.parse(await readFile(path.join(f.home, "software-updates/status.json"), "utf8")); assert.equal(persisted.requestId, queued.requestId);
     assert.equal((await f.settled()).phase, "prepared");
     assert.equal(f.commands.filter(c => c.args[0] === "checkout").length, 3);
@@ -98,9 +134,9 @@ test("install is durably scheduled outside command turn; three sources built, no
 test("candidate startup configuration failure retains active runtime and never announces prepared restart", async () => {
   const f = await fixture();
   try {
-    await f.owner.request("install"); assert.equal((await f.settled()).phase, "prepared"); await f.owner.afterExit();
+    await f.owner.request("update"); assert.equal((await f.settled()).phase, "prepared"); await f.owner.afterExit();
     const before = await readFile(path.join(f.home, "software-updates/selected.json"), "utf8"), entry = f.owner.entrypoint("original");
-    f.events.length = 0; f.advanceCore(); f.fail("--eval"); await f.owner.request("install"); const result = await f.settled("failed");
+    f.events.length = 0; f.advanceCore(); f.fail("--eval"); await f.owner.request("update"); const result = await f.settled("failed");
     assert.equal(result.phase, "failed"); assert.match(result.detail!, /startup configuration compatibility failed/);
     assert.equal(await readFile(path.join(f.home, "software-updates/selected.json"), "utf8"), before);
     assert.equal(f.owner.entrypoint("original"), entry); assert.ok(!f.events.some(event => event.startsWith("prepared:")));
@@ -111,7 +147,7 @@ test("candidate startup configuration failure retains active runtime and never a
 test("installed build metadata records the checked-out version, not package.json's stale base", async () => {
   const f = await fixture({ tags: `${revisions.core}\trefs/tags/v0.1.253` });
   try {
-    await f.owner.request("install"); const result = await f.settled(); assert.equal(result.phase, "prepared");
+    await f.owner.request("update"); const result = await f.settled(); assert.equal(result.phase, "prepared");
     const info = JSON.parse(await readFile(path.join(f.home, "software-updates/releases", result.pendingSelection!.release, "core/build-info.json"), "utf8"));
     assert.deepEqual(info, { version: "0.1.253", revision: revisions.core });
   } finally { await f.cleanup(); }
@@ -120,7 +156,7 @@ test("installed build metadata records the checked-out version, not package.json
 test("unavailable version metadata does not become an update/restart gate", async () => {
   const f = await fixture({ metadataFailure: true });
   try {
-    await f.owner.request("install"); const result = await f.settled(); assert.equal(result.phase, "prepared");
+    await f.owner.request("update"); const result = await f.settled(); assert.equal(result.phase, "prepared");
     const info = JSON.parse(await readFile(path.join(f.home, "software-updates/releases", result.pendingSelection!.release, "core/build-info.json"), "utf8"));
     assert.equal(info.version, `0.0.0+git.${revisions.core.slice(0, 12)}`);
     await f.owner.afterExit(); assert.equal(f.owner.snapshot().phase, "activated");
@@ -130,7 +166,7 @@ test("unavailable version metadata does not become an update/restart gate", asyn
 test("public snapshots use hash-locked vendored sources rather than leaking private commit lookups", async () => {
   const f = await fixture({ vendored: true });
   try {
-    await f.owner.request("install"); assert.equal((await f.settled()).phase, "prepared");
+    await f.owner.request("update"); assert.equal((await f.settled()).phase, "prepared");
     assert.ok(!f.commands.some(c => c.args.includes("e".repeat(40)) || c.args.includes("f".repeat(40))));
     const build = f.commands.find(c => c.command === "npm" && c.args[0] === "run" && c.cwd.endsWith("/core"))!;
     assert.ok(build.env?.HAYATE_PLUGIN_SOURCE?.endsWith("/core/vendor/plugins"));
@@ -141,34 +177,77 @@ test("public snapshots use hash-locked vendored sources rather than leaking priv
 test("external service owner replacement supersedes a self-update selected from an older base", async () => {
   const f = await fixture();
   try {
-    await f.owner.request("install"); await f.settled(); await f.owner.afterExit();
+    await f.owner.request("update"); await f.settled(); await f.owner.afterExit();
     const replaced = new NativeSoftwareUpdates(f.home, softwareUpdatePolicy(), () => {}, f.command, false, "/new/external/release/cli.js");
     await replaced.open(); assert.equal(replaced.entrypoint("new-external"), "new-external"); replaced.stop();
   } finally { await f.cleanup(); }
 });
 
-test("operator check prompts, never installs; later explicit install works with same sources", async () => {
+test("check remains staged across owner restart even with automatic updates enabled", async () => {
   const f = await fixture();
   try {
-    await f.owner.request("check"); assert.equal((await f.settled("available")).phase, "available");
-    assert.equal(f.commands.filter(c => c.command === "npm").length, 0);
-    await f.owner.request("install"); assert.equal((await f.settled()).phase, "prepared");
+    await f.owner.request("check");
+    assert.equal((await f.settled()).pendingSelection?.installation, "staged");
+    const events: string[] = [];
+    const restored = new NativeSoftwareUpdates(f.home, softwareUpdatePolicy(), event => events.push(event), async () => { throw Error("staged restore must not fetch"); }, false);
+    await restored.open(); restored.start();
+    assert.equal(restored.snapshot().phase, "prepared");
+    assert.equal(events.includes("prepared"), false);
+    await restored.afterExit();
+    assert.equal(restored.entrypoint("original"), "original");
+    restored.stop();
+  } finally { f.owner.stop(); await rm(f.home, { recursive: true, force: true }); }
+});
+
+test("a fresh check replaces staged revisions", async () => {
+  const f = await fixture();
+  try {
+    await f.owner.request("check");
+    const first = await f.settled();
+    f.advanceCore();
+    await f.owner.request("check");
+    const next = await f.settled();
+    assert.notEqual(next.pendingSelection?.plan.id, first.pendingSelection?.plan.id);
+    assert.equal(next.pendingSelection?.plan.revisions.core, "d".repeat(40));
+    assert.equal(next.pendingSelection?.installation, "staged");
+  } finally { f.owner.stop(); await rm(f.home, { recursive: true, force: true }); }
+});
+
+test("operator check downloads without activation; install uses only the prepared sources", async () => {
+  const f = await fixture();
+  try {
+    await assert.rejects(f.owner.request("install"), /No prepared update/);
+    assert.equal(f.commands.length, 0);
+    await f.owner.request("check"); assert.equal((await f.settled()).phase, "prepared");
+    assert.ok(f.commands.some(c => c.command === "npm"));
+    assert.equal(f.events.some(e => e.startsWith("prepared:")), false);
+    assert.equal(f.owner.snapshot().pendingSelection?.installation, "staged");
+    await f.owner.afterExit();
+    assert.equal(f.owner.entrypoint("original"), "original");
+    f.advanceCore();
+    const before = f.commands.length;
+    await f.owner.request("install");
+    assert.equal(f.owner.snapshot().pendingSelection?.plan.revisions.core, revisions.core);
+    assert.equal(f.commands.length, before, "install does not fetch or rebuild");
+    assert.equal(f.events.some(e => e.startsWith("prepared:")), true);
+    await f.owner.afterExit();
+    assert.equal(f.owner.snapshot().phase, "activated");
   } finally { await f.cleanup(); }
 });
 
 test("build failure leaves selection unchanged, redacts secrets and can retry without a permanent busy fence", async () => {
   const f = await fixture();
   try {
-    f.fail("build"); await f.owner.request("install"); assert.equal((await f.settled()).phase, "failed");
+    f.fail("build"); await f.owner.request("update"); assert.equal((await f.settled()).phase, "failed");
     assert.equal(f.owner.entrypoint("incumbent"), "incumbent"); assert.ok(!JSON.stringify(f.owner.snapshot()).includes("PRIVATE"));
-    f.fail(""); await f.owner.request("install"); assert.equal((await f.settled()).phase, "prepared");
+    f.fail(""); await f.owner.request("update"); assert.equal((await f.settled()).phase, "prepared");
   } finally { await f.cleanup(); }
 });
 
 test("prepared transaction survives owner restart without blind build/install replay", async () => {
   const f = await fixture();
   try {
-    await f.owner.request("install"); await f.settled(); f.owner.stop();
+    await f.owner.request("update"); await f.settled(); f.owner.stop();
     const events: string[] = [];
     const restored = new NativeSoftwareUpdates(f.home, softwareUpdatePolicy(), e => events.push(e), async () => { throw Error("must not repeat build"); }, false);
     await restored.open(); restored.start(); assert.deepEqual(events, ["prepared"]);
@@ -185,5 +264,27 @@ test("containers/disabled updates do not execute native git/npm or select cached
       assert.equal((await owner.request("install")).phase, external ? "external-owner" : "disabled");
       await owner.afterExit(); assert.equal(owner.entrypoint("original"), "original"); owner.stop();
     }
+  } finally { await rm(home, { recursive: true, force: true }); }
+});
+
+test("WebUI activation is explicit and fail-closed: enabled module activates, disabled or unconfigured does not", async () => {
+  const { webuiActivated, webuiActivatedFromHome } = await import("../src/software-updates.js");
+  assert.equal(webuiActivated({ webui: { module: "file:///x/webui.js" } }), true);
+  assert.equal(webuiActivated({ webui: { module: "file:///x/webui.js", disabled: true } }), false);
+  assert.equal(webuiActivated({ webui: { disabled: false } }), false, "baseline-only WebUI is not explicit activation");
+  assert.equal(webuiActivated(undefined), false);
+  const home = await mkdtemp(path.join(os.tmpdir(), "webui-activation-"));
+  try {
+    assert.equal(await webuiActivatedFromHome(home), false, "missing settings file stays fail-closed");
+    await writeFile(path.join(home, "settings.local.yaml"), "gatewayPlugins:\n  webui:\n    module: file:///x/webui.js\n");
+    assert.equal(await webuiActivatedFromHome(home), true);
+    await writeFile(path.join(home, "settings.local.yaml"), "gatewayPlugins:\n  webui:\n    module: file:///x/webui.js\n    disabled: true\n");
+    assert.equal(await webuiActivatedFromHome(home), false);
+    // Startup must not fail on an overlay the runtime itself tolerates.
+    await writeFile(path.join(home, "settings.local.yaml"), "gatewayPlugins: [unterminated\n  : : :\n");
+    assert.equal(await webuiActivatedFromHome(home), false, "malformed overlay is not activation and does not throw");
+    await rm(path.join(home, "settings.local.yaml"));
+    await mkdir(path.join(home, "settings.local.yaml"));
+    assert.equal(await webuiActivatedFromHome(home), false, "unreadable overlay is not activation and does not throw");
   } finally { await rm(home, { recursive: true, force: true }); }
 });

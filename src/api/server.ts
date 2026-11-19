@@ -192,6 +192,7 @@ export class ApiChannel implements Channel {
       ...(this.opts.lifecycle ? { lifecycle: { restart_timeout_seconds: this.opts.lifecycle.timeoutSeconds } } : {}),
       features: {
         run_submission: true,
+        model_work_metadata: true,
         durable_shutdown: !!this.opts.lifecycle,
         native_software_updates: this.opts.lifecycle?.nativeSoftwareUpdates ?? false,
         update_admission: !!this.opts.updateAdmission,
@@ -261,6 +262,9 @@ export class ApiChannel implements Channel {
     const requested = typeof body.model === "string" && body.model.trim() ? body.model.trim() : undefined;
     const provider = typeof body.provider === "string" && body.provider.trim() ? body.provider.trim().replace(/^custom:/, "") : undefined;
     const thinking = reasoning(body);
+    if (body.model_work !== undefined && body.model_work !== "interactive" && body.model_work !== "background")
+      throw new HttpError(400, "model_work must be interactive or background", "invalid_request");
+    const modelWork = body.model_work as "interactive" | "background" | undefined;
 
     const key = header(req, "idempotency-key");
     if (key !== undefined && !IDEMPOTENCY_KEY.test(key)) {
@@ -302,8 +306,10 @@ export class ApiChannel implements Channel {
       sessionKey: record.session_key,
       text: input,
       source: "api",
+      operatorIngress: true,
       replyTo: { channel: API_CHANNEL, target: record.run_id },
       turn: {
+        ...(modelWork ? { modelWork } : {}),
         ...(instructions?.trim() ? { instructions } : {}),
         ...(model ? { model } : {}),
         ...(thinking ? { thinking } : {}),

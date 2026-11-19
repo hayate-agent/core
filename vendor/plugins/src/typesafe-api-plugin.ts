@@ -18,7 +18,8 @@ export interface TypeSafeTransportFailure {
   status?: number;
 }
 export interface TypeSafeAPI {
-  choose(bank: ChoiceBank, state: string, signal: AbortSignal, failure?: (detail: TypeSafeTransportFailure) => void): Promise<string | undefined>;
+  choose(bank: ChoiceBank, state: string, signal: AbortSignal, failure?: (detail: TypeSafeTransportFailure) => void,
+    uncertainty?: (detail: { reason: "low_confidence" | "model_uncertain"; choice: string; confidence: number }) => void): Promise<string | undefined>;
 }
 export const TYPESAFE_API_SERVICE = "typesafe-api";
 // Match the host's bounded completion evidence envelope; the old24KiB
@@ -55,7 +56,7 @@ export function createTypeSafeAPI(config: TypeSafeAPIConfig): TypeSafeAPI {
       !(url.protocol === "https:" || (url.protocol === "http:" && ["127.0.0.1", "[::1]"].includes(url.hostname))) ||
       (typeof model !== "string" || !/^[a-zA-Z0-9][a-zA-Z0-9._/-]{0,127}$/.test(model)) || (typeof bearerTokenFile !== "string" || !bearerTokenFile.startsWith("/")) ||
       !Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 120000) throw Error("Invalid TypeSafe API configuration");
-  return { async choose(bank, state, signal, failure) {
+  return { async choose(bank, state, signal, failure, uncertainty) {
     const report = (detail: TypeSafeTransportFailure) => { try { failure?.(detail); } catch { /* diagnostic observers cannot alter transport behavior */ } };
     if (signal.aborted || Buffer.byteLength(state) > TYPESAFE_STATE_BYTES || !state.trim()) return;
     const canonical = registeredBank(bank);
@@ -92,11 +93,16 @@ export function createTypeSafeAPI(config: TypeSafeAPIConfig): TypeSafeAPI {
           }
         } finally { await reader.cancel().catch(() => {}); }
         const raw: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-        if (!record(raw) || !exact(raw, ["model", "answers", "usage"]) ||
+        if (!record(raw) || !exact(raw, ["model", "answers", "usage", "id", "provider"]) ||
+            (raw.id !== undefined && typeof raw.id !== "string") ||
+            (raw.provider !== undefined && typeof raw.provider !== "string") ||
             typeof raw.model !== "string" || !/^[a-zA-Z0-9][a-zA-Z0-9._/-]{0,127}$/.test(raw.model) ||
             !record(raw.answers) || Object.keys(raw.answers).length !== 1 || !Object.hasOwn(raw.answers, bank.id)) return;
-        if (raw.usage !== undefined && (!record(raw.usage) || !exact(raw.usage, ["input_tokens", "output_tokens"]) ||
-            Object.values(raw.usage).some(v => !Number.isSafeInteger(v) || (v as number) < 0))) return;
+        if (raw.usage !== undefined && (!record(raw.usage) || !exact(raw.usage, ["input_tokens", "output_tokens", "cost", "is_byok", "cost_details"]) ||
+            [raw.usage.input_tokens, raw.usage.output_tokens].some(v => v !== undefined && (!Number.isSafeInteger(v) || (v as number) < 0)) ||
+            (raw.usage.cost !== undefined && (typeof raw.usage.cost !== "number" || !Number.isFinite(raw.usage.cost) || raw.usage.cost < 0)) ||
+            (raw.usage.is_byok !== undefined && typeof raw.usage.is_byok !== "boolean") ||
+            (raw.usage.cost_details !== undefined && !record(raw.usage.cost_details)))) return;
         const answer = raw.answers[bank.id];
         if (!record(answer) || !exact(answer, ["type", "choice", "confidence", "probabilities"]) || answer.type !== "choice" ||
             typeof answer.choice !== "string" || !Object.hasOwn(bank.choices, answer.choice) || !unit(answer.confidence) ||
@@ -108,6 +114,9 @@ export function createTypeSafeAPI(config: TypeSafeAPIConfig): TypeSafeAPI {
         // model and credential remain fixed; this is not model discovery/fallback.
         // Confidence and probabilities are separate upstream values. A valid low
         // confidence response is uncertainty, never malformed data or permission.
+        if (answer.confidence < 0.9 || answer.choice === "unknown" || answer.choice === "none") {
+          try { uncertainty?.({ reason: answer.confidence < 0.9 ? "low_confidence" : "model_uncertain", choice: answer.choice, confidence: answer.confidence }); } catch { /* observers cannot change the decision */ }
+        }
         return answer.confidence < 0.9 ? "unknown" : answer.choice;
       };
       const result = await Promise.race([operation().catch(() => { if (!signal.aborted && !controller.signal.aborted) report({ cause: "provider_error" }); return undefined; }), cancelled]);

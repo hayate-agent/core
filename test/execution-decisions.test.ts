@@ -125,8 +125,9 @@ test("decision validation on reload rejects corrupt audits and receipt limits fa
   const large = await store.submit("parent", "large", "original", "sequential");
   for (let i = 0; i < 3; i++) await store.recordDecision("parent", large.id, `large${i}`, "x".repeat(4000));
   await assert.rejects(store.recordDecision("parent", large.id, "large3", "x".repeat(4000)), /data limit/);
-  const data = JSON.parse(await readFile(file, "utf8"));
-  data.executions[0].decisions[0].state = "applied"; // missing appliedClaim/At
+  const data = { version: 1, executions: store.list(), events: store.events() };
+  data.executions[0]!.decisions![0]!.state = "applied"; // missing appliedClaim/At
+  // Exercise the public legacy reader/semantic validation, not index internals.
   await writeFile(file, JSON.stringify(data));
   await assert.rejects(new ExecutionStore(file).load(), /Invalid execution decisions/);
 });

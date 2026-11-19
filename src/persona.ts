@@ -81,11 +81,14 @@ export async function loadPersona(files: PersonaFiles, personality?: string): Pr
 export interface AgentContext {
   name?: string;
   workspace?: string;
+  worker?: boolean;
 }
 
 /** Product grounding precedes configurable identity/voice; PI is an implementation detail. */
 export function personaSections(persona: Persona, context: AgentContext = {}): string[] {
-  const out: string[] = [
+  const out: string[] = context.worker ? [
+    `Hayate task worker ${JSON.stringify(context.name ?? "agent")}; use the task's scope and available tools. Workspace: ${JSON.stringify(context.workspace ?? "unspecified")}.`,
+  ] : [
     [
       "# Agent foundation",
       "You are a personal and development agent running in Hayate Agent.",
@@ -98,12 +101,12 @@ export function personaSections(persona: Persona, context: AgentContext = {}): s
       "Report unavailable integrations honestly; configured capability is not proof of authenticated access. Never expose credentials in output or commits.",
     ].join("\n"),
   ];
-  out.push(developmentContext());
+  if (!context.worker) out.push(developmentContext());
   if (persona.soul) out.push(`# Identity\n\n${persona.soul}`);
   if (persona.voice) out.push(`# Voice\n\nThis is how you sound everywhere (chat, reports, scheduled output). Stay in this voice.\n\n${persona.voice}`);
   if (persona.personality) out.push(`# Personality: ${persona.personality.name}\n\n${persona.personality.text}`);
   for (const overlay of persona.overlays ?? []) out.push(`# Persona overlay: ${overlay.name}\n\n${overlay.text}`);
-  out.push(
+  if (!context.worker) out.push(
     [
       "# Conversation",
       "",

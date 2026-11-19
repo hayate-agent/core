@@ -40,6 +40,40 @@ function setup(opts: { admins?: string[]; approvers?: string[]; skills?: SkillIn
   return { runtime, harness, ch, ctx, send, approvals };
 }
 
+test("/update routes bare, check and install to distinct lifecycle actions", async () => {
+  const { ctx, harness, send } = setup();
+  const actions: string[] = [];
+  ctx.softwareUpdates = async action => {
+    actions.push(action);
+    return { phase: "idle", detail: "test", configured: {} };
+  };
+  try {
+    await send("/update");
+    await send("/update check");
+    await send("/update install");
+    await send("/update status");
+    assert.deepEqual(actions, ["update", "check", "install", "status"]);
+  } finally { await harness.stop(1000); }
+});
+
+test("/status reports installed versions and safe model/gateway settings", async () => {
+  const { ctx, harness, send, ch } = setup();
+  ctx.modelSettings = { get: () => ({ model: "provider/model", reviewModel: "provider/reviewer", reviewThinking: "high", apiKey: "SECRET_MODEL" } as never), set: async () => {} };
+  ctx.gatewaySettings = () => ({ progress: "reduced", statusReactions: true, overrides: { matrix: { progress: "full", token: "SECRET_GATEWAY" } as never } });
+  try {
+    await send("/version");
+    const versions = ch.texts().at(-1)!.split("\n").slice(1).join("\n");
+    await send("/status");
+    const status = ch.texts().at(-1)!;
+    assert.ok(status.includes(versions));
+    assert.match(status, /provider\/reviewer/);
+    assert.match(status, /reviewThinking.*high/);
+    assert.match(status, /gateways: mem/);
+    assert.match(status, /matrix.*full/);
+    assert.doesNotMatch(status, /SECRET_|apiKey|"token"/);
+  } finally { await harness.stop(1000); }
+});
+
 test("channel command expansion assigns semantic tags before queueing with classifier enabled", async () => {
   const { harness, send, ch } = setup();
   harness.opts.topicLabeler = async text => {
@@ -618,4 +652,26 @@ test("cron management uses system locale and preserves controls and admitted run
     ctx.scheduler = undefined;
     await check("/cron", /Kein Scheduler/);
   } finally { await harness.stop(1000); }
+});
+
+test("loop run requires authenticated admin ingress and runs once without changing schedule", async t => {
+  const { harness, runtime, ch } = setup({ admins: ["owner"] }); t.after(() => harness.stop(0));
+  const s = harness.state("mem:room1"); s.loop = { prompt: "check", everyMs: 60000, nextAt: Date.now() + 100000, paused: false };
+  const before = structuredClone(s.loop); let calls = 0; runtime.answer = () => { calls++; return "NO_REPLY"; };
+  const command = { ...msg("/loop run", "owner"), id: "event-loop-run" };
+  await harness.submit(command); await harness.drained(); assert.equal(calls, 0);
+  await harness.accept(command); await harness.drained(); assert.equal(calls, 1);
+  await harness.accept(command); await harness.drained(); assert.equal(calls, 1);
+  assert.deepEqual(s.loop, before);
+  await harness.accept({ ...msg("/loop run", "intruder"), id: "event-loop-denied" }); await harness.drained();
+  assert.equal(calls, 1); assert.ok(ch.texts().some(t => t.includes("admin only")));
+});
+
+test("trusted console loop run receives a durable command identity", async t => {
+  const { harness, runtime } = setup(); t.after(() => harness.stop(0));
+  const consoleChannel = new MemoryChannel(); Object.defineProperty(consoleChannel, "name", { value: "console" }); harness.addChannel(consoleChannel);
+  harness.state("console:local").loop = { prompt: "console task", everyMs: 60000, nextAt: Date.now() + 60000, paused: false };
+  let calls = 0; runtime.answer = () => { calls++; return "NO_REPLY"; };
+  await harness.accept({ sessionKey: "console:local", source: "channel", text: "/loop run", replyTo: { channel: "console", target: "local" } });
+  await harness.drained(); assert.equal(calls, 1);
 });

@@ -36,7 +36,7 @@ for (const { label, query, hit } of cases) {
     const output = await tool.execute({ query });
     assert.equal(output.startsWith("Matching skills:"), hit, `query ${JSON.stringify(query)}`);
     assert.ok(!output.includes("BODY_SENTINEL"));
-    assert.ok(!output.includes(home));
+    assert.equal(output.includes(path.join(skillDir, 'SKILL.md')), hit);
   });
 }
 
@@ -53,7 +53,7 @@ test("normalized search preserves catalog order, limits, and metadata-only hits"
   let tool: any;
   await skillSearchPlugin(catalog).activate({ registerTool(value: any) { tool = value; } } as any);
   const parse = (output: string) => JSON.parse(output.slice(output.indexOf("["), output.lastIndexOf("]") + 1));
-  const expected = catalog.skills.map(s => ({ name: s.name, description: s.description }));
+  const expected = catalog.skills.map(s => ({ name: s.name, description: s.description, filePath: s.filePath }));
   for (const limit of [1, 2, 20, 21]) {
     const hits = parse(await tool.execute({ query: "  SHARED  ", limit }));
     assert.deepEqual(hits, expected.slice(0, Math.min(limit, 20)));

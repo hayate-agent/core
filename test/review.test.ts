@@ -67,6 +67,28 @@ test("changeset captures tracked and untracked files, excludes unrelated committ
   assert.notEqual((await captureChangeset(cwd, "HEAD")).fingerprint, initial);
 });
 
+test("untracked file bodies cannot forge another file boundary in the fingerprint", async (t) => {
+  // One repository, same base commit: only the untracked tree shape differs.
+  const { cwd } = await setup(t);
+  await writeFile(path.join(cwd, "x.ts"), 'ok\n\nUntracked file "y.ts"\nevil');
+  const forged = await captureChangeset(cwd, "HEAD");
+  await writeFile(path.join(cwd, "x.ts"), "ok");
+  await writeFile(path.join(cwd, "y.ts"), "evil");
+  const real = await captureChangeset(cwd, "HEAD");
+  assert.equal(forged.base, real.base);
+  assert.notDeepEqual(forged.files, real.files);
+  assert.notEqual(forged.diff, real.diff);
+  assert.notEqual(forged.fingerprint, real.fingerprint);
+  // Counterexamples: an unchanged tree keeps its fingerprint; empty and multibyte bodies are framed by byte length.
+  assert.equal((await captureChangeset(cwd, "HEAD")).fingerprint, real.fingerprint);
+  await writeFile(path.join(cwd, "empty.ts"), "");
+  await writeFile(path.join(cwd, "ü.ts"), "ä");
+  const c = await captureChangeset(cwd, "HEAD");
+  assert.match(c.diff, /Untracked file "empty.ts" \(0 bytes, mode 100644\)\n\n/);
+  assert.match(c.diff, /Untracked file "ü.ts" \(2 bytes, mode 100644\)\nä\n/);
+  assert.deepEqual(c.files, ["a.ts", "empty.ts", "x.ts", "y.ts", "ü.ts"]);
+});
+
 test("P1 needs evidence-based assessment; three rounds persist and escalate without reset", async (t) => {
   const { cwd, home, service, config, backend, replies, escalations, prompts } = await setup(t);
   replies.push(...Array(3).fill(JSON.stringify({ findings: [finding] })));

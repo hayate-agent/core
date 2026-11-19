@@ -3,6 +3,12 @@ import type { ReviewConfig } from "./config.js";
 export function reviewConfig(input?: Partial<Omit<ReviewConfig, "mandatory" | "scope">> & { mandatory?: Partial<ReviewConfig["mandatory"]>; scope?: Partial<ReviewConfig["scope"]> }): ReviewConfig {
   if (input !== undefined && (!input || typeof input !== "object" || Array.isArray(input))) throw new Error("Invalid review configuration");
   if (input?.mandatory !== undefined && (!input.mandatory || typeof input.mandatory !== "object" || Array.isArray(input.mandatory))) throw new Error("Invalid review.mandatory");
+  if (input?.scope !== undefined && (!input.scope || typeof input.scope !== "object" || Array.isArray(input.scope))) throw new Error("Invalid review.scope");
+  // Misspelled keys would silently fall back to defaults (e.g. `enabeld: false`).
+  const unknown = (value: object | undefined, allowed: string[]) => Object.keys(value ?? {}).find(key => !allowed.includes(key));
+  const extra = unknown(input, ["enabled", "shellGuard", "scope", "model", "thinking", "maxTurns", "mandatory", "baseRef"]) ??
+    unknown(input?.mandatory, ["local", "publish", "merge"]) ?? (input?.scope && typeof input.scope === "object" ? unknown(input.scope, ["mode", "nonBlockingPaths", "requiredPaths"]) : undefined);
+  if (extra !== undefined) throw new Error(`Unknown review setting: ${JSON.stringify(extra.slice(0, 64))}`);
   const result: ReviewConfig = {
     enabled: input?.enabled ?? false,
     shellGuard: input?.shellGuard ?? false,

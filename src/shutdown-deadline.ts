@@ -14,8 +14,11 @@ export class ShutdownDeadline {
   async wait<T>(work: Promise<T>, maximum: number, fallback: () => T): Promise<T> {
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      return await Promise.race([work, new Promise<T>(resolve => {
-        timer = setTimeout(() => resolve(fallback()), Math.min(Math.max(0, maximum), this.remaining()));
+      return await Promise.race([work, new Promise<T>((resolve, reject) => {
+        timer = setTimeout(() => {
+          try { resolve(fallback()); }
+          catch (error) { reject(error); }
+        }, Math.min(Math.max(0, maximum), this.remaining()));
       })]);
     } finally { clearTimeout(timer); }
   }

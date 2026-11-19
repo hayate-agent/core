@@ -382,6 +382,11 @@ export class HarnessTuiChannel implements Channel {
       this.executionState = this.execution.model && this.execution.thinking ? "observed" : "unavailable";
     } else if (this.executionState === "pending" && ["text", "tool", "usage"].includes(event.type)) this.executionState = "unavailable";
     if (event.type === "text") this.partial += event.delta;
+    if (event.type === "model_queue") this.routineStatus = event.state === "waiting" ? "Waiting for local model capacity; no own model activity yet."
+      : event.state === "admitted" ? "Local model request admitted; provider progress unknown." : "Local model wait cancelled.";
+    if (event.type === "compaction") this.routineStatus = event.state === "started" ? "Compacting context…"
+      : event.state === "completed" ? "Context compaction completed."
+        : `Context compaction ${event.state}; original context retained.`;
     if (event.type === "tool") {
       const count = this.activeTools.get(event.name) ?? 0;
       if (event.phase === "start") this.activeTools.set(event.name, count + 1);

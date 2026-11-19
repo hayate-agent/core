@@ -1,4 +1,11 @@
 {
+  "context.handoverArchived": "🔄 Sesión nueva iniciada; historial archivado. La retrospectiva puede estar incompleta.",
+  "context.handover": "🔄 Sesión nueva iniciada.",
+  "context.compacted": "♻️ Contexto compactado.",
+  "task.cancelled": "⏹️ Cancelado.",
+  "task.failed": "❌ Falló.",
+  "task.budget": "No he podido avanzar en: {original}. Responde «continuar» para intentarlo de nuevo. Si hay varias tareas pausadas, preguntaré cuál.",
+  "task.noNext": "No hay un siguiente paso seguro registrado; es necesario revisar.",
   "lifecycle.ready": "✅ {agent}: Iniciado y listo.",
   "lifecycle.restarted": "✅ {agent}: Reinicio completado; listo de nuevo.",
   "software.heading": "Versiones del software:",
@@ -95,5 +102,13 @@
   "cron.usage": "Uso: /cron list|run|pause|resume|reload|language <name> <BCP-47 tag|reset>",
   "language.listing": "Mostrar/configurar idioma predeterminado, del sistema, segundo plano, conversación o MCP (BCP-47)",
   "command.failure": "⚠️ /{name}: falló el comando (detalles omitidos)",
-  "conversation.reset": "🆕 Nuevo contexto de conversación. Se detuvieron las tareas, continuaciones y ejecuciones subordinadas anteriores de esta conversación; se eliminaron sus bucles, heartbeat y objetivo. Las demás conversaciones y los trabajos programados independientes no cambian."
+  "conversation.reset": "🆕 Nuevo contexto de conversación. Se detuvieron las tareas, continuaciones y ejecuciones subordinadas anteriores de esta conversación; se eliminaron sus bucles, heartbeat y objetivo. Las demás conversaciones y los trabajos programados independientes no cambian.",
+  "usage.skill.loaded": "Skill {name} cargado (aplicación no confirmada)",
+  "usage.skill.created": "Skill {name} creado",
+  "usage.skill.updated": "Skill {name} actualizado",
+  "usage.memory.recalled": "Memoria de trabajo consultada",
+  "usage.tool.started": "iniciado",
+  "usage.tool.completed": "finalizado",
+  "usage.tool.failed": "fallido",
+  "dispatcher.assessmentStalled": "Evaluación detenida por falta de nuevas pruebas. Se necesita información nueva o una continuación explícita; se conservan los resultados anteriores."
 }
