@@ -60,7 +60,7 @@ export class DispatcherRuntime {
   guardHostEvent(parent: string, input: Inbound): void {
     if (input.sessionKey !== parent || !input.hostEvent) throw new ToolGuardError("authority_revoked", "Host event parent mismatch");
     if (input.hostEvent.assessmentStalled) {
-      if (!this.store.assessmentStalledAllowed(input) || !this.harness.resultMandate(input))
+      if (!this.store.assessmentStalledAllowed(input, this.harness.sessions.get(parent)?.current === input) || !this.harness.resultMandate(input))
         throw new ToolGuardError("authority_revoked", "Dispatcher assessment notice no longer belongs to this active parent mandate");
       return;
     }

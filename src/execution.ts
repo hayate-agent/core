@@ -423,12 +423,17 @@ export class ExecutionStore {
       (!task.intent || question.retainedAssessment === true) &&
       input.text === this.questionText(task.id, question);
   }
-  assessmentStalledAllowed(input: import("./types.js").Inbound): boolean {
+  /** activeAdmittedTurn: the SAME already admitted turn may keep its authority after
+   * its own steering decision woke the held execution (blocked -> ready). A queued or
+   * replayed notice never gets this: it requires the exact stalled hold. Stop, pause,
+   * cancel, ownership hold, expiry and a changed question still revoke. */
+  assessmentStalledAllowed(input: import("./types.js").Inbound, activeAdmittedTurn = false): boolean {
     const receipt = input.hostEvent?.assessmentStalled;
     if (input.source !== "host" || !receipt?.eventId || input.id !== `dispatch-event:${receipt.eventId}`) return false;
     const task = this.data.executions.find(item => item.id === input.hostEvent!.executionId && item.parent === input.sessionKey);
-    return !!task && task.assessmentStalledEventId === receipt.eventId && task.status === "blocked" &&
-      ["assessment-stalled", "retry-exhausted"].includes(task.diagnosticCode ?? "") &&
+    const stillStalled = !!task && task.status === "blocked" && ["assessment-stalled", "retry-exhausted"].includes(task.diagnosticCode ?? "");
+    const woken = activeAdmittedTurn && !!task && ["ready", "running"].includes(task.status) && task.diagnosticCode !== "manual-pause";
+    return !!task && task.assessmentStalledEventId === receipt.eventId && (stillStalled || woken) &&
       !!task.question?.retainedAssessment && task.question.answer !== undefined && !!task.intent &&
       !task.parentStopped && !task.ownershipHold && task.recoveryEnrollment === "current" && this.executionTaskAllowed(task) &&
       (task.dependency?.expiresAt === undefined || task.dependency.expiresAt > this.now()) &&

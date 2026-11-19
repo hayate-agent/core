@@ -195,3 +195,29 @@ test("startup reconstructs only eligible legacy exhausted assessment notice once
   assert.equal(fresh.events().filter(e => e.type === "assessment-stalled").length, 1);
   assert.equal(fresh.list()[0]!.diagnosticCode, "retry-exhausted"); assert.equal(fresh.list()[0]!.intent?.key, "effect");
 });
+
+test("an admitted stalled-assessment turn keeps its authority after its own decision wakes the execution", async t => {
+  const home = await mkdtemp(path.join(os.tmpdir(), "stalled-active-"));
+  t.after(() => rm(home, { recursive: true, force: true }));
+  const store = new ExecutionStore(path.join(home, "executions.json")); await store.load();
+  const task = await store.submit("parent", "req", "original", "sequential");
+  const first = await store.claim(task.id); await store.intent(task.id, first.token!, "effect", "unsafe");
+  await store.checkpoint(task.id, first.token!, JSON.stringify({ outcomes: [], assessment: { index: 0, reply: "report", mainClarification: true } }));
+  await store.ask(task.id, first.token!, "What remains?", true);
+  await store.answer("parent", task.id, store.list()[0]!.question!.id, "Inspect receipt");
+  const next = await store.claim(task.id, { strategy: "sequential", version: 1, replaySafe: false, reconcile: true });
+  await store.fail(task.id, next.token!, "assessment-stalled");
+  const notice = store.events().find(e => e.type === "assessment-stalled")!;
+  const input = { id: `dispatch-event:${notice.id}`, source: "host" as const, sessionKey: "parent", text: store.assessmentStalledText(store.list()[0]!), hostEvent: { executionId: task.id, assessmentStalled: { eventId: notice.id } } };
+  assert.equal(store.assessmentStalledAllowed(input), true);
+  // The turn's own steering decision legitimately wakes the held execution.
+  await store.recordDecision("parent", task.id, "own-step", "Concrete independent next step", () => true);
+  assert.equal(store.list()[0]!.status, "ready");
+  assert.equal(store.assessmentStalledAllowed(input), false, "a queued or replayed notice must not be admitted from a woken execution");
+  assert.equal(store.assessmentStalledAllowed(input, true), true, "the already admitted active turn keeps its authority");
+  assert.equal(store.assessmentStalledAllowed({ ...input, sessionKey: "other" }, true), false);
+  assert.equal(store.assessmentStalledAllowed({ ...input, text: input.text + " forged" }, true), false);
+  await store.control(task.id, "pause");
+  await store.control(task.id, "cancel").catch(() => undefined);
+  assert.equal(store.assessmentStalledAllowed(input, true), false, "pause/cancel still revoke the active turn");
+});
