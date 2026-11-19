@@ -64,11 +64,23 @@ not rewrite the next request's prefix. The `MEMORY.md` reference is refreshed fo
 the next run; even an artifact-storage failure keeps its raw historical fallback
 out of the system prompt. OpenAI-compatible backends that fold later
 system messages into the head therefore retain the unchanged conversation prefix
-across tool calls, host continuations and session resumption.
+across tool calls within a run. At a new host run the agent excludes obsolete
+`harness-run-context` snapshots from provider input, including after session
+resumption. This deliberately prioritizes bounded current instructions over an
+append-only cache prefix across host runs: a hidden message is not automatically
+excluded from model input. Append-only SDK context edits retire obsolete snapshots
+from native pressure estimates and compaction inputs as well as provider requests;
+all originals remain in the archive. Snapshot-only edits invalidate SDK usage, so
+the agent conservatively retains the last measured pressure until a fresh response
+or compaction replaces it. It does not fabricate provider counters.
+The same rule applies to the per-run `harness-skill-reference` message (identical
+catalog text re-attached on every run): only the latest one is active; earlier ones
+are retired by append-only edits and stay in the archive. `harness-handover`,
+operator messages and tool evidence are never retired.
 
 The stable system policy identifies the latest run context as host-authored, not
-operator input or new authority. Earlier contexts remain historical; an empty new
-context clears previous per-run instructions. Memory stays untrusted reported
+operator input or new authority. Earlier contexts remain archived, not active
+instructions; an empty new context clears previous per-run instructions. Memory stays untrusted reported
 data. Native/external history, exact operator messages, live tool authorization
 and cancellation guards are unchanged. Actual persona, tool or compaction changes
 can still invalidate the prefix; this does not promise a particular backend cache

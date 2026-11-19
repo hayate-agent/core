@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { Harness } from "../src/harness.js";
 import { PiSession } from "../src/runtime/pi.js";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { TurnActivity, type ActivityEvent } from "../src/activity.js";
 import { NativeActivityDelivery } from "../src/builtin-plugins/native-activity.js";
 import { HarnessTuiChannel } from "../src/channels/tui.js";
@@ -40,7 +41,8 @@ for (const scenario of ["override", "default", "failure", "disabled"] as const) 
   let prompts = 0;
   let runningLabel = "";
   const sdk = {
-    model: A, thinkingLevel: "high", messages: [], systemPrompt: "", 
+    model: A, thinkingLevel: "high", messages: [], systemPrompt: "",
+    sessionManager: SessionManager.inMemory(), refreshContext() {},
     async setModel(model: typeof A) { entered(); await gate; if (scenario === "failure") throw Error("setup failed"); this.model = model; this.thinkingLevel = "off"; },
     setThinkingLevel(_level: string) { this.thinkingLevel = "off"; },
     subscribe() { return () => {}; }, async prompt() {

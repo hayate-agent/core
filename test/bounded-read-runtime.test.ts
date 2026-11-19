@@ -30,10 +30,11 @@ for (const external of [false, true]) test(`bounded middle-file reads survive ac
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }], streamSimple: (model, context) => {
     requests++;
     const wire = convertMessages(model, context, { supportsMidConvoSystemMessages: false, supportsDeveloperRole: false });
-    if (previousWire) assert.deepEqual(wire.slice(0, previousWire.length), previousWire, "bounded evidence remains prefix-stable on continuation/reopen");
+    if (previousWire) assert.deepEqual(wire.slice(0, previousWire.length), previousWire, "bounded evidence remains prefix-stable within a host run");
     previousWire = structuredClone(wire);
     const results: any[] = context.messages.filter((m: any) => m.role === "toolResult");
     const range = results.find(m => m.toolName === "read");
+    if (stage === 1) assert(range, "retained exact read must be present in every continuation/reopen request");
     if (range) {
       const actual = range.content[0].text;
       assert.match(actual, /153:range detail/, "required middle evidence must not disappear behind a second head/tail excerpt");
@@ -71,11 +72,17 @@ for (const external of [false, true]) test(`bounded middle-file reads survive ac
       const native = session.session.sessionManager.getEntries().find((e: any) => e.type === "message" && e.message.toolName === "read");
       assert(native.message.details.hayateReadRange);
       stage = 1;
+      // A host-run boundary replaces the runtime snapshot, not tool evidence.
+      // The exact range/receipt checks above remain active across both runs.
+      previousWire = undefined;
       await session.prompt("Summarize without rereading.");
       await session.dispose(); session = await runtime.open(key);
       session.session.settingsManager.setCompactionEnabled(false);
+      previousWire = undefined;
       await session.prompt("Resume using retained exact range.");
       assert(readText);
+      const reopenedRead = session.session.messages.find((m: any) => m.role === "toolResult" && m.toolName === "read");
+      assert(reopenedRead?.details.hayateReadRange, "native bounded range proof survives reopen projection");
     } finally { await session.dispose(); }
   }
   assert.equal(requests, 18, "no extra model requests or repeated reads");

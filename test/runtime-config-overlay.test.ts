@@ -1,3 +1,4 @@
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { mkdtemp, writeFile, readFile, rm, access, symlink, stat } from "node:fs/promises";
@@ -75,7 +76,7 @@ test("read-only base, writable overlay, tolerant runtime reload and restart", as
   const payloads: any[] = [];
   let inflight: (() => Promise<void>) | undefined;
   const agent: any = {
-    model: local, thinkingLevel: "off", messages: [],
+    model: local, thinkingLevel: "off", messages: [], sessionManager: SessionManager.inMemory(), refreshContext() {},
     waitForIdle: async () => {},
     subscribe: () => () => {}, setModel: async (model: any) => { agent.model = model; },
     setThinkingLevel: (thinking: string) => { agent.thinkingLevel = thinking; },

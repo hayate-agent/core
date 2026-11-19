@@ -10,6 +10,7 @@ import { executionMetadata } from "../builtin-plugins/execution-metadata.js";
  */
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai/compat";
 import { modelInputEstimate, modelInputLimit } from "../model-input-budget.js";
+import { currentRunContext, retireRunContexts, runContextPressure } from "../run-context.js";
 import { reasoningEffortNoneModels as reasoningEffortNoneModelsFromEnv } from "../product-paths.js";
 import type { AdaptiveSkills } from "../adaptive-skills.js";
 import { toolGuardDenialReason } from "../tool-guard-error.js";
@@ -315,6 +316,12 @@ export class PiSession implements RuntimeSession {
     let prevModel: AgentSession["model"];
     let prevThinking: AgentSession["thinkingLevel"] | undefined;
     try {
+      // Retire the prior run before SDK pre-run native compaction can consume
+      // it. This is append-only; exact originals and task evidence stay intact.
+      if (retireRunContexts(this.session, false)) {
+        await checkpointNativeSession(this.session.sessionManager);
+        await this.checkpoint?.();
+      }
       await this.beforePrompt?.();
 
       if (this.restore) {
@@ -513,6 +520,7 @@ export class PiSession implements RuntimeSession {
     const nativeCompactionFailure = receipt?.state === "failed" && (receipt.reason === "threshold" || receipt.reason === "overflow")
       ? { reason: receipt.reason as "threshold" | "overflow", receiptId: native!.id } : undefined;
     const usage = this.session.getContextUsage();
+    const pressure = runContextPressure(this.session);
     const m = this.session.model;
     const budget = this.workingBudget?.();
     // Local endpoints often report zero usage on timeouts/unsupported counters.
@@ -521,14 +529,14 @@ export class PiSession implements RuntimeSession {
     const historyBytes = budget ? modelInputEstimate(this.session.messages.filter(message => message.role !== "system")) : 0;
     const fallbackBytes = budget ? this.workingOverhead() + Buffer.byteLength(this.session.systemPrompt) + historyBytes +
       Buffer.byteLength(JSON.stringify(this.session.getAllTools().filter(tool => active.has(tool.name)).map(tool => tool.parameters))) : 0;
-    // SDK context usage already accounts for provider counters, trailing messages
-    // and invalidated pre-compaction usage. Bytes are only a labelled fallback
-    // estimate, never tokens or a reason to force native compaction.
+    // Snapshot-only omissions invalidate SDK usage but cannot increase the old
+    // measured context. Show its conservative floor, never call it fresh usage.
+    // Compaction/unrelated edits invalidate that floor as well.
     const known = typeof usage?.tokens === "number" && Number.isFinite(usage.tokens) && usage.tokens > 0;
-    const estimate = budget ? known ? usage.tokens! : Math.ceil(fallbackBytes / 3) : undefined;
+    const estimate = budget ? pressure?.tokens ?? (known ? usage.tokens! : Math.ceil(fallbackBytes / 3)) : undefined;
     return {
       ...(budget && estimate !== undefined ? { contextBudgetTokens: budget, contextEstimateTokens: estimate,
-        contextEstimateBasis: known ? "sdk-context" as const : "heuristic" as const,
+        contextEstimateBasis: known && !pressure?.debt ? "sdk-context" as const : "heuristic" as const,
         contextHistoryTokens: Math.ceil(historyBytes / 3), contextBudgetPercent: estimate / budget * 100 } : {}),
       ...(nativeCompactionFailure ? { nativeCompactionFailure } : {}),
       sessionId: this.record?.id ?? this.session.sessionId,
@@ -540,7 +548,7 @@ export class PiSession implements RuntimeSession {
       messages: stats.totalMessages,
       tokens: { ...stats.tokens },
       costUsd: stats.cost,
-      contextPercent: usage?.percent ?? undefined,
+      contextPercent: pressure && usage?.contextWindow ? pressure.tokens / usage.contextWindow * 100 : usage?.percent ?? undefined,
       contextWindow: m?.contextWindow,
       systemPrompt: { characters: [...this.session.systemPrompt].length, bytes: Buffer.byteLength(this.session.systemPrompt, "utf8") },
     };
@@ -965,6 +973,8 @@ export class PiRuntime implements AgentRuntime {
             // is folded into the HEAD by OpenAI-compatible providers, invalidating
             // the cached history. A custom message stays at the conversation tail
             // across tool iterations, retries and session restoration instead.
+            // The context hook excludes obsolete run snapshots from requests;
+            // native history still retains all of them for exact recovery.
             pi.on("before_agent_start", async () => {
               let workingMemory = "";
               if (!options.ephemeral && !childSession && this.opts.recallStep) {
@@ -979,6 +989,10 @@ export class PiRuntime implements AgentRuntime {
                   historicalWorkingMemory: workingMemory, personaHistory: personaHistoryContext,
                 })}` } };
             });
+            // A genuine response supersedes snapshot-retirement debt before the
+            // SDK's post-run check, not only before the next host prompt.
+            pi.on("turn_end", () => { prepareWorkerCompaction(); });
+            pi.on("session_compact", () => { prepareWorkerCompaction(); });
             if (!options.ephemeral && this.opts.captureStep) pi.on("turn_end", async event => {
               const text = event.message.role === "assistant" ? event.message.content.filter(part => part.type === "text").map(part => part.text).join("\n") : "";
               if (!text.trim() && !event.toolResults.length) return;
@@ -1022,7 +1036,7 @@ export class PiRuntime implements AgentRuntime {
               // Also optimize retained pre-upgrade histories without editing their
               // native archives or dropping tool/call pairs. New results already
               // arrive as excerpts and take the cheap unchanged path.
-              let messages = await Promise.all(event.messages.map(async message => {
+              let messages = await Promise.all(currentRunContext(event.messages).map(async message => {
                 if (message.role !== "toolResult" || isBoundedReadResult(message)) return message;
                 const text = message.content.map(part => part.type === "text" ? part.text : "").join("\n");
                 const excerpt = await compactContext(artifactDirectory, text, "Tool evidence");
@@ -1031,7 +1045,7 @@ export class PiRuntime implements AgentRuntime {
               const policy = this.opts.pruning?.();
               if (policy) messages = await compactAccumulatedToolContext(artifactDirectory, messages, policy);
               if (policy && this.opts.projectToolResults) messages = projectToolResultPrefixes(messages, policy, this.opts.projectToolResults);
-              return messages.some((message, index) => message !== event.messages[index]) ? { messages } : undefined;
+              return messages.length !== event.messages.length || messages.some((message, index) => message !== event.messages[index]) ? { messages } : undefined;
             });
             pi.on("before_agent_start", async (event) => {
               let reference = "";
@@ -1164,13 +1178,22 @@ export class PiRuntime implements AgentRuntime {
       const budget = modelInputLimit(localContextBudget(configured, child, local, policy), model.contextWindow, model.maxTokens);
       const bounded = policy ? contextCompactionSettings(model.contextWindow, baseline, budget)
         : options.ephemeral ? undefined : workerCompactionSettings(sessionKey, model.contextWindow, baseline, this.opts.workerContextTokens?.());
-      // Native SDK checks use provider usage plus trailing-message estimates,
-      // with their own heuristic fallback for missing/zero counters. Do not
-      // compare JSON bytes to a token budget and force a zero-token threshold.
-      if (bounded) settingsManager.applyOverrides({ compaction: { enabled: true,
-        modelOverrides: { [key]: { reserveTokens: bounded.reserveTokens, keepRecentTokens: bounded.keepRecentTokens } } } });
-      else settingsManager.applyOverrides({ compaction: { enabled: this.opts.compactionOwner?.() === "agent",
-        modelOverrides: { [key]: baseline } } });
+      // Native checks must see the pressure lost when snapshot omissions make
+      // the SDK discard measured usage. Shift its public threshold by exactly
+      // that conservative token debt; never fabricate usage or patch internals.
+      // Recomputed from the branch, so a response/compaction releases it and
+      // reopen, reload and model overrides cannot retain a stale adjustment.
+      const pressure = runContextPressure(session);
+      const debt = pressure?.debt ?? 0;
+      const target = bounded ?? baseline;
+      // Native cut selection also uses heuristic tokens after the edit. Scale
+      // its retained tail to the same units or a tiny-looking, high-pressure
+      // history can cross the threshold yet yield no compaction preparation.
+      const keepRecentTokens = debt && pressure ? Math.floor(target.keepRecentTokens *
+        Math.max(0, pressure.tokens - debt) / pressure.tokens) : target.keepRecentTokens;
+      settingsManager.applyOverrides({ compaction: { enabled: !!bounded || this.opts.compactionOwner?.() === "agent",
+        modelOverrides: { [key]: { reserveTokens: Math.min(Number.MAX_SAFE_INTEGER, target.reserveTokens + debt),
+          keepRecentTokens } } } });
     };
     const toolUse = new Map<string, number>(); let toolClock = 0;
     let previousActive = new Set(session.getActiveToolNames());
@@ -1351,6 +1374,9 @@ export class PiRuntime implements AgentRuntime {
     try {
       appliedMcpFingerprint = await mcpFingerprint();
       await applySelection();
+      // Migrate already-stacked histories before the Harness reads pressure or
+      // asks for compaction. Keep the latest snapshot until a new run replaces it.
+      if (retireRunContexts(session, true)) await checkpointNativeSession(session.sessionManager);
       if (checkpoint) await checkpoint();
       if (provider && record) await provider.bind(sessionKey, record.id);
     } catch (err) {
