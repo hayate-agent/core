@@ -13,7 +13,7 @@ const MAINTENANCE_BATCH = 500;
 // bounded by maxIndexBytes plus this hard file ceiling, so maintenance actually frees write budget.
 const FILE_CEILING_FACTOR = 4;
 const isActive = (e: MemoryEntry) => e.state === "active";
-const words = (s: string) => [...new Set(s.toLocaleLowerCase().match(/[\p{L}\p{N}_-]{2,}/gu) ?? [])];
+const words = (s: string) => [...new Set(s.normalize("NFC").toLocaleLowerCase().match(/[\p{L}\p{N}_-]{2,}/gu) ?? [])];
 function validDate(value: unknown): boolean { return value === undefined || (typeof value === "string" && Number.isFinite(Date.parse(value))); }
 function validate(e: MemoryEntry): void {
   const fail = (field: string) => { throw Error(`Invalid memory entry: ${field}`); };
