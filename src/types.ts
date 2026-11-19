@@ -36,6 +36,9 @@ export interface Inbound {
   hostEvent?: { executionId: string; nativeSubagent?: true; question?: { id: string; eventId: string }; assessmentStalled?: { eventId: string } };
   /** Host scheduler fingerprint; model text cannot establish source scope. */
   cronScope?: string;
+  /** Host recurring source/configuration identity; not inferred from equal prompt text.
+   * Explicit operator/API occurrences deliberately omit it. */
+  recurringSource?: string;
   /** Trusted scheduler metadata; output never expands the configured follow-up scope. */
   cronReport?: { job: string; runId: string; createdAt: number; audience: "agent" | "user";
     original: string; authorization?: string; maxTasks: number; output?: string; completedOutput?: string };
