@@ -58,13 +58,14 @@ export function webuiActivated(gatewayPlugins: Record<string, { module?: string;
   return !override?.disabled && typeof override?.module === "string" && override.module.length > 0;
 }
 
-/** Reads the same local overlay the runtime SettingsService uses; missing file means not activated. */
+/** Reads the same local overlay the runtime SettingsService uses. A missing, unreadable or malformed file means not activated:
+ * the runtime falls back to installation defaults for such an overlay, so launcher startup must never fail on it. */
 export async function webuiActivatedFromHome(home: string): Promise<boolean> {
   const { readFile } = await import("node:fs/promises");
   const { parse } = await import("yaml");
   let raw: unknown;
   try { raw = parse(await readFile(path.join(home, "settings.local.yaml"), "utf8")); }
-  catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return false; throw error; }
+  catch { return false; }
   return webuiActivated((raw as { gatewayPlugins?: Record<string, { module?: string; disabled?: boolean }> } | null)?.gatewayPlugins);
 }
 
