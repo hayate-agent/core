@@ -659,6 +659,33 @@ export class ExecutionStore {
       validateTaskBook(draft.taskBook); return next;
     });
   }
+  /** Same-owner exact duplicate retirement: both authority fences and child
+   * custody are checked in the writer transaction, not against a stale snapshot. */
+  retireScheduledDuplicate(parent: string, duplicate: TaskRef, keeper: TaskRef, revision: number,
+    keeperRevision: number, eventId: string, reason: string, boundary: () => boolean): Promise<void> {
+    return this.mutate(draft => {
+      const book = draft.taskBook;
+      const order = book?.tasks.find(t => t.id === duplicate.id), kept = book?.tasks.find(t => t.id === keeper.id);
+      if (!book || !order || !kept || duplicate.id === keeper.id || !order.scheduled || !kept.scheduled ||
+          order.original !== kept.original) throw Error("Exact scheduled duplicate pair unavailable");
+      const receipt = order.receipts.find(r => r.id === eventId);
+      if (receipt) {
+        if (receipt.digest !== taskDigest([duplicate.id, "close", reason])) throw Error("Duplicate retirement receipt conflict");
+        return;
+      }
+      if (!boundary()) throw Error("Duplicate repair idle boundary changed");
+      const bindings = book.bindings.filter(b => b.sessionKey === parent &&
+        (b.ref.id === duplicate.id && b.ref.generation === duplicate.generation || b.ref.id === keeper.id && b.ref.generation === keeper.generation));
+      if (!bindings.some(b => b.ref.id === duplicate.id) || !bindings.some(b => b.ref.id === keeper.id) ||
+          !taskOpen(book, duplicate) || !taskOpen(book, keeper) || order.revision !== revision || kept.revision !== keeperRevision ||
+          draft.executions.some(e => e.parent === parent &&
+            (!e.dependency?.taskId || bindings.some(b => b.taskId === e.dependency?.taskId)) &&
+            (!['completed', 'cancelled'].includes(e.status) || !!e.intent))) throw Error("Duplicate authority or custody changed");
+      operatorTransition(book, duplicate, revision, eventId, "close", reason, this.now());
+      validateTaskBook(book);
+    });
+  }
+
   bindTask(sessionKey: string, taskId: string, ref: TaskRef): Promise<void> {
     return this.mutate(draft => {
       if (!draft.taskBook || !taskOpen(draft.taskBook, ref)) throw Error("Open current operator task required");

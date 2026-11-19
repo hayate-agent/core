@@ -16,6 +16,8 @@ export interface PendingApproval {
 }
 
 export interface Recurring {
+  /** Persistent identity for exact owner-control authorization. */
+  sourceId?: string;
   prompt: string;
   everyMs: number;
   nextAt: number;
