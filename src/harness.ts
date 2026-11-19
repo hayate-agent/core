@@ -665,6 +665,49 @@ export class Harness {
     }
     await this.onStateChange?.(); return renderTask(store.coreTask(id)!);
   }
+  private readonly duplicateRepairs = new Set<string>();
+
+  /** Exact same-UID operator repair, never semantic/prose auto-deduplication.
+   * Retire only a proven scheduled duplicate; keep both durable checkpoints and
+   * all evidence. A current turn/child must settle first, never cut across effects. */
+  async retireScheduledDuplicate(key: string, duplicateId: string, keeperId: string,
+    expectedRevision: number, keeperRevision: number, requestId: string): Promise<void> {
+    const store = this.opts.executionStore, s = this.sessions.get(key);
+    if (!this.opts.taskLifecycle?.enabled || !store || !s || duplicateId === keeperId) throw Error("Duplicate repair unavailable");
+    const duplicate = this.tasks(s).find(task => task.taskRef?.id === duplicateId);
+    const keeper = this.tasks(s).find(task => task.taskRef?.id === keeperId);
+    const order = store.coreTask(duplicateId), kept = store.coreTask(keeperId);
+    if (!duplicate || !keeper || !order || !kept || !order.scheduled || !kept.scheduled ||
+        order.original !== kept.original || duplicate.original !== keeper.original || duplicate.original !== order.original ||
+        keeper.state === "stopped" || keeper.state === "completed" || keeper.recoveryEnrollment === "held-legacy" ||
+        keeper.expiresAt !== undefined && keeper.expiresAt <= this.now() || !store.taskIsOpen(keeper.taskRef!)) throw Error("Exact open scheduled pair required");
+    const receipt = order.receipts.find(r => r.id === requestId);
+    const reason = `Operator-requested duplicate retirement; not business completion. Keeper ${keeperId}. All checkpoints, receipts and uncertain effects retained; keeper must reconcile journals before further effects.`;
+    if (receipt) {
+      if (receipt.kind !== "operator-close" || receipt.reason !== reason) throw Error("Duplicate repair receipt conflict");
+      return;
+    }
+    if (order.revision !== expectedRevision || kept.revision !== keeperRevision || !store.taskIsOpen(duplicate.taskRef!) ||
+        s.current || s.prompting || s.stopPending || s.resetPending || this.duplicateRepairs.has(key) ||
+        this.opts.pendingNativeSubagent?.(key, duplicate.id) || this.opts.pendingNativeSubagent?.(key, keeper.id) ||
+        store.list(key).some(e => (!e.dependency?.taskId || [duplicate.id, keeper.id].includes(e.dependency.taskId)) &&
+          (!['completed', 'cancelled'].includes(e.status) || !!e.intent))) throw Error("Duplicate repair boundary or custody changed");
+    this.duplicateRepairs.add(key);
+    try {
+      await store.retireScheduledDuplicate(key, duplicate.taskRef!, keeper.taskRef!, expectedRevision, keeperRevision, requestId, reason,
+        () => !s.current && !s.prompting && !s.stopPending && !s.resetPending &&
+          !this.opts.pendingNativeSubagent?.(key, duplicate.id) && !this.opts.pendingNativeSubagent?.(key, keeper.id));
+      await this.onStateChange?.();
+    } finally {
+      this.duplicateRepairs.delete(key);
+      // A pump may have yielded at the reservation while preparing a topic.
+      // Resume retained inbox work after that pump's own finally clears running.
+      void this.waitForSessionIdle(key).then(() => {
+        if (s.queue.length && !this.stopping) return this.pump(s);
+      }).catch(err => this.log(`duplicate repair wake failed: ${err instanceof Error ? err.message : err}`));
+    }
+  }
+
   proposeTaskPlan(key: string, plan: TaskTodo[]): void {
     const input = this.sessions.get(key)?.current;
     if (!input?.taskRef || !this.opts.taskLifecycle?.enabled || /^(dispatch|subagent):/.test(key)) throw Error("Current core task required");
@@ -994,7 +1037,7 @@ export class Harness {
   private readonly taskSchedulers = new Map<string, PriorityScheduler>();
   /** Synchronous claim: queue and checkpoint are saved together before execution. */
   private queueRunnableTask(s: SessionState, excludeTask?: string): boolean {
-    if (!this.onStateChange || this.paused || this.stopping || s.queue.length || s.current ||
+    if (!this.onStateChange || this.paused || this.stopping || this.duplicateRepairs.has(s.key) || s.queue.length || s.current ||
         s.key === "improvement:nightly" || s.key.startsWith("cron:") || this.stoppingHostParents.has(s.key) ||
         this.opts.externallyRecoveredSession?.(s.key)) return false;
     // A retained proposal without admission must not starve later admitted work.
@@ -1366,6 +1409,10 @@ export class Harness {
    * callers may retry, but must not claim restart durability.
    */
   async controlLoop(key: string, input: { action: string; prompt?: string; everyMs?: number; times?: number }): Promise<Recurring | null> {
+    return this.serializeLoopControl(key, () => this.controlLoopNow(key, input));
+  }
+
+  private async controlLoopNow(key: string, input: { action: string; prompt?: string; everyMs?: number; times?: number }): Promise<Recurring | null> {
     const s = this.state(key);
     if (input.action === "status") return s.loop ? structuredClone(s.loop) : null;
     if (!this.onStateChange) throw Error("Loop persistence unavailable");
@@ -1374,7 +1421,7 @@ export class Harness {
           !Number.isSafeInteger(input.everyMs) || input.everyMs! < 60_000 ||
           !Number.isSafeInteger(this.now() + input.everyMs!) ||
           (input.times !== undefined && (!Number.isSafeInteger(input.times) || input.times < 1))) throw Error("Invalid loop: prompt 1..4000 characters, interval >=60000 safe milliseconds, positive integer times");
-      s.loop = { prompt: input.prompt.trim(), everyMs: input.everyMs!, nextAt: this.now(), paused: false,
+      s.loop = { sourceId: randomUUID(), prompt: input.prompt.trim(), everyMs: input.everyMs!, nextAt: this.now(), paused: false,
         ...(input.times !== undefined ? { remaining: input.times } : {}) };
     } else if (input.action === "stop") {
       s.loop = undefined;
@@ -1392,14 +1439,29 @@ export class Harness {
     return s.loop ? structuredClone(s.loop) : null;
   }
 
-  /** Host-owner handoff: freeze only the exact inspected loop, retaining every queued turn. */
-  async freezeLoopForMigration(key: string, expectedDigest: string): Promise<void> {
-    const s = this.state(key), loop = s.loop;
-    if (!loop || !this.onStateChange) throw Error("Loop or persistence unavailable");
-    const digest = createHash("sha256").update(JSON.stringify({ prompt: loop.prompt, everyMs: loop.everyMs })).digest("hex");
-    if (digest !== expectedDigest) throw Error("Loop changed since inspection");
-    loop.paused = true;
-    await this.onStateChange();
+  private readonly loopOwnerControls = new Map<string, Promise<void>>();
+
+  private async serializeLoopControl<T>(key: string, work: () => Promise<T>): Promise<T> {
+    const previous = this.loopOwnerControls.get(key) ?? Promise.resolve();
+    const operation = previous.catch(() => {}).then(work);
+    const settled = operation.then(() => {}, () => {});
+    this.loopOwnerControls.set(key, settled);
+    try { return await operation; }
+    finally { if (this.loopOwnerControls.get(key) === settled) this.loopOwnerControls.delete(key); }
+  }
+
+  /** Host-owner handoff: change only the exact inspected loop, retaining every queued turn. */
+  async freezeLoopForMigration(key: string, expectedDigest: string, paused = true): Promise<void> {
+    return this.serializeLoopControl(key, async () => {
+      const s = this.state(key), loop = s.loop;
+      if (!loop || !this.onStateChange) throw Error("Loop or persistence unavailable");
+      const digest = createHash("sha256").update(JSON.stringify({ prompt: loop.prompt, everyMs: loop.everyMs, sourceId: loop.sourceId })).digest("hex");
+      if (digest !== expectedDigest) throw Error("Loop changed since inspection");
+      const previous = loop.paused;
+      loop.paused = paused;
+      try { await this.onStateChange(); }
+      catch (err) { loop.paused = previous; throw err; }
+    });
   }
 
   /** Admit one additional occurrence without changing the recurring schedule or count. */
@@ -2746,6 +2808,7 @@ export class Harness {
           await this.flushMaintenanceNotices();
           break;
         }
+        if (this.duplicateRepairs.has(s.key)) break;
         if (!s.queue.length && this.queueRunnableTask(s)) continue;
         if (!s.queue.length || this.paused) break;
         // Stable foreground priority also applies to restored inboxes and saved
@@ -2778,6 +2841,7 @@ export class Harness {
             break;
           }
         }
+        if (this.duplicateRepairs.has(s.key)) break;
         s.queue.shift();
         if (input.source === "host" && (this.stoppingHostParents.has(s.key) || !this.opts.hostEventAllowed?.(input))) {
           s.unsaved = true;
@@ -3933,7 +3997,7 @@ export class Harness {
       }
       }
       if (s.queue.length || s.outbox.length || s.unsaved) { void this.pump(s); continue; }
-      if (s.loop && !s.loop.paused && at >= s.loop.nextAt) {
+      if (s.loop && !this.loopOwnerControls.has(s.key) && !s.loop.paused && at >= s.loop.nextAt) {
         s.loop.nextAt = at + s.loop.everyMs;
         if (s.loop.remaining !== undefined && --s.loop.remaining <= 0) {
           const prompt = s.loop.prompt;
