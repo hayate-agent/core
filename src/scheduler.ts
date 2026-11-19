@@ -10,7 +10,7 @@
  */
 import { languageTag } from "./language.js";
 import { execFile } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -48,7 +48,10 @@ export function parseJobs(text: string): CronJob[] {
   const jobs = Array.isArray(doc.jobs) ? doc.jobs : [];
   for (const j of jobs) {
     if (!j || typeof j.name !== "string") throw new Error("cron job without name");
+    // /cron trims its argument; blank or padded names could never be addressed exactly.
+    if (!j.name.trim() || j.name !== j.name.trim()) throw Error(`Invalid cron job name ${JSON.stringify(j.name)}: must be non-empty without surrounding whitespace`);
     if (!j.absent && typeof j.schedule !== "string") throw new Error(`cron job "${j.name}" has no schedule`);
+    if (j.enabled !== undefined && typeof j.enabled !== "boolean") throw Error("Invalid cron enabled");
     if (j.language !== undefined) languageTag(j.language);
     if (j.audience !== undefined && !["agent", "user"].includes(j.audience)) throw Error("Invalid cron audience");
     if (j.audience === "agent" && j.no_agent) throw Error("Agent-only cron requires agent processing");
@@ -95,6 +98,7 @@ export class Scheduler {
   private readonly resettingNames = new Set<string>();
   private readonly resettingParents = new Set<string>();
   private resetGeneration = 0;
+  private readonly preparingSources = new Set<string>();
 
   private creator(job: CronJob): string | undefined {
     const origin = job.origin;
@@ -156,7 +160,7 @@ export class Scheduler {
     this.log = opts.log ?? ((m) => console.error(`[cron] ${m}`));
   }
 
-  async load(): Promise<void> {
+  async load(expectedDigest?: string): Promise<void> {
     if (this.resettingParents.size) throw Error("Cron reset in progress; retry reload");
     const generation = this.resetGeneration;
     if (!this.opts.jobsFile) { this.stop(); this.jobs = []; return; }
@@ -165,12 +169,14 @@ export class Scheduler {
       text = await readFile(this.opts.jobsFile, "utf8");
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        if (expectedDigest) throw Error("Cron configuration missing");
         if (this.resettingParents.size || generation !== this.resetGeneration) throw Error("Cron reset in progress or changed; retry reload");
         this.stop(); this.jobs = []; return;
       }
       throw err;
     }
     if (this.resettingParents.size || generation !== this.resetGeneration) throw Error("Cron reset in progress or changed; retry reload");
+    if (expectedDigest && createHash("sha256").update(text).digest("hex") !== expectedDigest) throw Error("Cron configuration changed");
     const jobs = parseJobs(text);
     const crons: Cron[] = [];
     try {
@@ -211,6 +217,20 @@ export class Scheduler {
     return this.jobs.find((j) => j.name === name);
   }
 
+  /** Same-UID owner path: exact enabled prompt job, idempotent durable admission. */
+  async runOwnedPrompt(name: string, digest: string, requestId: string): Promise<void> {
+    const job = this.find(name), entry = this.list().find(item => item.name === name);
+    if (!job || !entry?.enabled || createHash("sha256").update(JSON.stringify(job)).digest("hex") !== digest)
+      throw Error("Cron job changed, missing or paused");
+    if (job.script || job.prompt_file || job.no_agent || job.audience || job.origin?.user_id || !job.prompt?.trim()) throw Error("Only owner-independent plain prompt jobs supported");
+    if (this.resettingNames.has(name) || this.resettingParents.has(this.creator(job) ?? "") || this.harness.paused || this.harness.stopping || this.harness.updateFenced || this.originResetPending(job)) throw Error("Cron admission fenced");
+    const to = resolveDelivery(job, this.harness.home);
+    const replyTo = to === "home" ? this.harness.home : to;
+    const text = `${job.prompt}\n\n(Scheduled job "${job.name}". If there is nothing worth reporting, reply exactly ${NO_REPLY}.)`;
+    const id = `owner-cron:${createHash("sha256").update(JSON.stringify([name, requestId])).digest("hex")}`;
+    await this.harness.accept({ id, cronScope: this.scope(job, job.prompt!), sessionKey: `cron:${name}`, text, source: "cron", language: languageTag(this.opts.language?.(job) ?? job.language ?? "en"), replyTo });
+  }
+
   setEnabled(name: string, enabled: boolean): boolean {
     if (enabled && this.resettingNames.has(name)) throw Error("Cron reset in progress; retry enable");
     const i = this.jobs.findIndex((j) => j.name === name);
@@ -221,6 +241,9 @@ export class Scheduler {
     return true;
   }
 
+  private scope(job: CronJob, prompt: string): string {
+    return createHash("sha256").update(JSON.stringify([job, prompt])).digest("hex");
+  }
   private baseDir(): string {
     return this.opts.jobsFile ? path.dirname(this.opts.jobsFile) : process.cwd();
   }
@@ -239,7 +262,7 @@ export class Scheduler {
         await this.harness.onStateChange?.();
       }
       this.assertOccurrence(job, abort.signal);
-      await this.runJobForeground(job, abort.signal);
+      await this.runJobForeground(job, abort.signal, explicit);
     });
     const active = this.active.get(job.name) ?? new Set(); this.active.set(job.name, active);
     const task = { creator: this.creator(job), abort, done }; active.add(task);
@@ -253,9 +276,20 @@ export class Scheduler {
       throw Error("Origin conversation reset; old occurrence revoked");
   }
 
-  private async runJobForeground(job: CronJob, signal: AbortSignal): Promise<void> {
+  private async runJobForeground(job: CronJob, signal: AbortSignal, explicit: boolean): Promise<void> {
     this.assertOccurrence(job, signal);
     const language = languageTag(this.opts.language?.(job) ?? job.language ?? "en");
+    let prompt = job.prompt ?? "";
+    if (job.prompt_file) prompt = await readFile(path.resolve(this.baseDir(), job.prompt_file), "utf8");
+    this.assertOccurrence(job, signal);
+    const cronScope = this.scope(job, prompt);
+    const recurringSource = explicit ? undefined : `cron:${job.name}:${cronScope}`;
+    // Reserve synchronously before any configured script can produce effects.
+    // Keep this claim through durable turn acceptance; the pump then owns it.
+    if (recurringSource && (this.preparingSources.has(recurringSource) ||
+        this.harness.recurringWorkHeld(`cron:${job.name}`, recurringSource))) return;
+    if (recurringSource) this.preparingSources.add(recurringSource);
+    try {
     let scriptOut = "";
     if (job.script) {
       const scriptsDir = this.opts.scriptsDir ?? path.join(this.baseDir(), "scripts");
@@ -290,15 +324,13 @@ export class Scheduler {
       return;
     }
 
-    let prompt = job.prompt ?? "";
-    if (job.prompt_file) prompt = await readFile(path.resolve(this.baseDir(), job.prompt_file), "utf8");
-    this.assertOccurrence(job, signal);
     if (scriptOut) prompt += `\n\n## Script output\n\n${scriptOut}`;
     if (!prompt.trim()) return;
     prompt += `\n\n(Scheduled job "${job.name}". If there is nothing worth reporting, reply exactly ${NO_REPLY}.)`;
     if (metadata) {
       metadata.original = prompt;
-      await this.harness.accept({ id: metadata.runId, sessionKey: `cron:${job.name}`, text: prompt, source: "cron", language, replyTo: to, cronReport: metadata });
-    } else this.harness.enqueue({ sessionKey: `cron:${job.name}`, text: prompt, source: "cron", language, replyTo: to });
+      await this.harness.accept({ id: metadata.runId, cronScope, recurringSource, sessionKey: `cron:${job.name}`, text: prompt, source: "cron", language, replyTo: to, cronReport: metadata });
+    } else await this.harness.accept({ id: randomUUID(), cronScope, recurringSource, sessionKey: `cron:${job.name}`, text: prompt, source: "cron", language, replyTo: to });
+    } finally { if (recurringSource) this.preparingSources.delete(recurringSource); }
   }
 }

@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { readExecutionLedgerFixture } from "./execution-ledger-fixture.js";
 import os from "node:os";
 import path from "node:path";
 import { ExecutionStore } from "../src/execution.js";
@@ -39,7 +40,7 @@ for (const fence of ["manual", "parent-stop", "legacy", "ownership", "intent", "
   const claim = await store.claim(child.id); await store.intent(child.id, claim.token!, "settled", "unsafe");
   await store.settleIntent(child.id, claim.token!, "settled", "report", "{}");
   await store.fail(child.id, claim.token!, "runtime-failure", { strategy: { name: "direct", version: 1, reconcile: () => ({ action: "continue" }) }, assessmentHold: { state: "blocked", step: 0 } });
-  const raw = JSON.parse(await readFile(file, "utf8")), row = raw.executions[0];
+  const raw = await readExecutionLedgerFixture(file), row = raw.executions[0];
   if (fence === "manual") row.diagnosticCode = "manual-pause";
   if (fence === "parent-stop") row.parentStopped = true;
   if (fence === "legacy") row.recoveryEnrollment = "held-legacy";
@@ -53,13 +54,13 @@ for (const fence of ["manual", "parent-stop", "legacy", "ownership", "intent", "
   finally { await h.stop(0); }
 });
 
-test("ordinary technical retry without a settled semantic assessment remains Dispatcher-owned", async t => {
+test("inactive technical retry does not prevent parent assessment", async t => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "technical-parent-")); t.after(() => rm(dir, { recursive: true, force: true }));
   const store = new ExecutionStore(path.join(dir, "executions.json")); await store.load();
   const child = await store.submit("mem:room1", "child", "Child", "direct", 1, { taskId: "parent", original: "Task", depth: 0 });
   const claim = await store.claim(child.id); await store.fail(child.id, claim.token!, "runtime-failure", { strategy: { name: "direct", version: 1, reconcile: () => ({ action: "continue" }) } });
   let assessed = 0; const h = new Harness({ runtime: new FakeRuntime(), executionStore: store, completionCheck: async () => { assessed++; return { state: "continue", next: "Must not race" }; } });
   h.onStateChange = async () => {}; h.restoreSessions([{ key: "mem:room1", task: { id: "parent", original: "Task", state: "active", depth: 0 } }]);
-  try { await h.recoverTasks(); assert.equal(assessed, 0); assert.equal(h.pendingInputs().length, 0); }
+  try { await h.recoverTasks(); assert.equal(assessed, 1); assert.equal(store.list()[0].status, "paused"); }
   finally { await h.stop(0); }
 });

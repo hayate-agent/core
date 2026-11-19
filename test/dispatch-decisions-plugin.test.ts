@@ -12,6 +12,8 @@ test("parent maintenance tool keeps exact conversation binding and typed non-des
   } as unknown as Dispatcher;
   await dispatchDecisionsPlugin(() => dispatcher).activate({ registerTool: (registered: PluginTool) => { tool = registered; } } as PluginAPI);
   assert.equal(tool.name, "plugin_dispatch_decisions");
+  assert.match(tool.description, /not a general prohibition on Main taking over/);
+  assert.doesNotMatch(tool.description, /do not spawn another worker/);
   const status = JSON.parse(await tool.execute({ action: "status", id: "same-owner" }, { sessionKey: "parent" }) as string);
   assert.equal(status.revision, 1);
   await tool.execute({ action: "read", id: "same-owner", requestId: "old" }, { sessionKey: "parent" });

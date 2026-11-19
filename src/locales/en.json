@@ -1,4 +1,11 @@
 {
+  "context.handoverArchived": "🔄 Switched to a new session; history archived. The retrospective may be incomplete.",
+  "context.handover": "🔄 Switched to a new session.",
+  "context.compacted": "♻️ Context compacted.",
+  "task.cancelled": "⏹️ Cancelled.",
+  "task.failed": "❌ Failed.",
+  "task.budget": "I could not make progress on: {original}. Reply “continue” to try again. If more than one task is paused, I will ask which one.",
+  "task.noNext": "No safe next step recorded; reassessment required.",
   "lifecycle.ready": "✅ {agent}: Started and ready.",
   "lifecycle.restarted": "✅ {agent}: Restart complete — ready again.",
   "software.heading": "Software versions:",
@@ -95,5 +102,13 @@
   "cron.usage": "usage: /cron list|run|pause|resume|reload|language <name> <BCP-47 tag|reset>",
   "language.listing": "Show/set default, system, background, conversation or per-MCP language (BCP-47)",
   "command.failure": "⚠️ /{name}: command failed (details withheld)",
-  "conversation.reset": "🆕 Fresh conversation context. Previous conversation tasks, continuations and child executions were stopped; conversation loops, heartbeat and goal were cleared. Other conversations and independent scheduled jobs are unchanged."
+  "conversation.reset": "🆕 Fresh conversation context. Previous conversation tasks, continuations and child executions were stopped; conversation loops, heartbeat and goal were cleared. Other conversations and independent scheduled jobs are unchanged.",
+  "usage.skill.loaded": "Skill {name} loaded (application not confirmed)",
+  "usage.skill.created": "Skill {name} created",
+  "usage.skill.updated": "Skill {name} updated",
+  "usage.memory.recalled": "Working memory recalled",
+  "usage.tool.started": "started",
+  "usage.tool.completed": "completed",
+  "usage.tool.failed": "failed",
+  "dispatcher.assessmentStalled": "Assessment stopped without new evidence. New information or an explicit continuation is required; prior results are retained."
 }

@@ -27,7 +27,7 @@ test("startup missing next assesses retained mandate, executes resumed turn and 
   try {
     await Promise.all([h.recoverTasks(), h.recoverTasks()]);
     assert.equal(h.pendingInputs().length, 1);
-    assert.match(h.pendingInputs()[0].text, /First reconcile/);
+    assert.match(h.pendingInputs()[0].text, /Consider known effects where relevant/);
     h.releaseRestored(); await h.drained();
     assert.equal(turns, 1); assert.equal(checks, 2);
     await h.recoverTasks(); await h.tick(); await h.drained();
@@ -41,6 +41,66 @@ test("startup missing next assesses retained mandate, executes resumed turn and 
       assert.equal(turns, 1); assert.equal(next.pendingInputs().length, 0);
     } finally { await next.stop(1000); }
   } finally { await h.stop(1000); }
+});
+
+test("startup assessment receives only executions belonging to its exact task and generation", async () => {
+  const ref = { id: "order", generation: 2 };
+  const retained = { ...task(), taskRef: ref };
+  const executionStore = { coreTask: () => undefined, list: () => [
+    { id: "own", status: "completed", dependency: { taskId: retained.id, original, taskRef: ref } },
+    { id: "legacy-own", status: "completed", dependency: { taskId: retained.id, original } },
+    { id: "other-task", status: "completed", dependency: { taskId: "other", original, taskRef: ref } },
+    { id: "other-original", status: "completed", dependency: { taskId: retained.id, original: "different", taskRef: ref } },
+    { id: "old-generation", status: "completed", dependency: { taskId: retained.id, original, taskRef: { id: "order", generation: 1 } } },
+    { id: "unscoped", status: "completed" },
+  ].map(e => ({ requestId: e.id, restarts: 0, ...e })) } as unknown as ExecutionStore;
+  let seen: string[] = [];
+  const h = new Harness({ runtime: new FakeRuntime(), executionStore, completionCheck: async (_input, evidence) => {
+    seen = JSON.parse(evidence).executions.map((e: { id: string }) => e.id); return undefined;
+  } });
+  h.restoreSessions([{ key: "mem:room1", task: retained }]); h.onStateChange = async () => {};
+  try { await h.recoverTasks(); assert.deepEqual(seen, ["own"]); assert.equal(h.pendingInputs().length, 0); }
+  finally { await h.stop(1000); }
+});
+
+test("uncertain recovery diagnostic survives reload without admitting work", async () => {
+  const h = new Harness({ runtime: new FakeRuntime(), completionCheck: async (_input, _reply, _signal, diagnostic) => {
+    diagnostic?.("inconclusive", { cause: "uncertain", reason: "TypeSafe low_confidence; selected more, confidence 0.59. No textual rationale provided." });
+    return undefined;
+  } });
+  h.restoreSessions([{ key: "mem:room1", task: task() }]); h.onStateChange = async () => {};
+  try {
+    await h.recoverTasks();
+    const saved = JSON.parse(JSON.stringify(h.snapshotSessions()));
+    assert.equal(saved[0].task.recoveryRetry.detail.cause, "uncertain");
+    assert.match(saved[0].task.recoveryRetry.detail.reason, /low_confidence/);
+    const next = new Harness({ runtime: new FakeRuntime() }); next.restoreSessions(saved);
+    try { assert.equal(next.state("mem:room1").task!.recoveryRetry!.detail!.reason, saved[0].task.recoveryRetry.detail.reason);
+      assert.equal(next.state("mem:room1").task!.recoveryAdmission, undefined); assert.equal(next.pendingInputs().length, 0); }
+    finally { await next.stop(0); }
+  } finally { await h.stop(0); }
+});
+
+test("startup assessment claim preserves the previous diagnostic if interrupted", async () => {
+  const detail = { cause: "uncertain" as const, reason: "Previous low confidence" };
+  const retained = { ...task(), recoveryRetry: { attempts: 2, nextAt: 1, diagnostic: "inconclusive" as const, detail } };
+  let saved: DurableTask | undefined;
+  const h = new Harness({ runtime: new FakeRuntime(), now: () => 1000, completionCheck: async () => {
+    assert.deepEqual(saved?.recoveryRetry?.detail, detail);
+    throw Error("interrupted assessor");
+  } });
+  h.restoreSessions([{ key: "mem:room1", task: retained }]);
+  h.onStateChange = async () => {
+    const current = h.state("mem:room1").task;
+    if (current?.recoveryAssessment === "claimed") saved = structuredClone(current);
+  };
+  try {
+    await h.recoverTasks();
+    assert.equal(saved?.recoveryRetry?.attempts, 3);
+    assert.equal(saved?.recoveryRetry?.diagnostic, "inconclusive");
+    assert.deepEqual(saved?.recoveryRetry?.detail, detail);
+    assert.equal(saved?.recoveryAdmission, undefined);
+  } finally { await h.stop(0); }
 });
 
 test("startup fences states, expiry, depth, absent mandate and accepted children", { timeout: 30000 }, async () => {

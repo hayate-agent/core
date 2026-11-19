@@ -16,7 +16,7 @@ export interface DispatchContext {
   /** Optional only for source compatibility with existing strategy test adapters. */
   status?(text: string): Promise<void>;
   /** Persists a question and suspends this execution; never returns normally. */
-  question?(text: string): Promise<never>;
+  question?(text: string, retainedAssessment?: boolean): Promise<never>;
   intent(key: string, replay: "safe" | "unsafe", route?: import("./model-roles.js").ModelPair, decisionRevision?: number): Promise<void>;
   settleIntent(key: string, result: string, checkpoint: string, decisionRevision?: number): Promise<void>;
   /** Authenticated parent data, not authority expansion or verdict override. */
@@ -115,17 +115,21 @@ export class Dispatcher {
     }
     return blockers;
   }
-  async start(): Promise<void> {
+  /** Structural recovery is required before ingress replay; scheduling is not.
+   * A live scheduling loop can keep requesting another pass while old workers
+   * settle, so awaiting its quiescence must not hold unrelated restored input.
+   */
+  async start(options: { schedule?: boolean } = {}): Promise<void> {
     if (this.initialized) throw Error("Dispatcher already started");
     this.initialized = true;
-    await this.store.recover(this.strategies, undefined, this.recoveryPolicy, task => this.parentEnabled(task.parent));
+    await this.store.recover(this.strategies, this.store.workerRecoveryLimit(), this.recoveryPolicy, task => this.parentEnabled(task.parent));
     this.recovered = true;
-    await this.kick();
+    if (options.schedule !== false) await this.kick();
   }
   /** Explicit conversation selection may release only its retained, non-active workers. */
   async activateParent(parent: string): Promise<void> {
     if (!this.ready || !this.parentEnabled(parent)) return;
-    await this.store.recover(this.strategies, undefined, this.recoveryPolicy,
+    await this.store.recover(this.strategies, this.store.workerRecoveryLimit(), this.recoveryPolicy,
       task => task.parent === parent && !this.active.has(task.id));
     await this.kick();
   }
@@ -181,6 +185,17 @@ export class Dispatcher {
       if (task.dependency?.taskId === taskId || task.ownershipHold) this.active.get(task.id)?.abort.abort();
     void this.kick().catch(this.report);
   }
+  /** Ledger revocation was committed by the host bulk reconciliation. Notify
+   * live owners without cloning/revoking that same ledger once per old task. */
+  stopRevokedTasks(stops: readonly { parent: string; taskId: string }[]): void {
+    const scopes = new Map<string, Set<string>>();
+    for (const stop of stops) { const ids = scopes.get(stop.parent) ?? new Set<string>(); ids.add(stop.taskId); scopes.set(stop.parent, ids); }
+    for (const task of this.store.list()) {
+      const ids = scopes.get(task.parent);
+      if (ids && (task.dependency?.taskId && ids.has(task.dependency.taskId) || task.ownershipHold)) this.active.get(task.id)?.abort.abort();
+    }
+    void this.kick().catch(this.report);
+  }
   /** Also called by host retry ticks; no model calls are used to poll task status. */
   kick(): Promise<void> {
     if (this.stopped || !this.recovered || this.admissionFenced()) return Promise.resolve();
@@ -196,7 +211,8 @@ export class Dispatcher {
   }
   private async schedule(): Promise<void> {
     void this.flushEvents().catch(this.report);
-    const tasks = this.store.list().filter(task => !task.ownershipHold && task.recoveryEnrollment !== "held-legacy" &&
+    const tasks = this.store.list().filter(task => this.store.executionTaskAllowed(task) && !task.ownershipHold && task.recoveryEnrollment !== "held-legacy" &&
+      !this.store.parentTakeoverActive(task) &&
       !this.active.has(task.id) && this.parentEnabled(task.parent) && !!this.strategyFor(task) &&
       (task.status === "ready" && this.store.assessmentDue(task) ||
         ["worker-failed", "runtime-failure"].includes(task.diagnosticCode ?? "") && ["blocked", "paused", "ready"].includes(task.status) &&
@@ -267,8 +283,8 @@ export class Dispatcher {
           // event remains queued until a later delivery attempt succeeds.
           void this.flushEvents().catch(this.report);
         },
-        question: async text => {
-          check(); await this.store.ask(task.id, token, text);
+        question: async (text, retainedAssessment) => {
+          check(); await this.store.ask(task.id, token, text, retainedAssessment);
           void this.flushEvents().catch(this.report);
           throw new ExecutionClaimConflict("Execution waiting for answer");
         },

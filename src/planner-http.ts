@@ -1,4 +1,5 @@
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import type { ModelAdmission } from "./local-model-admission.js";
 import { resolveHttpAssessment, assessmentHttpAttempt } from "./assessment-http.js";
 import type { ModelPair } from "./model-roles.js";
 
@@ -20,7 +21,7 @@ export type PlannerHttpOutcome = { status: "unsupported" } | { status: "failed" 
 
 /** One tool-free SDK request on the exact dispatcher role. No session, no fallback model, no retry. */
 export async function planHttp(runtime: ModelRuntime, request: PlannerHttpRequest,
-  transport: typeof fetch = globalThis.fetch): Promise<PlannerHttpOutcome> {
+  transport: typeof fetch = globalThis.fetch, admit?: ModelAdmission): Promise<PlannerHttpOutcome> {
   const { signal } = request;
   const check = () => {
     if (signal.aborted) throw Error("Planning stopped");
@@ -38,7 +39,7 @@ export async function planHttp(runtime: ModelRuntime, request: PlannerHttpReques
     const { result } = await assessmentHttpAttempt(runtime, selected, {
       systemPrompt: DISPATCH_PLAN_SYSTEM_PROMPT,
       messages: [{ role: "user", content: request.prompt, timestamp: 0 }],
-    }, signal, check, transport);
+    }, signal, check, transport, admit);
     if (signal.aborted || result.stopReason !== "stop") return { status: "failed" };
     return { status: "ok", text: result.content.filter(c => c.type === "text").map(c => c.text).join("") };
   } catch { return { status: "failed" }; }

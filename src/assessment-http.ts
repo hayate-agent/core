@@ -2,6 +2,7 @@ import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai/compat";
 import type { Context } from "@earendil-works/pi-ai";
 import type { ModelPair } from "./model-roles.js";
+import type { ModelAdmission } from "./local-model-admission.js";
 
 /** Physical, normal-auth preflight only; no session or provider registration. */
 export async function resolveHttpAssessment(runtime: ModelRuntime, pair: ModelPair, signal: AbortSignal) {
@@ -19,7 +20,7 @@ export async function resolveHttpAssessment(runtime: ModelRuntime, pair: ModelPa
 /** One SDK HTTP attempt. Caller owns consumption, persistence and any fallback. */
 export async function assessmentHttpAttempt(runtime: ModelRuntime,
   selected: NonNullable<Awaited<ReturnType<typeof resolveHttpAssessment>>>, context: Context,
-  signal: AbortSignal, check: () => void, transport: typeof fetch = globalThis.fetch) {
+  signal: AbortSignal, check: () => void, transport: typeof fetch = globalThis.fetch, admit?: ModelAdmission) {
   let attempts = 0;
   let rejected = false;
   const intercepted: typeof fetch = async (input, init) => {
@@ -50,9 +51,14 @@ export async function assessmentHttpAttempt(runtime: ModelRuntime,
       status: 429, headers: { "content-type": "application/json" },
     });
   };
-  const result = await runtime.streamSimple(selected.model, context, {
-    signal, reasoning: selected.actual.thinking as never, maxRetries: 0, fetch: intercepted,
-  }).result();
-  check();
-  return { result, eligible: attempts === 1 && rejected && result.stopReason === "error" };
+  // Wait BEFORE constructing the SDK stream/HTTP timeout; no request was sent.
+  const release = await admit?.(selected.model, signal);
+  try {
+    check();
+    const result = await runtime.streamSimple(selected.model, context, {
+      signal, reasoning: selected.actual.thinking as never, maxRetries: 0, fetch: intercepted,
+    }).result();
+    check();
+    return { result, eligible: attempts === 1 && rejected && result.stopReason === "error" };
+  } finally { release?.(); }
 }

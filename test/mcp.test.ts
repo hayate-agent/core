@@ -14,8 +14,11 @@ test("MCP stdio discovery is opt-in and closes its server on session shutdown", 
     const server = path.join(dir, "server.mjs");
     await writeFile(server, `
 import { createInterface } from 'node:readline';
-import { writeFileSync } from 'node:fs';
-writeFileSync(process.argv[2], String(process.pid));
+import { writeFileSync, renameSync } from 'node:fs';
+const pidFile = process.argv[2];
+const temporaryPidFile = pidFile + '.' + process.pid;
+writeFileSync(temporaryPidFile, String(process.pid));
+renameSync(temporaryPidFile, pidFile);
 createInterface({input:process.stdin}).on('line', line => {
  const m=JSON.parse(line); if(m.id===undefined) return;
  const result=m.method==='initialize' ? {protocolVersion:'2025-03-26',capabilities:{tools:{}},serverInfo:{name:'fixture',version:'1'}}

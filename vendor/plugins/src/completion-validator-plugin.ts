@@ -90,10 +90,16 @@ export async function assessCompletion(backend: ReviewBackend, input: Inbound, r
     const progress = answer?.progress && typeof answer.progress.advanced === "boolean" &&
       typeof answer.progress.fingerprint === "string" && /^[a-zA-Z0-9][a-zA-Z0-9 ._:/-]{0,199}$/.test(answer.progress.fingerprint)
       ? { advanced: answer.progress.advanced, fingerprint: answer.progress.fingerprint } : undefined;
-    if (["completed", "waiting", "blocked"].includes(answer.state)) return { state: answer.state, ...(progress ? { progress } : {}) };
+    // Host checks identity, mandate, revision and the full plan before adopting.
+    // Ignore malformed optional suggestions without granting them authority.
+    const taskPlan = answer.taskPlan && typeof answer.taskPlan === "object" &&
+      typeof answer.taskPlan.basisEventId === "string" && answer.taskPlan.basisEventId === input.executionTurnId &&
+      Array.isArray(answer.taskPlan.todos) && answer.taskPlan.todos.length <= 48
+      ? { basisEventId: answer.taskPlan.basisEventId, todos: answer.taskPlan.todos } : undefined;
+    if (["completed", "waiting", "blocked"].includes(answer.state)) return { state: answer.state, ...(progress ? { progress } : {}), ...(taskPlan ? { taskPlan } : {}) };
     if (answer.state !== "continue" || typeof answer.next !== "string" || !answer.next.trim() || answer.next.length > 4000) { diagnostic?.(failure, { cause: "invalid_shape" }); return; }
     if (answer.contextPreparation !== undefined && !["compact", "handover"].includes(answer.contextPreparation)) { diagnostic?.(failure, { cause: "invalid_shape" }); return; }
-    return { state: "continue", next: answer.next.trim(), ...(progress ? { progress } : {}), ...(answer.contextPreparation ? { contextPreparation: answer.contextPreparation } : {}), ...(authorization.expiresAt !== undefined ? { expiresAt: authorization.expiresAt } : {}) };
+    return { state: "continue", next: answer.next.trim(), ...(progress ? { progress } : {}), ...(taskPlan ? { taskPlan } : {}), ...(answer.contextPreparation ? { contextPreparation: answer.contextPreparation } : {}), ...(authorization.expiresAt !== undefined ? { expiresAt: authorization.expiresAt } : {}) };
   } catch (error) {
     // Cancellation/expiry is not a provider fault, and never grants follow-up.
     if (signal.aborted || (grantLimited && timedOut) || (authorization.expiresAt !== undefined && authorization.expiresAt <= now())) diagnostic?.("unavailable");

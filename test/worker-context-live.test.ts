@@ -7,7 +7,7 @@ import { ModelRuntime } from '@earendil-works/pi-coding-agent';
 import { createAssistantMessageEventStream } from '@earendil-works/pi-ai';
 import { PiRuntime } from '../src/runtime/pi.js';
 
-test('native compaction actually occurs within one worker tool loop, preserving tool effects', async () => {
+for (const key of ['dispatch:fixture:claim', 'matrix:fixture']) test(`native token-aware history maintenance within one tool loop: ${key}`, async () => {
   const home=await mkdtemp(path.join(os.tmpdir(),'worker-inner-compact-'));
   const models=await ModelRuntime.create();
   let working=0,summaries=0,effects=0;
@@ -20,19 +20,31 @@ test('native compaction actually occurs within one worker tool loop, preserving 
     const tool=!summary&&working<=3;
     const message:any={role:'assistant',api:model.api,provider:model.provider,model:model.id,
       content:tool?[{type:'toolCall',id:'call-'+working,name:'plugin_evidence',arguments:{}}]:[{type:'text',text:summary?'Goal: authorized bounded fixture. Preserve performed effects; do not repeat them. Next: finish.':'DONE'}],
-      usage:{input:0,output:0,cacheRead:0,cacheWrite:0,totalTokens:0,cost:{input:0,output:0,cacheRead:0,cacheWrite:0,total:0}},stopReason:tool?'toolUse':'stop',timestamp:Date.now()};
+      usage:{input:summary?0:working>=2?9000:1000,output:20,cacheRead:0,cacheWrite:0,totalTokens:summary?20:working>=2?9020:1020,cost:{input:0,output:0,cacheRead:0,cacheWrite:0,total:0}},stopReason:tool?'toolUse':'stop',timestamp:Date.now()};
     const stream=createAssistantMessageEventStream();queueMicrotask(()=>{stream.push({type:'done',reason:message.stopReason,message});stream.end();});return stream;
   }});
   const runtime=new PiRuntime({cwd:home,sessionsDir:path.join(home,'sessions'),skillPaths:[],model:'bounded-fixture/worker',
-    compactionOwner:()=> 'harness',workerContextTokens:()=>8192,personaSections:async()=>[],approvals:{mode:'off',tools:[]},tools:['plugin_evidence'],
+    compactionOwner:()=> 'harness',workerContextTokens:()=>8192,contextBudgets:()=>({mainContextTokens:8192,workerContextTokens:8192}),personaSections:async()=>[],approvals:{mode:'off',tools:[]},tools:['plugin_evidence'],
     pluginTools:()=>[{name:'plugin_evidence',description:'Return bounded evidence fixture',parameters:{type:'object',properties:{}},execute:async()=>{effects++;return ('evidence '+effects+'\n').repeat(3000);}}]});
   (runtime as any).modelRuntime=async()=>models;
   try {
-    const wrapped:any=await runtime.open('dispatch:fixture:claim');
+    const wrapped:any=await runtime.open(key);
+    const identity=wrapped.session.sessionId;
+    // A tiny fixture needs an explicitly small retained tail to have a useful
+    // cut point. Do not force compaction by pretending JSON bytes are tokens.
+    wrapped.session.settingsManager.applyOverrides({compaction:{keepRecentTokens:512}});
     const answer=await wrapped.prompt('Perform the authorized bounded fixture, then return DONE.');
     assert.equal(answer,'DONE');assert.equal(effects,3,'no replay of tool effects');assert.equal(working,4);
     assert.ok(summaries>0,'summary model invoked before outer prompt finishes');
-    assert.ok(wrapped.session.sessionManager.getEntries().some((e:any)=>e.type==='compaction'),'durable native compaction entry');
+    const entries=wrapped.session.sessionManager.getEntries();
+    assert.ok(entries.some((e:any)=>e.type==='compaction'),'durable native compaction entry');
+    const receipts=entries.filter((e:any)=>e.type==='message'&&e.message.role==='toolResult');
+    assert.equal(receipts.length,3,'all native call/result receipts retained on disk, not dropped');
+    for(let i=1;i<=3;i++) {
+      assert.ok(receipts.some((e:any)=>e.message.toolCallId==='call-'+i));
+      assert.ok(entries.some((e:any)=>e.type==='message'&&e.message.role==='assistant'&&e.message.content.some((p:any)=>p.type==='toolCall'&&p.id==='call-'+i)),'matching original tool calls retained');
+    }
+    assert.equal(wrapped.session.sessionId,identity,'history maintenance does not replace conversation identity');
     await wrapped.dispose();
   } finally {await rm(home,{recursive:true,force:true});}
 });

@@ -19,9 +19,9 @@ export async function git(cwd: string, args: string[]): Promise<string> {
 }
 export interface Changeset { root: string; base: string; fingerprint: string; diff: string; files: string[] }
 export async function captureChangeset(cwd: string, baseRef: string): Promise<Changeset> {
-  const root = (await git(cwd, ["rev-parse", "--show-toplevel"])).trim();
+  const root = (await git(cwd, ["rev-parse", "--show-toplevel"])).replace(/\n$/, "");
   const base = (await git(root, ["rev-parse", "--verify", `${baseRef}^{commit}`])).trim();
-  let diff = await git(root, ["diff", "--no-ext-diff", "--no-textconv", "--binary", base, "--"]);
+  let diff = await git(root, ["diff", "--no-color", "--no-ext-diff", "--no-textconv", "--binary", base, "--"]);
   const tracked = (await git(root, ["diff", "--no-renames", "--name-only", "-z", base, "--"])).split("\0").filter(Boolean);
   const untracked = (await git(root, ["ls-files", "--others", "--exclude-standard", "-z"])).split("\0").filter(Boolean).sort();
   for (const file of untracked) {
@@ -33,7 +33,9 @@ export async function captureChangeset(cwd: string, baseRef: string): Promise<Ch
     const body = await readFile(absolute);
     if (body.includes(0)) throw new Error("Untracked binary file requires operator review");
     if (!isUtf8(body)) throw new Error("Untracked invalid UTF-8 file requires operator review");
-    diff += `\nUntracked file ${JSON.stringify(file)}\n${body.toString("utf8")}\n`;
+    // Byte length makes the framing injective: a body cannot forge another file header.
+    const mode = info.mode & 0o100 ? "100755" : "100644";
+    diff += `\nUntracked file ${JSON.stringify(file)} (${body.length} bytes, mode ${mode})\n${body.toString("utf8")}\n`;
     if (Buffer.byteLength(diff) > LIMIT) throw new Error("Changeset exceeds review size limit");
   }
   if (Buffer.byteLength(diff) > LIMIT) throw new Error("Changeset exceeds review size limit");

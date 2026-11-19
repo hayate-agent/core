@@ -10,6 +10,7 @@ import { Dispatcher } from "../src/dispatcher.js";
 import { DispatcherRuntime } from "../src/dispatcher-runtime.js";
 import { ExecutionStore } from "../src/execution.js";
 import { PiSession } from "../src/runtime/pi.js";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { FakeRuntime, MemoryChannel, msg } from "./fakes.js";
 import type { ActivityEvent } from "../src/activity.js";
 import type { Address, AgentRuntime, Inbound } from "../src/types.js";
@@ -29,6 +30,7 @@ for (const available of [true, false]) test(`persisted role + actual PI display:
   const observed: Array<{ model: unknown; thinking: string }> = [];
   const agent = {
     model: A, thinkingLevel: "low", messages: [] as unknown[],
+    sessionManager: SessionManager.inMemory(), refreshContext() {},
     isStreaming: false, systemPrompt: "", tools: [],
     async waitForIdle() {},
     getContextUsage: () => ({ tokens: 0, contextWindow: 100000, percent: 0 }),

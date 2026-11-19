@@ -1,18 +1,21 @@
 import type { SkillCatalog } from "./skill-catalog.js";
 import type { PluginModule } from "./plugins.js";
 
+/** Own-scope learned recipes; supplied by AdaptiveSkills so a later run can find and revise them. */
+export type LearnedRecipeSearch = (sessionKey: string, query: string, limit: number) => Promise<Array<{ name: string; description: string; revision: string }>>;
+
 /**
  * Late skill discovery: instead of injecting every skill's metadata into the
  * prompt each turn, the model can query this lightweight tool to find matching
  * skills on demand. Full instructions are still loaded by the runtime when the
- * task calls for the named skill. The tool returns names + descriptions only,
- * never file paths or full bodies, so it stays small and prefix-cache friendly.
+ * task calls for the named skill. Search results provide the exact catalog path
+ * so the agent can read the matching skill without guessing or scanning roots.
  */
-export function skillSearchPlugin(catalog: SkillCatalog): PluginModule {
+export function skillSearchPlugin(catalog: SkillCatalog, learned?: LearnedRecipeSearch): PluginModule {
   return { apiVersion: 1, activate(api) {
     api.registerTool({
       name: "plugin_skill_search",
-      description: "Search the agent's available skills by keyword and return matching skill names + descriptions. Call this when a task might match a documented skill (e.g. 'web', 'search', 'pdf', 'test') to discover it on demand instead of listing every skill.",
+      description: "Search available skills by keyword; return matching names, descriptions and SKILL.md paths. Read the relevant path for the full instructions, and update it with normal tools when appropriate and in scope.",
       parameters: {
         type: "object",
         properties: {
@@ -22,15 +25,26 @@ export function skillSearchPlugin(catalog: SkillCatalog): PluginModule {
         required: ["query"],
         additionalProperties: false,
       },
-      async execute(input) {
+      async execute(input, context) {
+        // Skills may be created or edited by normal tools during a session.
+        // Search must reflect the current sources, not just the startup snapshot.
+        await catalog.refresh();
         const q = String(input.query).trim().toLowerCase();
         const limit = Math.max(1, Math.min(20, Number(input.limit) || 8));
-        const hits = catalog.skills
-          .filter((s) => q.length > 0 && (s.name.toLowerCase().includes(q) || s.description.toLowerCase().includes(q)))
-          .slice(0, limit)
-          .map((s) => ({ name: s.name, description: s.description }));
+        const hits: Array<{ name: string; description: string; filePath: string }> = [];
+        if (q) for (const s of catalog.skills) {
+          if (!s.name.toLowerCase().includes(q) && !s.description.toLowerCase().includes(q)) continue;
+          hits.push({ name: s.name, description: s.description, filePath: s.filePath });
+          if (hits.length >= Math.trunc(limit)) break;
+        }
+        // Learned recipes stay in the caller's own scope; never another conversation's.
+        const recipes = learned && q ? await learned(context.sessionKey, q, limit).catch(() => []) : [];
+        const learnedText = recipes.length
+          ? `\nLearned recipes (your scope; update with plugin_skill_learn using this revision as expectedRevision):\n${JSON.stringify(recipes, null, 2)}`
+          : "";
+        if (!hits.length && learnedText) return learnedText.slice(1);
         return hits.length
-          ? `Matching skills:\n${JSON.stringify(hits, null, 2)}\nRead the named SKILL.md for full instructions; the runtime loads it when the task calls for it.`
+          ? `Matching skills:\n${JSON.stringify(hits, null, 2)}\nRead the named SKILL.md at its filePath for full instructions; automatic loading is not guaranteed.${learnedText}`
           : "No matching skills. Try broader keywords from the task (e.g. 'web', 'search', 'test', 'pdf').";
       },
     });

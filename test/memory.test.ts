@@ -263,3 +263,17 @@ test("memory put defaults source to session key and names the failing field", as
   await assert.rejects(store.put(ctx, { key: "bad-kind", title: "Deployment verification", text: "x", kind: "weird" as unknown as "note" }), /Invalid memory entry: kind/);
   await assert.rejects(store.put(ctx, { key: "long-title", title: "x".repeat(301), text: "x" }), /Invalid memory entry: title/);
 });
+
+test("memory.embedding rejects unknown keys, non-string model and URL credentials", () => {
+  const ok = { url: "https://embedding.example/v1/embeddings", model: "m", tokenEnv: "MEMORY_EMBEDDING_TOKEN", dimensions: 768 };
+  assert.doesNotThrow(() => memoryConfig({ embedding: ok }));
+  assert.doesNotThrow(() => memoryConfig({ embedding: { url: "http://127.0.0.1:9/v1?x=a@b", model: "m" } }));
+  for (const bad of [
+    { url: ok.url, model: "m", dimension: 768 },
+    { url: ok.url, model: "m", tokenenv: "MEMORY_EMBEDDING_TOKEN" },
+    { url: ok.url, model: 123 },
+    { url: ok.url, model: " " },
+    { url: "https://user:synthetic@embedding.example/v1", model: "m" },
+    { url: "https://synthetic@embedding.example/v1", model: "m" },
+  ]) assert.throws(() => memoryConfig({ embedding: bad as never }), /Invalid memory\.embedding/);
+});

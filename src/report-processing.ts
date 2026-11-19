@@ -12,6 +12,7 @@ export interface ReportProcessing {
 export class ReportProcessingRegistry {
   private selected?: ReportProcessing;
   private stopping?: Promise<void>;
+  private ticking?: Promise<void>;
   private readonly implementations = new Map<string, ReportProcessing>();
   get size(): number { return this.implementations.size; }
   clear(): void { this.selected = undefined; this.implementations.clear(); }
@@ -31,7 +32,13 @@ export class ReportProcessingRegistry {
     await this.selected.record(input, output);
   }
   async context(input: Inbound): Promise<string> { return await this.selected?.context(input) ?? ""; }
-  async tick(): Promise<void> { await this.selected?.tick(); }
+  tick(): Promise<void> {
+    if (this.stopping) return Promise.resolve();
+    if (this.ticking) return this.ticking;
+    const selected = this.selected;
+    this.ticking = Promise.resolve().then(() => selected?.tick()).finally(() => { this.ticking = undefined; });
+    return this.ticking;
+  }
   stop(): Promise<void> {
     if (this.stopping) return this.stopping;
     const implementations = [...this.implementations.values()]; this.selected = undefined;
@@ -40,6 +47,9 @@ export class ReportProcessingRegistry {
       for (const implementation of implementations.reverse()) {
         try { await implementation.stop(); } catch (error) { errors.push(error); }
       }
+      // Signal processor stop first (it may abort inference), then drain the
+      // existing host-owned pass before its resources can be closed.
+      if (this.ticking) await this.ticking.catch(error => errors.push(error));
       if (errors.length) throw new AggregateError(errors, "Report processor cleanup failed");
     })();
     return this.stopping;

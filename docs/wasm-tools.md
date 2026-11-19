@@ -11,7 +11,8 @@ wasmTools:
 ```
 
 Paths resolve against Harness home. No module is downloaded or installed from
-chat. Names must start with `plugin_`; ordinary tool selection, review guards and
+chat. Entries accept only `name`, `description`, `path` and `timeoutMs`; unknown
+keys (for example a misspelt `timeout`) fail configuration. Names must start with `plugin_`; ordinary tool selection, review guards and
 approval configuration still apply. Restart to change registration/schema/config.
 Module bytes are read per invocation: an in-flight worker retains its snapshot,
 while the next invocation uses the replacement file. Publish files with atomic

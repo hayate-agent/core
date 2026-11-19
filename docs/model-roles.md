@@ -3,9 +3,9 @@
 `modelRoles` is an optional object in installation settings or the existing durable
 local settings overlay. Absence/`enabled: false` preserves historical routing.
 The object has only `enabled` and optional `roles`; the allowed roles are
-`dispatcher`, `simple`, `medium`, `high`, `reviewer`, `validator`, plus the parseable
-legacy `hashtag` entry. Hashtag classification now ignores roles: migrate that
-entry's model to `hashtag.model`, or remove it to inherit Main only (see
+`dispatcher`, `basic`, `simple`, `medium`, `high`, `reviewer`, `validator`, plus the parseable
+legacy `hashtag` entry. `basic` is an optional explicit model that only hashtag classification reads (dispatch complexity keeps using `simple`); hashtag classification ignores the `hashtag` role and uses `basic` as fallback after `hashtag.model` and before Main (thinking stays off): migrate that
+entry's model to `hashtag.model`, or remove it (see
 [topic labels](topic-labels.md)). Each pair accepts a full
 `provider/model` reference and optional thinking level (`off`, `minimal`, `low`,
 `medium`, `high`, `xhigh`, `max`). This does not grant tools, authority or budget.
@@ -15,6 +15,7 @@ Authenticated channel administrators (or the attached local console) can use:
 ```
 /model-roles show
 /model-roles set dispatcher provider/model medium
+/model-roles set basic provider/small-model
 /model-roles set simple provider/model low
 /model-roles set validator provider/small-model low
 /model-roles enable

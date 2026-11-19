@@ -28,8 +28,17 @@ export interface Inbound {
   sessionKey: string;
   text: string;
   source: InputSource;
+  /** Set only by authenticated external API ingress, not synthetic API work. */
+  operatorIngress?: true;
+  /** Explicitly admitted loop occurrence, durably retained independently of timer ticks. */
+  explicitLoopRun?: boolean;
   /** Host event identity for authority checks; event data never grants continuation. */
-  hostEvent?: { executionId: string };
+  hostEvent?: { executionId: string; nativeSubagent?: true; question?: { id: string; eventId: string }; assessmentStalled?: { eventId: string } };
+  /** Host scheduler fingerprint; model text cannot establish source scope. */
+  cronScope?: string;
+  /** Host recurring source/configuration identity; not inferred from equal prompt text.
+   * Explicit operator/API occurrences deliberately omit it. */
+  recurringSource?: string;
   /** Trusted scheduler metadata; output never expands the configured follow-up scope. */
   cronReport?: { job: string; runId: string; createdAt: number; audience: "agent" | "user";
     original: string; authorization?: string; maxTasks: number; output?: string; completedOutput?: string };
@@ -39,6 +48,8 @@ export interface Inbound {
   continuation?: { /** Optional existing task in this session; never grants new authority. */
     taskId?: string;
     state: "continue" | "waiting" | "blocked" | "completed"; next?: string; expiresAt?: number;
+    /** Independent validator suggestion; adopted only by the originating durable turn settlement. */
+    taskPlan?: { basisEventId: string; todos: import("./task-lifecycle.js").TaskTodo[] };
     /** Advisory preparation; host executes existing maintenance before authorized work. */
     contextPreparation?: "compact" | "handover";
     /** Independent assessor's stable substantive milestone, not working-model authority. */
@@ -58,6 +69,9 @@ export interface Inbound {
   waitCheck?: { sequence: number; productive?: boolean };
   /** Host-assigned durable task identity, never a model authorization grant. */
   taskId?: string;
+  /** Core operator authority captured at admission, not reconstructed from model text. */
+  taskRef?: import("./task-lifecycle.js").TaskRef;
+  taskRevision?: number;
   /** Trusted numeric authorization boundary inherited by generated work. */
   continuationExpiresAt?: number;
   /** Core-captured original chat input; inherited by generated follow-ups, never reply text. */
@@ -71,6 +85,7 @@ export interface Inbound {
     resolved?: import("./completion-context.js").ResolvedCompletionContext;
     /** Bounded task-local evidence. Saved plans and replies remain untrusted. */
     retained?: { original: string; savedNext?: string; priorReply?: string; parentReconciliation?: string;
+      order?: { id: string; generation: number; revision: number; operatorStatus: string; sources?: Array<{ id: string; text: string }>; plan?: import("./task-lifecycle.js").TaskTodo[] };
       /** Host's actual loaded Core, not an available release or proof of task completion. */
       runtime?: { phase: "process-started"; version: string; revision?: string; startedAt: number };
       technical: { verdict?: string; diagnostic?: import("./completion-check.js").CompletionDiagnostic;
@@ -109,7 +124,9 @@ export interface Inbound {
 
 /** Overrides for a single turn; the session's own settings are restored afterwards. */
 export interface TurnOptions {
-  /** Extra system instructions for this turn only. */
+  /** Local inference scheduling hint, never execution authority or permission. */
+  modelWork?: "interactive" | "background";
+  /** Extra host instructions for this turn only; runtime preserves their host provenance. */
   instructions?: string;
   /** "provider/model". */
   model?: string;
@@ -120,7 +137,14 @@ export interface TurnOptions {
 export type TurnEvent =
   | { type: "execution"; selection: import("./builtin-plugins/execution-metadata.js").ExecutionMetadata }
   | { type: "text"; delta: string }
-  | { type: "tool"; phase: "start" | "end"; name: string; callId?: string; error?: boolean; detail?: string }
+  /** Request-local semantic activity only; private reasoning/arguments are never exported. */
+  | { type: "model_progress"; phase: "reasoning" | "tool_arguments" }
+  /** Known host-local capacity wait; never evidence of provider/GPU progress. */
+  | { type: "model_queue"; state: "waiting" | "admitted" | "cancelled" }
+  | { type: "compaction"; state: "started" | "completed" | "failed" | "cancelled"; reason: "manual" | "threshold" | "overflow" }
+  | { type: "tool"; phase: "start" | "end"; name: string; callId?: string; error?: boolean; detail?: string; locale?: string }
+  /** Host-observed use, not proof of successful application; no content or paths. */
+  | { type: "resource_usage"; resource: "skill" | "memory"; action: "loaded" | "recalled" | "created" | "updated"; name?: string; locale?: string }
   /** One assistant message finished; usage is for that message only. */
   | {
       type: "usage";
@@ -136,6 +160,8 @@ export type TurnEvent =
 export interface PromptOptions extends TurnOptions {
   /** Host-owned per-turn presentation snapshot; not part of transport TurnOptions. */
   languagePolicy?: import("./language.js").LanguagePolicy;
+  /** Resolved host presentation locale for this exact turn. */
+  presentationLocale?: string;
   images?: PromptImage[];
   onEvent?: (event: TurnEvent) => void;
   /** Host-only authorization guard, invoked after asynchronous runtime setup. */
@@ -163,9 +189,13 @@ export interface RuntimeSessionStatus {
   /** Separately labelled host estimate for an explicitly configured local working budget. */
   contextBudgetTokens?: number;
   contextEstimateTokens?: number;
+  /** SDK usage-aware context estimate, or approximate byte/3 fallback (never a tokenizer guarantee). */
+  contextEstimateBasis?: "sdk-context" | "heuristic";
   contextHistoryTokens?: number;
   contextBudgetPercent?: number;
   contextWindow?: number;
+  /** Persisted SDK automatic-compaction failure, not an operator cancellation. */
+  nativeCompactionFailure?: { reason: "threshold" | "overflow"; receiptId: string };
   /** Effective runtime system prompt size; excludes conversation history and tool schemas. */
   systemPrompt?: { characters: number; bytes: number };
 }
@@ -220,6 +250,9 @@ export interface AgentRuntime {
   planDispatchHttp?(request: import("./planner-http.js").PlannerHttpRequest): Promise<import("./planner-http.js").PlannerHttpOutcome>;
   readonly name: string;
   open(sessionKey: string, options?: OpenSessionOptions): Promise<RuntimeSession>;
+  /** Optional context optimization: retain a long child report and return an excerpt/reference.
+   * Must not add model calls, change authority or fail a completed operation. */
+  compactResult?(sessionKey: string, text: string): Promise<string>;
   /** Model refs ("provider/model") usable for per-turn overrides. */
   models?(): Promise<string[]>;
   sessions?(key: string, offset?: number): Promise<import("./sessions.js").SessionSummary[]>;

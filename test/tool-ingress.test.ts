@@ -13,8 +13,10 @@ test('agent ownership survives reload and oversized plugin result is bounded bef
  const wrapped:any=await runtime.open('private-conversation'),s=wrapped.session;
  assert.equal(s.settingsManager.getCompactionSettings().enabled,true);
  const result=await s.extensionRunner.getToolDefinition('plugin_large').execute('call',{},new AbortController().signal,undefined,{});
- const text=result.content[0].text;assert.ok(text.length<14000);assert.match(text,/untrusted evidence/);
- const file=text.match(/retained at (.*); sha256/)[1];assert.equal(await readFile(file,'utf8'),original);
+ assert.equal(result.content[0].text,original,'programmatic/nested tool callers can filter the full result');
+ const projected=await s.extensionRunner.emitToolResult({type:'tool_result',toolCallId:'call',toolName:'plugin_large',input:{},...result,isError:false});
+ const text=projected.content[0].text;assert.ok(text.length<4000);assert.match(text,/not a complete summary or proof of success/);
+ const file=text.match(/Complete original at (.*?); sha256/)[1];assert.equal(await readFile(file,'utf8'),original);
  s.prompt=async()=>{assert.equal(s.settingsManager.getCompactionSettings().enabled,owner==='agent');};s.waitForIdle=async()=>{};
  s.settingsManager.applyOverrides({compaction:{enabled:false}});await wrapped.prompt('agent');owner='harness';await wrapped.prompt('harness');await wrapped.dispose();
  }finally{await rm(home,{recursive:true,force:true});}

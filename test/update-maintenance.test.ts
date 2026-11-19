@@ -4,6 +4,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { tmpdir } from "node:os";
 import { MaintenanceJournal } from "../src/update-maintenance.js";
+import { readExecutionLedgerFixture } from "./execution-ledger-fixture.js";
 import { Harness } from "../src/harness.js";
 import { Dispatcher, type DispatcherStrategy } from "../src/dispatcher.js";
 import { ExecutionStore, ExecutionAssessmentHold } from "../src/execution.js";
@@ -92,7 +93,7 @@ test("maintenance yields an active publisher at the committed receipt and resume
     assert.equal(messages, once); assert.equal(pushes, 1); assert.equal(reports, 1);
     assert.equal(loaded.list()[0].id, job.id); assert.deepEqual(loaded.list()[0].dependency, dependency);
     assert.equal(loaded.list()[0].status, "completed");
-    assert.ok((await readFile(path.join(dir, "executions.json"), "utf8")).includes("PR already merged"));
+    assert.ok(JSON.stringify(await readExecutionLedgerFixture(path.join(dir, "executions.json"))).includes("PR already merged"));
   } finally { await next.stop(); }
 });
 
@@ -212,7 +213,7 @@ for (const phase of ["preparing", "checkpointed"] as const) test(`crash ${phase}
   if (phase === "checkpointed") await journal.record({ requestId: "crash", leaseId: "old-lease", pid: 1234, at: 2, phase });
   const job = await store.submit("p", "legacy", "authentic original", "direct");
   const owned = await store.claim(job.id); await store.fail(job.id, owned.token!, "worker-failed");
-  const disk = JSON.parse(await readFile(store.file, "utf8"));
+  const disk = await readExecutionLedgerFixture(store.file);
   disk.executions[0].restarts = 7; delete disk.executions[0].recoveryEnrollment;
   await writeFile(store.file, JSON.stringify(disk));
   const loaded = new ExecutionStore(store.file); await loaded.load(); await loaded.holdLegacyRecovery(); await loaded.holdLegacyRecovery();

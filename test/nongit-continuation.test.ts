@@ -7,13 +7,14 @@ import { Harness } from '../src/harness.js';
 import { accountRepetition, repetitions } from '../src/repetition-budget.js';
 import { FakeRuntime, MemoryChannel, msg } from './fakes.js';
 
-test('independently assessed analysis continues beyond 20 without Git, including durable restart', async () => {
+test('analysis with explicit novel milestones continues beyond 20 without Git, including durable restart', async () => {
   let turns = 0; let checks = 0; let first: Harness | undefined; let restored: Harness | undefined;
   let writes = Promise.resolve();
   const runtime = new FakeRuntime(() => { turns++; return 'analysis checkpoint'; });
   const options = { runtime, now: () => 1000, completionCheck: async () => {
     checks++;
-    return checks === 45 ? { state: 'completed' as const } : { state: 'continue' as const, next: 'Continue original analysis' };
+    return checks === 45 ? { state: 'completed' as const } : { state: 'continue' as const, next: 'Continue original analysis',
+      progress: { advanced: true, fingerprint: `verified-analysis-section-${checks}` } };
   }};
   const home = await mkdtemp(path.join(os.tmpdir(), 'nongit-continuation-'));
   try {
@@ -92,11 +93,11 @@ for (const mode of ['fresh', 'error', 'missing'] as const) {
   });
 }
 
-test('normal independent continuation preserves prior stalls and total attempts', () => {
+test('independent continuation alone consumes stagnation allowance, never resets it', () => {
   const task = { depth: 0 };
   accountRepetition(task);
   accountRepetition(task, undefined, undefined, { normal: true });
-  assert.equal(repetitions(task), 1);
+  assert.equal(repetitions(task), 2);
   assert.equal((task as { repetition?: { attempts: number } }).repetition?.attempts, 2);
 });
 
@@ -123,7 +124,7 @@ test('operator stop after turn 20 fences independent continuation', async () => 
   h = new Harness({ runtime: new FakeRuntime(() => { turns++; return 'analysis'; }), now: () => 1000,
     completionCheck: async () => {
       if (turns === 24) await h.stopConversation('mem:room1');
-      return { state: 'continue', next: 'Original scope only' };
+      return { state: 'continue', next: 'Original scope only', progress: { advanced: true, fingerprint: `section-${turns}` } };
     } });
   h.addChannel(new MemoryChannel()); h.onStateChange = async () => {};
   await h.accept(msg('Analyze original scope')); await h.drained();

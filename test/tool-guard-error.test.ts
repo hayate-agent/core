@@ -18,7 +18,7 @@ function denial(fn: () => void, code: string) {
 
 test("guard throw sites classify orchestration and revoked authority", () => {
   const task = { id: "id", token: "token", status: "running", parentStopped: false };
-  const worker = new DispatcherRuntime({} as never, { list: () => [task] } as never);
+  const worker = new DispatcherRuntime({} as never, { list: () => [task], executionTaskAllowed: () => true } as never);
   denial(() => worker.guardTool("dispatch:id:token", "plugin_loop"), "worker_orchestration_denied");
   assert.doesNotThrow(() => worker.guardTool("dispatch:id:token", "read"));
   task.parentStopped = true;
@@ -37,7 +37,7 @@ test("guard throw sites classify orchestration and revoked authority", () => {
   assert.doesNotThrow(() => worker.guardResult("parent", "id"));
   denial(() => worker.guardResult("parent", "absent"), "parent_mandate_missing");
   denial(() => worker.guardTool("dispatch:id:stale-token", "read"), "ownership_lost");
-  const children = new Subagents({} as never, async () => {});
+  const children = new Subagents({ opts: {} } as never, async () => {});
   const record = { sessionKey: "subagent:child", state: "running", expiresAt: Date.now() + 60_000 };
   (children as any).records.set("child", record);
   denial(() => children.guardTool(record.sessionKey, "plugin_loop"), "worker_orchestration_denied");

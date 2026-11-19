@@ -33,5 +33,5 @@ function shellSummary(command: string): string {
 }
 
 function safePath(value: string): string {
-  return JSON.stringify(value.replace(/[\r\n\t]/g, " ").slice(0, 200));
+  return JSON.stringify(value.replace(/[\r\n\t\u061c\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]/g, " ").slice(0, 200));
 }

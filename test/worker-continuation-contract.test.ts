@@ -23,6 +23,7 @@ test("child contract: workers lose parent-owned orchestration tools, main keeps 
     assert.ok(childDeniedTools(key).includes("plugin_task_continuation"));
     assert.ok(childDeniedTools(key).includes("plugin_loop"));
     assert.ok(childDeniedTools(key).includes("plugin_subagent"));
+    assert.ok(childDeniedTools(key).includes("plugin_dispatch"));
   }
   assert.ok(childDeniedTools("dispatch:a:b").includes("plugin_dispatch"));
   assert.ok(childDeniedTools("dispatch:a:b").includes("plugin_worker_tasks"));
@@ -47,14 +48,18 @@ for(const tools of [undefined,['read','bash','plugin_task_continuation','plugin_
  for(const [key,hidden,visible] of [
    ['main',[],['read','bash','plugin_task_continuation','plugin_loop','plugin_dispatch','plugin_memory']],
    ['dispatch:x:y',['plugin_task_continuation','plugin_loop','plugin_subagent','plugin_dispatch','plugin_worker_tasks','plugin_improvement_evaluate'],['plugin_memory','read','bash']],
-   ['subagent:z',['plugin_task_continuation','plugin_loop','plugin_subagent','plugin_improvement_evaluate'],['plugin_memory','plugin_dispatch','read']],
+   ['subagent:z',['plugin_task_continuation','plugin_loop','plugin_subagent','plugin_dispatch','plugin_improvement_evaluate'],['plugin_memory','read']],
  ]) {
   const wrapped=await runtime.open(key);
   try {
    const s=wrapped.session;
    const check=()=>{const active=s.getActiveToolNames();
     for(const n of hidden) assert.equal(active.includes(n),false,key+' must not see '+n+' tools='+JSON.stringify(tools));
-    for(const n of visible) assert.equal(active.includes(n),true,key+' must see '+n+' tools='+JSON.stringify(tools));};
+    for(const n of visible) {
+     const definition=s.getAllTools().find(t=>t.name===n);
+     assert.ok(active.includes(n)||definition?.exposure==='deferred',key+' must retain/discover '+n+' tools='+JSON.stringify(tools));
+     if(definition?.exposure==='deferred')assert.ok(active.includes('tool_search'),key+' must expose discovery');
+    }};
    check();
    // Catalog change forces SDK reload; exclusion must survive it.
    catalog=[...catalog.slice(0,-1),{...mk('plugin_memory'),description:'changed'+key+tools?.length}];

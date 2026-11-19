@@ -37,11 +37,14 @@ test('SDK-step capture never waits for a slow provider; a corrupt local file doe
  const healthy=new WorkingMemory(h,{...backend,capture:async()=>{captures++;}},policy);await healthy.capture({sessionKey:'step',text:'Slack',reply:'Reported decision',outcome:'completed'});assert.equal(captures,1);
 });
 
-test('small explicit local budgets remain operator adjustable; frontier and physical model identity are not inferred',()=>{
+test('local models inherit configured context capacity unless the operator explicitly selects a stricter local target',()=>{
  assert.equal(localModel({localModels:['local/exact']},'local/exact'),true);assert.equal(localModel({localModels:[]},'local/qwen'),false);
- assert.equal(localContextBudget(262144,false,true),16384);assert.equal(localContextBudget(131072,true,true),8192);
- assert.equal(localContextBudget(262144,false,true,{localMainContextTokens:32768}),32768);assert.equal(localContextBudget(4096,false,true),4096);
- assert.equal(localContextBudget(262144,false,false),262144);
+ assert.equal(localContextBudget(262144,false,true),262144);assert.equal(localContextBudget(131072,true,true),131072);
+ assert.equal(localContextBudget(262144,false,true,{localMainContextTokens:32768}),32768);
+ assert.equal(localContextBudget(131072,true,true,{localWorkerContextTokens:16384}),16384);
+ assert.equal(localContextBudget(262144,true,true,{localMainContextTokens:32768}),262144,'Main target does not become a worker default');
+ assert.equal(localContextBudget(4096,false,true,{localMainContextTokens:32768}),4096,'local override never enlarges configured capacity');
+ assert.equal(localContextBudget(262144,false,false,{localMainContextTokens:32768}),262144,'local target does not change frontier capacity');
 });
 test('content-addressed catalogs stay distinct and late entries are readable with actual SDK offset/limit',async t=>{
  const h=await home(t),skills=Array.from({length:100},(_,i)=>({name:'skill'+i,description:'large description'.repeat(1000),filePath:'/workspace/skills/'+i+'/SKILL.md',baseDir:'/workspace/skills/'+i}));

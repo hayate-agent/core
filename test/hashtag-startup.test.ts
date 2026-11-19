@@ -101,6 +101,15 @@ test("YAML startup -> settings -> plugin registry -> actual Harness ingress uses
   assertMetadata(f.runtime.metadata[4]!, "fixture/installed");
 });
 
+test("unset hashtag override uses Basic (modelRoles.roles.basic) at ingress, thinking off; hashtag.model wins; reset returns to Basic", { timeout: 10000 }, async t => {
+  const f = await fixture(t, "    basic: {model: fixture/basic}\n");
+  await f.send("basic fallback first ingress"); assertMetadata(f.runtime.metadata[0]!, "fixture/basic");
+  await f.settings.set("hashtag.model", "fixture/local");
+  await f.send("explicit beats basic"); assertMetadata(f.runtime.metadata[1]!, "fixture/local");
+  await f.settings.set("hashtag.model");
+  await f.send("reset back to basic"); assertMetadata(f.runtime.metadata[2]!, "fixture/basic");
+});
+
 test("unset hashtag override ignores legacy hashtag/reviewer/dispatcher roles; live Main changes and persisted reset reach ingress", { timeout: 10000 }, async t => {
   const f = await fixture(t);
   await f.send("unset override first ingress"); assertMetadata(f.runtime.metadata[0]!, "fixture/main");
@@ -209,12 +218,12 @@ test("startup factory propagates caller cancellation to held metadata runtime ab
   assertMetadata(f.runtime.metadata[0]!, "fixture/main");
 });
 
-test("real Harness metadata deadline aborts/disposes held runtime and admits business input with neutral metadata", { timeout: 10000 }, async t => {
+test("real Harness metadata deadline aborts/disposes held runtime and admits business input with neutral metadata", { timeout: 15000 }, async t => {
   const f = await fixture(t); f.runtime.holding = true;
   await f.harness.accept(msg("held metadata must not drop input"));
   await f.runtime.entered.promise;
   await f.runtime.disposed.promise;
-  // The production 2s deadline, not a sleep/release pretending successful cancellation.
+  // The production 10s deadline, not a sleep/release pretending successful cancellation.
   await f.harness.drained();
   assert.equal(f.runtime.metadata[0]!.aborts, 1);
   assert.equal(f.runtime.metadata[0]!.disposals, 1);

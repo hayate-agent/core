@@ -39,7 +39,9 @@ export function validateWasmTools(config: WasmToolConfig[]): void {
   if (!Array.isArray(config)) throw Error("wasmTools must be an array");
   const names = new Set<string>();
   for (const item of config) {
-    if (!item || typeof item.name !== "string" || item.name.length > 80 || !/^plugin_[a-z][a-z0-9_]*$/.test(item.name) || names.has(item.name) ||
+    if (!item || typeof item !== "object" || Array.isArray(item) ||
+        Object.keys(item).some(key => !["name", "description", "path", "timeoutMs"].includes(key)) ||
+        typeof item.name !== "string" || item.name.length > 80 || !/^plugin_[a-z][a-z0-9_]*$/.test(item.name) || names.has(item.name) ||
         typeof item.description !== "string" || !item.description.trim() ||
         typeof item.path !== "string" || !item.path.trim() ||
         (item.timeoutMs !== undefined && (!Number.isInteger(item.timeoutMs) || item.timeoutMs < 1 || item.timeoutMs > 30000))) throw Error("Invalid wasmTools entry");

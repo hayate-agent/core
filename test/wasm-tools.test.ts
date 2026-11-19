@@ -67,4 +67,8 @@ test("Wasm resource declarations require bounded memory and tables", () => {
 test("restricted tools require explicit valid configuration", () => {
   assert.throws(()=>validateWasmTools([{name:"bash",description:"x",path:"x"}]),/Invalid/);
   assert.throws(()=>validateWasmTools([{name:"plugin_x",description:"x",path:"x",timeoutMs:Infinity}]),/Invalid/);
+  // A misspelt deadline must not silently fall back to the default.
+  for (const extra of [{timeout:100},{timeoutMS:100},{timeout_ms:100},{permissions:["fs"]}])
+    assert.throws(()=>validateWasmTools([{name:"plugin_x",description:"x",path:"x",...extra} as never]),/Invalid/);
+  validateWasmTools([{name:"plugin_x",description:"x",path:"x",timeoutMs:100}]);
 });

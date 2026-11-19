@@ -12,6 +12,33 @@ function gate() {
   return { promise, resolve };
 }
 
+test("dispatcher startup and parent activation bound consecutive interrupted claims without replay", async t => {
+  const home = await mkdtemp(path.join(os.tmpdir(), "dispatcher-restart-cap-"));
+  t.after(() => rm(home, { recursive: true, force: true }));
+  const file = path.join(home, "ledger.json"), strategy = { name: "direct", version: 1, replaySafe: false,
+    reconcile: () => ({ action: "continue" as const }), execute: async () => { throw Error("worker must not run"); } };
+  let store = new ExecutionStore(file, { workerRetryMax: 3 }); await store.load();
+  const task = await store.submit("parent", "request", "work", "direct");
+  const first = await store.claim(task.id); await store.intent(task.id, first.token!, "unsafe-effect", "unsafe");
+  for (let i = 1; i <= 3; i++) {
+    store = new ExecutionStore(file, { workerRetryMax: 3 }); await store.load();
+    const dispatcher = new Dispatcher(store, strategy, 1, async () => {}, () => {});
+    await dispatcher.start({ schedule: false });
+    assert.equal(store.list()[0]!.restarts, i);
+    if (i < 3) {
+      assert.equal(store.list()[0]!.status, "ready");
+      await store.claim(task.id, { strategy: "direct", version: 1, replaySafe: false, reconcile: true });
+    } else {
+      assert.equal(store.list()[0]!.status, "blocked");
+      assert.match(store.list()[0]!.recoveryReason!, /restart limit 3/);
+      assert.equal(store.list()[0]!.intent?.key, "unsafe-effect");
+      await dispatcher.activateParent("parent");
+      assert.equal(store.list()[0]!.status, "blocked", "parent activation must not bypass the limit");
+    }
+    await dispatcher.stop();
+  }
+});
+
 test("worker capacity bounds execution, not submission or independent completion delivery", async t => {
   const home = await mkdtemp(path.join(os.tmpdir(), "dispatcher-parallel-"));
   const store = new ExecutionStore(path.join(home, "ledger.json"));

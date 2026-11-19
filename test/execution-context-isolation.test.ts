@@ -11,18 +11,19 @@ import { FakeRuntime } from "./fakes.js";
 
 async function fixture(t: any) {
   const home = await mkdtemp(path.join(os.tmpdir(), "context-isolation-"));
-  t.after(() => rm(home, { recursive: true, force: true }));
   const file = path.join(home, "executions.json");
   const store = new ExecutionStore(file); await store.load();
-  return { store, file };
+  const cleanup: { stop?: () => Promise<unknown> } = {};
+  t.after(async () => { await cleanup.stop?.(); await store.drain(); await rm(home, { recursive: true, force: true }); });
+  return { store, file, cleanup };
 }
 
 test("model taskId is an assertion, not a selector; admission exposes exact host mandate", async t => {
-  const { store } = await fixture(t);
+  const { store, cleanup } = await fixture(t);
   const expiresAt = Date.now() + 3600000;
   const dispatcher = new Dispatcher(store, { name: "direct", version: 1, replaySafe: false, reconcile: true,
     execute: async () => "done" }, 1, async () => {}, () => {}, () => ({ taskId: "old", original: "old mandate", depth: 0, expiresAt }));
-  await dispatcher.start(); t.after(() => dispatcher.stop());
+  cleanup.stop = () => dispatcher.stop(); await dispatcher.start();
   let tool: any;
   dispatcherPlugin(() => dispatcher).activate({ registerTool: (value: any) => tool = value, registerCommand: () => {} } as any);
   const submit = (taskId?: string) => tool.execute({ action: "submit", requestId: "review", task: "Review newer interface fix", taskId }, { sessionKey: "main" });
@@ -63,9 +64,9 @@ test("queued deadline expiry launches no strategy; diagnostic persists and resum
 });
 
 test("missing historical or legacy result ancestry never adopts current task", async t => {
-  const { store } = await fixture(t);
+  const { store, cleanup } = await fixture(t);
   const harness = new Harness({ runtime: new FakeRuntime(), executionStore: store, hostEventAllowed: () => true });
-  t.after(() => harness.stop(0)); harness.onStateChange = async () => {};
+  cleanup.stop = () => harness.stop(0); harness.onStateChange = async () => {};
   await harness.accept({ id: "new", sessionKey: "main", source: "channel", text: "New task" });
   await harness.waitForSessionIdle("main");
   const current = harness.sessions.get("main")!.task!;
