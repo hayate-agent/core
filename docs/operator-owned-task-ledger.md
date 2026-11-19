@@ -34,7 +34,7 @@ Inaktivität ist keine technische Erfolgsbehauptung. Sie ist eine operatorseitig
 
 ### Bestehende Pi-Extensions integrieren, kein Parallelprodukt
 
-Bestätigtes bestehendes Repository: `https://git.samaschke.de/pi-agent/extensions`, Paket `pi-agent-extensions`. Die Pi-Integration gehört in diese Sammlung, nicht in ein neu erfundenes separates Extension-Repository.
+Bestehendes, vom Operator bestätigtes Extension-Repository (Beispiel: `https://git.example.com/pi-agent/extensions`), Paket `pi-agent-extensions`. Die Pi-Integration gehört in diese Sammlung, nicht in ein neu erfundenes separates Extension-Repository.
 
 Die aktuellen Repository-Dokumente beschreiben relevante vorhandene Komponenten:
 
