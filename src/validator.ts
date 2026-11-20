@@ -54,6 +54,9 @@ export interface ValidatorProvider {
   requiresModel?: boolean;
   /** Trusted transport input budget, never a permission to truncate authority. */
   maxPromptBytes?: number;
+  /** Explicit larger authority budget; absent means maxPromptBytes is a hard
+   * bound. Only trusted bindings with a verified transport ceiling opt in. */
+  maxAuthorityPromptBytes?: number;
   assess(request: ValidatorRequest): Promise<unknown>;
 }
 
@@ -65,7 +68,9 @@ export class ValidatorRegistry {
     if (!provider || provider.apiVersion !== 1 || typeof provider.name !== "string" || !/^[a-z][a-z0-9-]{0,79}$/.test(provider.name) ||
         !Number.isSafeInteger(provider.version) || provider.version < 1 || typeof provider.assess !== "function" ||
         (provider.requiresModel !== undefined && typeof provider.requiresModel !== "boolean") ||
-        (provider.maxPromptBytes !== undefined && (!Number.isSafeInteger(provider.maxPromptBytes) || provider.maxPromptBytes < 1024 || provider.maxPromptBytes > 56000))) {
+        (provider.maxPromptBytes !== undefined && (!Number.isSafeInteger(provider.maxPromptBytes) || provider.maxPromptBytes < 1024 || provider.maxPromptBytes > 56000)) ||
+        (provider.maxAuthorityPromptBytes !== undefined && (provider.maxPromptBytes === undefined || !Number.isSafeInteger(provider.maxAuthorityPromptBytes) ||
+          provider.maxAuthorityPromptBytes < provider.maxPromptBytes || provider.maxAuthorityPromptBytes > 56000))) {
       throw Error("Invalid validator provider");
     }
     if (this.providers.has(provider.name)) throw Error("Duplicate validator provider");

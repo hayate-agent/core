@@ -64,8 +64,21 @@ confirm compatibility read-only before applying anything. Never print its value.
 Credentials are resolved per assessment to support rotation. Registration reads
 no credentials and performs no network I/O.
 
-The transport has a <=10s timeout, 24KB UTF-8 state budget, 16KB streamed response
-budget, 2..8 choices per bank, and no retry. Host retries remain separately owned.
+The pinned transport (`plugins.lock.json` revision
+`a7ed21a16f2cbd312eac14a67b3a7692b2f4c6cf`) has a configurable timeout
+(default 120s, maximum 120s), a **56,000-byte UTF-8 state ceiling**
+(`TYPESAFE_STATE_BYTES`), a 16,384-byte streamed response budget, 2..8 choices per
+bank, and no retry. Host retries remain separately owned. The decision adapters'
+`maxPromptBytes: 24000` is a routine evidence/prefill budget, not the transport
+ceiling. Core first projects optional evidence within that routine budget. If
+exact authority cannot fit, the Core `src/typesafe-decisions.ts` binding explicitly
+opts these pinned adapters into `maxAuthorityPromptBytes: TYPESAFE_STATE_BYTES`.
+Core may then render within that declared 56,000-byte ceiling;
+authority is not truncated and optional evidence is still projected. State over
+the transport ceiling is rejected before wire I/O. This is the pinned local
+transport contract, not proof of live server acceptance. Other providers retain
+their declared `maxPromptBytes` hard bound unless they explicitly opt into a
+larger authority budget.
 Exports use only the existing host-rendered assessment prompt, not entire request,
 backend, environment or authorization object. Oversized evidence is rejected, not
 silently truncated to force a verdict. Recognizable credential assignments/private

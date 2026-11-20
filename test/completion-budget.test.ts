@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { assessCompletion } from "./completion-selected.js";
-import { fitsCompletionPrompt, prefix, projectObservation, renderCompletionPrompt } from "../src/completion-budget.js";
+import { fitsCompletionPrompt, losslessMandate, prefix, projectObservation, renderCompletionPrompt } from "../src/completion-budget.js";
 import { completionPrompt } from "../src/builtin-plugins/completion-prompt.js";
 import { Harness } from "../src/harness.js";
 import { FakeRuntime, MemoryChannel, msg } from "./fakes.js";
@@ -9,6 +9,27 @@ import { resolveCompletionContext } from "../src/completion-context.js";
 
 const auth = { task: "Full exact scope. No deployments. " + "mandate ".repeat(1000), expiresAt: 20000 };
 const signal = () => new AbortController().signal;
+
+test("lossless mandate references distinguish conflicting rules with identical prefixes", () => {
+  const opening = "Standing operator requirement with the same long opening wording: ".repeat(3);
+  const allow = opening + 'ALLOW delivery to "internal" recipients only; preserve approvals.';
+  const deny = opening + 'DENY delivery to "external" recipients always; preserve approvals.';
+  const escape = (value: string) => JSON.stringify(value).slice(1, -1);
+  const original = `Existing operator marker [mandate-line-1]\n${allow}\n${deny}\nRaw repeats:\n${deny}\n${allow}\nJSON repeats: ${JSON.stringify({ allow, deny })}`;
+  const compacted = losslessMandate(original);
+  assert.ok(compacted.length < original.length);
+  // The collision-safe namespace differs from the pre-existing operator marker.
+  const allowId = "mandate-line---1", denyId = "mandate-line---2";
+  assert.ok(compacted.includes(`[${allowId}]${allow}`));
+  assert.ok(compacted.includes(`[${denyId}]${deny}`));
+  assert.ok(compacted.includes(`Raw repeats:\n[exact repeat of the earlier line ${denyId}]\n[exact repeat of the earlier line ${allowId}]`));
+  const expanded = compacted.replaceAll(`[exact repeat of the earlier line ${allowId}]`, allow)
+    .replaceAll(`[exact repeat of the earlier line ${denyId}]`, deny)
+    .replace(`[${allowId}]`, "").replace(`[${denyId}]`, "");
+  // Raw and JSON-escaped occurrences resolve to the same exact retained rule.
+  assert.equal(expanded, original.replaceAll(escape(allow), allow).replaceAll(escape(deny), deny));
+  assert.equal(losslessMandate(`${allow}\n${deny}`), `${allow}\n${deny}`, "unique text remains unchanged");
+});
 
 test("host final gate measures both complete UTF16 and UTF8 strings, including custom renderers", async () => {
   for (const text of ["x".repeat(56000), "x".repeat(56001), "界".repeat(20000), "😀".repeat(14000)]) {

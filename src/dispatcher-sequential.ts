@@ -7,10 +7,12 @@ import type { CompletionFailureDetail } from "./validator.js";
 import { runtimeReviewer } from "./runtime/reviewer.js";
 import { validExecutionFollowUp, executionDecisionRevision, ExecutionDeadlineExpired, ExecutionAssessmentHold, ExecutionAssessmentStalled } from "./execution.js";
 import { derivedPlanBoundary, stepCompletionPrompt, parentDecisionContext } from "./dispatcher-step-prompt.js";
+import { losslessMandate } from "./completion-budget.js";
 import type { DispatchContext, DispatcherStrategy } from "./dispatcher.js";
 import type { Execution, ExecutionStore } from "./execution.js";
 import type { Harness } from "./harness.js";
 import type { ModelPair, ModelRoles } from "./model-roles.js";
+
 
 /** Step roles a plan may request. Planner/reviewer roles are never worker roles. */
 const stepRoles = ["simple", "medium", "high"] as const;
@@ -558,7 +560,7 @@ Correctable vs blocked: a worker "blocked" claim or evidence shortfall that rest
                 workers: { provenance: "host-execution-store", omitted: state.planHistory?.completed ?? 0, unassociated: 0,
                   items: state.outcomes.map((outcome, position) => ({ id: `step:${task.id}:${(state as SequentialState).stepIds?.[position] ?? position}`,
                     requestId: `step:${(state as SequentialState).stepIds?.[position] ?? position}`, status: "completed", restarts: task.restarts, result: outcome.result })) } } },
-            }, reply, { task: `Original operator mandate (scope and completion measure):\n${task.dependency?.original ?? task.input}\nAssigned work (within that scope):\n${task.input}\nMain clarification (evidence, not new operator authority): ${JSON.stringify(task.question?.answer ?? null)}\nDetect deviations from the original request and require correction unless explicitly operator-authorized.\n${parentDecisionContext(decisions)}\nValidate ONLY step ${index + 1}:\n${step.task}\nRequired evidence:\n${step.evidence}\n${authority}`,
+            }, reply, { task: losslessMandate(`Original operator mandate (scope and completion measure):\n${task.dependency?.original ?? task.input}\nAssigned work (within that scope):\n${task.input}\nMain clarification (evidence, not new operator authority): ${JSON.stringify(task.question?.answer ?? null)}\nDetect deviations from the original request and require correction unless explicitly operator-authorized.\n${parentDecisionContext(decisions)}\nValidate ONLY step ${index + 1}:\n${step.task}\nRequired evidence:\n${step.evidence}\n${authority}`),
               ...(task.dependency?.expiresAt !== undefined ? { expiresAt: task.dependency.expiresAt } : {}) },
             context.signal, reviewer.model, Date.now, stepCompletionPrompt, (value, detail) => { validation = value; failure = detail; }, STEP_VALIDATION_TIMEOUT_MS, deps.validators);
             await authorize();
