@@ -11,7 +11,7 @@ import { ValidatorRegistry } from "../src/validator.js";
 import { Dispatcher } from "../src/dispatcher.js";
 import { ExecutionStore, executionRecoveryHash, type ExecutionEvent } from "../src/execution.js";
 import { Harness } from "../src/harness.js";
-import { parsePlan, planPrompt, stepStatus, validatorRole, type SequentialState } from "../src/dispatcher-sequential.js";
+import { parsePlan, planPrompt, stepStatus, validatorRole, crossCheckRole, type SequentialState } from "../src/dispatcher-sequential.js";
 import { FakeRuntime } from "./fakes.js";
 import { dispatcherPlugin } from "../src/builtin-plugins/dispatcher-plugin.js";
 import { PluginHost } from "../src/plugins.js";
@@ -434,6 +434,19 @@ test("delegated step uses selected dedicated provider, not legacy LLM", async t 
   assert.equal(task.status, "completed"); assert.equal(assessments, 1); assert.equal(env.calls.review.length, 0);
 });
 
+test("Minerva: an uncertain TypeSafe step verdict is cross-checked by the model validator, not sent to Main", async t => {
+  const validators = new ValidatorRegistry(); let classifier = 0;
+  validators.register({ apiVersion: 1, name: "classifier", version: 1, requiresModel: false, maxPromptBytes: 24000,
+    async assess() { classifier++; return { state: "uncertain", reason: "TypeSafe low_confidence; selected done, confidence 0.56." }; } });
+  validators.select("classifier");
+  const env = await setup(t, { verdict: () => '{"state":"completed"}' }, { validators });
+  const task = await env.run("Post the two-hourly mail summary");
+  assert.equal(classifier, 1);
+  assert.equal(env.calls.review.length, 1, "exactly one model cross-check");
+  assert.equal(task.status, "completed");
+  assert.equal(task.question, undefined, "no Main clarification for a routine verdict");
+});
+
 test("Minerva: Paperclip-sized original mandate is assessed losslessly instead of failing closed as unavailable", async t => {
   const validators = new ValidatorRegistry(); let assessments = 0; let seen = "";
   validators.register({ apiVersion: 1, name: "bounded", version: 1, requiresModel: false, maxPromptBytes: 24000, maxAuthorityPromptBytes: 56000,
@@ -603,6 +616,24 @@ test("validator model selection: explicit validator, then review, then default; 
   config.roles!.validator = validator;
   env.runtime.modelPreflight = async () => ({ available: false, thinkingSupported: true });
   assert.match(await validatorRole(env.runtime, { config, review, defaults }) as string, /validator.*unavailable; no silent default model/);
+});
+
+test("classifier cross-check role uses only explicit validator/review/reviewer, never defaults", async t => {
+  const env = await setup(t, {});
+  const validator = { model: "p/validator", thinking: "low" };
+  const review = { model: "p/review", thinking: "off" };
+  const reviewer = { model: "p/reviewer", thinking: "low" };
+  const config: ModelRoles = { enabled: true, roles: { validator, reviewer } };
+  assert.deepEqual(await crossCheckRole(env.runtime, { config, review, defaults }), validator);
+  delete config.roles!.validator;
+  assert.deepEqual(await crossCheckRole(env.runtime, { config, review, defaults }), review);
+  assert.deepEqual(await crossCheckRole(env.runtime, { config, defaults }), reviewer);
+  delete config.roles!.reviewer;
+  assert.equal(await crossCheckRole(env.runtime, { config, defaults }), undefined);
+  assert.equal(await crossCheckRole(env.runtime, undefined), undefined);
+  config.roles!.validator = validator;
+  env.runtime.modelPreflight = async () => ({ available: false, thinkingSupported: true });
+  assert.equal(await crossCheckRole(env.runtime, { config, review, defaults }), undefined, "no availability fallback");
 });
 
 test("planner-derived invariants are corrected in the same worker without repeating publication", async t => {
