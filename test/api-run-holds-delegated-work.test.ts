@@ -698,3 +698,22 @@ test("a deferred answer is part of the durable turn settlement", async t => {
   assert.deepEqual(settled.map(e => [e.id, e.apiDeferredHold]), [["newer-answer", true]], "deferred answer recorded in settlement for crash replay");
   task.apiRevoking = undefined;
 });
+
+test("stop: a same-task follow-up finishing while stop revocation is blocked stays fenced", async t => {
+  let unblock!: () => void; const gate = new Promise<void>(r => { unblock = r; });
+  let runId = ""; const aborts: string[] = [];
+  const { harness, runtime, runs, store, call, start } = await setup(t, { taskStopped: async () => { await gate; aborts.push(`run-${runs.get(runId)?.status}`); } });
+  const { run_id, child } = await start(); runId = run_id;
+  await store.claim(child.id);
+  const session = runtime.sessions.get("api:issue-1")!; const release = session.hold();
+  await harness.accept({ id: "follow-24", source: "host", sessionKey: "api:issue-1", text: "Status update", replyTo: { channel: "api", target: run_id } });
+  for (let i = 0; i < 50 && session.prompts.length < 2; i++) await settle();
+  const stopping = call("POST", `/v1/runs/${run_id}/stop`);
+  for (let i = 0; i < 20; i++) await settle();
+  release(); for (let i = 0; i < 30; i++) await settle(); // follow-up finishes while revocation is blocked
+  assert.equal(runs.get(run_id)!.status, "running", "no terminal result while stop revocation is pending");
+  unblock(); await stopping;
+  for (let i = 0; i < 100 && runs.get(run_id)!.status === "running"; i++) { await settle(); await harness.tick(); }
+  assert.notEqual(runs.get(run_id)!.status, "running");
+  assert.ok(aborts.length > 0 && aborts.every(a => a === "run-running"), aborts.join(","));
+});

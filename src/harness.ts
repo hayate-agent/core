@@ -2201,8 +2201,13 @@ export class Harness {
       // a crash. A concurrent tick sees the stopped task and takes that same path.
       // revokeCancelledTask marks the task stopped synchronously (before any await), so a
       // concurrent tick can only release it as cancelled; the turn is aborted after revocation.
+      // The durable revocation fence goes up synchronously, before the stop's first await:
+      // it is persisted with the stopped task, so every terminal result of this run (also
+      // a same-task follow-up finishing now) stays held until revocation succeeded, also
+      // across a failure or restart (the tick retries the fenced revocation).
+      held.apiRevoking = true; held.apiRevokingRun ??= hold.entry.to.target;
       await this.revokeCancelledTask(s, { id, source: "api", sessionKey, text: held.original, taskId: held.id });
-      await this.abortTaskTurn(s, held);
+      await this.closeApiWindow(s, held);
       this.releaseSettledApiHolds();
       return "running";
     }
