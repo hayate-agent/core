@@ -60,6 +60,7 @@ test("actual SDK requests: Main and children receive excerpts, children skip his
       assert.match(sent, /do not publish/);
       assert.match(sent, /# Tool results and retained context/);
       assert.match(sent, /# Operator authority/);
+      assert.match(sent, /# Task completion[\s\S]{0,4}Bias towards action and persist/);
       assert.match(sent, /Do not invent security rules, approvals, checks or acceptance criteria/);
       assert.match(sent, /generated temporary\/artifact file/);
       assert.match(sent, /paginated tool\/session archive/);
