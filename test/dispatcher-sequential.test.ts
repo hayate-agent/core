@@ -346,135 +346,30 @@ for (const gate of ["current", "manual-pause", "held-legacy", "expired", "opaque
   }
 });
 
-for (const admit of [true]) test(`consolidated parent follow-up after publication ${admit ? "runs in the original execution" : "requires independent readiness admission"}`, async t => {
+test("parent follow-up is appended after the held step and never overtakes it", async t => {
+  let repairs = 0;
   const env = await setup(t, { plan: steps(["source publication", "medium"], ["live verification", "simple"]),
-    ready: admit ? '{"state":"continue","next":"3"}' : '{"state":"blocked"}',
-    worker: text => text.includes("live verification") && !text.includes("compatibility repair\nREQUIRED EVIDENCE")
-      ? (text.includes("STEP 1/2:\nsource publication") ? "source publication milestone\nSTEP-STATUS: complete" : "Live gate missing\nSTEP-STATUS: blocked: external")
-      : "compatibility repair and existing source integration verified\nSTEP-STATUS: complete",
-    verdict: text => JSON.parse(text.slice(text.lastIndexOf("DATA: ") + 6)).reply.includes("Live gate missing") ? '{"state":"blocked"}' : '{"state":"completed"}',
-  });
-  const task = await env.run("Publish source through required CI and perform separately gated live verification. Source compatibility repair remains authorized; never bypass the live gate.");
-  assert.equal(task.status, "paused"); assert.equal(state(task.checkpoint).outcomes.length, 1);
-  await env.dispatcher.decide("parent", task.id, "old-scope", "Preserve all original restrictions and effect receipts");
-  await env.dispatcher.waitForExecution(task.id);
-  const before = env.calls.worker.length;
-  const next = { task: "compatibility repair", role: "high" as const, reason: "repair existing failed compatibility contract", evidence: "Verified source integration and required CI receipts; no live effect" };
-  await env.dispatcher.consolidateDecisions("parent", task.id, "current-source-repair", "Source compatibility repair is pending after publication; live verification remains OPEN. Original scope and gates remain binding. No second writer or replay.", ["old-scope"], next);
-  await env.dispatcher.waitForExecution(task.id);
-  const current = env.store.list()[0]!, checkpoint = state(current.checkpoint);
-  assert.equal(current.id, task.id); assert.equal(current.status, "paused", "genuine live hold is not falsely completed");
-  assert.deepEqual(checkpoint.appliedFollowUps, ["current-source-repair"]);
-  assert.equal(checkpoint.plan.length, 3);
-  assert.equal(env.calls.worker.length, before + (admit ? 1 : 0));
-  if (admit) { assert.deepEqual(checkpoint.stepIds, [0, 2, 1]); assert.equal(checkpoint.outcomes.length, 2); assert.match(checkpoint.outcomes[1]!.result, /compatibility repair/); }
-  await env.dispatcher.control("parent", task.id, "resume"); await env.dispatcher.waitForExecution(task.id);
-  assert.equal(state(env.store.list()[0]!.checkpoint).plan.length, 3, "same amendment never adds another follow-up on repeated wake");
-  assert.equal(env.calls.worker.length, before + (admit ? 1 : 0), "neither publication nor settled repair replays");
-});
-
-for (const admitted of [true]) test(`old-step validator continuations ${admitted ? "cannot starve an independently admitted follow-up" : "cannot admit a refused follow-up"}`, async t => {
-  let redirected = false, repairs = 0, corrections = 0;
-  const env = await setup(t, { plan: steps(["source publication", "medium"], ["live verification", "simple"]),
-    ready: admitted ? '{"state":"continue","next":"3"}' : '{"state":"blocked"}',
     worker: text => {
-      if (text.startsWith("CONTINUE STEP")) corrections++;
-      if (text.includes("STEP 1/2:\nsource publication")) return "source published\nSTEP-STATUS: complete";
-      if (text.includes("compatibility repair\nREQUIRED EVIDENCE")) { repairs++; return "compatibility repaired and existing source integration verified\nSTEP-STATUS: complete"; }
+      if (text.includes("STEP 1/")) return "source published\nSTEP-STATUS: complete";
+      if (text.includes("compatibility repair\nREQUIRED EVIDENCE")) { repairs++; return "compatibility repaired\nSTEP-STATUS: complete"; }
       return "Live gate missing\nSTEP-STATUS: blocked: external";
     },
-    verdict: text => {
-      const data = JSON.parse(text.slice(text.lastIndexOf("DATA: ") + 6));
-      if (!data.reply.includes("Live gate missing")) return '{"state":"completed"}';
-      return redirected && !repairs && (admitted || !corrections) ? '{"state":"continue","next":"Inspect the same live configuration again"}' : '{"state":"blocked"}';
-    },
+    verdict: text => JSON.parse(text.slice(text.lastIndexOf("DATA: ") + 6)).reply.includes("Live gate missing") ? '{"state":"blocked"}' : '{"state":"completed"}',
   });
-  const task = await env.run("Publish source through required CI and perform separately gated live verification. Compatibility repair remains authorized; never bypass live gates.");
-  await env.dispatcher.decide("parent", task.id, "old-context", "Retain original constraints and unknown effects");
-  await env.dispatcher.waitForExecution(task.id); redirected = true;
-  await env.dispatcher.consolidateDecisions("parent", task.id, "source-followup", "Source compatibility repair is now the next scoped assignment; live verification remains open and deferred. Preserve original gates and same writer.", ["old-context"], {
-    task: "compatibility repair", role: "high", reason: "unrepresented source repair after publication", evidence: "Actual source integration and required checks; no live effects",
-  });
+  const task = await env.run("Publish source and perform separately gated live verification; compatibility repair remains authorized.");
+  assert.equal(task.status, "paused"); assert.equal(state(task.checkpoint).outcomes.length, 1);
+  await env.dispatcher.decide("parent", task.id, "old-scope", "Preserve all original restrictions");
   await env.dispatcher.waitForExecution(task.id);
-  const current = env.store.list()[0]!, saved = state(current.checkpoint);
-  assert.equal(repairs, admitted ? 1 : 0, "only independent ready-step admission permits follow-up effects");
-  if (admitted) {
-    assert.equal(env.calls.worker.length, 3, "publication, original live report and repair each run exactly once");
-    assert.deepEqual(saved.stepIds, [0, 2, 1]); assert.equal(saved.outcomes.length, 2);
-  } else assert.equal(saved.outcomes.length, 1, "read-only correction is not permission for follow-up work");
-  if (admitted) assert.equal(current.status, "paused", "genuine live work remains open, not fabricated completed");
-  else { assert.equal(current.status, "ready"); assert.ok(current.assessmentRetryAt, "unadmitted same-step correction retains durable pacing"); }
-});
-
-for (const missing of ['{"state":"uncertain"}', 'not json']) for (const admitted of [true])
-test(`missing current verdict ${missing} cannot veto or implicitly admit an independent follow-up (${admitted})`, async t => {
-  let amended = false, repairs = 0;
-  const env = await setup(t, { plan: steps(["publication", "simple"], ["live verification", "simple"]),
-    ready: admitted ? '{"state":"continue","next":"3"}' : '{"state":"blocked"}',
-    worker: text => {
-      if (text.includes("STEP 1/2:\npublication")) return "source published\nSTEP-STATUS: complete";
-      if (text.includes("fresh read-only report\nREQUIRED EVIDENCE")) { repairs++; return "fresh receipts read\nSTEP-STATUS: complete"; }
-      return "retained live report\nSTEP-STATUS: blocked: external";
-    },
-    verdict: text => {
-      const data = JSON.parse(text.slice(text.lastIndexOf("DATA: ") + 6));
-      return data.reply.includes("retained live report") ? amended ? missing : '{"state":"blocked"}' : '{"state":"completed"}';
-    },
-  });
-  const task = await env.run("Original scoped publication and verification; read-only reporting remains authorized, no repeated effects");
-  await env.dispatcher.decide("parent", task.id, "old-context", "Keep original authority and existing effects");
-  await env.dispatcher.waitForExecution(task.id); amended = true;
-  await env.dispatcher.consolidateDecisions("parent", task.id, "current-readonly-followup", "Only the new read-only report is independently available; old live work remains held", ["old-context"], {
-    task: "fresh read-only report", role: "simple", reason: "Read current receipts within original authority", evidence: "Actual current receipts, no effect replay",
-  });
+  await env.dispatcher.consolidateDecisions("parent", task.id, "repair", "Compatibility repair after live verification", ["old-scope"],
+    { task: "compatibility repair", role: "high", reason: "repair after verification", evidence: "source receipts" });
   await env.dispatcher.waitForExecution(task.id);
-  const current = env.store.list()[0]!, saved = state(current.checkpoint);
-  assert.equal(current.id, task.id); assert.equal(repairs, admitted ? 1 : 0);
-  assert.equal(env.calls.worker.length, admitted ? 3 : 2, "Only independently admitted follow-up may run, no old worker replay");
-  assert.equal(current.status, missing.includes("uncertain") ? "paused" : "ready", "Missing verdict never completes original work; semantic uncertainty asks Main");
-  if (current.status === "paused") { assert.ok(current.question); assert.equal(current.assessmentRetryAt, undefined); }
-  else assert.ok(current.assessmentRetryAt);
-  assert.equal(saved.outcomes.length, admitted ? 2 : 1);
-  if (admitted) assert.deepEqual(saved.stepIds, [0, 2, 1]);
-});
-
-test("forty parent follow-ups roll completed evidence instead of exhausting six lifetime plan slots", async t => {
-  let env!: Awaited<ReturnType<typeof setup>>;
-  env = await setup(t, { plan: steps(["source zero", "medium"], ["source one", "simple"], ["source two", "high"], ["source three", "simple"], ["source four", "medium"], ["live verification", "simple"]),
-    ready: async () => {
-      const current = state(env.store.list()[0]!.checkpoint);
-      const candidate = current.plan.findIndex((step, index) => index > current.outcomes.length && step.task.startsWith("source amendment"));
-      return candidate < 0 ? '{"state":"blocked"}' : JSON.stringify({ state: "continue", next: String(candidate + 1) });
-    },
-    worker: text => /STEP \d+\/\d+:\nlive verification\n/.test(text) ? "Original live gate missing\nSTEP-STATUS: blocked: external" : "Existing authorized source milestone verified\nSTEP-STATUS: complete",
-    verdict: text => JSON.parse(text.slice(text.lastIndexOf("DATA: ") + 6)).reply.includes("live gate missing") ? '{"state":"blocked"}' : '{"state":"completed"}',
-  });
-  const original = await env.run("Complete source verification and separately gated live verification; later in-scope source corrections remain authorized. Never bypass the live gate or repeat effects.");
-  assert.equal(original.status, "paused"); assert.equal(state(original.checkpoint).outcomes.length, 5);
-  await env.dispatcher.decide("parent", original.id, "initial-context", "Preserve original restrictions, all completed receipts and live hold");
-  await env.dispatcher.waitForExecution(original.id);
-  for (let i = 0; i < 40; i++) {
-    const before = env.store.list()[0]!;
-    await env.dispatcher.consolidateDecisions("parent", original.id, `amendment-${i}`, "Explicitly replace working context only: perform new in-scope source amendment; live work remains OPEN and all original restrictions/unknown effects bind.", before.decisions!.map(d => d.requestId),
-      { task: `source amendment ${i}`, role: "high", reason: "new scoped source correction", evidence: "Actual independent source verification receipt, not live completion" });
-    await env.dispatcher.waitForExecution(original.id);
-    const current = env.store.list()[0]!, checkpoint = state(current.checkpoint);
-    assert.equal(current.id, original.id); assert.equal(current.status, "paused");
-    assert.ok(checkpoint.plan.length <= 6 && current.checkpoint!.length <= 63000);
-    assert.equal(checkpoint.outcomes.length + (checkpoint.planHistory?.completed ?? 0), 6 + i);
-    assert.equal(checkpoint.stepIds![checkpoint.outcomes.length], 5, "original blocked step identity retained across every rotation");
-    assert.equal(checkpoint.assessment!.tools, 0); assert.ok(checkpoint.nextStepId! > 6 + i);
-    assert.equal(env.calls.worker.length, 7 + i, "each new source amendment exactly once; original six workers never replay");
-    const reload = new ExecutionStore(env.file); await reload.load();
-    assert.deepEqual(state(reload.list()[0]!.checkpoint), checkpoint);
-  }
-  const final = state(env.store.list()[0]!.checkpoint); assert.ok(final.planHistory!.segments > 1);
-  let history = final.planHistory, count = 0;
-  while (history) {
-    const archived = await env.store.readPlanHistory("parent", original.id, history.head);
-    count += archived.steps.length; history = archived.previous;
-  }
-  assert.equal(count, final.planHistory!.completed, "all exact independently completed steps remain retrievable");
+  let saved = state(env.store.list()[0]!.checkpoint);
+  assert.deepEqual(saved.plan.map(step => step.task), ["source publication", "live verification", "compatibility repair"], "plan order unchanged; follow-up appended");
+  assert.equal(repairs, 0, "follow-up never overtakes the held step it may depend on");
+  assert.ok(env.events.some(e => /angehängt[\s\S]*○ 3\. compatibility repair/.test(String(e.text))), "amended plan is shown");
+  await env.dispatcher.control("parent", task.id, "resume"); await env.dispatcher.waitForExecution(task.id);
+  assert.equal(repairs, 0, "resume re-assesses the held report without replaying effects or skipping ahead");
+  assert.equal(state(env.store.list()[0]!.checkpoint).plan.length, 3, "same amendment never adds another follow-up on repeated wake");
 });
 
 test("same-worker correction receives fresh exact original mandate and current step, not just stale session and parent prose", async t => {

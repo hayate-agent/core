@@ -373,29 +373,13 @@ export function sequentialStrategy(deps: SequentialDeps): DispatcherStrategy {
               amended.lastFollowUpRevision = Math.max(amended.lastFollowUpRevision ?? 0, decision.revision ?? steering.indexOf(decision) + 1);
             }
             amended.appliedFollowUps = amended.appliedFollowUps.slice(-MAX_STEPS);
-            // Operator-supplied follow-up work runs NEXT, before the held step, deterministically.
-            // The held step keeps its settled evidence (deferred by stable id) and resumes afterwards.
-            // No validator ever chooses or reorders plan steps.
-            const at = amended.outcomes.length, added = admittedToPlan.length;
-            let settledHeld: { key: string; reply: string } | undefined;
-            if (added && amended.assessment && at < amended.plan.length - added) {
-              const heldId = amended.stepIds[at]!;
-              const heldRole = amended.escalation?.index === at ? amended.escalation.to : amended.plan[at]!.role;
-              amended.deferred = [...(amended.deferred ?? []).filter(d => d.stepId !== heldId), { stepId: heldId, assessment: amended.assessment,
-                correction: amended.correction, progress: amended.progress, prior: amended.prior, escalation: amended.escalation }];
-              delete amended.assessment; delete amended.correction; delete amended.progress; delete amended.prior; delete amended.escalation;
-              const newSteps = amended.plan.splice(amended.plan.length - added, added), newIds = amended.stepIds.splice(amended.stepIds.length - added, added);
-              amended.plan.splice(at, 0, ...newSteps); amended.stepIds.splice(at, 0, ...newIds);
-              settledHeld = { key: `step:${task.id}:${heldId}:${heldRole}`, reply: amended.deferred.at(-1)!.assessment.reply };
-            }
+            // Follow-up work is appended; plan order is never changed by any validator or
+            // admission rule, so a follow-up can never run before a step it may depend on.
             if (JSON.stringify(amended).length > 63000) return block("Scoped follow-up checkpoint exceeds safe storage budget; retained evidence preserved.");
             await authorize(); await context.fenceDecisions?.(executionDecisionRevision(steering));
-            const owner = deps.store.list(task.parent).find(item => item.id === task.id);
-            if (settledHeld && owner?.intent?.key === settledHeld.key)
-              await context.settleIntent(settledHeld.key, settledHeld.reply.slice(0, STEP_RESULT_LIMIT), JSON.stringify(amended), executionDecisionRevision(steering));
-            else await context.checkpoint(JSON.stringify(amended), undefined, executionDecisionRevision(steering));
+            await context.checkpoint(JSON.stringify(amended), undefined, executionDecisionRevision(steering));
             state = amended;
-            if (settledHeld) await context.status?.(`Nachgereichte Operator-Arbeit läuft vor dem gehaltenen Schritt.\n${planView(amended)}`.slice(0, 8000)).catch(() => {});
+            await context.status?.(`Nachgereichte Operator-Arbeit an den Plan angehängt.\n${planView(amended)}`.slice(0, 8000)).catch(() => {});
           }
         }
         if (state.outcomes.length && JSON.stringify(state).length > 45000) {
