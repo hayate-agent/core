@@ -717,3 +717,24 @@ test("stop: a same-task follow-up finishing while stop revocation is blocked sta
   assert.notEqual(runs.get(run_id)!.status, "running");
   assert.ok(aborts.length > 0 && aborts.every(a => a === "run-running"), aborts.join(","));
 });
+
+test("stop of an active API turn: a reply racing blocked worker revocation stays fenced", async t => {
+  let unblock!: () => void; const gate = new Promise<void>(r => { unblock = r; });
+  let runId = ""; const aborts: string[] = [];
+  const { harness, runtime, runs, store, call } = await setup(t, { taskStopped: async () => { await gate; aborts.push(`run-${runs.get(runId)?.status}`); } });
+  await harness.sessionFor("api:issue-25");
+  const session = runtime.sessions.get("api:issue-25")!; const release = session.hold();
+  const { run_id } = await (await call("POST", "/v1/runs", { input: "Work SHR-25", session_id: "issue-25" })).json() as { run_id: string }; runId = run_id;
+  for (let i = 0; i < 100 && !harness.dispatchOrigin("api:issue-25"); i++) await settle();
+  const child = await store.submit("api:issue-25", "req-25", "Update SHR-25", "direct", 1, harness.dependencyCheckpoint("api:issue-25"), undefined, harness.dispatchOrigin("api:issue-25"));
+  await store.claim(child.id);
+  session.abort = async () => {}; // the turn replies anyway
+  const stopping = call("POST", `/v1/runs/${run_id}/stop`);
+  for (let i = 0; i < 20; i++) await settle();
+  release(); for (let i = 0; i < 30; i++) await settle();
+  assert.equal(runs.get(run_id)!.status, "running", "no terminal result while stop revocation is pending");
+  unblock(); await stopping;
+  for (let i = 0; i < 100 && runs.get(run_id)!.status === "running"; i++) { await settle(); await harness.tick(); }
+  assert.notEqual(runs.get(run_id)!.status, "running");
+  assert.ok(aborts.length > 0 && aborts.every(a => a === "run-running"), aborts.join(","));
+});

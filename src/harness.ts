@@ -2184,7 +2184,14 @@ export class Harness {
       const input = s.current;
       if (s.prompted === input && s.cancelling !== input) return false; // prompt already returned
       s.cancelling = input;
+      // An API run's task with delegated work: raise the durable revocation fence before
+      // the first await, so no reply ends the run before its workers are revoked.
+      const apiTask = input.taskId && input.replyTo?.channel === "api" ? this.tasks(s).find(t => t.id === input.taskId) : undefined;
+      if (apiTask && apiTask.apiRunDeadline !== undefined && this.apiHoldMs() > 0) {
+        apiTask.apiRevoking = true; apiTask.apiRevokingRun ??= input.replyTo!.target;
+      }
       await this.revokeCancelledTask(s, input);
+      if (apiTask?.apiRevoking) await this.closeApiWindow(s, apiTask);
       if (s.current !== input) return "running";
       this.turnAbort.get(sessionKey)?.abort();
       // Before the prompt (session still opening) runTurn sees `cancelling` and never starts it.
