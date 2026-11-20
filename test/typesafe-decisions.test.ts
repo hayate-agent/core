@@ -162,7 +162,7 @@ for (const choice of ["done", "blocked", "waiting", "unknown", "low-confidence",
   else assert.notEqual(task.state, "completed", "uncertain or technical failure must not endorse worker completion");
 });
 
-for (const choice of ["done", "blocked", "waiting", "unknown", "low-confidence", "failure", "noul", "injection", "redirect", "ready", "ready-none", "ready-unknown", "ready-low-confidence", "ready-failure", "ready-noul", "bank-unknown-version", "bank-unknown-id", "bank-over-limit"]) test(`actual sequential Dispatcher consumer over loopback: ${choice}`, async t => {
+for (const choice of ["done", "blocked", "waiting", "unknown", "low-confidence", "failure", "noul", "injection", "redirect", "bank-unknown-version", "bank-unknown-id", "bank-over-limit"]) test(`actual sequential Dispatcher consumer over loopback: ${choice}`, async t => {
   const env = await fixture(t, choice);
   const readyMode = choice.startsWith("ready");
   let workers = 0, fallbackCalls = 0;

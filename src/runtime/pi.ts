@@ -17,7 +17,7 @@ import { toolGuardDenialReason } from "../tool-guard-error.js";
 import { childDeniedTools } from "../child-tools.js";
 import { compactContext, compactTaskReport, compactAccumulatedToolContext, retainContext, contextArtifactDirectory, COMPACT_WORKER_PROMPT } from "../context-artifacts.js";
 import { CONTEXT_RESULT_CONTRACT, DISPATCH_TOOL_GUIDANCE } from "../context-contract.js";
-import { OPERATOR_AUTHORITY } from "../operator-authority.js";
+import { OPERATOR_AUTHORITY, TASK_COMPLETION } from "../operator-authority.js";
 import { localModel, localContextBudget, essentialPluginTools, compactSkillCatalog, materializeSkillCatalog } from "../local-context.js";
 import { workerCompactionSettings, contextCompactionSettings } from "../worker-context.js";
 import { ModelWorkProof } from "../model-work-proof.js";
@@ -866,7 +866,7 @@ export class PiRuntime implements AgentRuntime {
       // persona builder supplies a smaller generated foundation for workers.
       const optional = (text: string) => /^# Persona overlay: MEMORY\.md\n/.test(text);
       const selected = persona.filter(text => !optional(text));
-      const prefix = [...(childSession ? [COMPACT_WORKER_PROMPT] : []), OPERATOR_AUTHORITY, CONTEXT_RESULT_CONTRACT];
+      const prefix = [...(childSession ? [COMPACT_WORKER_PROMPT] : []), OPERATOR_AUTHORITY, TASK_COMPLETION, CONTEXT_RESULT_CONTRACT];
       const historical = persona.filter(optional).join("\n\n");
       // Even a content-addressed memory reference changes as memory grows. Keep
       // it out of the leading persona, including the storage-failure fallback.
