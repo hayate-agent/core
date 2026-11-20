@@ -37,3 +37,11 @@ API runs without delegated work behave exactly as before.
 The run is released on the host tick and delivered directly to the run (finishing is
 idempotent). An unrelated turn running in the same session therefore cannot delay the
 deadline.
+
+## Task-scoped window
+
+The run window belongs to the task, not to an individual run. A newer API run can only
+answer for an existing task through task rebinding, which carries the earliest acceptance
+anchor (`apiRunDeadline`) onto the task and never extends it. All runs bound to a task
+therefore share one window: when it closes, the task's delegated work is revoked under the
+durable fence and each held run ends in order through the single release path.

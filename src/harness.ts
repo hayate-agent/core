@@ -670,8 +670,21 @@ export class Harness {
       if (!s.current || origin && s.current === origin) s.task = existing ?? task;
       const input = origin;
       if (input && s.current === input && (input.source === "channel" || input.source === "api")) {
+        // The API run's ownership moves with the rebinding: its acceptance-anchored window
+        // (never extended) bounds the rebound task's work and keeps the run open while it is live.
+        const previous = input.taskId ? this.tasks(s).find(t => t.id === input.taskId) : undefined;
+        const bound = existing ?? task;
+        if (input.source === "api" && input.replyTo?.channel === "api" && previous?.apiRunDeadline !== undefined) {
+          bound.apiRunDeadline = Math.min(bound.apiRunDeadline ?? Infinity, previous.apiRunDeadline);
+        }
+        // The turn's expiry (inherited at settlement) is the earliest of the run window and
+        // the rebound task's own expiry: rebinding never extends authority.
+        if (input.source === "api" && previous?.apiRunDeadline !== undefined || bound.expiresAt !== undefined) {
+          const earliest = Math.min(input.continuationExpiresAt ?? Infinity, bound.expiresAt ?? Infinity, previous?.expiresAt ?? Infinity);
+          if (earliest !== Infinity) { input.continuationExpiresAt = earliest; bound.expiresAt = earliest; }
+        }
         input.taskId = taskId; input.taskRef = ref; input.taskRevision = store.coreTask(id)!.revision;
-        input.completionAnchor = structuredClone(task.anchor); input.continuationDepth = (existing ?? task).depth;
+        input.completionAnchor = structuredClone(task.anchor); input.continuationDepth = bound.depth;
       }
     }
     await this.onStateChange?.(); return renderTask(store.coreTask(id)!);
@@ -3997,8 +4010,11 @@ export class Harness {
     if (task?.apiHold && task.apiHold.entry.to.target !== entry.to.target) {
       // A fenced/releasing older run keeps its single release path (revocation first); the
       // newer run's answer is persisted on the task and delivered after it, never before.
-      if (task.apiRevoking || this.apiReleasing.has(task.apiHold)) { this.deferApiResult(s, input, task, entry); return true; }
-      this.releaseApiHold(s, task); // never strand another run's answer
+      // The older run keeps its hold until the release path settles it (its own live-work
+      // check, revoking first on window close); the newer answer waits behind it.
+      // Authority is task-scoped: one window per task (apiRunDeadline, the earliest anchor of
+      // any run bound to it, never extended), so a newer run on this task shares that window.
+      this.deferApiResult(s, input, task, entry); return true;
     }
     // Never renewed by a later reply: the acceptance-time anchor is the only bound.
     const deadline = task?.apiRunDeadline;
@@ -4024,14 +4040,6 @@ export class Harness {
     return true;
   }
 
-  /** A newer run of the same task supersedes the held answer of an older run. */
-  private releaseApiHold(s: SessionState, task: DurableTask): void {
-    const held = task.apiHold;
-    if (!held) return;
-    task.apiHold = undefined;
-    s.outbox.push(held.entry);
-    s.unsaved = true;
-  }
 
 
   /** Tick: finish held API runs once their work settled or the run window closed.
@@ -4078,7 +4086,8 @@ export class Harness {
         this.apiReleasing.add(held);
         // The window closed with open work: stop it (aborting running workers) before the
         // run ends, so nothing keeps working without the caller's write authority.
-        void (stopped ? (task.state === "stopped" ? this.revokeApiChildren(s, task) : this.closeApiWindow(s, task)) : open ? this.closeApiWindow(s, task) : Promise.resolve())
+        // Stopped/cancelled too: revocation always runs under the durable fence.
+        void (stopped ? this.closeApiWindow(s, task) : open ? this.closeApiWindow(s, task) : Promise.resolve())
           .then(() => this.deliver(held.entry.to, text, { deliveryId: held.entry.id, ...(stopped ? { outcome: "cancelled" as const } : failed ? { outcome: "failed" as const } : {}) }))
           .then(async () => {
             if (task.apiHold === held) task.apiHold = undefined;
