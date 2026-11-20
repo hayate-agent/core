@@ -571,7 +571,9 @@ export class ExecutionStore {
         if (!archived) commitTaskOutcome(draft.taskBook, settlement.taskOutcome, this.now());
         if (order && order.revision !== priorRevision && priorPlan !== JSON.stringify(order.plan) && settlement.taskPresentation) {
           if (!validAddress(settlement.taskPresentation.to)) throw Error("Invalid task presentation target");
-          committed.outbox.push({ id: `${id}:task-plan`, sessionKey, to: structuredClone(settlement.taskPresentation.to), text: renderTask(order) });
+          // A plan view is status, not the run's answer: an API run stays owned by its result.
+          committed.outbox.push({ id: `${id}:task-plan`, sessionKey, to: structuredClone(settlement.taskPresentation.to), text: renderTask(order),
+            ...(settlement.taskPresentation.to.channel === "api" ? { presentation: "progress" as const } : {}) });
         }
         validateTaskBook(draft.taskBook);
       }

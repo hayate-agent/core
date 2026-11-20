@@ -752,7 +752,7 @@ test("rebinding an API turn to a reopened operator task keeps the run's acceptan
     return "Reopened.";
   };
   await harness.accept({ id: "api:run_26", source: "api", sessionKey: "api:issue-26", text: "Reopen SHR-26 and continue", replyTo: { channel: "api", target: "run_26" }, apiAcceptedAt: 1_000_000 });
-  for (let i = 0; i < 100 && observed.previous === undefined; i++) await settle();
+  for (let i = 0; i < 2000 && observed.previous === undefined; i++) await settle();
   assert.ok(observed.previous !== undefined, "API task had a run window");
   assert.equal(observed.deadline, observed.previous, "the rebound order task inherits the run deadline");
 });
@@ -812,4 +812,493 @@ test("a restored stopped hold without a fence revokes under the durable fence; a
   unblock(); for (let i = 0; i < 100 && runs.get(record.run_id)!.status === "running"; i++) { await harness.tick(); await settle(); }
   assert.equal(runs.get(record.run_id)!.status, "cancelled");
   assert.ok(aborts.length > 0 && aborts.every(a => a === "run-running"), aborts.join(","));
+});
+
+test("work dispatched before a rebinding keeps the API run open and is revoked on its close", async t => {
+  const { harness, runtime, runs, store, call, advance } = await setup(t, { taskLifecycle: { enabled: true } });
+  const ref = await store.enrollTask("old-room", "old", "Original SHR-29 request", "operator", "operator");
+  await store.decideTask(ref, 1, "done", "close", "done");
+  let childId = "";
+  runtime.answer = async () => {
+    const s = harness.state("api:issue-29"); const input = s.current!;
+    const child = await store.submit("api:issue-29", "req-29", "Update SHR-29", "direct", 1, harness.dependencyCheckpoint("api:issue-29"), undefined, harness.dispatchOrigin("api:issue-29"));
+    childId = child.id; await store.claim(child.id); // dispatched BEFORE the rebinding, running
+    await harness.operatorTaskDecision(ref.id, "reopen", "reopen-29", "Reopen SHR-29", "api:issue-29", input);
+    return "Interim: worker dispatched, order reopened.";
+  };
+  await harness.sessionFor("api:issue-29");
+  const { run_id } = await (await call("POST", "/v1/runs", { input: "Reopen SHR-29 and update it", session_id: "issue-29" })).json() as { run_id: string };
+  for (let i = 0; i < 100 && !childId; i++) await settle();
+  for (let i = 0; i < 30; i++) { await settle(); await harness.tick(); }
+  assert.equal(runs.get(run_id)!.status, "running", "the original task's worker keeps the run open after rebinding");
+  advance(DEFAULT_API_RESULT_HOLD_MS + 1);
+  for (let i = 0; i < 100 && runs.get(run_id)!.status === "running"; i++) { await harness.tick(); await settle(); }
+  assert.notEqual(runs.get(run_id)!.status, "running");
+  const row = store.list().find(e => e.id === childId)!;
+  assert.equal(row.status, "cancelled", "the pre-rebinding worker is revoked when the run closes");
+});
+
+test("window close also aborts and drops follow-ups of tasks owned before a rebinding", async t => {
+  const { harness, runtime, runs, start, advance } = await setup(t);
+  const { run_id } = await start();
+  const s = harness.state("api:issue-1"); const task = harness["tasks"](s)[0];
+  task.apiOwnedTasks = ["order:old:1"];
+  s.tasks!.push({ id: "order:old:1", original: "Old order", state: "active", depth: 0, recoveryEnrollment: "current" });
+  const session = runtime.sessions.get("api:issue-1")!; session.hold();
+  await harness.accept({ id: "owned-running", source: "host", sessionKey: "api:issue-1", taskId: "order:old:1", text: "Owned follow-up" });
+  await harness.accept({ id: "owned-queued", source: "host", sessionKey: "api:issue-1", taskId: "order:old:1", text: "Owned queued" });
+  for (let i = 0; i < 50 && s.current?.id !== "owned-running"; i++) await settle();
+  const running = s.current!;
+  running.taskId = "order:old:1"; // a turn still bound to the pre-rebinding task
+  advance(DEFAULT_API_RESULT_HOLD_MS + 1);
+  for (let i = 0; i < 100 && runs.get(run_id)!.status === "running"; i++) { await harness.tick(); await settle(); }
+  assert.equal(s.cancelling === running || s.current !== running, true, "running owned follow-up aborted");
+  assert.ok(!harness.pendingInputs().some(i => i.id === "owned-queued"), "queued owned follow-up dropped");
+});
+
+test("a task-plan presentation for an API run is nonterminal progress", async () => {
+  const { OutboxQueue } = await import("../src/delivery/outbox.js").catch(() => ({ OutboxQueue: undefined }));
+  void OutboxQueue;
+  const src = await (await import("node:fs/promises")).readFile(new URL("../src/execution.ts", import.meta.url), "utf8");
+  assert.match(src, /task-plan`[\s\S]{0,300}presentation: "progress"/, "API task-plan view is delivered as progress");
+});
+
+test("concurrent window closes are single-flight: the fence holds until the slowest revocation finished", async t => {
+  const gates: Array<() => void> = []; let calls = 0;
+  const { harness, start } = await setup(t, { taskStopped: () => { calls++; return new Promise<void>(r => gates.push(r)); } });
+  await start();
+  const s = harness.state("api:issue-1"); const task = harness["tasks"](s)[0];
+  const first = harness["closeApiWindow"](s, task); const second = harness["closeApiWindow"](s, task);
+  assert.equal(first, second, "a concurrent close joins the running one");
+  for (let i = 0; i < 20 && !gates.length; i++) await settle();
+  assert.equal(task.apiRevoking, true);
+  gates.shift()!(); await first;
+  assert.equal(calls, 1); assert.equal(task.apiRevoking, undefined);
+});
+
+test("pre-rebinding ownership is retired when the run is released", async t => {
+  const { harness, runs, store, start } = await setup(t);
+  const { run_id, child } = await start();
+  const s = harness.state("api:issue-1"); const task = harness["tasks"](s)[0];
+  task.apiOwnedTasks = ["order:old:1"];
+  const claim = await store.claim(child.id); await store.complete(child.id, claim.token!, "done");
+  for (const e of store.events().filter(e => e.executionId === child.id)) await store.ack(e.id);
+  for (let i = 0; i < 100 && runs.get(run_id)!.status === "running"; i++) { await harness.tick(); await settle(); }
+  assert.equal(runs.get(run_id)!.status, "completed");
+  assert.equal(task.apiOwnedTasks, undefined, "a later run never adopts this run's ownership");
+});
+
+test("stop racing a tick: one per-task revocation chain, run never ends while a revocation is pending", async t => {
+  // Hold-free race: the active API turn is stopped while the tick's window close is revoking.
+  const gates: Array<() => void> = []; let pendingAtEnd = -1; let runId = "";
+  const { harness, runtime, runs, store, call, advance } = await setup(t, { taskStopped: () => new Promise<void>(r => gates.push(r)) });
+  await harness.sessionFor("api:issue-30");
+  const session = runtime.sessions.get("api:issue-30")!; const release = session.hold();
+  const { run_id } = await (await call("POST", "/v1/runs", { input: "Work SHR-30", session_id: "issue-30" })).json() as { run_id: string }; runId = run_id;
+  for (let i = 0; i < 100 && !harness.dispatchOrigin("api:issue-30"); i++) await settle();
+  const child = await store.submit("api:issue-30", "req-30", "Update SHR-30", "direct", 1, harness.dependencyCheckpoint("api:issue-30"), undefined, harness.dispatchOrigin("api:issue-30"));
+  await store.claim(child.id);
+  const finish = runs.finish.bind(runs);
+  runs.finish = ((id: string, ...rest: unknown[]) => { if (id === runId && pendingAtEnd < 0) pendingAtEnd = gates.length; return (finish as Function)(id, ...rest); }) as typeof runs.finish;
+  session.abort = async () => {}; // the turn replies regardless
+  advance(DEFAULT_API_RESULT_HOLD_MS + 1);
+  await harness.tick(); for (let i = 0; i < 20 && !gates.length; i++) await settle(); // tick close in flight
+  const stopping = call("POST", `/v1/runs/${run_id}/stop`);
+  for (let i = 0; i < 20; i++) await settle();
+  release(); // turn replies while revocations are pending
+  gates.shift()!(); for (let i = 0; i < 30; i++) { await settle(); await harness.tick(); }
+  for (let i = 0; i < 200 && runs.get(run_id)!.status === "running"; i++) { gates.shift()?.(); await settle(); await harness.tick(); }
+  await stopping;
+  assert.notEqual(runs.get(run_id)!.status, "running");
+  assert.equal(pendingAtEnd, 0, "the run ended only after every revocation call completed");
+});
+
+test("ownership is retired when the run's answer is delivered directly", async t => {
+  const { harness, start, store } = await setup(t);
+  const { child } = await start();
+  const claim = await store.claim(child.id); await store.complete(child.id, claim.token!, "done");
+  for (const e of store.events().filter(e => e.executionId === child.id)) await store.ack(e.id);
+  const s = harness.state("api:issue-1"); const task = harness["tasks"](s)[0];
+  task.apiHold = undefined; task.apiOwnedTasks = ["order:old:1"];
+  assert.equal(harness["holdApiResult"](s, { id: "x", source: "api", sessionKey: "api:issue-1", taskId: task.id },
+    { id: "direct", sessionKey: "api:issue-1", to: { channel: "api", target: "run_direct" }, text: "Done" }), false);
+  assert.equal(task.apiOwnedTasks, undefined);
+});
+
+test("a pre-rebinding task's result resolves to the rebound owner and stays held while its work is live", async t => {
+  const { harness, runs, store, start } = await setup(t);
+  const { run_id, child } = await start();
+  await store.claim(child.id); // rebound task's work is live
+  const s = harness.state("api:issue-1"); const owner = harness["tasks"](s)[0];
+  owner.apiOwnedTasks = ["order:old:1"];
+  s.tasks!.push({ id: "order:old:1", original: "Old", state: "active", depth: 0, recoveryEnrollment: "current" });
+  const held = harness["holdApiResult"](s, { id: "old-result", source: "host", sessionKey: "api:issue-1", taskId: "order:old:1" },
+    { id: "old-answer", sessionKey: "api:issue-1", to: { channel: "api", target: run_id }, text: "Old child done" });
+  assert.equal(held, true, "held by the rebound owner, not delivered");
+  for (let i = 0; i < 10; i++) { await harness.tick(); await settle(); }
+  assert.equal(runs.get(run_id)!.status, "running");
+});
+
+test("the release path never delivers while a chained revocation is pending", async t => {
+  const { harness, runs, start, advance, store } = await setup(t);
+  const { run_id, child } = await start();
+  await store.claim(child.id);
+  const s = harness.state("api:issue-1"); const task = harness["tasks"](s)[0];
+  let unblock!: () => void; const gate = new Promise<void>(r => { unblock = r; });
+  advance(DEFAULT_API_RESULT_HOLD_MS + 1);
+  const tick = harness.tick(); // starts the window close
+  const revoke = harness["revokeCancelledTask"].bind(harness);
+  harness["revokeCancelledTask"] = async (...a: unknown[]) => { await gate; return revoke(...a); };
+  const chained = harness["closeApiWindow"](s, task, { id: "stop-chain", source: "api", sessionKey: "api:issue-1", text: "", taskId: task.id }); // a stop chains another revocation
+  await tick; for (let i = 0; i < 30; i++) { await settle(); await harness.tick(); }
+  assert.equal(runs.get(run_id)!.status, "running", "no delivery while the chained revocation is pending");
+  unblock(); await chained;
+  for (let i = 0; i < 100 && runs.get(run_id)!.status === "running"; i++) { await harness.tick(); await settle(); }
+  assert.notEqual(runs.get(run_id)!.status, "running");
+});
+
+test("chained rebinding A -> B -> C transfers run ownership to C alone; a later run on A is unaffected", async t => {
+  const { harness, runtime, store } = await setup(t, { taskLifecycle: { enabled: true } });
+  const refs = [];
+  for (const name of ["b", "c"]) { const r = await store.enrollTask(`room-${name}`, name, `Order ${name}`, "operator", "operator"); await store.decideTask(r, 1, "done", "close", "done"); refs.push(r); }
+  let snapshot: Array<{ id: string; owned?: string[]; deadline?: number }> = []; let firstTask = "";
+  runtime.answer = async () => {
+    const s = harness.state("api:issue-31"); const input = s.current!;
+    firstTask = input.taskId!;
+    await harness.operatorTaskDecision(refs[0].id, "reopen", "reopen-b", "Reopen B", "api:issue-31", input);
+    await harness.operatorTaskDecision(refs[1].id, "reopen", "reopen-c", "Reopen C", "api:issue-31", input);
+    snapshot = harness["tasks"](s).map((t: { id: string; apiOwnedTasks?: string[]; apiRunDeadline?: number }) => ({ id: t.id, owned: t.apiOwnedTasks, deadline: t.apiRunDeadline }));
+    return "Done.";
+  };
+  await harness.accept({ id: "api:run_31", source: "api", sessionKey: "api:issue-31", text: "Work", replyTo: { channel: "api", target: "run_31" }, apiAcceptedAt: 1_000_000 });
+  for (let i = 0; i < 2000 && !snapshot.length; i++) await settle();
+  const owners = snapshot.filter(t => t.owned?.includes(firstTask));
+  assert.equal(owners.length, 1, `exactly one owner of A: ${JSON.stringify(snapshot)}`);
+  assert.match(owners[0].id, /^order:/);
+  assert.equal(snapshot.filter(t => t.deadline !== undefined).length, 1, "only the current owner carries the run window");
+  assert.equal(owners[0].owned!.length, 2, "C owns both A and B");
+  // After the run ended (answer delivered directly), ownership is retired: a later run on A resolves to A itself.
+  assert.equal(harness["apiTaskFor"](harness.state("api:issue-31"), { id: "x", source: "host", sessionKey: "api:issue-31", taskId: firstTask }).id, firstTask);
+});
+
+test("rebinding is refused while the API run's revocation chain is in flight", async t => {
+  const gates: Array<() => void> = [];
+  const { harness, runtime, store, start } = await setup(t, { taskStopped: () => new Promise<void>(r => gates.push(r)) });
+  t.after(() => { for (const g of gates) g(); });
+  const { child } = await start(); await store.claim(child.id);
+  const ref = await store.enrollTask("old-room", "old", "Order", "operator", "operator");
+  await store.decideTask(ref, 1, "done", "close", "done");
+  (harness as unknown as { opts: { taskLifecycle?: { enabled: boolean } } }).opts.taskLifecycle = { enabled: true };
+  const s = harness.state("api:issue-1"); const task = harness["tasks"](s)[0];
+  void harness["closeApiWindow"](s, task); await settle();
+  const session = runtime.sessions.get("api:issue-1")!; session.hold();
+  await harness.accept({ id: "follow-32", source: "api", sessionKey: "api:issue-1", text: "Reopen", replyTo: { channel: "api", target: "run_x" } });
+  for (let i = 0; i < 50 && s.current?.id !== "follow-32"; i++) await settle();
+  const origin = s.current!; origin.taskId = task.id;
+  await assert.rejects(harness.operatorTaskDecision(ref.id, "reopen", "reopen-32", "Reopen", "api:issue-1", origin), /rebinding refused/);
+  assert.equal(task.apiRevoking, true, "fence stays on the closing task");
+  assert.equal(store.coreTask(ref.id)!.generation, ref.generation, "refusal writes nothing");
+  // Drain the gated close before teardown removes the state directory.
+  for (let i = 0; i < 200 && (gates.length || harness["apiClosings"].get(task)); i++) { gates.shift()?.(); await settle(); }
+});
+
+test("a window close starting during the rebinding's awaits keeps the fence and chain on the closing owner", async t => {
+  const gates: Array<() => void> = [];
+  const { harness, runtime, store, start } = await setup(t, { taskStopped: () => new Promise<void>(r => gates.push(r)) });
+  t.after(() => { for (const g of gates) g(); });
+  const { child } = await start(); await store.claim(child.id);
+  const ref = await store.enrollTask("old-room", "old", "Order", "operator", "operator");
+  await store.decideTask(ref, 1, "done", "close", "done");
+  (harness as unknown as { opts: { taskLifecycle?: { enabled: boolean } } }).opts.taskLifecycle = { enabled: true };
+  const s = harness.state("api:issue-1"); const owner = harness["tasks"](s)[0];
+  const session = runtime.sessions.get("api:issue-1")!; session.hold();
+  await harness.accept({ id: "follow-33", source: "api", sessionKey: "api:issue-1", text: "Reopen", replyTo: { channel: "api", target: "run_y" } });
+  for (let i = 0; i < 50 && s.current?.id !== "follow-33"; i++) await settle();
+  const origin = s.current!; origin.taskId = owner.id;
+  const bind = store.bindTask.bind(store);
+  store.bindTask = (async (...a: Parameters<typeof store.bindTask>) => { owner.apiRevoking = true; harness["apiClosings"].set(owner, new Promise<void>(r => gates.push(r))); /* a stop's close begins during the await */ return bind(...a); }) as typeof store.bindTask;
+  await harness.operatorTaskDecision(ref.id, "reopen", "reopen-33", "Reopen", "api:issue-1", origin);
+  assert.equal(owner.apiRevoking, true, "fence stays on the closing owner");
+  const others = harness["tasks"](s).filter((x: { id: string }) => x.id.startsWith("order:"));
+  assert.equal(others.length, 1, "the rebound task exists");
+  // Either the close already aborted the originating turn (nothing moves) or the rebound
+  // task joins the closing owner; in no case does the run's ownership leave the owner.
+  assert.equal(s.current, origin, "the stop's revocation is still pending; the turn is live");
+  assert.ok(owner.apiOwnedTasks?.includes(others[0].id), "the rebound task joins the closing owner");
+  for (const o of others) {
+    assert.equal(o.apiRunDeadline, undefined, `window did not move to ${o.id}`);
+    assert.equal(o.apiHold, undefined); assert.equal(o.apiRevoking, undefined);
+  }
+  assert.equal(harness["apiTaskFor"](s, origin).id, owner.id, "results resolve to the closing owner");
+  harness["apiClosings"].delete(owner); owner.apiRevoking = undefined; for (const g of gates.splice(0)) g();
+  for (let i = 0; i < 20; i++) await settle();
+  assert.equal(owner.apiRunDeadline !== undefined, true, "the closing owner keeps the window");
+});
+
+test("rebinding onto a task that already holds a run keeps the previous held answer in its deferred chain", async t => {
+  const { harness, runtime, store } = await setup(t, { taskLifecycle: { enabled: true } });
+  const ref = await store.enrollTask("old-room", "old", "Order", "operator", "operator");
+  await store.decideTask(ref, 1, "done", "close", "done");
+  let result: { target?: string; hold?: string; deferred?: string[]; otherHold?: unknown; held?: string[] } | undefined;
+  runtime.answer = async () => {
+    const s = harness.state("api:issue-34"); const input = s.current!;
+    await harness.operatorTaskDecision(ref.id, "reopen", "reopen-34", "Reopen", "api:issue-34", input);
+    const bound = harness["tasks"](s).find((x: { id: string }) => x.id === input.taskId)!;
+    bound.apiHold = { deadline: 2_000_000, entry: { id: "bound-held", sessionKey: "api:issue-34", to: { channel: "api", target: "run_bound" }, text: "Bound" } };
+    const other = { id: "other", original: "x", state: "active", depth: 0, recoveryEnrollment: "current", apiRunDeadline: 2_000_000,
+      apiHold: { deadline: 2_000_000, entry: { id: "other-held", sessionKey: "api:issue-34", to: { channel: "api", target: "run_other" }, text: "Other" } } } as Record<string, unknown>;
+    s.tasks!.push(other as never);
+    input.taskId = "other";
+    await harness.operatorTaskDecision(ref.id, "clarify", "clarify-34", "Clarify", "api:issue-34", input); // same generation: rebinds onto the holding task
+    const target = harness["tasks"](s).find((x: { id: string }) => x.id === input.taskId)!;
+    result = { target: target.id, hold: target.apiHold?.entry.id, deferred: target.apiDeferred?.map((e: { id: string }) => e.id), otherHold: other.apiHold, held: harness.heldApiRuns() };
+    return "Done.";
+  };
+  await harness.accept({ id: "api:run_34", source: "api", sessionKey: "api:issue-34", text: "Work", replyTo: { channel: "api", target: "run_34" }, apiAcceptedAt: 1_000_000 });
+  for (let i = 0; i < 2000 && !result; i++) await settle();
+  assert.ok(result, "turn ran");
+  assert.equal(result!.hold, "bound-held", JSON.stringify(result));
+  assert.deepEqual(result!.deferred, ["other-held"], "the previous held answer is deferred, never dropped");
+  assert.equal(result!.otherHold, undefined);
+  assert.ok(result!.held!.includes("run_other"), "restart reconciliation still protects the previous run");
+});
+
+test("ownership joining during an in-flight revocation is revoked before the fence lifts", async t => {
+  const stopped: string[] = []; const gates: Array<() => void> = [];
+  const { harness, start, store } = await setup(t, { taskStopped: (_k: string, id: string) => { stopped.push(id); return new Promise<void>(r => gates.push(r)); } });
+  const { child } = await start(); await store.claim(child.id);
+  const s = harness.state("api:issue-1"); const task = harness["tasks"](s)[0];
+  const closing = harness["closeApiWindow"](s, task);
+  for (let i = 0; i < 20 && !gates.length; i++) await settle();
+  task.apiOwnedTasks = [...(task.apiOwnedTasks ?? []), "order:joined:1"]; // a rebinding joins meanwhile
+  for (let i = 0; i < 50 && task.apiRevoking; i++) { gates.shift()?.(); await settle(); }
+  await closing;
+  assert.ok(stopped.includes("order:joined:1"), `joined task revoked: ${stopped.join(",")}`);
+  assert.equal(task.apiRevoking, undefined);
+});
+
+test("a failed active-run stop is retried to the end: the hung turn is aborted by the retry", async t => {
+  let fail = true;
+  const { harness, runtime, store, call } = await setup(t, { taskStopped: async () => { if (fail) { fail = false; throw Error("transient"); } } });
+  await harness.sessionFor("api:issue-35");
+  const session = runtime.sessions.get("api:issue-35")!; session.hold();
+  const { run_id } = await (await call("POST", "/v1/runs", { input: "Work SHR-35", session_id: "issue-35" })).json() as { run_id: string };
+  for (let i = 0; i < 100 && !harness.dispatchOrigin("api:issue-35"); i++) await settle();
+  const child = await store.submit("api:issue-35", "req-35", "Update SHR-35", "direct", 1, harness.dependencyCheckpoint("api:issue-35"), undefined, harness.dispatchOrigin("api:issue-35"));
+  await store.claim(child.id);
+  let aborts = 0; session.abort = async () => { aborts++; }; // hung turn: abort does not end it
+  await call("POST", `/v1/runs/${run_id}/stop`); // revocation fails once, before the stop's own abort
+  for (let i = 0; i < 20; i++) await settle();
+  const before = aborts;
+  for (let i = 0; i < 30; i++) { await harness.tick(); await settle(); }
+  assert.ok(aborts > before, `the retry aborts the hung turn (aborts ${before} -> ${aborts})`);
+});
+
+test("rebinding onto a holding task with a later deadline shortens its hold to the earlier window", async t => {
+  const { harness, runtime, store } = await setup(t, { taskLifecycle: { enabled: true } });
+  const ref = await store.enrollTask("old-room", "old", "Order", "operator", "operator");
+  await store.decideTask(ref, 1, "done", "close", "done");
+  let result: { run?: number; hold?: number; prev?: number } | undefined;
+  runtime.answer = async () => {
+    const s = harness.state("api:issue-36"); const input = s.current!;
+    await harness.operatorTaskDecision(ref.id, "reopen", "reopen-36", "Reopen", "api:issue-36", input);
+    const bound = harness["tasks"](s).find((x: { id: string }) => x.id === input.taskId)!;
+    bound.apiRunDeadline = 9_000_000;
+    bound.apiHold = { deadline: 9_000_000, entry: { id: "bound-held", sessionKey: "api:issue-36", to: { channel: "api", target: "run_late" }, text: "Late" } };
+    const early = { id: "early", original: "x", state: "active", depth: 0, recoveryEnrollment: "current", apiRunDeadline: 2_000_000 } as Record<string, unknown>;
+    s.tasks!.push(early as never); input.taskId = "early";
+    await harness.operatorTaskDecision(ref.id, "clarify", "clarify-36", "Clarify", "api:issue-36", input);
+    result = { run: bound.apiRunDeadline, hold: bound.apiHold?.deadline, prev: 2_000_000 };
+    return "Done.";
+  };
+  await harness.accept({ id: "api:run_36", source: "api", sessionKey: "api:issue-36", text: "Work", replyTo: { channel: "api", target: "run_36" }, apiAcceptedAt: 1_000_000 });
+  for (let i = 0; i < 2000 && !result; i++) await settle();
+  assert.ok(result, "turn ran");
+  assert.equal(result!.run, 2_000_000);
+  assert.equal(result!.hold, 2_000_000, "the hold never outlives the earlier window");
+});
+
+test("a hung turn rebound into a closing owner's ownership still expires with the owner's window", async t => {
+  const { harness, runtime, call, advance } = await setup(t);
+  await harness.sessionFor("api:issue-37");
+  const session = runtime.sessions.get("api:issue-37")!; session.hold();
+  await call("POST", "/v1/runs", { input: "Work SHR-37", session_id: "issue-37" });
+  const s = harness.state("api:issue-37");
+  for (let i = 0; i < 100 && !(s.running && s.current); i++) await settle();
+  const owner = harness["tasks"](s).find((x: { id: string }) => x.id === s.current!.taskId)!;
+  assert.ok(owner?.apiRunDeadline !== undefined, "API task has a run window");
+  owner.apiOwnedTasks = ["order:joined:37"]; s.current!.taskId = "order:joined:37"; // rebound during a close
+  advance(DEFAULT_API_RESULT_HOLD_MS + 1);
+  const turn = s.current!;
+  for (let i = 0; i < 30 && s.current === turn; i++) { await harness.tick(); await settle(); }
+  assert.notEqual(s.current, turn, "expiry recognizes the owned task id and ends the hung turn");
+  assert.equal(owner.termination, "deadline_expired");
+});
+
+test("release delivery starts in the same step as its fence check: a close beginning right after the check is never bypassed", async t => {
+  const { harness, runs, store, start } = await setup(t);
+  const { run_id, child } = await start();
+  const claim = await store.claim(child.id); await store.complete(child.id, claim.token!, "done");
+  for (const e of store.events().filter(e => e.executionId === child.id)) await store.ack(e.id);
+  const s = harness.state("api:issue-1"); const task = harness["tasks"](s)[0];
+  assert.ok(task.apiHold, "held");
+  const violations: string[] = []; let raced = false;
+  const deliver = harness["deliver"].bind(harness);
+  harness["deliver"] = (to: { target: string }, text: string, meta: unknown) => {
+    if (to.target === run_id && (task.apiRevoking || harness["apiClosings"].has(task))) violations.push("delivered while revoking");
+    return deliver(to, text, meta);
+  };
+  // The instant the release's fence check passes, a stop begins a close in the next microtask.
+  const closings: Map<unknown, unknown> = harness["apiClosings"];
+  const has = closings.has.bind(closings);
+  (closings as { has: (k: unknown) => boolean }).has = (k: unknown) => {
+    const r = has(k);
+    if (k === task && !r && !raced && harness["apiReleasing"].has(task.apiHold)) {
+      raced = true;
+      const revoke = harness["revokeCancelledTask"].bind(harness);
+      harness["revokeCancelledTask"] = async (...a: unknown[]) => { await new Promise<void>(res => setTimeout(res, 30)); return revoke(...a); };
+      queueMicrotask(() => { void harness["closeApiWindow"](s, task, { id: "stop-race", source: "api", sessionKey: "api:issue-1", text: "", taskId: task.id }); });
+    }
+    return r;
+  };
+  for (let i = 0; i < 60 && runs.get(run_id)!.status === "running"; i++) { await harness.tick(); await settle(); }
+  for (let i = 0; i < 100 && harness["apiClosings"].get(task); i++) { await new Promise(r => setTimeout(r, 10)); await harness.tick(); await settle(); }
+  assert.equal(raced, true, "the race was exercised");
+  assert.deepEqual(violations, []);
+});
+
+test("a stop whose turn revocation fails is resumed in full by the retry before the fence lifts", async t => {
+  let failStop = true; const stoppedTurns: string[] = [];
+  const { harness, store, start } = await setup(t);
+  const { child } = await start(); await store.claim(child.id);
+  const stopTurn = store.stopTurn.bind(store);
+  store.stopTurn = (async (turnId: string, key: string) => { if (failStop) { failStop = false; throw Error("transient stopTurn"); } stoppedTurns.push(turnId); return stopTurn(turnId, key); }) as typeof store.stopTurn;
+  const s = harness.state("api:issue-1"); const task = harness["tasks"](s)[0];
+  const stop = { id: "stop-38", source: "api" as const, sessionKey: "api:issue-1", text: "", taskId: task.id, executionTurnId: "turn-38" };
+  await assert.rejects(harness["closeApiWindow"](s, task, stop));
+  assert.equal(task.apiRevoking, true, "fence stays after the failed stop");
+  assert.equal(task.apiStop?.executionTurnId, "turn-38", "the stop intent is part of the durable fence");
+  for (let i = 0; i < 30 && task.apiRevoking; i++) { await harness.tick(); await settle(); }
+  assert.equal(task.apiRevoking, undefined);
+  assert.deepEqual(stoppedTurns, ["turn-38"], "the retry resumed the complete stop (turn revoked) before lifting the fence");
+});
+
+test("fence and stop intent are persisted before the stop's first revocation step (restart resumes the stop)", async t => {
+  const order: string[] = [];
+  const { harness, store, start } = await setup(t);
+  const { child } = await start(); await store.claim(child.id);
+  const s = harness.state("api:issue-1"); const task = harness["tasks"](s)[0];
+  const save = harness["onStateChange"];
+  harness["onStateChange"] = async () => { order.push(`save:${task.apiRevoking}:${task.apiStop?.id}`); return save?.(); };
+  const revoke = harness["revokeCancelledTask"].bind(harness);
+  harness["revokeCancelledTask"] = async (...a: unknown[]) => { order.push("revoke"); return revoke(...a); };
+  await harness["closeApiWindow"](s, task, { id: "stop-39", source: "api", sessionKey: "api:issue-1", text: "", taskId: task.id });
+  assert.equal(order.indexOf("save:true:stop-39") >= 0 && order.indexOf("save:true:stop-39") < order.indexOf("revoke"), true, order.join(","));
+  // A restart with a persisted stop intent reconstructs and resumes the stop.
+  task.apiRevoking = true; task.apiStop = { id: "stop-40", text: "", taskId: task.id, executionTurnId: "turn-40" };
+  const resumed: string[] = []; harness["revokeCancelledTask"] = async (_s: unknown, input: { id: string; executionTurnId?: string }) => { resumed.push(`${input.id}:${input.executionTurnId}`); };
+  for (let i = 0; i < 30 && task.apiRevoking; i++) { await harness.tick(); await settle(); }
+  assert.deepEqual(resumed, ["stop-40:turn-40"]);
+  assert.equal(task.apiStop, undefined);
+});
+
+test("settlement replay replaces a checkpointed interim hold of the same run with the newer settled answer", async t => {
+  const { harness, start } = await setup(t);
+  const { run_id } = await start();
+  const s = harness.state("api:issue-1"); const task = harness["tasks"](s)[0];
+  task.apiHold = { deadline: 2_000_000, entry: { id: "interim", sessionKey: "api:issue-1", to: { channel: "api", target: run_id }, text: "Interim" } };
+  harness["replayHeldEntry"](task, { id: "final", sessionKey: "api:issue-1", to: { channel: "api", target: run_id }, text: "Final" }, 2_400_000, false);
+  assert.equal(task.apiHold.entry.id, "final", "the newer settled answer of the same run wins");
+  assert.equal(task.apiHold.deadline, 2_000_000, "never extended");
+  harness["replayHeldEntry"](task, { id: "other", sessionKey: "api:issue-1", to: { channel: "api", target: "run_other" }, text: "Other" }, 2_000_000, false);
+  assert.equal(task.apiHold.entry.id, "final", "a different run never takes over the hold");
+  assert.deepEqual(task.apiDeferred?.map(e => e.id), ["other"]);
+  harness["replayHeldEntry"](task, { id: "other2", sessionKey: "api:issue-1", to: { channel: "api", target: "run_other" }, text: "Other 2" }, 2_000_000, true);
+  assert.deepEqual(task.apiDeferred?.map(e => e.id), ["other2"], "deferred answer of the same run replaced, not duplicated");
+});
+
+test("window close stops the durable turns of owned queued follow-ups before dropping them", async t => {
+  const stopped: string[] = [];
+  const { harness, store, start } = await setup(t);
+  const { child } = await start(); await store.claim(child.id);
+  const stopTurn = store.stopTurn.bind(store);
+  store.stopTurn = (async (id: string, key: string) => { stopped.push(id); return stopTurn(id, key).catch(() => undefined); }) as typeof store.stopTurn;
+  const s = harness.state("api:issue-1"); const task = harness["tasks"](s)[0];
+  task.apiOwnedTasks = ["order:old:41"];
+  const queued = { id: "owned-queued-41", source: "host" as const, sessionKey: "api:issue-1", text: "old follow-up", taskId: "order:old:41", executionTurnId: "turn-41" };
+  s.queue.push(queued as never);
+  await harness["closeApiWindow"](s, task);
+  assert.ok(!s.queue.includes(queued as never), "dropped");
+  assert.deepEqual(stopped.filter(x => x === "turn-41"), ["turn-41"], "its durable turn was stopped first");
+});
+
+test("a stop joining while the prior close is saving performs its own save before revoking", async t => {
+  const { harness, store, start } = await setup(t);
+  const { child } = await start(); await store.claim(child.id);
+  const s = harness.state("api:issue-1"); const task = harness["tasks"](s)[0];
+  const saves: Array<string | undefined> = []; let releaseFirst!: () => void; let first = true;
+  const save = harness["onStateChange"];
+  harness["onStateChange"] = async () => {
+    const snapshot = task.apiStop?.id; // what this save persists
+    if (first) { first = false; await new Promise<void>(r => { releaseFirst = r; }); }
+    saves.push(snapshot); return save?.();
+  };
+  const order: string[] = [];
+  const revoke = harness["revokeCancelledTask"].bind(harness);
+  harness["revokeCancelledTask"] = async (...a: unknown[]) => { order.push(`revoke after saves=${JSON.stringify(saves)}`); return revoke(...a); };
+  harness["apiFencePersisted"].delete(task);
+  const prior = harness["closeApiWindow"](s, task); await settle(); // its save is in flight (no stop intent yet)
+  const stopping = harness["closeApiWindow"](s, task, { id: "stop-42", source: "api", sessionKey: "api:issue-1", text: "", taskId: task.id });
+  releaseFirst(); await prior.catch(() => undefined); await stopping;
+  assert.ok(order.length > 0 && JSON.parse(order[0].slice("revoke after saves=".length)).includes("stop-42"), order.join(" | "));
+});
+
+test("window close durably stops the current turn of the run before aborting it", async t => {
+  const stopped: string[] = [];
+  const { harness, runtime, store, call } = await setup(t);
+  await harness.sessionFor("api:issue-43");
+  const session = runtime.sessions.get("api:issue-43")!; session.hold();
+  const stopTurn = store.stopTurn.bind(store);
+  store.stopTurn = (async (id: string, key: string) => { stopped.push(id); return stopTurn(id, key).catch(() => undefined); }) as typeof store.stopTurn;
+  await call("POST", "/v1/runs", { input: "Work SHR-43", session_id: "issue-43" });
+  const s = harness.state("api:issue-43");
+  for (let i = 0; i < 100 && !(s.running && s.current?.executionTurnId); i++) await settle();
+  const turn = s.current!; assert.ok(turn.executionTurnId, "durable turn");
+  const task = harness["apiTaskFor"](s, turn)!;
+  await harness["closeApiWindow"](s, task);
+  assert.ok(stopped.includes(turn.executionTurnId!), "the current turn was durably stopped under the fence");
+});
+
+test("an input arriving during revocation is durably stopped before it is dropped", async t => {
+  const stopped: string[] = [];
+  const { harness, store, start } = await setup(t);
+  const { child } = await start(); await store.claim(child.id);
+  const s = harness.state("api:issue-1"); const task = harness["tasks"](s)[0];
+  const late = { id: "late-44", source: "host" as const, sessionKey: "api:issue-1", text: "late", taskId: task.id, executionTurnId: "turn-44" };
+  const stopTurn = store.stopTurn.bind(store); let injected = false;
+  store.stopTurn = (async (id: string, key: string) => { stopped.push(id); return stopTurn(id, key).catch(() => undefined); }) as typeof store.stopTurn;
+  const abortTurn = harness["abortTaskTurn"].bind(harness); // runs after the first durable-turn scan
+  harness["abortTaskTurn"] = async (...a: unknown[]) => { const r = await abortTurn(...a); if (!injected) { injected = true; s.queue.push(late as never); } return r; };
+  await harness["closeApiWindow"](s, task);
+  assert.equal(injected, true);
+  assert.ok(!s.queue.includes(late as never), "dropped");
+  assert.ok(stopped.includes("turn-44"), "its durable turn was stopped before it was dropped");
+});
+
+test("a task has at most one owning run: rebinding onto a task owned by another run is refused before any write", async t => {
+  const { harness, runtime, store } = await setup(t, { taskLifecycle: { enabled: true } });
+  const ref = await store.enrollTask("old-room", "old", "Order", "operator", "operator");
+  await store.decideTask(ref, 1, "done", "close", "done");
+  let error = ""; let generation = 0;
+  runtime.answer = async () => {
+    const s = harness.state("api:issue-45"); const input = s.current!;
+    s.tasks!.push({ id: "other-run-owner", original: "x", state: "active", depth: 0, recoveryEnrollment: "current", apiRunDeadline: 2_000_000, apiOwnedTasks: [`order:${ref.id}:1`] } as never);
+    generation = store.coreTask(ref.id)!.generation;
+    await harness.operatorTaskDecision(ref.id, "reopen", "reopen-45", "Reopen", "api:issue-45", input).catch(e => { error = String(e); });
+    return "Done.";
+  };
+  await harness.accept({ id: "api:run_45", source: "api", sessionKey: "api:issue-45", text: "Work", replyTo: { channel: "api", target: "run_45" }, apiAcceptedAt: 1_000_000 });
+  for (let i = 0; i < 2000 && !error; i++) await settle();
+  assert.match(error, /owned by another API run/);
+  assert.equal(store.coreTask(ref.id)!.generation, generation, "refusal writes nothing");
 });

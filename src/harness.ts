@@ -658,6 +658,16 @@ export class Harness {
     if (!this.opts.taskLifecycle?.enabled || !store || !record) throw Error("Unknown operator task");
     if (origin && this.sessions.get(key)?.current !== origin) throw Error("Originating operator turn changed");
     const currentInput = origin;
+    // KISS: an API run whose work is being revoked is never rebound (checked before any write);
+    // its single revocation chain stays on one task until it has finished.
+    const closingOwner = action !== "close" && origin?.taskId ? this.apiTaskFor(this.state(key), origin) : undefined;
+    if (closingOwner && (closingOwner.apiRevoking || this.apiClosings.has(closingOwner)))
+      throw Error("API run is closing (its delegated work is being revoked); task rebinding refused");
+    // A task has at most ONE owning run: never rebind onto a task another run already owns.
+    if (action !== "close" && this.sessions.get(key)) {
+      const foreign = this.tasks(this.state(key)).find(t => t !== closingOwner && t.apiOwnedTasks?.some(owned => owned.startsWith(`order:${id}:`)));
+      if (foreign) throw Error("Operator task is owned by another API run; task rebinding refused");
+    }
     const ref = await store.decideTask({ id, generation: record.generation }, record.revision, sourceId, action, text,
       action !== "close" ? currentInput?.taskRef : undefined);
     if (action !== "close") {
@@ -672,10 +682,31 @@ export class Harness {
       if (input && s.current === input && (input.source === "channel" || input.source === "api")) {
         // The API run's ownership moves with the rebinding: its acceptance-anchored window
         // (never extended) bounds the rebound task's work and keeps the run open while it is live.
-        const previous = input.taskId ? this.tasks(s).find(t => t.id === input.taskId) : undefined;
+        const previous = input.taskId ? this.apiTaskFor(s, input) : undefined;
         const bound = existing ?? task;
-        if (input.source === "api" && input.replyTo?.channel === "api" && previous?.apiRunDeadline !== undefined) {
+        // Re-checked synchronously after the awaits above: if the owner started closing in
+        // between, ownership does NOT move; the rebound task joins the closing owner, so the
+        // fence and the single revocation chain stay on one task and cover it.
+        const ownerClosing = !!previous && previous.id !== bound.id && (previous.apiRevoking === true || this.apiClosings.has(previous));
+        if (ownerClosing && input.source === "api" && input.replyTo?.channel === "api" && previous!.apiRunDeadline !== undefined) {
+          previous!.apiOwnedTasks = [...new Set([...(previous!.apiOwnedTasks ?? []), bound.id])];
+        } else if (input.source === "api" && input.replyTo?.channel === "api" && previous?.apiRunDeadline !== undefined) {
           bound.apiRunDeadline = Math.min(bound.apiRunDeadline ?? Infinity, previous.apiRunDeadline);
+          // The earlier window binds every hold of the bound task too: never extended.
+          if (bound.apiHold) bound.apiHold.deadline = Math.min(bound.apiHold.deadline, bound.apiRunDeadline);
+          // Work dispatched before the rebinding stays owned by this run: the rebound task
+          // holds the run open for it and revokes it on close.
+          if (previous.id !== bound.id) {
+            // Ownership is TRANSFERRED, never copied: exactly one task owns the run.
+            bound.apiOwnedTasks = [...new Set([...(bound.apiOwnedTasks ?? []), previous.id, ...(previous.apiOwnedTasks ?? [])])].filter(id => id !== bound.id);
+            // No held or deferred answer is ever dropped: the previous hold becomes the bound
+            // task's hold, or (if it already holds one) joins its deferred chain.
+            const carried = [...(previous.apiHold ? [previous.apiHold.entry] : []), ...(previous.apiDeferred ?? [])];
+            if (carried.length) bound.apiDeferred = [...(bound.apiDeferred ?? []), ...carried];
+            this.promoteDeferred(s, bound);
+            previous.apiOwnedTasks = undefined; previous.apiRunDeadline = undefined; previous.apiHold = undefined;
+            previous.apiDeferred = undefined;
+          }
         }
         // The turn's expiry (inherited at settlement) is the earliest of the run window and
         // the rebound task's own expiry: rebinding never extends authority.
@@ -2199,12 +2230,11 @@ export class Harness {
       s.cancelling = input;
       // An API run's task with delegated work: raise the durable revocation fence before
       // the first await, so no reply ends the run before its workers are revoked.
-      const apiTask = input.taskId && input.replyTo?.channel === "api" ? this.tasks(s).find(t => t.id === input.taskId) : undefined;
+      const apiTask = input.taskId && input.replyTo?.channel === "api" ? this.apiTaskFor(s, input) : undefined;
       if (apiTask && apiTask.apiRunDeadline !== undefined && this.apiHoldMs() > 0) {
-        apiTask.apiRevoking = true; apiTask.apiRevokingRun ??= input.replyTo!.target;
-      }
-      await this.revokeCancelledTask(s, input);
-      if (apiTask?.apiRevoking) await this.closeApiWindow(s, apiTask);
+        apiTask.apiRevokingRun ??= input.replyTo!.target;
+        await this.closeApiWindow(s, apiTask, input);
+      } else await this.revokeCancelledTask(s, input);
       if (s.current !== input) return "running";
       this.turnAbort.get(sessionKey)?.abort();
       // Before the prompt (session still opening) runTurn sees `cancelling` and never starts it.
@@ -2225,9 +2255,8 @@ export class Harness {
       // it is persisted with the stopped task, so every terminal result of this run (also
       // a same-task follow-up finishing now) stays held until revocation succeeded, also
       // across a failure or restart (the tick retries the fenced revocation).
-      held.apiRevoking = true; held.apiRevokingRun ??= hold.entry.to.target;
-      await this.revokeCancelledTask(s, { id, source: "api", sessionKey, text: held.original, taskId: held.id });
-      await this.closeApiWindow(s, held);
+      held.apiRevokingRun ??= hold.entry.to.target;
+      await this.closeApiWindow(s, held, { id, source: "api", sessionKey, text: held.original, taskId: held.id, replyTo: hold.entry.to });
       this.releaseSettledApiHolds();
       return "running";
     }
@@ -3072,13 +3101,10 @@ export class Harness {
             // A held API answer replays into its hold, not into delivery.
             for (const entry of structuredClone(settled.outbox)) {
               // Cancelled held entries too: only the release path ends the run, after revocation.
-              const owner = entry.apiHeldUntil !== undefined ? this.tasks(s).find(t => t.id === input.taskId) : undefined;
+              const owner = entry.apiHeldUntil !== undefined ? this.apiTaskFor(s, input) : undefined;
               const deadline = entry.apiHeldUntil; const deferredHold = entry.apiDeferredHold;
               delete entry.apiHeldUntil; delete entry.apiDeferredHold;
-              if (owner && deadline !== undefined && deferredHold) {
-                if (!owner.apiDeferred?.some(e => e.id === entry.id) && owner.apiHold?.entry.id !== entry.id) (owner.apiDeferred ??= []).push(entry);
-              }
-              else if (owner && deadline !== undefined) { if (!owner.apiHold) owner.apiHold = { deadline, entry }; }
+              if (owner && deadline !== undefined) this.replayHeldEntry(owner, entry, deadline, !!deferredHold);
               else s.outbox.push(entry);
             }
             input.continuation = structuredClone(settled.continuation);
@@ -3964,6 +3990,10 @@ export class Harness {
   /** Live work owned by an API task: running/queued/retrying children, undelivered
    * child events and their not-yet-processed Main inputs. Settled holds are not live. */
   private apiWorkPending(s: SessionState, task: DurableTask, except?: Inbound): boolean {
+    for (const id of task.apiOwnedTasks ?? []) {
+      const owned = this.tasks(s).find(t => t.id === id) ?? { ...task, id, apiOwnedTasks: undefined, apiHold: undefined };
+      if (owned !== task && this.apiWorkPending(s, { ...owned, apiOwnedTasks: undefined }, except)) return true;
+    }
     if (this.opts.pendingNativeSubagent?.(s.key, task.id) || this.opts.pendingNativeResult?.(s.key, task.id)) return true;
     const store = this.opts.executionStore;
     const queued = () => [s.current, ...s.queue, ...(s.steered ?? [])].some(item => !!item && item !== except && this.taskApiInput(s, task, item));
@@ -3982,7 +4012,7 @@ export class Harness {
 
   /** The answer this turn held, persisted with its settlement (crash after settle, before checkpoint). */
   private settledHold(s: SessionState, input: Inbound): OutboxEntry[] {
-    const task = input.taskId ? this.tasks(s).find(t => t.id === input.taskId) : undefined;
+    const task = this.apiTaskFor(s, input);
     const mine = this.heldBy.get(input);
     const deferred = mine && task?.apiDeferred?.includes(mine) ? mine : undefined;
     if (deferred) return [{ ...structuredClone(deferred), apiHeldUntil: task!.apiRunDeadline ?? this.now(), apiDeferredHold: true }];
@@ -3993,6 +4023,12 @@ export class Harness {
   private readonly apiCloseInFlight = new WeakSet<DurableTask>();
   private readonly apiFencePersisted = new WeakSet<DurableTask>();
 
+  /** The task owning this input's API run: a pre-rebinding task resolves to its rebound owner. */
+  private apiTaskFor(s: SessionState, input: Inbound): DurableTask | undefined {
+    if (!input.taskId) return undefined;
+    return this.tasks(s).find(t => t.apiOwnedTasks?.includes(input.taskId!)) ?? this.tasks(s).find(t => t.id === input.taskId);
+  }
+
   /** Persisted on the task and recorded with the turn's settlement (crash-safe). */
   private deferApiResult(s: SessionState, input: Inbound, task: DurableTask, entry: OutboxEntry): void {
     (task.apiDeferred ??= []).push(entry); this.heldBy.set(input, entry); s.unsaved = true;
@@ -4000,7 +4036,7 @@ export class Harness {
 
   /** Keep an API run open (latest answer retained) while its task's work is live. */
   private holdApiResult(s: SessionState, input: Inbound, entry: OutboxEntry): boolean {
-    const task = input.taskId ? this.tasks(s).find(t => t.id === input.taskId) : undefined;
+    const task = this.apiTaskFor(s, input);
     if (entry.to.channel !== "api") return false;
     // The release path already owns this run's terminal result (window closed).
     if (task?.apiHold && this.apiReleasing.has(task.apiHold) && task.apiHold.entry.to.target === entry.to.target) return true;
@@ -4030,6 +4066,8 @@ export class Harness {
     const fenced = !!task && !!task.apiRevoking;
     if (!fenced && (!task || deadline === undefined || this.apiHoldMs() <= 0 || entry.outcome && !failed || task.state === "stopped" || !live)) {
       if (task) task.apiHold = undefined;
+      // Delivered directly (terminal): run-scoped ownership of pre-rebinding work ends here.
+      if (task && !task.apiDeferred?.length) task.apiOwnedTasks = undefined;
       return false;
     }
     task!.apiHold = { deadline: failed || fenced ? Math.min(deadline ?? this.now(), this.now()) : deadline!, entry };
@@ -4070,7 +4108,7 @@ export class Harness {
         // No reply yet but the window closed: a hung same-task turn and its children stop
         // now; the aborted turn then ends the run (never left running past its deadline).
         if (!held && task.apiRunDeadline !== undefined && task.apiRunDeadline <= this.now() && !this.apiExpiring.has(task) &&
-            s.current?.taskId === task.id && s.current.replyTo?.channel === "api" && task.state !== "stopped") {
+            !!s.current?.taskId && this.apiTaskFor(s, s.current) === task && s.current.replyTo?.channel === "api" && task.state !== "stopped") {
           this.apiExpiring.add(task);
           void this.closeApiWindow(s, task).catch(err => { this.apiExpiring.delete(task); this.log(`API window close retained for retry: ${err instanceof Error ? err.message : err}`); });
           continue;
@@ -4088,12 +4126,21 @@ export class Harness {
         // run ends, so nothing keeps working without the caller's write authority.
         // Stopped/cancelled too: revocation always runs under the durable fence.
         void (stopped ? this.closeApiWindow(s, task) : open ? this.closeApiWindow(s, task) : Promise.resolve())
-          .then(() => this.deliver(held.entry.to, text, { deliveryId: held.entry.id, ...(stopped ? { outcome: "cancelled" as const } : failed ? { outcome: "failed" as const } : {}) }))
+          .then(() => {
+            // Check and delivery start are ONE synchronous step: no close can begin in between.
+            // Another revocation of this task's chain is still pending: deliver nothing yet;
+            // the next tick retries once the whole chain has lifted the fence.
+            if (task.apiRevoking || this.apiClosings.has(task)) throw Error("revocation still pending");
+            return this.deliver(held.entry.to, text, { deliveryId: held.entry.id, ...(stopped ? { outcome: "cancelled" as const } : failed ? { outcome: "failed" as const } : {}) });
+          })
           .then(async () => {
             if (task.apiHold === held) task.apiHold = undefined;
             // A deferred newer answer becomes the next hold: the same release path checks its
             // own work and window (revoking first) before it ends that run.
             this.promoteDeferred(s, task);
+            // Ownership of pre-rebinding work is scoped to the run(s) of this window: retired
+            // once no run of the task is held, so a later run never adopts it.
+            if (!task.apiHold && !task.apiDeferred?.length) task.apiOwnedTasks = undefined;
             await this.onStateChange?.();
           })
           .catch(err => this.log(`held API result retained for retry: ${err instanceof Error ? err.message : err}`))
@@ -4114,16 +4161,25 @@ export class Harness {
   }
 
   /** Durable revocation of dispatcher AND native children (either may be configured alone). */
-  private async revokeApiChildren(s: SessionState, task: DurableTask): Promise<void> {
-    await this.opts.executionStore?.cancelTask(s.key, task.id, task.preexistingUnscoped);
-    await this.opts.taskStopped?.(s.key, task.id, task.preexistingUnscoped ?? []);
+  private async revokeApiChildren(s: SessionState, task: DurableTask, visited = new Set<string>()): Promise<void> {
+    // Ownership can grow while revocation awaits (a rebinding joining a closing owner):
+    // revisit until every task owned at the end has been revoked.
+    for (let id; (id = [...(task.apiOwnedTasks ?? []), task.id].find(x => !visited.has(x))) !== undefined;) {
+      visited.add(id);
+      const owned = this.tasks(s).find(t => t.id === id);
+      const fence = owned?.preexistingUnscoped ?? task.preexistingUnscoped;
+      await this.opts.executionStore?.cancelTask(s.key, id, fence);
+      await this.opts.taskStopped?.(s.key, id, fence ?? []);
+    }
   }
 
   /** A same-task Main turn (e.g. processing a child result) must not keep acting after
    * its run's authority ends; the held-run release/stop path owns the run result. */
   private async abortTaskTurn(s: SessionState, task: DurableTask): Promise<void> {
     const current = s.current;
-    if (current?.taskId !== task.id || !s.running || s.cancelling === current) return;
+    // Idempotent: also re-aborts a turn already marked cancelling (e.g. a stop whose
+    // revocation failed before its own abort), so a retry always ends the turn.
+    if (!current || !(current.taskId === task.id || current.taskId && task.apiOwnedTasks?.includes(current.taskId)) || !s.running) return;
     s.cancelling = current;
     this.turnAbort.get(s.key)?.abort();
     if (s.prompting && s.session) await s.session.abort();
@@ -4135,6 +4191,7 @@ export class Harness {
    * cannot restart meanwhile: their work deadline precedes the run deadline. */
   /** An input that belongs to this task's API run, also before its task id is (re-)bound. */
   private taskApiInput(s: SessionState, task: DurableTask, item: Inbound): boolean {
+    if (item.taskId && task.apiOwnedTasks?.includes(item.taskId)) return true; // pre-rebinding work of this run
     // An input still owed to the held API run (e.g. replayed after a crash) is this run's
     // work: the run never ends on a stale held answer, and expiry drops it with the run.
     const run = task.apiHold?.entry.to.target;
@@ -4142,7 +4199,73 @@ export class Harness {
       !!item.hostEvent?.nativeSubagent && this.opts.nativeResultTask?.(s.key, item.hostEvent.executionId) === task.id;
   }
 
-  private async closeApiWindow(s: SessionState, task: DurableTask): Promise<void> {
+  /** Single-flight per task: a concurrent close (tick, stop) joins the running one, so the
+   * fence is never lifted while any revocation is still in flight. */
+  private closeApiWindow(s: SessionState, task: DurableTask, stop?: Inbound): Promise<void> {
+    const prior = this.apiClosings.get(task);
+    if (prior && !stop) return prior;
+    // Stop paths chain their own revocation onto the same per-task operation; the fence goes
+    // up synchronously and only the last operation in the chain lifts it. The stop intent is
+    // part of the durable fence, so every retry (also after a restart) resumes the full stop.
+    task.apiRevoking = true;
+    if (stop && !task.apiStop) {
+      task.apiStop = { id: stop.id!, text: stop.text, taskId: stop.taskId ?? task.id,
+        ...(stop.executionTurnId ? { executionTurnId: stop.executionTurnId } : {}),
+        ...(stop.replyTo ? { replyTo: { channel: stop.replyTo.channel, target: stop.replyTo.target } } : {}) };
+      this.apiFencePersisted.delete(task);
+    }
+    const closing: Promise<void> = (async () => {
+      if (prior) await prior.catch(() => undefined);
+      // Fence and stop intent are durable before the first revocation step. A stop always
+      // performs its OWN save after the prior chain, so it never relies on an earlier save
+      // that may have started before its intent was recorded.
+      if (stop || !this.apiFencePersisted.has(task)) await this.persistApiFence(task);
+      if (task.apiStop) {
+        // Executed only once a save that started AFTER the intent was recorded has completed.
+        while (this.apiStopPersisted.get(task) !== task.apiStop) await this.persistApiFence(task);
+        await this.revokeCancelledTask(s, this.apiStopInput(s, task, stop));
+      }
+      await this.closeApiWindowOnce(s, task, () => this.apiClosings.get(task) === closing);
+    })().finally(() => { if (this.apiClosings.get(task) === closing) this.apiClosings.delete(task); });
+    this.apiClosings.set(task, closing);
+    return closing;
+  }
+  private readonly apiClosings = new WeakMap<DurableTask, Promise<void>>();
+  /** The stop intent covered by the last COMPLETED save (snapshot taken when the save began). */
+  private readonly apiStopPersisted = new WeakMap<DurableTask, NonNullable<DurableTask["apiStop"]>>();
+  private async persistApiFence(task: DurableTask): Promise<void> {
+    const stop = task.apiStop;
+    await this.onStateChange?.();
+    this.apiFencePersisted.add(task);
+    if (stop) this.apiStopPersisted.set(task, stop);
+  }
+
+  /** Settlement replay of a held answer. A settled entry is newer than a checkpointed answer
+   * of the SAME run: it replaces it (hold or deferred), never leaving a stale interim answer.
+   * Answers of different runs keep their order: a newer run defers behind the held one. */
+  private replayHeldEntry(owner: DurableTask, entry: OutboxEntry, deadline: number, deferred: boolean): void {
+    const run = entry.to.target;
+    if (owner.apiHold?.entry.to.target === run) {
+      owner.apiHold = { deadline: Math.min(deadline, owner.apiHold.deadline), entry }; return;
+    }
+    const same = owner.apiDeferred?.findIndex(e => e.to.target === run) ?? -1;
+    if (same >= 0) { owner.apiDeferred![same] = entry; return; }
+    if (!owner.apiHold && !deferred) { owner.apiHold = { deadline, entry }; return; }
+    (owner.apiDeferred ??= []).push(entry);
+  }
+
+  /** The live input of a persisted stop, or its durable reconstruction after a restart. */
+  private apiStopInput(s: SessionState, task: DurableTask, live?: Inbound): Inbound {
+    const stop = task.apiStop!;
+    if (live && live.id === stop.id) return live;
+    const current = [s.current, ...s.queue].find(item => item?.id === stop.id);
+    if (current) return current;
+    return { id: stop.id, source: "api", sessionKey: s.key, text: stop.text, taskId: stop.taskId,
+      ...(stop.executionTurnId ? { executionTurnId: stop.executionTurnId } : {}),
+      ...(stop.replyTo ? { replyTo: stop.replyTo as Inbound["replyTo"] } : {}) };
+  }
+
+  private async closeApiWindowOnce(s: SessionState, task: DurableTask, latest: () => boolean = () => true): Promise<void> {
     // Children are durably revoked BEFORE the same-task turn is aborted: an aborted turn
     // may deliver its terminal result at once, and no worker may outlive that.
     // Fence first: a reply arriving while revocation is in flight is held, never delivered
@@ -4153,22 +4276,38 @@ export class Harness {
     this.apiCloseInFlight.add(task);
     try {
       task.apiRevoking = true;
-      const run = task.apiHold?.entry.to.target ?? (s.current?.taskId === task.id && s.current.replyTo?.channel === "api" ? s.current.replyTo.target : undefined);
+      const run = task.apiHold?.entry.to.target ?? (s.current?.taskId && this.apiTaskFor(s, s.current) === task && s.current.replyTo?.channel === "api" ? s.current.replyTo.target : undefined);
       // The fenced run's identity is fixed once recorded; it never moves to another run.
       if (run && !task.apiRevokingRun) { task.apiRevokingRun = run; this.apiFencePersisted.delete(task); }
       // The fence must be durable before any revocation step; a failed save is retried
       // (on every attempt until it succeeded), never skipped.
-      if (!this.apiFencePersisted.has(task)) { await this.onStateChange?.(); this.apiFencePersisted.add(task); }
-      await this.revokeApiChildren(s, task);
-      await this.abortTaskTurn(s, task);
+      if (!this.apiFencePersisted.has(task)) await this.persistApiFence(task);
+      const visited = new Set<string>(); const stoppedTurns = new Set<string>();
+      // Durable turns of the current, queued and steered inputs of this run (incl. pre-rebinding
+      // owned tasks and inputs arriving DURING revocation) not yet stopped.
+      const unstopped = () => [...(s.current ? [s.current] : []), ...s.queue, ...(s.steered ?? [])]
+        .filter(item => item.executionTurnId && !stoppedTurns.has(item.executionTurnId) && this.taskApiInput(s, task, item));
+      do {
+        await this.revokeApiChildren(s, task, visited);
+        // Stopped durably before their entries are dropped (or the current turn aborted) and
+        // before the fence lifts: a crash never leaves them replayable after the run ended.
+        for (const item of unstopped()) {
+          await this.opts.executionStore?.stopTurn(item.executionTurnId!, s.key);
+          stoppedTurns.add(item.executionTurnId!);
+        }
+        await this.abortTaskTurn(s, task);
+        // Re-scanned synchronously right before the fence is lifted and inputs are dropped
+        // below (no await in between): no new ownership and no new durable turn slips through.
+      } while ([...(task.apiOwnedTasks ?? []), task.id].some(x => !visited.has(x)) || unstopped().length > 0);
     } finally { this.apiCloseInFlight.delete(task); }
+    if (!latest()) return; // a chained revocation is still pending: it lifts the fence
     // A fenced run that never produced an answer (e.g. restored after a crash) and has no
     // current turn still ends honestly as blocked through the normal release path.
     const fencedRun = task.apiRevokingRun;
     const turnOwnsRun = s.current?.replyTo?.channel === "api" && s.current.replyTo.target === fencedRun;
     if (fencedRun && !task.apiHold && !turnOwnsRun)
       task.apiHold = { deadline: this.now(), entry: { ...this.outbox.create(s.key, { channel: "api", target: fencedRun }, ""), id: `api-window:${fencedRun}` } };
-    task.apiRevoking = undefined; task.apiRevokingRun = undefined; this.apiFencePersisted.delete(task);
+    task.apiRevoking = undefined; task.apiRevokingRun = undefined; task.apiStop = undefined; this.apiFencePersisted.delete(task);
     this.promoteDeferred(s, task);
     if (task.state !== "completed" && task.state !== "stopped") { task.state = "blocked"; task.termination = "deadline_expired"; }
     task.recoveryAdmission = undefined; task.recoveryRetry = undefined;

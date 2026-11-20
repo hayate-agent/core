@@ -117,6 +117,11 @@ export interface DurableTask {
   apiRevoking?: boolean;
   /** API run whose window close is pending (kept alive across restart even without an answer). */
   apiRevokingRun?: string;
+  /** A stop of this run is part of the pending fence: every retry (also after restart) resumes
+   * the complete stop (turn + follow-ups + children) before the fence can lift. */
+  apiStop?: { id: string; text: string; taskId: string; executionTurnId?: string; replyTo?: { channel: string; target: string } };
+  /** Tasks this API run's turn was bound to before a rebinding: their work stays owned by the run. */
+  apiOwnedTasks?: string[];
   /** Queue namespace after reset; accepted IDs are never erased. */
   budgetEpoch?: string;
   explicitBlocked?: boolean;
