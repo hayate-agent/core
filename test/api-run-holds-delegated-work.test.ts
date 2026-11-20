@@ -455,3 +455,246 @@ test("a restored stale hold is not released while an input for the same run is s
   assert.ok(!harness.pendingInputs().some(input => input.id === "follow-15"), "expired run's unbound follow-up never runs later");
   void session; release();
 });
+
+test("a reply arriving while window-close revocation is in flight is held until workers are stopped", async t => {
+  let unblock!: () => void; const gate = new Promise<void>(r => { unblock = r; });
+  const order: string[] = [];
+  const { harness, runtime, runs, store, call, advance } = await setup(t, { taskStopped: async () => { order.push("ledger-cancelled"); await gate; order.push("worker-aborted"); } });
+  await harness.sessionFor("api:issue-16");
+  const session = runtime.sessions.get("api:issue-16")!; const release = session.hold();
+  const { run_id } = await (await call("POST", "/v1/runs", { input: "Work SHR-16", session_id: "issue-16" })).json() as { run_id: string };
+  for (let i = 0; i < 100 && !harness.dispatchOrigin("api:issue-16"); i++) await settle();
+  const child = await store.submit("api:issue-16", "req-16", "Update SHR-16", "direct", 1, harness.dependencyCheckpoint("api:issue-16"), undefined, harness.dispatchOrigin("api:issue-16"));
+  await store.claim(child.id);
+  session.abort = async () => {}; // the turn ignores abort and replies during revocation
+  advance(DEFAULT_API_RESULT_HOLD_MS + 1);
+  await harness.tick(); for (let i = 0; i < 50 && !order.includes("ledger-cancelled"); i++) await settle();
+  release(); for (let i = 0; i < 20; i++) await settle();
+  assert.equal(runs.get(run_id)!.status, "running", "no terminal delivery while the worker is not yet aborted");
+  unblock(); await settle(); await harness.tick(); for (let i = 0; i < 100 && runs.get(run_id)!.status === "running"; i++) { await settle(); await harness.tick(); }
+  assert.notEqual(runs.get(run_id)!.status, "running");
+  assert.deepEqual(order, ["ledger-cancelled", "worker-aborted"]);
+});
+
+test("a failed window-close revocation keeps the run fenced and is retried before the run ends", async t => {
+  let failures = 1; const order: string[] = [];
+  const { harness, runs, store, start, advance } = await setup(t, { taskStopped: async () => {
+    if (failures-- > 0) { order.push("abort-failed"); throw Error("worker abort failed"); } order.push("worker-aborted"); } });
+  const { run_id, child } = await start();
+  await store.claim(child.id);
+  advance(DEFAULT_API_RESULT_HOLD_MS + 1);
+  await harness.tick(); for (let i = 0; i < 20; i++) await settle();
+  assert.deepEqual(order, ["abort-failed"]);
+  assert.equal(runs.get(run_id)!.status, "running", "ledger cancelled but worker not aborted: the run stays fenced");
+  for (let i = 0; i < 100 && runs.get(run_id)!.status === "running"; i++) { await harness.tick(); await settle(); }
+  assert.deepEqual(order, ["abort-failed", "worker-aborted"]);
+  assert.notEqual(runs.get(run_id)!.status, "running");
+});
+
+test("a cancelled turn result during pending revocation stays fenced until the worker is stopped", async t => {
+  let unblock!: () => void; const gate = new Promise<void>(r => { unblock = r; });
+  const order: string[] = []; let runId = "";
+  const { harness, runtime, runs, store, call, advance } = await setup(t, { taskStopped: async () => {
+    order.push("ledger-cancelled"); await gate; order.push(`worker-aborted:run-${runs.get(runId)?.status}`); } });
+  await harness.sessionFor("api:issue-17");
+  const session = runtime.sessions.get("api:issue-17")!; session.hold();
+  const { run_id } = await (await call("POST", "/v1/runs", { input: "Work SHR-17", session_id: "issue-17" })).json() as { run_id: string }; runId = run_id;
+  for (let i = 0; i < 100 && !harness.dispatchOrigin("api:issue-17"); i++) await settle();
+  const child = await store.submit("api:issue-17", "req-17", "Update SHR-17", "direct", 1, harness.dependencyCheckpoint("api:issue-17"), undefined, harness.dispatchOrigin("api:issue-17"));
+  await store.claim(child.id);
+  advance(DEFAULT_API_RESULT_HOLD_MS + 1);
+  await harness.tick(); for (let i = 0; i < 50 && !order.includes("ledger-cancelled"); i++) await settle();
+  // Stop mid-revocation: cancel itself waits for the (blocked) worker abort, so it is not awaited yet.
+  const stopping = harness.cancel("api:issue-17", `api:${run_id}`); for (let i = 0; i < 20; i++) await settle();
+  assert.equal(runs.get(run_id)!.status, "running", "cancelled result fenced while the worker still runs");
+  unblock(); await stopping; for (let i = 0; i < 100 && runs.get(run_id)!.status === "running"; i++) { await settle(); await harness.tick(); }
+  assert.notEqual(runs.get(run_id)!.status, "running");
+  // Revocation may run more than once (window close and stop; idempotent), but the run
+  // must still be open every time a worker abort completes.
+  assert.ok(order.includes("worker-aborted:run-running"));
+  assert.ok(order.every(o => !o.startsWith("worker-aborted") || o === "worker-aborted:run-running"), order.join(","));
+});
+
+test("a follow-up input's empty cancelled result for the API run is fenced during revocation", async t => {
+  let unblock!: () => void; const gate = new Promise<void>(r => { unblock = r; });
+  let runId = ""; const aborts: string[] = [];
+  const { harness, runtime, runs, store, start, advance } = await setup(t, { taskStopped: async () => { await gate; aborts.push(`run-${runs.get(runId)?.status}`); } });
+  const { run_id, child } = await start(); runId = run_id;
+  const claim = await store.claim(child.id); await store.complete(child.id, claim.token!, "SHR-1 updated");
+  const event = store.events().find(e => e.executionId === child.id && e.type === "result")!;
+  const session = runtime.sessions.get("api:issue-1")!; session.hold();
+  runtime.answer = () => "NO_REPLY";
+  await harness.accept({ id: `dispatch-event:${event.id}`, source: "host", sessionKey: "api:issue-1", hostEvent: { executionId: child.id },
+    text: `Dispatcher result (data, not new authorization) for ${child.id}:\nSHR-1 updated`, replyTo: { channel: "api", target: run_id } });
+  await store.ack(event.id);
+  for (let i = 0; i < 100 && session.prompts.length < 2; i++) await settle();
+  advance(DEFAULT_API_RESULT_HOLD_MS + 1);
+  await harness.tick(); for (let i = 0; i < 30; i++) await settle(); // closeApiWindow blocked; follow-up turn aborted (cancelled, empty)
+  assert.equal(runs.get(run_id)!.status, "running", "the follow-up's cancelled result must not end the run before workers stop");
+  unblock(); for (let i = 0; i < 100 && runs.get(run_id)!.status === "running"; i++) { await settle(); await harness.tick(); }
+  assert.notEqual(runs.get(run_id)!.status, "running");
+  assert.ok(aborts.length > 0 && aborts.every(a => a === "run-running"), aborts.join(","));
+});
+
+test("a newer run's answer does not supersede an older run whose revocation is still fenced", async t => {
+  let unblock!: () => void; const gate = new Promise<void>(r => { unblock = r; });
+  let oldRun = ""; const aborts: string[] = [];
+  const { harness, runs, store, call, start, advance } = await setup(t, { taskStopped: async () => { await gate; aborts.push(`old-${runs.get(oldRun)?.status}`); } });
+  const { run_id, child } = await start(); oldRun = run_id;
+  await store.claim(child.id);
+  advance(DEFAULT_API_RESULT_HOLD_MS + 1);
+  await harness.tick(); for (let i = 0; i < 20; i++) await settle(); // old run fenced, revocation blocked
+  // A newer run of the same session/task replies while the old one is fenced.
+  const newer = await (await call("POST", "/v1/runs", { input: "Status SHR-1?", session_id: "issue-1" })).json() as { run_id: string };
+  for (let i = 0; i < 40; i++) await settle();
+  assert.equal(runs.get(oldRun)!.status, "running", "old run must not be finished by supersession while its workers are not stopped");
+  unblock(); for (let i = 0; i < 100 && (runs.get(oldRun)!.status === "running" || runs.get(newer.run_id)!.status === "running" || runs.get(newer.run_id)!.status === "queued"); i++) { await settle(); await harness.tick(); }
+  assert.notEqual(runs.get(oldRun)!.status, "running");
+  assert.ok(aborts.length > 0 && aborts.every(a => a === "old-running"), aborts.join(","));
+});
+
+test("a pending revocation fence survives restart: workers are revoked before the restored run ends", async t => {
+  const dir = await mkdtemp(path.join(tmpdir(), "api-hold-fence-restart-")); t.after(() => rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }).catch(() => undefined));
+  const runs = new RunRegistry(path.join(dir, "runs.json"));
+  const record = runs.create({ session_key: "api:issue-18" }); runs.started(record.run_id);
+  const deferred = runs.create({ session_key: "api:issue-18" }); runs.started(deferred.run_id); await runs.save();
+  const order: string[] = [];
+  const harness = new Harness({ runtime: new FakeRuntime(), tickMs: 600_000, log: () => {}, now: () => 2000,
+    pendingNativeSubagent: () => false, taskStopped: async () => { order.push("worker-aborted"); } });
+  const api = new ApiChannel({ key: KEY, host: "127.0.0.1", port: 0, agent: "minerva", runs, cancel: (k, id) => harness.cancel(k, id), models: async () => [], log: () => {} });
+  const send = api.send.bind(api);
+  api.send = async (to, text, meta) => { if (!meta?.presentation) order.push(`run-end:${to.target === record.run_id ? "old" : "new"}`); return send(to, text, meta); };
+  harness.addChannel(api); harness.onStateChange = async () => {};
+  // Crash after the ledger was cancelled but before the physical worker abort succeeded.
+  harness.restoreSessions([{ key: "api:issue-18", tasks: [{ id: "t18", original: "Work SHR-18", state: "blocked", termination: "deadline_expired", depth: 0, recoveryEnrollment: "current",
+    apiRunDeadline: 1000, apiRevoking: true,
+    apiHold: { deadline: 1000, entry: { id: "held-18", sessionKey: "api:issue-18", to: { channel: "api", target: record.run_id }, text: "Interim" } },
+    apiDeferred: [{ id: "new-18", sessionKey: "api:issue-18", to: { channel: "api", target: deferred.run_id }, text: "Newer answer" }] }] }]);
+  assert.deepEqual(harness.heldApiRuns().sort(), [record.run_id, deferred.run_id].sort(), "deferred runs survive startup reconciliation");
+  await harness.start(); t.after(() => harness.stop(0));
+  for (let i = 0; i < 100 && (runs.get(record.run_id)!.status === "running" || runs.get(deferred.run_id)!.status === "running"); i++) { await harness.tick(); await settle(); }
+  assert.equal(order[0], "worker-aborted", order.join(","));
+  assert.ok(order.indexOf("run-end:old") > 0 && order.indexOf("run-end:new") > order.indexOf("run-end:old"), order.join(","));
+});
+
+test("a restored revocation fence without a held answer is retried on the tick", async t => {
+  const dir = await mkdtemp(path.join(tmpdir(), "api-hold-fence-nohold-")); t.after(() => rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }).catch(() => undefined));
+  const order: string[] = [];
+  const harness = new Harness({ runtime: new FakeRuntime(), tickMs: 600_000, log: () => {}, now: () => 2000,
+    pendingNativeSubagent: () => false, taskStopped: async () => { order.push("worker-aborted"); } });
+  harness.onStateChange = async () => {};
+  harness.restoreSessions([{ key: "api:issue-19", tasks: [{ id: "t19", original: "Work SHR-19", state: "active", depth: 0, recoveryEnrollment: "current",
+    apiRunDeadline: 1000, apiRevoking: true }] }]);
+  await harness.start(); t.after(() => harness.stop(0));
+  for (let i = 0; i < 50 && !order.length; i++) { await harness.tick(); await settle(); }
+  assert.deepEqual(order, ["worker-aborted"]);
+});
+
+test("a failed fence save is retried before any revocation step", async t => {
+  let saves = 0; const order: string[] = [];
+  const { harness, runs, store, start, advance } = await setup(t, { taskStopped: async () => { order.push("worker-aborted"); } });
+  const { run_id, child } = await start();
+  await store.claim(child.id);
+  harness.onStateChange = async () => { saves++; if (saves === 1) { order.push("save-failed"); throw Error("disk full"); } order.push("saved"); };
+  advance(DEFAULT_API_RESULT_HOLD_MS + 1);
+  for (let i = 0; i < 100 && runs.get(run_id)!.status === "running"; i++) { await harness.tick(); await settle(); }
+  assert.equal(order[0], "save-failed");
+  assert.ok(order.indexOf("saved") >= 0 && order.indexOf("saved") < order.indexOf("worker-aborted"), order.join(","));
+  assert.equal(store.list().find(e => e.id === child.id)!.status, "cancelled");
+});
+
+test("a fenced run without any held answer stays alive in startup reconciliation", async () => {
+  const harness = new Harness({ runtime: new FakeRuntime(), tickMs: 600_000, log: () => {}, pendingNativeSubagent: () => false });
+  harness.restoreSessions([{ key: "api:issue-20", tasks: [{ id: "t20", original: "Work SHR-20", state: "active", depth: 0, recoveryEnrollment: "current",
+    apiRunDeadline: 1000, apiRevoking: true, apiRevokingRun: "run_fenced20" }] }]);
+  assert.deepEqual(harness.heldApiRuns(), ["run_fenced20"]);
+});
+
+test("a deferred newer answer is re-held and released through its own work check, never pushed directly", async t => {
+  const dir = await mkdtemp(path.join(tmpdir(), "api-hold-deferred-")); t.after(() => rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }).catch(() => undefined));
+  const runs = new RunRegistry(path.join(dir, "runs.json"));
+  const old = runs.create({ session_key: "api:issue-21" }); runs.started(old.run_id);
+  const newer = runs.create({ session_key: "api:issue-21" }); runs.started(newer.run_id); await runs.save();
+  let nativeLive = false;
+  const harness = new Harness({ runtime: new FakeRuntime(), tickMs: 600_000, log: () => {}, now: () => 2000, pendingNativeSubagent: () => nativeLive });
+  const api = new ApiChannel({ key: KEY, host: "127.0.0.1", port: 0, agent: "minerva", runs, cancel: (k, id) => harness.cancel(k, id), models: async () => [], log: () => {} });
+  harness.addChannel(api); harness.onStateChange = async () => {};
+  harness.restoreSessions([{ key: "api:issue-21", tasks: [{ id: "t21", original: "Work SHR-21", state: "active", depth: 0, recoveryEnrollment: "current",
+    apiRunDeadline: 999_999,
+    apiHold: { deadline: 999_999, entry: { id: "held-21", sessionKey: "api:issue-21", to: { channel: "api", target: old.run_id }, text: "Old answer" } },
+    apiDeferred: [{ id: "new-21", sessionKey: "api:issue-21", to: { channel: "api", target: newer.run_id }, text: "Newer answer" }] }] }]);
+  await harness.start(); t.after(() => harness.stop(0));
+  for (let i = 0; i < 50 && runs.get(old.run_id)!.status === "running"; i++) { await harness.tick(); await settle(); }
+  assert.equal(runs.get(old.run_id)!.status, "completed");
+  nativeLive = true; // the newer run's own delegated work is live
+  for (let i = 0; i < 10; i++) { await harness.tick(); await settle(); }
+  assert.equal(runs.get(newer.run_id)!.status, "running", "deferred answer waits for its own live work");
+  nativeLive = false;
+  for (let i = 0; i < 50 && runs.get(newer.run_id)!.status === "running"; i++) { await harness.tick(); await settle(); }
+  assert.equal(runs.get(newer.run_id)!.status, "completed");
+});
+
+test("while fenced, a newer run's answer cannot take over the fenced run (no hold yet), also across restart", async t => {
+  const dir = await mkdtemp(path.join(tmpdir(), "api-hold-fenced-identity-")); t.after(() => rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }).catch(() => undefined));
+  const runs = new RunRegistry(path.join(dir, "runs.json"));
+  const fenced = runs.create({ session_key: "api:issue-22" }); runs.started(fenced.run_id);
+  const newer = runs.create({ session_key: "api:issue-22" }); runs.started(newer.run_id); await runs.save();
+  let unblock!: () => void; const gate = new Promise<void>(r => { unblock = r; });
+  const ends: string[] = [];
+  const harness = new Harness({ runtime: new FakeRuntime(), tickMs: 600_000, log: () => {}, now: () => 2000, pendingNativeSubagent: () => false,
+    taskStopped: async () => { await gate; ends.push("worker-aborted"); } });
+  const api = new ApiChannel({ key: KEY, host: "127.0.0.1", port: 0, agent: "minerva", runs, cancel: (k, id) => harness.cancel(k, id), models: async () => [], log: () => {} });
+  const send = api.send.bind(api);
+  api.send = async (to, text, meta) => { if (!meta?.presentation) ends.push(to.target === fenced.run_id ? "fenced-end" : "newer-end"); return send(to, text, meta); };
+  harness.addChannel(api); harness.onStateChange = async () => {};
+  // Restored: fence pending for the original run, no answer held yet.
+  harness.restoreSessions([{ key: "api:issue-22", tasks: [{ id: "t22", original: "Work SHR-22", state: "active", depth: 0, recoveryEnrollment: "current",
+    apiRunDeadline: 1000, apiRevoking: true, apiRevokingRun: fenced.run_id }] }]);
+  await harness.start(); t.after(() => harness.stop(0));
+  await harness.tick(); await settle(); // revocation in flight (blocked)
+  // A newer run's answer arrives first, then the fenced run's own answer.
+  assert.equal((harness as unknown as { holdApiResult: Function }).holdApiResult(harness["state"]("api:issue-22"), { id: "n", source: "api", sessionKey: "api:issue-22", taskId: "t22" },
+    { id: "newer-22", sessionKey: "api:issue-22", to: { channel: "api", target: newer.run_id }, text: "Newer" }), true);
+  assert.deepEqual(harness.heldApiRuns().sort(), [fenced.run_id, newer.run_id].sort(), "fenced identity kept, newer deferred");
+  unblock();
+  for (let i = 0; i < 100 && runs.get(newer.run_id)!.status === "running"; i++) { await harness.tick(); await settle(); }
+  assert.equal(ends[0], "worker-aborted", ends.join(","));
+  assert.ok(!ends.includes("fenced-end") || ends.indexOf("fenced-end") > 0, ends.join(","));
+  assert.equal(ends.at(-1), "newer-end", ends.join(","));
+});
+
+test("a fenced cancelled held result stays held through settlement and replay until revocation succeeded", async t => {
+  let unblock!: () => void; const gate = new Promise<void>(r => { unblock = r; });
+  let runId = ""; const aborts: string[] = [];
+  const settled: Array<{ outcome?: string; apiHeldUntil?: number; to: { target: string } }> = [];
+  const { harness, runtime, runs, store, call, advance } = await setup(t, { taskStopped: async () => { await gate; aborts.push(`run-${runs.get(runId)?.status}`); } });
+  const original = store.settleTurn.bind(store);
+  store.settleTurn = (async (id: string, key: string, settlement: { outbox: typeof settled }) => {
+    settled.push(...structuredClone(settlement.outbox)); return original(id, key, settlement as never); }) as typeof store.settleTurn;
+  await harness.sessionFor("api:issue-23");
+  const session = runtime.sessions.get("api:issue-23")!; const release = session.hold();
+  const { run_id } = await (await call("POST", "/v1/runs", { input: "Work SHR-23", session_id: "issue-23" })).json() as { run_id: string }; runId = run_id;
+  for (let i = 0; i < 100 && !harness.dispatchOrigin("api:issue-23"); i++) await settle();
+  const child = await store.submit("api:issue-23", "req-23", "Update SHR-23", "direct", 1, harness.dependencyCheckpoint("api:issue-23"), undefined, harness.dispatchOrigin("api:issue-23"));
+  await store.claim(child.id);
+  advance(DEFAULT_API_RESULT_HOLD_MS + 1);
+  await harness.tick(); for (let i = 0; i < 20; i++) await settle(); // fence up, revocation blocked; turn aborted → cancelled
+  release(); for (let i = 0; i < 30; i++) await settle();
+  assert.equal(runs.get(run_id)!.status, "running", "cancelled result is not delivered by settlement while fenced");
+  unblock(); for (let i = 0; i < 100 && runs.get(run_id)!.status === "running"; i++) { await settle(); await harness.tick(); }
+  assert.notEqual(runs.get(run_id)!.status, "running");
+  assert.ok(aborts.length > 0 && aborts.every(a => a === "run-running"), aborts.join(","));
+});
+
+test("a deferred answer is part of the durable turn settlement", async t => {
+  const { harness, start } = await setup(t);
+  const { run_id } = await start();
+  const s = harness["state"]("api:issue-1"); const task = harness["tasks"](s)[0];
+  task.apiRevoking = true; task.apiRevokingRun = run_id; // older run fenced
+  const input = { id: "follow", source: "host" as const, sessionKey: "api:issue-1", taskId: task.id };
+  const entry = { id: "newer-answer", sessionKey: "api:issue-1", to: { channel: "api", target: "run_newer" }, text: "Newer" };
+  assert.equal(harness["holdApiResult"](s, input, entry), true);
+  const settled = harness["settledHold"](s, input) as Array<{ id: string; apiDeferredHold?: boolean }>;
+  assert.deepEqual(settled.map(e => [e.id, e.apiDeferredHold]), [["newer-answer", true]], "deferred answer recorded in settlement for crash replay");
+  task.apiRevoking = undefined;
+});

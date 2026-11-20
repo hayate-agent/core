@@ -16,6 +16,8 @@ export interface OutboxEntry {
   statusKey?: string;
   /** Turn settlement only: an API answer held until this run deadline (restored as task.apiHold). */
   apiHeldUntil?: number;
+  /** Settlement marker: the held answer waits behind a fenced older run (task.apiDeferred). */
+  apiDeferredHold?: boolean;
 }
 
 export interface OutboxDeps {

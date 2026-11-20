@@ -111,6 +111,12 @@ export interface DurableTask {
   apiRunDeadline?: number;
   /** API run answer held while the task's delegated work is live (bounded by apiRunDeadline). */
   apiHold?: { deadline: number; entry: OutboxEntry };
+  /** Answers of a newer run that arrived while the held run was fenced/releasing; flushed after it. */
+  apiDeferred?: OutboxEntry[];
+  /** Window-close revocation pending (persisted fence): no terminal result until it succeeded. */
+  apiRevoking?: boolean;
+  /** API run whose window close is pending (kept alive across restart even without an answer). */
+  apiRevokingRun?: string;
   /** Queue namespace after reset; accepted IDs are never erased. */
   budgetEpoch?: string;
   explicitBlocked?: boolean;
