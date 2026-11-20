@@ -43,6 +43,7 @@ typeSafeDecisions:
   model: openjev-latest
   bearerTokenFile: /home/karsten/.pi/secrets/ai-gateway
   timeoutMs: 5000
+  minConfidence: 0.8   # optional, 0.5..0.9, default 0.8
 completionCheck:
   provider: typesafe-completion
 dispatcher:
@@ -148,3 +149,20 @@ Before that lock update, plain production build cannot include the new modules.
 Neither local test success nor a development lock proves deployability. Required
 reviews/CI/publication/final immutable lock and later parent-only native activation
 and separately released live acceptance remain outstanding.
+
+## Confidence floor and model cross-check
+
+The pinned transport reports every answer below 0.9 as `unknown`. Core wraps it
+with an operator-tunable floor `typeSafeDecisions.minConfidence` (default 0.8,
+allowed 0.5..0.9; 0.9 is the pinned transport's own floor, so it can be relaxed, not raised). A fully transport-validated choice at or above the floor is
+used; `unknown`/`none` choices are never re-admitted. Below the floor, or for an
+uncertain answer, the configured model validator (`modelRoles.validator`, else
+`review`, else `reviewer`) assesses the SAME exact authority and evidence once.
+Its decision is used; if it is uncertain too, the result stays inconclusive and
+reaches Main as before. Without a configured model validator nothing changes.
+
+For floors above 0.9, Core uses a compatibility copy of the pinned transport's
+validation with the stricter cutoff: the pinned API does not expose confidence
+for accepted answers. Generated plugin sources and the immutable lock are not
+modified. The same schema, bank, probability, credential, and cancellation checks
+apply; a 0.92 answer is inconclusive when the configured floor is 0.95.
