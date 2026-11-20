@@ -32,6 +32,8 @@ export interface PluginMessage {
   sender?: string;
   id?: string;
   thread?: string;
+  /** Opaque attachment references; the host still validates session scope and bytes. */
+  attachments?: import('./types.js').InboundAttachment[];
   /** Trusted adapter-selected overrides; routing/authority remain host-owned. */
   turn?: import("./types.js").TurnOptions;
 }
@@ -71,6 +73,7 @@ function wrapChannel(channel: PluginChannel): Channel {
       const input: Inbound = {
         source: "channel", text: message.text, turn: message.turn ? structuredClone(message.turn) : undefined,
         sessionKey: `plugin:${name}:${message.session}`,
+        ...(message.attachments !== undefined ? { attachments: structuredClone(message.attachments) } : {}),
         sender: message.sender,
         id: message.id === undefined ? undefined : `plugin:${name}:${message.id}`,
         replyTo: { channel: name, target: message.target, thread: message.thread },
@@ -125,6 +128,7 @@ export interface PluginServices { get(name: string): PluginService | undefined }
 
 export interface PluginAPI {
   readonly version: 1;
+  readonly channelAttachments?: 1;
   /** Trusted in-process capabilities; never infer authority from model input. */
   readonly executionContexts?: HostExecutionContexts;
   /** Reserve host admission for trusted work outside model turns. */
@@ -214,7 +218,7 @@ export class PluginHost {
         let registering = true;
         try {
           await module.activate(Object.freeze({
-            version: 1 as const, ...context,
+            version: 1 as const, channelAttachments: 1 as const, ...context,
             services: this.services,
             registerService: (name: string, version: number, implementation: object) => {
               if (!registering || !/^[a-z][a-z0-9_-]*$/.test(name) || !Number.isSafeInteger(version) || version < 1 ||
