@@ -4,7 +4,7 @@ import type { CompletionAuthorization, CompletionPrompt, CompletionDiagnosticSin
 import { ValidatorRegistry, completionFailureDetail } from "./validator.js";
 import { renderCompletionPrompt } from "./completion-budget.js";
 import { createHash } from "node:crypto";
-import { assessCompletion as validate } from "./builtin-plugins/completion-validator-plugin.js";
+import { assessCompletion as validate, legacyLLMProvider } from "./builtin-plugins/completion-validator-plugin.js";
 export type { CompletionAuthorization, CompletionDiagnostic, CompletionDiagnosticSink, CompletionPrompt } from "./validator.js";
 
 /** Same bounded allowance as a real Dispatcher step: queue/prefill/reasoning can
@@ -15,8 +15,11 @@ export function completionTimeout(configured?: number): number { return configur
  * read-only assessment, not effect replay or reset of productive budgets. */
 export function assessmentPolicyStamp(registry?: ValidatorRegistry, settings?: unknown, timeoutMs = DEFAULT_COMPLETION_TIMEOUT_MS): string | undefined {
   let p; try { p = registry?.current; } catch { return; } if (!p) return;
-  return `assessment-boundary-v3:${createHash("sha256").update(JSON.stringify([p.name, p.version, p.maxPromptBytes ?? 56000, p.maxAuthorityPromptBytes, timeoutMs, settings])).digest("hex")}`;
+  return `assessment-boundary-v4:${createHash("sha256").update(JSON.stringify([p.name, p.version, p.maxPromptBytes ?? 56000, p.maxAuthorityPromptBytes, timeoutMs, settings])).digest("hex")}`;
 }
+
+/** Model judge used once when a non-model classifier answers "uncertain". */
+export interface CompletionCrossCheck { backend: ReviewBackend; model?: string }
 
 /** Compatibility entry point. Host authority and ownership fences remain outside providers.
  * Plugin results are advisory; execution/worker precedence is enforced by existing callers.
@@ -25,7 +28,8 @@ export function assessmentPolicyStamp(registry?: ValidatorRegistry, settings?: u
 export async function assessCompletion(backend: ReviewBackend, input: Inbound, reply: string,
   authorization: CompletionAuthorization | undefined, signal: AbortSignal,
   model: string | undefined = undefined, now = Date.now, promptStrategy?: CompletionPrompt,
-  diagnostic?: CompletionDiagnosticSink, timeoutMs = 10000, registry?: ValidatorRegistry): Promise<NonNullable<Inbound["continuation"]> | undefined> {
+  diagnostic?: CompletionDiagnosticSink, timeoutMs = 10000, registry?: ValidatorRegistry,
+  crossCheck?: () => Promise<CompletionCrossCheck | undefined>): Promise<NonNullable<Inbound["continuation"]> | undefined> {
   const checkpoint = input.continuation;
   const permitted = () => input.source !== "api" &&
     (input.sessionKey !== "improvement:nightly" || authorization?.purpose === "nightly-closure") &&
@@ -63,8 +67,30 @@ export async function assessCompletion(backend: ReviewBackend, input: Inbound, r
     return validate(backend, input, reply, authorization, signal, model, now, promptStrategy,
       (category, detail) => diagnostic?.(category, category === "inconclusive" ? uncertainty : detail), timeoutMs, observed, prompt);
   };
+  // A classifier below its confidence floor is not a semantic blocker. When a
+  // model judge is configured, it decides once on the SAME exact authority and
+  // evidence instead of handing a routine verdict to Main as a question.
+  const original = diagnostic;
+  let held: [Parameters<CompletionDiagnosticSink>[0], Parameters<CompletionDiagnosticSink>[1]] | undefined;
+  const classifier = provider.requiresModel === false && !!crossCheck;
+  if (classifier) diagnostic = (category, detail) => { held = [category, detail]; };
   let result;
   try { result = provider.requiresModel !== false && backend.admit ? await backend.admit(execute, signal) : await execute(); }
-  catch { diagnostic?.(signal.aborted ? "unavailable" : "technical"); return; }
+  catch { held = undefined; original?.(signal.aborted ? "unavailable" : "technical"); return; }
+  diagnostic = original;
+  if (classifier && !result && held?.[0] === "inconclusive" && permitted()) {
+    let judge: CompletionCrossCheck | undefined;
+    try { judge = await crossCheck!(); } catch { judge = undefined; }
+    // Reuse the frozen classifier prompt, including its evidence projection and
+    // timestamp. Re-rendering could change authority/evidence between judges.
+    if (judge?.model) {
+      const run = () => validate(judge!.backend, input, reply, authorization, signal, judge!.model, now, promptStrategy,
+        (category, detail) => original?.(category, category === "inconclusive" ? held![1] ?? detail : detail), timeoutMs, legacyLLMProvider, prompt);
+      try { result = judge.backend.admit ? await judge.backend.admit(run, signal) : await run(); }
+      catch { original?.(signal.aborted ? "unavailable" : "technical"); return; }
+      return permitted() ? result : undefined;
+    }
+  }
+  if (held) original?.(held[0], held[1]);
   return permitted() ? result : undefined;
 }
