@@ -1,5 +1,5 @@
 {
-  "contentDigest": "af401332b03c5db1b1a596da19488ffe162b6558856cde8c8d134e2d85f5002c",
+  "contentDigest": "b387c6646d442c06bf92d16f3a3bb3b3ca4f4af9847991cd234f28ffd8ed0b64",
   "files": [
     {
       "mode": "100644",
@@ -1209,7 +1209,7 @@
     {
       "mode": "100644",
       "path": "src/plugins.ts",
-      "sha256": "7d2e70e1a7f7b5804ff8229df98c27347a9f25ebb26d0943e016207ac035070e"
+      "sha256": "b1c440c79ff5ea81d87df3ac7f7178983b7e22d7afd6c72cbdd70ccfe81518cc"
     },
     {
       "mode": "100644",
@@ -3404,7 +3404,7 @@
     {
       "mode": "100644",
       "path": "test/plugin-channels.test.ts",
-      "sha256": "6ad7b925a2ac9da7383b1585ed716ac8bf135abfa4779362a95eb40eece7a689"
+      "sha256": "00eae70ed179e5ba56f94a6597b5166d3dd632cb37a82b68d4cca2e245c02e42"
     },
     {
       "mode": "100644",
@@ -4670,5 +4670,5 @@
   "historyPolicy": "fresh-root; no source commits, tags, refs or deleted blobs",
   "pluginSHA": "a7ed21a16f2cbd312eac14a67b3a7692b2f4c6cf",
   "schema": 1,
-  "sourceSHA": "13b6166d685950aca797025ee01981c622fcd8bc"
+  "sourceSHA": "2a0e5290563533dc8c9acb89b0b32f9a42cfedb7"
 }
