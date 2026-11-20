@@ -1408,6 +1408,10 @@ export class Harness {
     if (!input || !task || task.recoveryEnrollment === "held-legacy" || input.taskId !== task.id || task.state === "stopped" ||
         (task.state === "completed" && input.source !== "host")) return;
     if (input.source === "host" && !this.resultMandate(input)) return;
+    // No new delegated work under a closing API run: its revocation must stay quiescent.
+    const apiOwner = this.apiTaskFor(s!, input);
+    if (apiOwner && (apiOwner.apiRevoking || this.apiClosings.has(apiOwner)))
+      throw new ToolGuardError("execution_cancelled", "API run is closing; no new delegated work");
     const deadlines = [task.expiresAt, input.continuationExpiresAt]
       .filter((value): value is number => value !== undefined);
     this.guardTaskAuthority(input);
@@ -4160,6 +4164,14 @@ export class Harness {
     s.unsaved = true;
   }
 
+  /** Any non-terminal dispatcher/native child of the run's owned tasks still live. */
+  private apiChildrenLive(s: SessionState, task: DurableTask): boolean {
+    const ids = [...(task.apiOwnedTasks ?? []), task.id];
+    if (ids.some(id => this.opts.pendingNativeSubagent?.(s.key, id))) return true;
+    return this.opts.executionStore?.list(s.key).some(e => !!e.dependency?.taskId && ids.includes(e.dependency.taskId) && !e.parentStopped &&
+      (e.status === "ready" || e.status === "running")) ?? false;
+  }
+
   /** Durable revocation of dispatcher AND native children (either may be configured alone). */
   private async revokeApiChildren(s: SessionState, task: DurableTask, visited = new Set<string>()): Promise<void> {
     // Ownership can grow while revocation awaits (a rebinding joining a closing owner):
@@ -4287,7 +4299,13 @@ export class Harness {
       // owned tasks and inputs arriving DURING revocation) not yet stopped.
       const unstopped = () => [...(s.current ? [s.current] : []), ...s.queue, ...(s.steered ?? [])]
         .filter(item => item.executionTurnId && !stoppedTurns.has(item.executionTurnId) && this.taskApiInput(s, task, item));
+      let passes = 0;
       do {
+        // Bounded: a run that does not become quiescent keeps its fence; the tick retries.
+        if (++passes > 8) throw Error("API run revocation not quiescent yet");
+        // Every pass revokes ALL owned tasks again (idempotent): a child admitted for an
+        // already-revoked task during an await is caught by the next pass.
+        visited.clear();
         await this.revokeApiChildren(s, task, visited);
         // Stopped durably before their entries are dropped (or the current turn aborted) and
         // before the fence lifts: a crash never leaves them replayable after the run ended.
@@ -4298,7 +4316,7 @@ export class Harness {
         await this.abortTaskTurn(s, task);
         // Re-scanned synchronously right before the fence is lifted and inputs are dropped
         // below (no await in between): no new ownership and no new durable turn slips through.
-      } while ([...(task.apiOwnedTasks ?? []), task.id].some(x => !visited.has(x)) || unstopped().length > 0);
+      } while ([...(task.apiOwnedTasks ?? []), task.id].some(x => !visited.has(x)) || unstopped().length > 0 || this.apiChildrenLive(s, task));
     } finally { this.apiCloseInFlight.delete(task); }
     if (!latest()) return; // a chained revocation is still pending: it lifts the fence
     // A fenced run that never produced an answer (e.g. restored after a crash) and has no

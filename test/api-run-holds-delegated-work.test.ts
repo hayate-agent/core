@@ -388,7 +388,7 @@ test("native-only: a stopped held run revokes native children before ending canc
   const record = runs.create({ session_key: "api:issue-14" }); runs.started(record.run_id); await runs.save();
   const order: string[] = [];
   const harness = new Harness({ runtime: new FakeRuntime(), tickMs: 600_000, log: () => {}, now: () => 2000,
-    pendingNativeSubagent: () => true, taskStopped: async () => { order.push("native-revoked"); } });
+    pendingNativeSubagent: () => !order.includes("native-revoked"), taskStopped: async () => { if (!order.includes("native-revoked")) order.push("native-revoked"); } });
   const api = new ApiChannel({ key: KEY, host: "127.0.0.1", port: 0, agent: "minerva", runs, cancel: (k, id) => harness.cancel(k, id), models: async () => [], log: () => {} });
   const send = api.send.bind(api);
   api.send = async (to, text, meta) => { if (!meta?.presentation) order.push(`run:${meta?.outcome ?? "completed"}`); return send(to, text, meta); };
@@ -1301,4 +1301,26 @@ test("a task has at most one owning run: rebinding onto a task owned by another 
   for (let i = 0; i < 2000 && !error; i++) await settle();
   assert.match(error, /owned by another API run/);
   assert.equal(store.coreTask(ref.id)!.generation, generation, "refusal writes nothing");
+});
+
+test("a child arriving for an already-revoked task during revocation is revoked before the fence lifts; no admission under the fence", async t => {
+  const { harness, store, start } = await setup(t);
+  const { child } = await start(); await store.claim(child.id);
+  const s = harness.state("api:issue-1"); const task = harness["tasks"](s)[0];
+  let late: { id: string } | undefined;
+  const abortTurn = harness["abortTaskTurn"].bind(harness); // after the first revocation pass
+  harness["abortTaskTurn"] = async (...a: unknown[]) => {
+    const r = await abortTurn(...a);
+    if (!late) { late = await store.submit("api:issue-1", "req-late", "Late child", "direct", 1, { taskId: task.id, depth: 1, original: task.original }); await store.claim(late.id); }
+    return r;
+  };
+  await harness["closeApiWindow"](s, task);
+  assert.ok(late, "late child admitted for the already-revoked task");
+  const record = store.list("api:issue-1").find(e => e.id === late!.id)!;
+  assert.ok(record.parentStopped || !["ready", "running"].includes(record.status), `late child revoked: ${record.status}`);
+  // Under the fence no new delegated work is admitted at all.
+  task.apiRevoking = true;
+  s.current = { id: "turn-x", source: "api", sessionKey: "api:issue-1", text: "x", taskId: task.id, replyTo: { channel: "api", target: "run_x" } } as never;
+  assert.throws(() => harness.dependencyCheckpoint("api:issue-1"), /API run is closing/);
+  task.apiRevoking = undefined; s.current = undefined;
 });
