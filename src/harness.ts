@@ -3934,8 +3934,7 @@ export class Harness {
   private apiWorkPending(s: SessionState, task: DurableTask, except?: Inbound): boolean {
     if (this.opts.pendingNativeSubagent?.(s.key, task.id) || this.opts.pendingNativeResult?.(s.key, task.id)) return true;
     const store = this.opts.executionStore;
-    const queued = () => [s.current, ...s.queue, ...(s.steered ?? [])].some(item => !!item && item !== except && (item.taskId === task.id ||
-      !!item.hostEvent?.nativeSubagent && this.opts.nativeResultTask?.(s.key, item.hostEvent.executionId) === task.id));
+    const queued = () => [s.current, ...s.queue, ...(s.steered ?? [])].some(item => !!item && item !== except && this.taskApiInput(s, task, item));
     if (!store) return queued();
     const children = store.list(s.key).filter(e => e.dependency?.taskId === task.id && !e.parentStopped);
     // An open child question waits for Main's answer within this run (bounded by the window).
@@ -4066,6 +4065,15 @@ export class Harness {
    * Revocation is durable first; the hold (persisted) is cleared only after delivery,
    * so a crash anywhere repeats this idempotent release on the next tick. Children
    * cannot restart meanwhile: their work deadline precedes the run deadline. */
+  /** An input that belongs to this task's API run, also before its task id is (re-)bound. */
+  private taskApiInput(s: SessionState, task: DurableTask, item: Inbound): boolean {
+    // An input still owed to the held API run (e.g. replayed after a crash) is this run's
+    // work: the run never ends on a stale held answer, and expiry drops it with the run.
+    const run = task.apiHold?.entry.to.target;
+    return item.taskId === task.id || !!run && item.replyTo?.channel === "api" && item.replyTo.target === run ||
+      !!item.hostEvent?.nativeSubagent && this.opts.nativeResultTask?.(s.key, item.hostEvent.executionId) === task.id;
+  }
+
   private async closeApiWindow(s: SessionState, task: DurableTask): Promise<void> {
     // Children are durably revoked BEFORE the same-task turn is aborted: an aborted turn
     // may deliver its terminal result at once, and no worker may outlive that.
@@ -4073,8 +4081,9 @@ export class Harness {
     await this.abortTaskTurn(s, task);
     if (task.state !== "completed" && task.state !== "stopped") { task.state = "blocked"; task.termination = "deadline_expired"; }
     task.recoveryAdmission = undefined; task.recoveryRetry = undefined;
-    const followups = s.queue.filter(item => item.taskId === task.id && item !== s.current);
+    const followups = s.queue.filter(item => item !== s.current && this.taskApiInput(s, task, item));
     for (const item of followups) s.queue.splice(s.queue.indexOf(item), 1);
+    if (s.steered) s.steered = s.steered.filter(item => !this.taskApiInput(s, task, item));
     await this.onStateChange?.();
   }
 

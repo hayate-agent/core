@@ -425,3 +425,33 @@ test("a native result accepted into Main's inbox but not yet processed keeps the
   await harness.tick(); await settle();
   assert.equal(runs.get(run_id)!.status, "running", "an accepted, unprocessed native result is live work of the run");
 });
+
+test("a restored stale hold is not released while an input for the same run is still pending replay", async t => {
+  const dir = await mkdtemp(path.join(tmpdir(), "api-hold-replay-")); t.after(() => rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }).catch(() => undefined));
+  const runs = new RunRegistry(path.join(dir, "runs.json"));
+  const record = runs.create({ session_key: "api:issue-15" }); runs.started(record.run_id); await runs.save();
+  const runtime = new FakeRuntime(() => "Final: SHR-15 done.");
+  let now = 2000;
+  const harness = new Harness({ runtime, tickMs: 600_000, log: () => {}, now: () => now });
+  const api = new ApiChannel({ key: KEY, host: "127.0.0.1", port: 0, agent: "minerva", runs, cancel: (k, id) => harness.cancel(k, id), models: async () => [], log: () => {} });
+  harness.addChannel(api); harness.onStateChange = async () => {};
+  const finished: string[] = []; const send = api.send.bind(api);
+  api.send = async (to, text, meta) => { if (!meta?.presentation) finished.push(text); return send(to, text, meta); };
+  // Crash after the follow-up cleared the hold in memory but before it settled: checkpoint has the
+  // old interim hold plus the still-pending follow-up (task id not yet bound).
+  harness.restoreSessions([{ key: "api:issue-15",
+    tasks: [{ id: "t15", original: "Work SHR-15", state: "active", depth: 0, recoveryEnrollment: "current",
+      apiRunDeadline: 999_999, apiHold: { deadline: 999_999, entry: { id: "held-15", sessionKey: "api:issue-15", to: { channel: "api", target: record.run_id }, text: "Interim: worker dispatched." } } }] }]);
+  const session = await harness.sessionFor("api:issue-15"); const release = runtime.sessions.get("api:issue-15")!.hold();
+  harness.restorePending([{ id: "busy-15", source: "api", sessionKey: "api:issue-15", text: "unrelated" },
+    { id: "follow-15", source: "host", sessionKey: "api:issue-15", text: "Dispatcher result: SHR-15 done", replyTo: { channel: "api", target: record.run_id } }]);
+  await harness.start(); t.after(() => harness.stop(0));
+  await harness.tick(); await settle();
+  assert.ok(!finished.includes("Interim: worker dispatched."), "stale interim answer must not end the run while its follow-up is pending");
+  // Window expiry while the unbound follow-up still waits behind the busy turn: it is dropped with the run.
+  now = 1_000_000;
+  await harness.tick(); for (let i = 0; i < 100 && runs.get(record.run_id)!.status === "running"; i++) await settle();
+  assert.notEqual(runs.get(record.run_id)!.status, "running");
+  assert.ok(!harness.pendingInputs().some(input => input.id === "follow-15"), "expired run's unbound follow-up never runs later");
+  void session; release();
+});
