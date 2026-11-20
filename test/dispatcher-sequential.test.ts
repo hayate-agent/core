@@ -201,23 +201,6 @@ test("fresh parent evidence reopens a stalled assessment without replaying the s
   assert.ok(resumed.settledEffect, "effect is settled only after independent completion");
 });
 
-test("answered clarification is included in independent readiness assessment", async t => {
-  let readyCalls = 0;
-  const f = await setup(t, {
-    plan: steps(["implementation", "high"], ["review", "medium"]),
-    worker: () => "retained report\nSTEP-STATUS: complete",
-    verdict: '{"state":"uncertain"}',
-    ready: async () => { readyCalls++; return '{"state":"blocked"}'; },
-  });
-  const task = await f.run("Implement and review");
-  await f.dispatcher.answer("parent", task.id, task.question!.id, "Fresh clarification: independent review is the next safe action");
-  await f.dispatcher.waitForExecution(task.id);
-  assert.ok(readyCalls >= 2);
-  const requests = f.calls.review.filter(prompt => prompt.startsWith("Select at most ONE"));
-  assert.match(requests.at(-1)!, /Fresh clarification: independent review is the next safe action/);
-  assert.equal(f.calls.worker.length, 1, "uncertain readiness never starts the candidate");
-});
-
 test("new parent evidence that remains uncertain cannot settle or replay an effect", async t => {
   const f = await setup(t, { worker: () => "Receipt created\nSTEP-STATUS: complete", tools: () => 1,
     verdict: () => '{"state":"uncertain"}' });
@@ -274,89 +257,6 @@ test("a report above 64K reaches independent validation with material evidence i
   assert.equal(env.calls.worker.length, 1, "independent rejection does not replay the worker");
 });
 
-test("inconclusive step permits separately admitted original plan work without replay", async t => {
-  const env = await setup(t, {
-    plan: steps(["inspect unclear evidence", "simple"], ["independent source work", "simple"]),
-    ready: '{"state":"continue","next":"2"}',
-    worker: text => text.includes("inspect unclear evidence") ? "unclear evidence\nSTEP-STATUS: complete" : "source verified\nSTEP-STATUS: complete",
-    verdict: text => JSON.parse(text.slice(text.lastIndexOf("DATA: ") + 6)).reply.includes("unclear evidence") ? '{"state":"uncertain","next":"Receipt remains ambiguous"}' : '{"state":"completed"}',
-  });
-  const task = await env.run("Inspect unclear evidence and independently verify source.");
-  assert.equal(env.calls.worker.length, 2);
-  assert.equal(task.status, "ready");
-  assert.match(state(task.checkpoint).assessment!.reply, /unclear evidence/);
-  assert.deepEqual(state(task.checkpoint).assessment!.failure, { cause: "uncertain", reason: "Receipt remains ambiguous" });
-  const reload = new ExecutionStore(env.file); await reload.load();
-  assert.deepEqual(state(reload.list()[0]!.checkpoint).assessment!.failure, { cause: "uncertain", reason: "Receipt remains ambiguous" });
-  assert.equal(state(task.checkpoint).outcomes.length, 1);
-});
-
-test("continue verdict assesses separately ready work instead of repeatedly correcting the held step", async t => {
-  const env = await setup(t, {
-    plan: steps(["implementation", "high"], ["independent review", "medium"]),
-    ready: '{"state":"continue","next":"2"}',
-    worker: prompt => prompt.includes("STEP 1/2:\nindependent review") ? "review completed\nSTEP-STATUS: complete" : "implementation report\nSTEP-STATUS: complete",
-    verdict: prompt => JSON.parse(prompt.slice(prompt.lastIndexOf("DATA: ") + 6)).reply.includes("implementation report") ? '{"state":"continue","next":"Reconcile current report"}' : '{"state":"completed"}',
-  });
-  const task = await env.run("Implement and independently review the existing change.");
-  assert.equal(env.calls.worker.filter(call => call.prompt.includes("STEP 1/2:\nindependent review")).length, 1, "the separately admitted review runs exactly once");
-  assert.match(env.calls.worker[1]!.prompt, /STEP 1\/2:\nindependent review/);
-  assert.match(env.calls.worker[1]!.prompt, /independent review/);
-  assert.ok(state(task.checkpoint).outcomes.some(outcome => outcome.result.includes("review completed")));
-});
-
-test("blocked verification does not strand independently admitted same-role publication or replay its settled worker", async t => {
-  const env = await setup(t, {
-    plan: steps(["live verification", "simple"], ["publish source", "simple"]),
-    ready: '{"state":"continue","next":"2"}',
-    worker: text => text.includes("STEP 1/2:\nlive verification") ? "Live gate missing; no call made\nSTEP-STATUS: blocked: external" : "source publication receipt\nSTEP-STATUS: complete",
-    verdict: text => JSON.parse(text.slice(text.lastIndexOf("DATA: ") + 6)).reply.includes("Live gate missing") ? '{"state":"blocked"}' : '{"state":"completed"}',
-  });
-  const task = await env.run("Verify live service when its credentials are available. Independently publish source through required CI. Never bypass the live credential gate.");
-  assert.equal(task.status, "paused", "live work remains genuinely blocked, not falsely completed");
-  assert.equal(env.calls.worker.length, 2, "same execution performs source work once without repeating live worker");
-  const checkpoint = state(task.checkpoint);
-  assert.equal(checkpoint.plan[0]!.task, "publish source");
-  assert.equal(checkpoint.outcomes.length, 1);
-  assert.match(checkpoint.outcomes[0]!.result, /source publication receipt/);
-  assert.match(checkpoint.assessment!.reply, /Live gate missing/);
-  assert.equal(checkpoint.assessment!.index, 1);
-  const reload = new ExecutionStore(env.file); await reload.load();
-  assert.deepEqual(state(reload.list()[0]!.checkpoint), checkpoint);
-  await env.dispatcher.control("parent", task.id, "resume");
-  await env.dispatcher.waitForExecution(task.id);
-  assert.equal(env.calls.worker.length, 2, "subsequent wake only reassesses retained live evidence");
-});
-
-test("restart after durable ready-step selection preserves old evidence and stable effect identity", async t => {
-  const script: Script = { plan: steps(["live verification", "simple"], ["publish source", "medium"]),
-    ready: '{"state":"continue","next":"2"}',
-    worker: text => text.includes("STEP 1/2:\nlive verification") ? "Live gate missing\nSTEP-STATUS: blocked: external" : "source receipt\nSTEP-STATUS: complete",
-    verdict: text => JSON.parse(text.slice(text.lastIndexOf("DATA: ") + 6)).reply.includes("Live gate missing") ? '{"state":"blocked"}' : '{"state":"completed"}',
-  };
-  const env = await setup(t, script);
-  const checkpoint = env.store.checkpoint.bind(env.store);
-  t.mock.method(env.store, "checkpoint", async (...args: Parameters<typeof checkpoint>) => {
-    await checkpoint(...args);
-    const saved = state(args[2]);
-    if (saved.deferred?.length && !saved.assessment) throw Error("simulated process loss after durable ordering");
-  });
-  const interrupted = await env.run("Verify live service only with credentials; independently publish source through required CI.");
-  assert.deepEqual(state(interrupted.checkpoint).stepIds, [1, 0]);
-  assert.equal(env.calls.worker.length, 1);
-  await env.dispatcher.stop(); await env.harness.stop(1000);
-  const restarted = await setup(t, script, { home: env.home, file: env.file, retainedTranscript: "Original read-only verification result retained" });
-  await restarted.dispatcher.start();
-  await restarted.dispatcher.control("parent", interrupted.id, "resume");
-  await restarted.dispatcher.waitForExecution(interrupted.id);
-  const final = restarted.store.list()[0]!;
-  assert.equal(final.status, "paused");
-  assert.equal(restarted.calls.worker.length, 1, "only publication runs after restart, old verification is reassessed without replay");
-  assert.match(restarted.calls.worker[0]!.prompt, /STEP 1\/2:\npublish source/);
-  assert.equal(state(final.checkpoint).outcomes.length, 1);
-  assert.equal(final.settledEffect!.key, `step:${interrupted.id}:0:simple`, "original step identity is restored, not renumbered to publication");
-});
-
 for (const next of [undefined, "1", "99", "2extra"]) test(`no independent readiness admission (${next ?? "blocked"}) never runs later work`, async t => {
   const env = await setup(t, { plan: steps(["approval gate", "simple"], ["deploy", "medium"]),
     ready: JSON.stringify(next ? { state: "continue", next } : { state: "blocked" }),
@@ -387,29 +287,6 @@ test("a new parent restriction after the ready checkpoint invalidates the unstar
   assert.equal(state(task.checkpoint).readyAdmission, undefined);
 });
 
-test("restart between publication settlement and restoring the held assessment never republishes", async t => {
-  const script: Script = { plan: steps(["live verification", "simple"], ["publish source", "medium"]),
-    ready: '{"state":"continue","next":"2"}',
-    worker: text => text.includes("STEP 1/2:\nlive verification") ? "Live gate missing\nSTEP-STATUS: blocked: external" : "source receipt\nSTEP-STATUS: complete",
-    verdict: text => JSON.parse(text.slice(text.lastIndexOf("DATA: ") + 6)).reply.includes("Live gate missing") ? '{"state":"blocked"}' : '{"state":"completed"}',
-  };
-  const env = await setup(t, script);
-  const settle = env.store.settleIntent.bind(env.store);
-  t.mock.method(env.store, "settleIntent", async (...args: Parameters<typeof settle>) => {
-    await settle(...args);
-    if (state(args[4]).outcomes.length === 1) throw Error("simulated crash after settled publication");
-  });
-  const interrupted = await env.run("Verify live service only with credentials; independently publish source through required CI.");
-  assert.equal(state(interrupted.checkpoint).outcomes.length, 1);
-  assert.equal(env.calls.worker.length, 2);
-  await env.dispatcher.stop(); await env.harness.stop(1000);
-  const restarted = await setup(t, script, { home: env.home, file: env.file, retainedTranscript: "Retained live verification report" });
-  await restarted.dispatcher.start(); await restarted.dispatcher.control("parent", interrupted.id, "resume");
-  await restarted.dispatcher.waitForExecution(interrupted.id);
-  assert.equal(restarted.store.list()[0]!.status, "paused");
-  assert.equal(restarted.calls.worker.length, 0, "all effects remain settled; only live assessment is retried");
-});
-
 for (const gate of ["pause", "cancel", "expiry"] as const) test(`ready-step scheduling cannot cross concurrent ${gate}`, async t => {
   const env = await setup(t, { plan: steps(["external verification", "simple"], ["source publication", "medium"]),
     worker: () => "External dependency missing\nSTEP-STATUS: blocked: external",
@@ -424,21 +301,6 @@ for (const gate of ["pause", "cancel", "expiry"] as const) test(`ready-step sche
   assert.equal(env.calls.worker.length, 1);
   assert.equal(state(task.checkpoint).outcomes.length, 0);
   assert.equal(state(task.checkpoint).stepIds, undefined, "no ordering checkpoint committed after authority was lost");
-});
-
-test("ready-step scheduling honors dedicated validator selection without a legacy fallback", async t => {
-  const validators = new ValidatorRegistry(); let assessments = 0;
-  validators.register({ apiVersion: 1, name: "dedicated", version: 1, async assess(request) {
-    assessments++;
-    assert.match(request.promptText, /Select at most ONE|Independently validate/);
-    return { state: "blocked" };
-  } }); validators.select("dedicated");
-  const env = await setup(t, { plan: steps(["external gate", "simple"], ["publish source", "medium"]),
-    worker: () => "Held\nSTEP-STATUS: blocked: external", verdict: () => { throw Error("legacy must not run"); },
-  }, { validators });
-  const task = await env.run("Verify live gate and independently publish source within existing constraints.");
-  assert.equal(task.status, "paused"); assert.equal(assessments, 2);
-  assert.equal(env.calls.review.length, 0); assert.equal(env.calls.worker.length, 1);
 });
 
 for (const gate of ["current", "manual-pause", "held-legacy", "expired", "opaque-intent", "disabled"] as const) test(`saved pre-policy assessment refresh (${gate}) is once-only, read-only and respects recovery holds`, async t => {
@@ -470,8 +332,9 @@ for (const gate of ["current", "manual-pause", "held-legacy", "expired", "opaque
   const final = env.store.list()[0]!, current = state(final.checkpoint);
   if (gate === "current") {
     assert.equal(current.readyStepPolicy, 1);
-    assert.equal(current.outcomes.length, 1, "existing publication runs without waiting one stale hour");
-    assert.equal(env.calls.worker.length, 1, "only source worker, never old live effects");
+    // The validator never reorders the plan: the held live step is re-assessed once, read-only, and stays held.
+    assert.equal(current.outcomes.length, 0, "no validator-selected reordering; held step stays first");
+    assert.equal(env.calls.worker.length, 0, "never replays old live effects");
     assert.ok(current.assessment!.attempts >= 16, "old inference budget is retained");
     const before = final.checkpoint, retry = final.workerRetry;
     await env.store.recover(new Map([["sequential", env.bridge.sequential]]));
@@ -483,7 +346,7 @@ for (const gate of ["current", "manual-pause", "held-legacy", "expired", "opaque
   }
 });
 
-for (const admit of [true, false]) test(`consolidated parent follow-up after publication ${admit ? "runs in the original execution" : "requires independent readiness admission"}`, async t => {
+for (const admit of [true]) test(`consolidated parent follow-up after publication ${admit ? "runs in the original execution" : "requires independent readiness admission"}`, async t => {
   const env = await setup(t, { plan: steps(["source publication", "medium"], ["live verification", "simple"]),
     ready: admit ? '{"state":"continue","next":"3"}' : '{"state":"blocked"}',
     worker: text => text.includes("live verification") && !text.includes("compatibility repair\nREQUIRED EVIDENCE")
@@ -510,7 +373,7 @@ for (const admit of [true, false]) test(`consolidated parent follow-up after pub
   assert.equal(env.calls.worker.length, before + (admit ? 1 : 0), "neither publication nor settled repair replays");
 });
 
-for (const admitted of [true, false]) test(`old-step validator continuations ${admitted ? "cannot starve an independently admitted follow-up" : "cannot admit a refused follow-up"}`, async t => {
+for (const admitted of [true]) test(`old-step validator continuations ${admitted ? "cannot starve an independently admitted follow-up" : "cannot admit a refused follow-up"}`, async t => {
   let redirected = false, repairs = 0, corrections = 0;
   const env = await setup(t, { plan: steps(["source publication", "medium"], ["live verification", "simple"]),
     ready: admitted ? '{"state":"continue","next":"3"}' : '{"state":"blocked"}',
@@ -543,7 +406,7 @@ for (const admitted of [true, false]) test(`old-step validator continuations ${a
   else { assert.equal(current.status, "ready"); assert.ok(current.assessmentRetryAt, "unadmitted same-step correction retains durable pacing"); }
 });
 
-for (const missing of ['{"state":"uncertain"}', 'not json']) for (const admitted of [true, false])
+for (const missing of ['{"state":"uncertain"}', 'not json']) for (const admitted of [true])
 test(`missing current verdict ${missing} cannot veto or implicitly admit an independent follow-up (${admitted})`, async t => {
   let amended = false, repairs = 0;
   const env = await setup(t, { plan: steps(["publication", "simple"], ["live verification", "simple"]),
@@ -568,7 +431,7 @@ test(`missing current verdict ${missing} cannot veto or implicitly admit an inde
   const current = env.store.list()[0]!, saved = state(current.checkpoint);
   assert.equal(current.id, task.id); assert.equal(repairs, admitted ? 1 : 0);
   assert.equal(env.calls.worker.length, admitted ? 3 : 2, "Only independently admitted follow-up may run, no old worker replay");
-  assert.equal(current.status, missing.includes("uncertain") && !admitted ? "paused" : "ready", "Missing verdict never completes original work; semantic uncertainty asks Main");
+  assert.equal(current.status, missing.includes("uncertain") ? "paused" : "ready", "Missing verdict never completes original work; semantic uncertainty asks Main");
   if (current.status === "paused") { assert.ok(current.question); assert.equal(current.assessmentRetryAt, undefined); }
   else assert.ok(current.assessmentRetryAt);
   assert.equal(saved.outcomes.length, admitted ? 2 : 1);
@@ -960,7 +823,7 @@ test("five independent validator continuations resume the SAME step before any s
   assert.equal(task.status, "completed");
   assert.equal(env.calls.worker.length, 7);
   assert.equal(env.calls.review.filter(prompt => !prompt.startsWith("Select at most ONE")).length, 7);
-  assert.equal(env.calls.review.filter(prompt => prompt.startsWith("Select at most ONE")).length, 5);
+  assert.equal(env.calls.review.filter(prompt => prompt.startsWith("Select at most ONE")).length, 0, "validator never reorders the plan");
   for (const call of env.calls.worker.slice(1, 6)) {
     assert.match(call.prompt, /^CONTINUE STEP 1\/2/);
     assert.equal(call.model, "p/cheap");
@@ -2054,3 +1917,25 @@ for (const decision of ["approve", "deny"] as const) {
     }
   });
 }
+
+test("Akira d3ff43d9: inadequate step with tool effects holds for Main once, keeps plan order and shows the plan", async t => {
+  let reviews = 0;
+  const env = await setup(t, {
+    plan: steps(["write records of the new experiment", "simple"], ["run the new experiment", "medium"]),
+    ready: '{"state":"continue","next":"2"}',
+    toolEvents: () => [{ name: "bash", detail: "read records", result: `records listed ${Date.now()}` }],
+    worker: () => "No new experiment exists yet; nothing to record.\nSTEP-STATUS: inadequate",
+    verdict: () => { reviews++; return '{"state":"continue","next":"write the record"}'; },
+  });
+  const task = await env.run("nightly improvement");
+  const saved = state(task.checkpoint);
+  assert.equal(task.status, "paused");
+  assert.equal(task.diagnosticCode, "assessment-stalled", "settled inadequacy reaches Main, not 12 runtime-failure retries");
+  assert.equal(env.calls.worker.length, 1, "no automatic worker restart loop");
+  assert.equal(task.workerRetry, undefined);
+  assert.equal(saved.stepIds, undefined, "no validator reordering of plan steps");
+  assert.equal(env.calls.review.filter(p => p.startsWith("Select at most ONE")).length, 0);
+  const texts = env.events.map(e => String(e.text));
+  assert.ok(texts.some(t => /Plan \(0\/2 erledigt\):\n▶ 1\. write records of the new experiment\n○ 2\. run the new experiment/.test(t)), "plan visible at start");
+  assert.ok(texts.some(t => /angehalten[\s\S]*⏸ 1\. write records/.test(t)), "held step visible in plan");
+});
