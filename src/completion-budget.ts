@@ -58,6 +58,32 @@ export function projectObservation(text: string, role: string, limit: number): {
   return result(accepted, true);
 }
 
+/** Lossless authority compaction: wake prompts (e.g. Paperclip) embed the same
+ * issue text verbatim several times, raw and JSON-escaped. A later exact repeat
+ * of a long line is replaced by a reference to its first, retained occurrence.
+ * Nothing unique is removed, nothing is shortened; text without repeats is
+ * returned unchanged. */
+export function losslessMandate(text: string, minimum = 160): string {
+  const seen = new Set<string>();
+  let out = text;
+  for (const line of text.split("\n")) {
+    if (line.length < minimum || seen.has(line)) continue;
+    seen.add(line);
+    const escaped = JSON.stringify(line).slice(1, -1);
+    const forms = escaped === line ? [line] : [line, escaped];
+    const first = Math.min(...forms.map(form => out.indexOf(form)).filter(index => index >= 0));
+    if (!Number.isFinite(first)) continue;
+    const reference = `[exact repeat of the earlier line beginning "${prefix(line, 48).replace(/["\\]/g, "'")}..."]`;
+    for (const form of forms) {
+      for (let index = out.indexOf(form, first + 1); index >= 0; index = out.indexOf(form, index + reference.length)) {
+        if (index === first) continue;
+        out = out.slice(0, index) + reference + out.slice(index + form.length);
+      }
+    }
+  }
+  return out;
+}
+
 /** One existing collector; immutable projection only. Each candidate is fully
  * rendered and measured. No final-string slicing and no model-selected evidence. */
 export function renderCompletionPrompt(strategy: CompletionPrompt, input: Inbound, reply: string,

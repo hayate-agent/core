@@ -115,7 +115,7 @@ async function setup(t: import("node:test").TestContext, script: Script, opts: {
       now++; await dispatcher.kick(); await dispatcher.waitForExecution(id); await dispatcher.flushEvents();
       return store.list().find(item => item.id === id)!;
     },
-    async run(input: string, dependency?: { expiresAt?: number }) {
+    async run(input: string, dependency?: { expiresAt?: number; original?: string }) {
       settled = new Promise<void>(r => { settle = r; });
       await dispatcher.start();
       const task = dependency
@@ -432,6 +432,25 @@ test("delegated step uses selected dedicated provider, not legacy LLM", async t 
   const env = await setup(t, { verdict: () => { throw Error("legacy must not run"); } }, { validators });
   const task = await env.run("Finish authorized tests");
   assert.equal(task.status, "completed"); assert.equal(assessments, 1); assert.equal(env.calls.review.length, 0);
+});
+
+test("Minerva: Paperclip-sized original mandate is assessed losslessly instead of failing closed as unavailable", async t => {
+  const validators = new ValidatorRegistry(); let assessments = 0; let seen = "";
+  validators.register({ apiVersion: 1, name: "bounded", version: 1, requiresModel: false, maxPromptBytes: 24000,
+    async assess(request) { assessments++; seen = request.promptText; return { state: "completed" }; } });
+  validators.select("bounded");
+  const env = await setup(t, { verdict: () => { throw Error("legacy must not run"); } }, { validators });
+  // Real shape: the issue body appears as description, objective JSON and wake payload JSON.
+  const rules = Array.from({ length: 40 }, (_, i) => `RULE ${i}: standing operator rule number ${i} with its exact wording, recipients and approval gates. `.repeat(4).trim());
+  const body = rules.join("\n");
+  const mandate = `Paperclip runtime identity\nIssue description:\n${body}\nObjective JSON: ${JSON.stringify({ objective: body })}\nWake payload JSON: ${JSON.stringify({ wake: { objective: body } })}\nFINAL RULE: never send mail externally.`;
+  assert.ok(Buffer.byteLength(mandate) > 45000, String(Buffer.byteLength(mandate)));
+  const task = await env.run("Reconcile SHR-21329 and post the summary", { original: mandate });
+  assert.equal(assessments, 1, "validator must run instead of failing closed as unavailable");
+  assert.equal(task.status, "completed");
+  for (const rule of rules) assert.ok(seen.includes(JSON.stringify(rule).slice(1, -1)), "every unique rule reaches the validator");
+  assert.match(seen, /FINAL RULE: never send mail externally/);
+  assert.match(seen, /exact repeat of the earlier line/);
 });
 
 for (const manual of [false, true]) {
