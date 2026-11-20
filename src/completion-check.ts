@@ -15,7 +15,7 @@ export function completionTimeout(configured?: number): number { return configur
  * read-only assessment, not effect replay or reset of productive budgets. */
 export function assessmentPolicyStamp(registry?: ValidatorRegistry, settings?: unknown, timeoutMs = DEFAULT_COMPLETION_TIMEOUT_MS): string | undefined {
   let p; try { p = registry?.current; } catch { return; } if (!p) return;
-  return `assessment-boundary-v2:${createHash("sha256").update(JSON.stringify([p.name, p.version, p.maxPromptBytes ?? 56000, timeoutMs, settings])).digest("hex")}`;
+  return `assessment-boundary-v3:${createHash("sha256").update(JSON.stringify([p.name, p.version, p.maxPromptBytes ?? 56000, p.maxAuthorityPromptBytes, timeoutMs, settings])).digest("hex")}`;
 }
 
 /** Compatibility entry point. Host authority and ownership fences remain outside providers.
@@ -37,7 +37,14 @@ export async function assessCompletion(backend: ReviewBackend, input: Inbound, r
   const provider = registry.current;
   if (!provider || !promptStrategy) { diagnostic?.("unavailable"); return; }
   let prompt: string | undefined;
-  try { prompt = renderCompletionPrompt(promptStrategy, input, reply, authorization!, now, provider.maxPromptBytes); }
+  try {
+    prompt = renderCompletionPrompt(promptStrategy, input, reply, authorization!, now, provider.maxPromptBytes);
+    // A provider's declared bound remains hard unless its trusted binding
+    // explicitly opts into a larger authority budget backed by its transport.
+    // Authority is never shortened; optional evidence is still projected.
+    if (prompt === undefined && provider.maxAuthorityPromptBytes !== undefined)
+      prompt = renderCompletionPrompt(promptStrategy, input, reply, authorization!, now, provider.maxAuthorityPromptBytes);
+  }
   catch { diagnostic?.("unavailable"); return; }
   if (prompt === undefined) { diagnostic?.("unavailable"); return; }
   const execute = async () => {

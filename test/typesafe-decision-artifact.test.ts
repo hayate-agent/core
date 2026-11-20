@@ -8,7 +8,7 @@ test("built shared transport, both decision exports and host hooks register with
   const network = t.mock.method(globalThis, "fetch", () => { throw Error("No network during registration"); });
   const { PluginHost } = await import(artifact("plugins"));
   const { createTypeSafeAPIPlugin } = await import(artifact("builtin-plugins/typesafe-api-plugin"));
-  const { typeSafeDecisionPlugin, TYPESAFE_VALIDATOR, TYPESAFE_DISPATCHER, COMPLETION_BANK, DISPATCH_BANK, READY_BANK } = await import(artifact("builtin-plugins/typesafe-decision-plugin"));
+  const { typeSafeDecisionPlugin, TYPESAFE_VALIDATOR, TYPESAFE_DISPATCHER, COMPLETION_BANK, DISPATCH_BANK, READY_BANK } = await import(artifact("typesafe-decisions"));
   for (const reverse of [false, true]) {
     const host = new PluginHost();
     host.validators.select(TYPESAFE_VALIDATOR); host.dispatchDecisions.select(TYPESAFE_DISPATCHER);
