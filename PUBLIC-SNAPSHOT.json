@@ -1,5 +1,5 @@
 {
-  "contentDigest": "85733e3d3cdca18b5e04d0e4ca84e7e1c8045503f426dfe5c2aaacd47572f3d8",
+  "contentDigest": "b999797b5b1cb0047a24e11ad7ded5707ece22f0bec1be7c41b3f758730bfb6c",
   "files": [
     {
       "mode": "100644",
@@ -484,7 +484,7 @@
     {
       "mode": "100644",
       "path": "docs/typesafe-decisions.md",
-      "sha256": "2c5787dd9f330c604e27fb07411d9772d9d5ba8c2ad80d1c4cc7b1e8afa31eaa"
+      "sha256": "730c48c90b94f07fd4ab0b9321bd5df8e9321bc7304ee62296dff37d9392286f"
     },
     {
       "mode": "100644",
@@ -734,7 +734,7 @@
     {
       "mode": "100644",
       "path": "src/cli.ts",
-      "sha256": "8a1db13e280b3519b45f29222ee774b64c3eda2ca3a105ba1156199b1e269e52"
+      "sha256": "691e1643d269e60c0f939c1fec21de1772377dfbb6c654d3e215435fb6b74e6f"
     },
     {
       "mode": "100644",
@@ -749,12 +749,12 @@
     {
       "mode": "100644",
       "path": "src/completion-budget.ts",
-      "sha256": "a799f25aca35acb259b6b968c31133d7ba0fc8efe1dd3181a5f73430875c5859"
+      "sha256": "203987135428ad7554b6b3276dbbe2b0f873fb3126d3abd45466769d1d852ad5"
     },
     {
       "mode": "100644",
       "path": "src/completion-check.ts",
-      "sha256": "1273638946bc2f11141a2be5cace6d93e045683ff2bf370c55360570ab1d715e"
+      "sha256": "60a154f6646d35195efe58ede6bb3facd3b1cbb7b1e805de4cdd2793d6a3ff3a"
     },
     {
       "mode": "100644",
@@ -879,7 +879,7 @@
     {
       "mode": "100644",
       "path": "src/dispatcher-sequential.ts",
-      "sha256": "3c79ad6dda74bbe0fe5337661943e6feb8344e7d2434078cfd5302c2b9da79ad"
+      "sha256": "602188a37fe7226af04e1235ed0b09b8af35bfa73de7991ccc5250c5c9114b40"
     },
     {
       "mode": "100644",
@@ -1518,6 +1518,11 @@
     },
     {
       "mode": "100644",
+      "path": "src/typesafe-decisions.ts",
+      "sha256": "9c962e0666146ea1d8a3691d8fa449ff1c7e682ff73db1d0a93253e3c3d15c77"
+    },
+    {
+      "mode": "100644",
       "path": "src/update-maintenance.ts",
       "sha256": "e8b5e5cbe362d29f6fbcc124ceb836ab6dbd4d7917f3314fd643be1f50ac4ec0"
     },
@@ -1529,7 +1534,7 @@
     {
       "mode": "100644",
       "path": "src/validator.ts",
-      "sha256": "ed8d2a586b1dea85cef4d4fb97d4ac03da66428545deaa6772d419849f5a429a"
+      "sha256": "0ec32067fa5c36e72472b3cb625d52a2d32b99fbad59ade7da81011af7750aed"
     },
     {
       "mode": "100644",
@@ -1674,7 +1679,7 @@
     {
       "mode": "100644",
       "path": "test/assessment-boundaries.test.ts",
-      "sha256": "51b84da636312bc9054c46884c1e478e017c88299a5d540dd72cda4aef80708b"
+      "sha256": "684d60f836c44076cc0d28edf2889ae8e6ae8a739dffb5eded1fc2d70b29137b"
     },
     {
       "mode": "100644",
@@ -1894,7 +1899,7 @@
     {
       "mode": "100644",
       "path": "test/completion-budget.test.ts",
-      "sha256": "96105f7c0e8fa9b3e921ae24d29633a2053d461e9849e10ac0090e89284ed4d8"
+      "sha256": "18b1b3fdd3e9ba12392d1130703967667a4a869f4f03cb32249cf823f473bab1"
     },
     {
       "mode": "100644",
@@ -2319,7 +2324,7 @@
     {
       "mode": "100644",
       "path": "test/dispatcher-sequential.test.ts",
-      "sha256": "f8f2caf964b7d9e38d99dfa8e4ddfb92035bdfd4756a8b2172491d0056a6663c"
+      "sha256": "425f2dfcab6e7155e4fba95d45ce9580e2fc9fa3169e99580aa333a84994fb89"
     },
     {
       "mode": "100644",
@@ -4214,12 +4219,12 @@
     {
       "mode": "100644",
       "path": "test/typesafe-decision-artifact.test.ts",
-      "sha256": "3c6179da1fbadd16d95fcfb9caf8c5190ba0698d2ea5c03370c3bb2b466eebb1"
+      "sha256": "daeda2d32beab539b9ec89410ccb3c9fc5386af79baeb719400ccc1311e2ee7c"
     },
     {
       "mode": "100644",
       "path": "test/typesafe-decisions.test.ts",
-      "sha256": "bd74ea0507ce9076265ed5351803a75f8397e7b9922730a367f1020fae3789d8"
+      "sha256": "f5a80bc5d96ecc6e0e0849dd5c31e7e59f35d331437e3365f09e66d6d9446a1c"
     },
     {
       "mode": "100644",
@@ -4660,5 +4665,5 @@
   "historyPolicy": "fresh-root; no source commits, tags, refs or deleted blobs",
   "pluginSHA": "a7ed21a16f2cbd312eac14a67b3a7692b2f4c6cf",
   "schema": 1,
-  "sourceSHA": "b78cd7d12f5ed0986d4dfe5824cd5bf92dd9c847"
+  "sourceSHA": "9427826e385b866e6e4b52f998a980a0b7803a50"
 }

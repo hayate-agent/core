@@ -24,6 +24,30 @@ test("transport-specific budget is honored without truncating original authority
   for (const value of [0, NaN, 56001]) assert.throws(() => new ValidatorRegistry().register({ apiVersion: 1, name: "invalid", version: 1, maxPromptBytes: value, assess: async () => ({ state: "completed" }) }));
 });
 
+test("oversized authority cannot exceed a custom provider hard bound without explicit opt-in", async () => {
+  for (const optedIn of [false, true]) {
+    const registry = new ValidatorRegistry(); let calls = 0;
+    registry.register({ apiVersion: 1, name: "custom", version: 1, requiresModel: false, maxPromptBytes: 24000,
+      ...(optedIn ? { maxAuthorityPromptBytes: 32000 } : {}),
+      assess: async request => { calls++; assert.ok(Buffer.byteLength(request.promptText) <= 32000); return { state: "completed" }; } });
+    registry.select("custom");
+    const backend = { review: async () => { throw Error("No fallback"); } };
+    const verdict = await assessCompletion(backend, input(), "report", { task: "x".repeat(25000) }, new AbortController().signal,
+      undefined, Date.now, prompt, undefined, 1000, registry);
+    assert.equal(calls, optedIn ? 1 : 0);
+    assert.equal(verdict?.state, optedIn ? "completed" : undefined);
+    const stamp = assessmentPolicyStamp(registry);
+    assert.equal(await assessCompletion(backend, input(), "report", { task: "x".repeat(33000) }, new AbortController().signal,
+      undefined, Date.now, prompt, undefined, 1000, registry), undefined);
+    assert.equal(calls, optedIn ? 1 : 0, "the explicit larger bound is still hard");
+    assert.ok(stamp);
+  }
+  for (const value of [0, NaN, 23999, 56001]) assert.throws(() => new ValidatorRegistry().register({ apiVersion: 1, name: "invalid", version: 1,
+    maxPromptBytes: 24000, maxAuthorityPromptBytes: value, assess: async () => undefined }));
+  assert.throws(() => new ValidatorRegistry().register({ apiVersion: 1, name: "invalid", version: 1,
+    maxAuthorityPromptBytes: 56000, assess: async () => undefined }));
+});
+
 test("shared model capacity wait cannot consume provider execution timeout", async t => {
   t.mock.timers.enable({ apis: ["setTimeout"] });
   let release!: () => void; const queued = new Promise<void>(r => { release = r; }); let calls = 0;

@@ -121,7 +121,7 @@ import { roleAwareReviewer, resolveModelRole } from "./model-roles.js";
 import { runtimeReviewer } from "./runtime/reviewer.js";
 import { validatorRole } from "./dispatcher-sequential.js";
 import { createTypeSafeAPIPlugin } from "./builtin-plugins/typesafe-api-plugin.js";
-import { typeSafeDecisionPlugin } from "./builtin-plugins/typesafe-decision-plugin.js";
+import { typeSafeDecisionPlugin } from "./typesafe-decisions.js";
 import { boundaryAssessor } from "./builtin-plugins/boundary-assessor.js";
 import { pruneToolResults } from "./builtin-plugins/tool-result-projector.js";
 import { contextStrategyHolder, disabledContextStrategies, diagnosedBoundaryAssessor } from "./context-strategies.js";
