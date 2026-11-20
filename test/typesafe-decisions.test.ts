@@ -12,6 +12,7 @@ import { Dispatcher } from "../src/dispatcher.js";
 import { ExecutionStore } from "../src/execution.js";
 import { FakeRuntime, MemoryChannel, msg } from "./fakes.js";
 import { assessCompletion } from "../src/completion-check.js";
+import { losslessMandate, renderCompletionPrompt } from "../src/completion-budget.js";
 import { completionPrompt } from "../src/builtin-plugins/completion-prompt.js";
 import { typeSafeDecisionPlugin, TYPESAFE_VALIDATOR, TYPESAFE_DISPATCHER, COMPLETION_BANK, DISPATCH_BANK, READY_BANK } from "../src/builtin-plugins/typesafe-decision-plugin.js";
 import { createTypeSafeAPIPlugin, createTypeSafeAPI, TYPESAFE_STATE_BYTES, type ChoiceBank } from "../src/builtin-plugins/typesafe-api-plugin.js";
@@ -118,6 +119,42 @@ for (const consumer of ["Validator", "Dispatcher"]) test(`registered ${consumer}
   }
   assert.equal(env.requests.length, 0, "refusal must occur before transport export");
   assert.equal(fallbackCalls, 0);
+});
+
+for (const consumer of ["Validator", "Dispatcher"]) test(`registered ${consumer} oversized exact authority reaches the real bounded TypeSafe transport`, async t => {
+  const env = await fixture(t);
+  const registry = consumer === "Validator" ? env.host.validators : env.host.dispatchDecisions;
+  assert.equal(registry.current?.maxPromptBytes, 24000, "routine evidence budget is distinct from transport ceiling");
+  assert.equal(TYPESAFE_STATE_BYTES, 56000, "pin the transport contract, not a permissive mock provider");
+  const rules = Array.from({ length: 60 }, (_, i) => `RULE ${i}: preserve the exact recipients, approval gates and scope for requirement ${i}. `.repeat(4).trim());
+  const body = rules.join("\n");
+  const original = `Issue description:\n${body}\nObjective JSON: ${JSON.stringify({ objective: body })}\nWake payload JSON: ${JSON.stringify({ wake: { objective: body } })}\nFINAL RULE: never send mail externally.`;
+  const task = losslessMandate(original);
+  assert.ok(Buffer.byteLength(original) > TYPESAFE_STATE_BYTES);
+  assert.ok(Buffer.byteLength(task) > 24000);
+  const input = { id: consumer === "Validator" ? "assessment" : "validate:synthetic:0", source: "host" as const, sessionKey: "mem:oversized", text: "Reconcile the existing report only" };
+  const authorization = { task };
+  assert.equal(renderCompletionPrompt(completionPrompt, input, "Synthetic completed report", authorization, Date.now, 24000), undefined);
+  const verdict = await assessCompletion(forbiddenBackend, input, "Synthetic completed report", authorization, new AbortController().signal,
+    undefined, Date.now, completionPrompt, undefined, 2000, registry);
+  assert.equal(verdict?.state, "completed");
+  assert.equal(env.requests.length, 1, "real adapter and transport must export once, without fallback");
+  const state = env.requests[0]!.body.state as string;
+  assert.ok(Buffer.byteLength(state) > 24000);
+  assert.ok(Buffer.byteLength(state) <= TYPESAFE_STATE_BYTES);
+  for (const rule of rules) assert.ok(state.includes(JSON.stringify(rule).slice(1, -1)), "every unique rule must reach the wire intact");
+  assert.match(state, /FINAL RULE: never send mail externally/);
+  assert.match(state, /exact repeat of the earlier line/);
+  assert.ok(Object.hasOwn(env.requests[0]!.body.questions, consumer === "Validator" ? COMPLETION_BANK.id : DISPATCH_BANK.id));
+  assertPrivateWire(env);
+
+  // Exercise the actual transport guard directly, not just Core's renderer or
+  // the adapter. Multibyte state must be bounded by UTF-8 bytes, not JS length.
+  const wire = createTypeSafeAPI(env.config);
+  for (const state of ["x".repeat(TYPESAFE_STATE_BYTES + 1), "界".repeat(20000)]) {
+    assert.equal(await wire.choose(COMPLETION_BANK, state, new AbortController().signal), undefined);
+  }
+  assert.equal(env.requests.length, 1, "over-ceiling state must never reach HTTP");
 });
 
 for (const reverse of [false, true]) test(`built registries and reverse bootstrap order ${reverse}`, async t => {
