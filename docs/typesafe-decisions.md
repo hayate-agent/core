@@ -161,8 +161,7 @@ uncertain answer, the configured model validator (`modelRoles.validator`, else
 Its decision is used; if it is uncertain too, the result stays inconclusive and
 reaches Main as before. Without a configured model validator nothing changes.
 
-For floors above 0.9, Core uses a compatibility copy of the pinned transport's
-validation with the stricter cutoff: the pinned API does not expose confidence
-for accepted answers. Generated plugin sources and the immutable lock are not
-modified. The same schema, bank, probability, credential, and cancellation checks
-apply; a 0.92 answer is inconclusive when the configured floor is 0.95.
+Floors above 0.9 are rejected at configuration time: the pinned API exposes
+confidence only for rejected answers, so Core can relax its floor but cannot
+raise it without copying the transport. Generated plugin sources and the
+immutable lock are not modified.
