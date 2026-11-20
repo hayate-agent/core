@@ -144,6 +144,16 @@ export class Subagents {
       requestId: r.id, input: r.handover.task, strategy: "native-subagent", strategyVersion: 1,
       status: "completed", restarts: 0, result: r.result };
   }
+  /** Terminal child whose durable result has not yet reached Main's inbox. */
+  resultPending(parent: string, taskId: string): boolean {
+    return [...this.records.values()].some(r => r.parent === parent && r.parentTaskId === taskId &&
+      !!r.dependency && !r.parentStopped && r.resultEvent === "pending");
+  }
+  /** Parent task a native child belongs to (its result input carries only the execution id). */
+  resultTask(parent: string, executionId: string): string | undefined {
+    const r = this.records.get(executionId);
+    return r && r.parent === parent && !r.parentStopped ? r.parentTaskId : undefined;
+  }
   pending(parent: string, taskId?: string): boolean {
     return [...this.records.values()].some(r => r.parent === parent && (!taskId || r.parentTaskId === taskId) &&
       !!r.dependency && !r.parentStopped && !r.ownershipHold &&

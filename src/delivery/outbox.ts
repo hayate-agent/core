@@ -14,6 +14,8 @@ export interface OutboxEntry {
   progressId?: string;
   /** Routine status uses a stable update row, not a final reply. */
   statusKey?: string;
+  /** Turn settlement only: an API answer held until this run deadline (restored as task.apiHold). */
+  apiHeldUntil?: number;
 }
 
 export interface OutboxDeps {

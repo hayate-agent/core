@@ -107,6 +107,10 @@ export interface DurableTask {
   termination?: "deadline_expired" | "productive_budget_exhausted" | "malformed_checkpoint" | "recovery_assessment_failed" | "operator_budget_reset";
   /** Stable durable outbox notice; never renews the task's authority or budget. */
   budgetAttentionId?: string;
+  /** API run window end, fixed when the API task was accepted; never renewed. */
+  apiRunDeadline?: number;
+  /** API run answer held while the task's delegated work is live (bounded by apiRunDeadline). */
+  apiHold?: { deadline: number; entry: OutboxEntry };
   /** Queue namespace after reset; accepted IDs are never erased. */
   budgetEpoch?: string;
   explicitBlocked?: boolean;

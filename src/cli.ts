@@ -549,6 +549,8 @@ async function main(argv: string[]): Promise<void> {
       ? !!subagents.resultExecution(input) : !!dispatchRuntime?.hostEventAllowed(input)),
     nativeSubagentExecution: input => subagents.resultExecution(input),
     pendingNativeSubagent: (key, taskId) => subagents.pending(key, taskId),
+    pendingNativeResult: (key, taskId) => subagents.resultPending(key, taskId),
+    nativeResultTask: (key, executionId) => subagents.resultTask(key, executionId),
     // Reserve this namespace even with dispatch disabled: stale opaque turns
     // must be reconciled through the ledger, not replayed by Harness startup.
     externallyRecoveredSession: key => key.startsWith("dispatch:"),
@@ -788,7 +790,8 @@ async function main(argv: string[]): Promise<void> {
     // A run whose turn never made it into the inbox (crash between record and accept) is over.
     const pendingIds = new Set((saved?.pending ?? []).map((i) => i.id));
     const outboxRuns = new Set((saved?.outbox ?? []).filter((e) => e.to.channel === API_CHANNEL).map((e) => e.to.target));
-    const lost = await runs.reconcile((r) => pendingIds.has(r.input_id) || outboxRuns.has(r.run_id));
+    const heldRuns = new Set(harness.heldApiRuns());
+    const lost = await runs.reconcile((r) => pendingIds.has(r.input_id) || outboxRuns.has(r.run_id) || heldRuns.has(r.run_id));
     if (lost.length) console.error(`[api] ${lost.length} run(s) interrupted by the restart`);
   }
   await scheduler.load();
