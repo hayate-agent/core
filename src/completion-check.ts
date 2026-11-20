@@ -2,7 +2,7 @@ import type { Inbound } from "./types.js";
 import type { AssessmentBackend as ReviewBackend } from "./assessment-backend.js";
 import type { CompletionAuthorization, CompletionPrompt, CompletionDiagnosticSink } from "./validator.js";
 import { ValidatorRegistry, completionFailureDetail } from "./validator.js";
-import { COMPLETION_PROMPT_LIMIT, renderCompletionPrompt } from "./completion-budget.js";
+import { renderCompletionPrompt } from "./completion-budget.js";
 import { createHash } from "node:crypto";
 import { assessCompletion as validate } from "./builtin-plugins/completion-validator-plugin.js";
 export type { CompletionAuthorization, CompletionDiagnostic, CompletionDiagnosticSink, CompletionPrompt } from "./validator.js";
@@ -15,7 +15,7 @@ export function completionTimeout(configured?: number): number { return configur
  * read-only assessment, not effect replay or reset of productive budgets. */
 export function assessmentPolicyStamp(registry?: ValidatorRegistry, settings?: unknown, timeoutMs = DEFAULT_COMPLETION_TIMEOUT_MS): string | undefined {
   let p; try { p = registry?.current; } catch { return; } if (!p) return;
-  return `assessment-boundary-v3:${createHash("sha256").update(JSON.stringify([p.name, p.version, p.maxPromptBytes ?? 56000, timeoutMs, settings])).digest("hex")}`;
+  return `assessment-boundary-v3:${createHash("sha256").update(JSON.stringify([p.name, p.version, p.maxPromptBytes ?? 56000, p.maxAuthorityPromptBytes, timeoutMs, settings])).digest("hex")}`;
 }
 
 /** Compatibility entry point. Host authority and ownership fences remain outside providers.
@@ -39,12 +39,11 @@ export async function assessCompletion(backend: ReviewBackend, input: Inbound, r
   let prompt: string | undefined;
   try {
     prompt = renderCompletionPrompt(promptStrategy, input, reply, authorization!, now, provider.maxPromptBytes);
-    // maxPromptBytes is the provider's ROUTINE evidence budget. When the exact,
-    // untruncated authority alone does not fit it, assess within the shared
-    // transport ceiling instead of failing closed forever (Minerva: every step
-    // "unavailable"). Authority is never shortened; evidence is still projected.
-    if (prompt === undefined && provider.maxPromptBytes !== undefined && provider.maxPromptBytes < COMPLETION_PROMPT_LIMIT)
-      prompt = renderCompletionPrompt(promptStrategy, input, reply, authorization!, now, COMPLETION_PROMPT_LIMIT);
+    // A provider's declared bound remains hard unless its trusted binding
+    // explicitly opts into a larger authority budget backed by its transport.
+    // Authority is never shortened; optional evidence is still projected.
+    if (prompt === undefined && provider.maxAuthorityPromptBytes !== undefined)
+      prompt = renderCompletionPrompt(promptStrategy, input, reply, authorization!, now, provider.maxAuthorityPromptBytes);
   }
   catch { diagnostic?.("unavailable"); return; }
   if (prompt === undefined) { diagnostic?.("unavailable"); return; }

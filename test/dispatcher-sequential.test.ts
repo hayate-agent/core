@@ -436,7 +436,7 @@ test("delegated step uses selected dedicated provider, not legacy LLM", async t 
 
 test("Minerva: Paperclip-sized original mandate is assessed losslessly instead of failing closed as unavailable", async t => {
   const validators = new ValidatorRegistry(); let assessments = 0; let seen = "";
-  validators.register({ apiVersion: 1, name: "bounded", version: 1, requiresModel: false, maxPromptBytes: 24000,
+  validators.register({ apiVersion: 1, name: "bounded", version: 1, requiresModel: false, maxPromptBytes: 24000, maxAuthorityPromptBytes: 56000,
     async assess(request) { assessments++; seen = request.promptText; return { state: "completed" }; } });
   validators.select("bounded");
   const env = await setup(t, { verdict: () => { throw Error("legacy must not run"); } }, { validators });

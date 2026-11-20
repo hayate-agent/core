@@ -14,7 +14,7 @@ import { FakeRuntime, MemoryChannel, msg } from "./fakes.js";
 import { assessCompletion } from "../src/completion-check.js";
 import { losslessMandate, renderCompletionPrompt } from "../src/completion-budget.js";
 import { completionPrompt } from "../src/builtin-plugins/completion-prompt.js";
-import { typeSafeDecisionPlugin, TYPESAFE_VALIDATOR, TYPESAFE_DISPATCHER, COMPLETION_BANK, DISPATCH_BANK, READY_BANK } from "../src/builtin-plugins/typesafe-decision-plugin.js";
+import { typeSafeDecisionPlugin, TYPESAFE_VALIDATOR, TYPESAFE_DISPATCHER, COMPLETION_BANK, DISPATCH_BANK, READY_BANK } from "../src/typesafe-decisions.js";
 import { createTypeSafeAPIPlugin, createTypeSafeAPI, TYPESAFE_STATE_BYTES, type ChoiceBank } from "../src/builtin-plugins/typesafe-api-plugin.js";
 import { dispatcherConfig } from "../src/dispatcher-config.js";
 
@@ -125,6 +125,7 @@ for (const consumer of ["Validator", "Dispatcher"]) test(`registered ${consumer}
   const env = await fixture(t);
   const registry = consumer === "Validator" ? env.host.validators : env.host.dispatchDecisions;
   assert.equal(registry.current?.maxPromptBytes, 24000, "routine evidence budget is distinct from transport ceiling");
+  assert.equal(registry.current?.maxAuthorityPromptBytes, TYPESAFE_STATE_BYTES);
   assert.equal(TYPESAFE_STATE_BYTES, 56000, "pin the transport contract, not a permissive mock provider");
   const rules = Array.from({ length: 60 }, (_, i) => `RULE ${i}: preserve the exact recipients, approval gates and scope for requirement ${i}. `.repeat(4).trim());
   const body = rules.join("\n");
