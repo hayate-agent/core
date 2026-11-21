@@ -1,5 +1,5 @@
 {
-  "contentDigest": "68be140f8bf8c2d2493c2cb46bf8d8a91116c9ba6ca52853c67a96521d017564",
+  "contentDigest": "cae32f3ddb5491c8e382b5d2726e8e30587c3efd366c675c4b879212e0d3e455",
   "files": [
     {
       "mode": "100644",
@@ -989,7 +989,7 @@
     {
       "mode": "100644",
       "path": "src/improvement.ts",
-      "sha256": "b95360135b601e9744ed485c6f4a0103cc6eb739b1d586a5eec9b5ca240bf8a3"
+      "sha256": "f9fff171d5b356fa5ab003600f63ecd058f1fe3197a1112d7d9410c46f84a631"
     },
     {
       "mode": "100644",
@@ -2705,6 +2705,11 @@
       "mode": "100644",
       "path": "test/improvement-experiments.test.ts",
       "sha256": "ce47d6e1e62a53b8ef8de1f0fb4715561bff57afeccc07f34972ce83b31cb061"
+    },
+    {
+      "mode": "100644",
+      "path": "test/improvement-held-delegation.test.ts",
+      "sha256": "faad6a3e54db8cdbbdb81fe17103fe7db335f546391bb23cc14e91714933f840"
     },
     {
       "mode": "100644",
@@ -4680,5 +4685,5 @@
   "historyPolicy": "fresh-root; no source commits, tags, refs or deleted blobs",
   "pluginSHA": "fc5864dfd1930ad340e3b25e84fcf0a997ec1708",
   "schema": 1,
-  "sourceSHA": "f9ee6e29c0292fc0a0479d7de7c51e5b80644020"
+  "sourceSHA": "c0a69f5d90066a2ab1919b99393ccf32cb1cba60"
 }
