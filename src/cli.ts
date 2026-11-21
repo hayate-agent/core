@@ -550,6 +550,8 @@ async function main(argv: string[]): Promise<void> {
     nativeSubagentExecution: input => subagents.resultExecution(input),
     pendingNativeSubagent: (key, taskId) => subagents.pending(key, taskId),
     pendingNativeResult: (key, taskId) => subagents.resultPending(key, taskId),
+    nativeOwned: (key, taskId) => subagents.owned(key, taskId),
+    nativeLiveForTask: taskId => subagents.liveForTask(taskId),
     nativeResultTask: (key, executionId) => subagents.resultTask(key, executionId),
     // Reserve this namespace even with dispatch disabled: stale opaque turns
     // must be reconciled through the ledger, not replayed by Harness startup.

@@ -154,6 +154,15 @@ export class Subagents {
     const r = this.records.get(executionId);
     return r && r.parent === parent && !r.parentStopped ? r.parentTaskId : undefined;
   }
+  /** Live native work for a task from ANY parent session (running, queued or result undelivered). */
+  liveForTask(taskId: string): boolean {
+    return [...this.records.values()].some(r => r.parentTaskId === taskId && !r.parentStopped &&
+      (["queued", "running"].includes(r.state) || r.resultEvent === "pending"));
+  }
+  /** Any native child ever started for this parent task (also settled ones). */
+  owned(parent: string, taskId: string): boolean {
+    return [...this.records.values()].some(r => r.parent === parent && r.parentTaskId === taskId);
+  }
   pending(parent: string, taskId?: string): boolean {
     return [...this.records.values()].some(r => r.parent === parent && (!taskId || r.parentTaskId === taskId) &&
       !!r.dependency && !r.parentStopped && !r.ownershipHold &&
@@ -237,6 +246,8 @@ export class Subagents {
     if (parentState?.current && (parentState.cancelling === parentState.current ||
         (parentState.tasks ?? (parentState.task ? [parentState.task] : [])).some(task => task.id === parentState.current?.taskId && task.state === "stopped")))
       throw new ToolGuardError("execution_cancelled", "Parent task cancelled");
+    // Checkpoint and record insertion happen in the same synchronous step (no await between):
+    // a rebinding either sees this record as owned work or this checkpoint is refused.
     const mandate = this.harness.dependencyCheckpoint(parent);
     const parentTaskId = mandate?.taskId;
     const record:SubagentRecord={id,parent,...(parentTaskId ? { parentTaskId, dependency: structuredClone(mandate), origin: this.harness.dispatchOrigin(parent) } : {}), ...(mandate?.taskRef ? { taskRef: mandate.taskRef } : {}),sessionKey:`subagent:${id}`,handover:selected,state:"queued",expiresAt:Date.now()+this.maxDurationMs};

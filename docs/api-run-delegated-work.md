@@ -38,10 +38,77 @@ The run is released on the host tick and delivered directly to the run (finishin
 idempotent). An unrelated turn running in the same session therefore cannot delay the
 deadline.
 
-## Task-scoped window
+## Rebinding only while the run owns nothing (KISS)
 
-The run window belongs to the task, not to an individual run. A newer API run can only
-answer for an existing task through task rebinding, which carries the earliest acceptance
-anchor (`apiRunDeadline`) onto the task and never extends it. All runs bound to a task
-therefore share one window: when it closes, the task's delegated work is revoked under the
-durable fence and each held run ends in order through the single release path.
+An API run that owns nothing yet (no delegated work ever submitted for its task, no held or
+deferred answer, no revocation fence) may resume an older operator order: its turn is
+rebound and its acceptance-anchored window moves, unchanged, to that order's task. Exactly
+one task ever carries the run window. As soon as the run owns anything, `reopen`/`clarify`
+from its turn is refused before any write (`close` stays allowed), so work, holds and
+revocation never move between tasks. No delegated work is admitted while a rebinding is in
+flight.
+
+The rebinding is atomic: while it is in flight no delegated work is admitted (native starts
+take their checkpoint and insert their record in one synchronous step). "Owns nothing" covers
+every child ever started for the run's task (settled native children included, any parent),
+and the destination order must own no work of another mandate either. A stop or window close
+that begins during the rebinding fences the run immediately and durably on its own task; the
+run is then not moved (it ends there) and the order merely stays open. The same holds if
+work of another mandate reached the destination during the rebinding's awaits: ownership is
+re-checked synchronously right before the move, and once moved the run identity guard
+refuses every foreign submission for the destination. The admission guard applies to the task wherever it lives
+(also a submission from another session for an order carried by an API run), and native
+starts (`dependencyCheckpoint`) apply the same persisted guards as dispatcher submissions. Submissions that passed admission but whose ledger
+write is still pending count as live destination work (`submissionInFlight`). Live
+destination work is checked across all sessions (dispatcher executions and native
+children of any parent). Once moved, no foreign work can attach (the run-identity guard
+applies across sessions), so the run's liveness and revocation stay scoped to its own
+session. Terminal
+history (completed or cancelled executions) of the destination does not block resuming it;
+the run's own task, in contrast, counts every child ever started under it. The rebinding is never
+refused after its durable decision and binding were written. A finished run clears its task's
+window, so a later run can resume the same order.
+
+Admission is bound to the run identity: the task persists the run carrying its window
+(`apiRunId`, moved by a rebinding), and work submitted for another API run is refused, so a
+delayed submission of an ended run never enters a later run's window on the same order.
+Crash consistency: the rebinding persists an intent (`apiRebindIntent`) before its first
+durable task-book write, and the run window and identity move only in the final step. Any
+interruption (failed write or restart) leaves the run entirely on its own task; a reopened
+order is then merely open and carried by no run, so a later run can still resume it. While
+an intent is pending no work is admitted for the task; a restored intent is retired. If the
+final save of the move fails, both tasks stay fenced (no admission) and the save is retried
+until it covers the move. Admission also refuses work once the run's acceptance-anchored
+window has passed, even before the tick raises the revocation fence.
+
+A rebinding persists the move-away on the old task (`apiRunEndedAt`), so a stale checkpoint
+of the old task stays refused after a restart. A later run resuming an order whose earlier
+run ended gets its own bounded authority (its own window), never the expired predecessor's.
+When a task's run has ended (`apiRunEndedAt`, persisted) and no run is open, a checkpoint
+captured under it admits no delegated work. A late result for a closed or held order is
+delivered to an API run as progress only; it never ends a run outside its hold and fence.
+
+After a run ended, only stale API authority is fenced: API-origin or origin-less work under
+the ended run is refused, while a later operator mandate (non-API host origin, any session)
+can delegate on the order again.
+
+A task carried by an API run takes delegated work only from the run's own session
+(submissions from other sessions are refused, whatever their origin), so the run's liveness
+and revocation, scoped to that session, see all of its work. From the final liveness check
+of the release path until the run has ended, no new work is admitted; submissions admitted
+but not yet written keep the run open.
+
+An order is carried by at most one API run across all sessions: the carrier check covers
+every session and in-flight rebindings, before any write and right before the move.
+
+Replay exhaustion of an API turn (a turn interrupted too often by restarts) fails the run
+through its hold whenever its task carries the run (live work or a restored revocation
+fence alike): the release path waits for the fence, revokes the children, ends the run and
+retires the task's run window, so the order is not left with a stale carrier.
+
+An expired queued run's `cancelled` result is durably staged and then delivered directly by
+the tick, independent of a long-running turn in the same session. A finished run clears
+its task's window, so a later run can resume the same order.
+
+This feature is first released with this change; no earlier version persisted run
+ownership (`apiRunDeadline` and related fields), so there is no legacy state to migrate.

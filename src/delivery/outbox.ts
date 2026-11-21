@@ -64,6 +64,10 @@ export class OutboxDelivery {
     this.blocked.add(entry);
   }
 
+  isBlocked(entry: OutboxEntry): boolean {
+    return this.blocked.has(entry);
+  }
+
   get hasBlocked(): boolean {
     return this.blocked.size > 0;
   }

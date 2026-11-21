@@ -109,6 +109,14 @@ export interface DurableTask {
   budgetAttentionId?: string;
   /** API run window end, fixed when the API task was accepted; never renewed. */
   apiRunDeadline?: number;
+  /** Persisted: an API run of this task ended. Delegated work admitted from a checkpoint
+   * captured before must carry that run's window; anything captured earlier is refused. */
+  apiRunEndedAt?: number;
+  /** Persisted: the API run currently carrying this task's window (moves with a rebinding). */
+  apiRunId?: string;
+  /** Persisted before a rebinding's first durable write. An interrupted rebinding (crash or
+   * failed write) leaves the run entirely on this task; no work is admitted meanwhile. */
+  apiRebindIntent?: number;
   /** API run answer held while the task's delegated work is live (bounded by apiRunDeadline). */
   apiHold?: { deadline: number; entry: OutboxEntry };
   /** Answers of a newer run that arrived while the held run was fenced/releasing; flushed after it. */
@@ -120,8 +128,6 @@ export interface DurableTask {
   /** A stop of this run is part of the pending fence: every retry (also after restart) resumes
    * the complete stop (turn + follow-ups + children) before the fence can lift. */
   apiStop?: { id: string; text: string; taskId: string; executionTurnId?: string; replyTo?: { channel: string; target: string } };
-  /** Tasks this API run's turn was bound to before a rebinding: their work stays owned by the run. */
-  apiOwnedTasks?: string[];
   /** Queue namespace after reset; accepted IDs are never erased. */
   budgetEpoch?: string;
   explicitBlocked?: boolean;

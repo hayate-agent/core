@@ -193,6 +193,13 @@ export class ExecutionStore {
   private data: Ledger = { version: 1, executions: [], events: [] };
   private queue: Promise<unknown> = Promise.resolve();
   private loaded = false;
+  /** Host admission check, run inside the serialized submission (never on a stale checkpoint). */
+  submitGuard?: (parent: string, dependency: Execution["dependency"], origin: Execution["origin"]) => void;
+  /** Resolves once every already queued mutation (e.g. a submission) has committed or failed. */
+  quiesce(): Promise<void> { return this.queue.then(() => undefined, () => undefined); }
+  /** Task ids of submissions admitted by submitGuard whose ledger write has not finished yet. */
+  private readonly inflightTasks = new Map<string, number>();
+  submissionInFlight(taskId: string): boolean { return (this.inflightTasks.get(taskId) ?? 0) > 0; }
   private readonly storage: PartitionedJson;
   private readonly dependencies: ExecutionDependencyStorage;
   private readonly taskBooks: TaskBookStorage;
@@ -737,6 +744,7 @@ export class ExecutionStore {
     });
   }
   submit(parent: string, requestId: string, input: string, strategy: string, strategyVersion = 1, dependency?: Execution["dependency"], pinned?: Execution["pinned"], origin?: Execution["origin"]): Promise<Execution> {
+    let admitted: string | undefined;
     return this.mutate(async draft => {
       if (![parent, requestId, input, strategy].every(value => typeof value === "string" && value.trim()) || input.length > 1024 * 1024 ||
           !Number.isSafeInteger(strategyVersion) || strategyVersion < 1) throw Error("Invalid execution submission");
@@ -752,11 +760,19 @@ export class ExecutionStore {
         return old;
       }
       if (draft.executions.length >= 2000) throw Error("Retained execution limit reached; archive only after reconciliation");
+      this.submitGuard?.(parent, dependency, origin);
+      // Visible synchronously from admission until the write finished (see finally below).
+      if (dependency?.taskId) { const id = dependency.taskId; this.inflightTasks.set(id, (this.inflightTasks.get(id) ?? 0) + 1);
+        admitted = id; }
       if (origin !== undefined && !validAddress(origin)) throw Error("Invalid execution origin");
       const task: Execution = { recoveryEnrollment: "current", dependency: structuredClone(dependency), ...(origin ? { origin: structuredClone(origin) } : {}), pinned: structuredClone(pinned), id: randomUUID(), parent, requestId, input, strategy, strategyVersion, status: "ready", restarts: 0 };
       draft.executions.push(task);
       this.event(draft, task, "accepted", "Auftrag angenommen");
       return task;
+    }).finally(() => {
+      if (!admitted) return;
+      const n = (this.inflightTasks.get(admitted) ?? 1) - 1;
+      if (n > 0) this.inflightTasks.set(admitted, n); else this.inflightTasks.delete(admitted);
     });
   }
   /** Persist before dispatcher startup: accepted/interrupted work stays current;
