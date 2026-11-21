@@ -1,5 +1,5 @@
 {
-  "contentDigest": "8ab64169e68c9e0dde89ecd08078b6014e992c252613eb983e5dab754c2825ce",
+  "contentDigest": "68be140f8bf8c2d2493c2cb46bf8d8a91116c9ba6ca52853c67a96521d017564",
   "files": [
     {
       "mode": "100644",
@@ -50,6 +50,11 @@
       "mode": "100644",
       "path": "docs/agent-variants.md",
       "sha256": "7cf857eb5afd803d684eb46d2ef3c4bc950bc8049e043a38dd58babe2b5ad508"
+    },
+    {
+      "mode": "100644",
+      "path": "docs/api-run-delegated-work.md",
+      "sha256": "fd9d92a3112748cd5c34e8df19c00d10c8b908f948d983010ea3cd1ff6aef832"
     },
     {
       "mode": "100644",
@@ -734,7 +739,7 @@
     {
       "mode": "100644",
       "path": "src/cli.ts",
-      "sha256": "c1821847b4ea3f4455362f2720ecf83500270dfad50bf4c7ee7634552b14fd09"
+      "sha256": "eed0ea3f4c444cfa8fdaa849dbf4a21ae15fc6504ec33590141f26edbbb606da"
     },
     {
       "mode": "100644",
@@ -834,7 +839,7 @@
     {
       "mode": "100644",
       "path": "src/delivery/outbox.ts",
-      "sha256": "e4d29cd0fb04e35b0b92818136f3a53ac11f78a360ee9159807e5ec7a46d6bbe"
+      "sha256": "6bb176ae367c34df6a2f644322a0e799babebb3ad51fe5efaf9071620810b47d"
     },
     {
       "mode": "100644",
@@ -919,7 +924,7 @@
     {
       "mode": "100644",
       "path": "src/execution.ts",
-      "sha256": "826b30c735c9df3730b05e324121baf5b4131e4a3057cdc65a5037593beb0c61"
+      "sha256": "73f9784129eea04de9f6c229120d33de6b6bf6cfc036e2685b1e1701bd59481a"
     },
     {
       "mode": "100644",
@@ -949,12 +954,12 @@
     {
       "mode": "100644",
       "path": "src/harness-state.ts",
-      "sha256": "204fc6dcdf550d2287534361f6b6b3fdfe8672d9f4e47435829b27d89e33e5de"
+      "sha256": "e834f24cb1d5bf4c5acdd6cc9dd738d86522dab06c4b7cd2e4de0d221ce9eba0"
     },
     {
       "mode": "100644",
       "path": "src/harness.ts",
-      "sha256": "ea9a5502e0e1a660cdf6feab1e16c28a51aeec6f8fe99cac2390e3a9773848cf"
+      "sha256": "1f7d601ebf670628dfff252156aa006989b595f8e7890bf19f70f6c97e4f395b"
     },
     {
       "mode": "100644",
@@ -1459,7 +1464,7 @@
     {
       "mode": "100644",
       "path": "src/subagents.ts",
-      "sha256": "3cc95b57631a7ce8ff835edcf55146ba338b9b5d5c91c246ce33baa2e01ad6ee"
+      "sha256": "1de8220813ab6c5ba35d8dc1b7e904bcc9486481d077ce85668f8db6e6561156"
     },
     {
       "mode": "100644",
@@ -1514,7 +1519,7 @@
     {
       "mode": "100644",
       "path": "src/types.ts",
-      "sha256": "ce3dba1b0c69f645d6856773e1992dd6d68471d7e0b34a4ab9be7d8d45041e84"
+      "sha256": "d3835d68104fe2122d8c2a04946be9a090987afdd74ba7da806070d537b7a34d"
     },
     {
       "mode": "100644",
@@ -1635,6 +1640,11 @@
       "mode": "100644",
       "path": "test/api-keepalive.test.ts",
       "sha256": "e9737ad56e3815365fcef0f1d6838e596da797e8da8c7dc574306728c9bc9a01"
+    },
+    {
+      "mode": "100644",
+      "path": "test/api-run-holds-delegated-work.test.ts",
+      "sha256": "ea53b58643ad1d1cc50e00d9dca1c53dd8cc00c86797c0e5a0a5a656de4f0d6d"
     },
     {
       "mode": "100644",
@@ -4670,5 +4680,5 @@
   "historyPolicy": "fresh-root; no source commits, tags, refs or deleted blobs",
   "pluginSHA": "fc5864dfd1930ad340e3b25e84fcf0a997ec1708",
   "schema": 1,
-  "sourceSHA": "5ae681768d27368305a2b332ab5d5938b8a3cb2f"
+  "sourceSHA": "f9ee6e29c0292fc0a0479d7de7c51e5b80644020"
 }
