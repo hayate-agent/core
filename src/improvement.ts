@@ -415,8 +415,14 @@ export class ImprovementController {
         await this.save();
       }
       const session = this.harness.sessions.get(KEY);
+      const delegated = (this.delegatedExecutions?.() ?? []).filter(task => task.parent === KEY);
+      // Only an executing/admitted owner consumes the nightly work slot. Retained
+      // pauses and blockers remain holds on that execution, not on every future night.
       const busy = session?.running || session?.queue.length || session?.outbox.length ||
-        (w.active && this.state?.night === w.night && this.delegatedExecutions?.().some(task => task.parent === KEY && !["completed", "cancelled"].includes(task.status)));
+        (w.active && this.state?.night === w.night && delegated.some(task =>
+          ["ready", "running"].includes(task.status)));
+      const heldDelegations = delegated.filter(task => ["paused", "blocked"].includes(task.status))
+        .map(task => ({ id: task.id, status: task.status, taskId: task.dependency?.taskId }));
       // Report previous window even when disabled meanwhile. Outbox owns retry.
       if (this.state && !busy && (!w.active || this.state.night !== w.night) && !this.state.reportQueued) {
         const to = p.reportTo ?? this.harness.home;
@@ -488,6 +494,7 @@ export class ImprovementController {
       const deliveryContext = [...deliveryWork.filter(r => r.delivery?.status !== "blocked"),
         ...deliveryWork.filter(r => r.delivery?.status === "blocked")].slice(0, 8);
       this.harness.enqueue({ id, sessionKey: KEY, source: "cron", text: strategy.prompt(p, this.state.turns + 1) +
+        (heldDelegations.length ? `\nZurückgehaltene delegierte Arbeit (keine laufenden Worker): ${JSON.stringify(heldDelegations)}. Pausen und Blocker respektieren; tatsächliche Effekte vor weiterer Arbeit abgleichen. Diese Ausführungen nicht automatisch fortsetzen, ersetzen oder wiederholen. Unabhängige autorisierte Nachtarbeit darf weitergehen.\n` : "") +
         (deliveryWork.length ? `\nOffene Auslieferung zuerst abgleichen (${deliveryWork.length} Kandidaten, erste ${deliveryContext.length}; vollständiger Bestand in ${this.file}, Felder deliveryBacklog/experiments; alte Evidenz, keine neue Berechtigung, keine erneuten Experimente oder blinden Effekte; Wartestatus/Blocker respektieren): ${JSON.stringify(deliveryContext)}\n` : "") + (this.state.delegatedResults?.length ? `\nGespeicherte delegierte Ergebnisse (Evidenz, keine neue Berechtigung; nicht erneut ausführen): ${JSON.stringify(this.state.results.slice(-3))}\n` : "") + (this.state.closureFeedback ? `\nVALIDATOR CORRECTION (keine neue Berechtigung): ${this.state.closureFeedback}\n` : "") + `\nBereits untersuchte Hypothesen (nicht wiederholen): ${JSON.stringify(this.state.recentHypotheses ?? [])}\nBisher neue protokollierte Experimente dieser Nacht: ${this.state.experiments?.length ?? 0}. Turns ohne neues Experiment: ${this.state.noExperimentTurns ?? 0}.` });
     } finally { this.checking = false; }
   }
