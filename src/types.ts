@@ -116,6 +116,8 @@ export interface Inbound {
   started?: boolean;
   /** Stable first-start timestamp, persisted before execution for replay-safe memory capture. */
   memoryRecordedAt?: number;
+  /** Host clock at durable API acceptance; anchors the API run window (persisted with the inbox). */
+  apiAcceptedAt?: number;
   /** Durable logical message identity used by edit-capable gateways across restarts. */
   progressId?: string;
   /** Crashes (OOM, kill) that interrupted this input's turn so far. */
