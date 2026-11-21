@@ -1,5 +1,5 @@
 {
-  "contentDigest": "cae32f3ddb5491c8e382b5d2726e8e30587c3efd366c675c4b879212e0d3e455",
+  "contentDigest": "eda45659a7c2ac133895c8664d995f59d5e9ea072b64f2c876a91895a8d597c9",
   "files": [
     {
       "mode": "100644",
@@ -539,7 +539,7 @@
     {
       "mode": "100644",
       "path": "plugins.lock.json",
-      "sha256": "42c13a696b2f56979d13edba1da8bdfd215d1b902ba0c941f6ca28e96519e356"
+      "sha256": "f8d150c247c1072aa78fe40ae6aaa5e82f46eec4100c620417c9f085b025d77c"
     },
     {
       "mode": "100644",
@@ -4683,7 +4683,7 @@
     }
   ],
   "historyPolicy": "fresh-root; no source commits, tags, refs or deleted blobs",
-  "pluginSHA": "fc5864dfd1930ad340e3b25e84fcf0a997ec1708",
+  "pluginSHA": "d55dfe558a5c02e857612623bf2f33e3e665c515",
   "schema": 1,
-  "sourceSHA": "c0a69f5d90066a2ab1919b99393ccf32cb1cba60"
+  "sourceSHA": "53649c9922b9a4aef5ecd46807dbbfc2a8c6035a"
 }
