@@ -46,7 +46,29 @@ export async function compactContext(directory: string, text: string, label: str
 
 /** Prefer the worker's own structured synthesis when supplied; never infer facts
  * from head/tail text or make a second model request. Ordinary reports stay valid. */
+const RECEIPT_FENCE = /^```improvement-experiment[^\S\r\n]*\r?\n(?:(?!^```improvement-experiment)[\s\S])*?^```[^\S\r\n]*\r?$/gm;
+const RECEIPT_BUDGET = 5000;
+
+/** Experiment receipts are parent accounting evidence, not narrative: shortening must not drop them.
+ * Fence blocks are copied verbatim (no validation here; the receipt parser still decides) within a
+ * bounded budget, so the dispatcher's step-result limit keeps them. */
 export async function compactTaskReport(directory: string, text: string): Promise<string> {
+  const compact = await compactTaskReportBase(directory, text);
+  if (compact === text) return compact;
+  const missing: string[] = [];
+  let used = 0;
+  for (const [fence] of text.matchAll(RECEIPT_FENCE)) {
+    if (compact.includes(fence) || missing.includes(fence) || used + fence.length > RECEIPT_BUDGET) continue;
+    missing.push(fence); used += fence.length;
+  }
+  if (!missing.length) return compact;
+  // Placed before the excerpt tail so a later hard slice cannot remove them; the head marker stays first.
+  const nl = compact.indexOf("\n");
+  const block = `\n[Experiment receipts retained verbatim from the full report]\n${missing.join("\n")}`;
+  return nl < 0 ? compact + block : compact.slice(0, nl) + block + compact.slice(nl);
+}
+
+async function compactTaskReportBase(directory: string, text: string): Promise<string> {
   if (text.length <= 6000) return text;
   try {
     const report: unknown = JSON.parse(text);
