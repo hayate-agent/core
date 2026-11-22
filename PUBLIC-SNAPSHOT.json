@@ -1,5 +1,5 @@
 {
-  "contentDigest": "db39736e931068fe6a7aac64de7ae322104b46d899ddaf290ebfbfa9efbb30b4",
+  "contentDigest": "e26d94e1e11e58189d69516ea14b5d3d89df5193b378edff9914945a6ca64d94",
   "files": [
     {
       "mode": "100644",
@@ -54,7 +54,7 @@
     {
       "mode": "100644",
       "path": "docs/api-run-delegated-work.md",
-      "sha256": "fd9d92a3112748cd5c34e8df19c00d10c8b908f948d983010ea3cd1ff6aef832"
+      "sha256": "49ef79a9032e9a648eaf819703025fe6b037166dcc8a33310f441d50c011ff44"
     },
     {
       "mode": "100644",
@@ -739,7 +739,7 @@
     {
       "mode": "100644",
       "path": "src/cli.ts",
-      "sha256": "eed0ea3f4c444cfa8fdaa849dbf4a21ae15fc6504ec33590141f26edbbb606da"
+      "sha256": "fe885d7082a5e22ffc71b6ba3a82cb8fbcd1df107d1f548eaaa12339f6e44753"
     },
     {
       "mode": "100644",
@@ -894,7 +894,7 @@
     {
       "mode": "100644",
       "path": "src/dispatcher.ts",
-      "sha256": "3f34a82e858001926f7eddd5f75af52bcc6dd35031dc3a4a5f7a2da03d17a815"
+      "sha256": "00c3b13edccd67650267fddc94936883da19e34e88bf3bf7b13a277635656237"
     },
     {
       "mode": "100644",
@@ -959,7 +959,7 @@
     {
       "mode": "100644",
       "path": "src/harness.ts",
-      "sha256": "1f7d601ebf670628dfff252156aa006989b595f8e7890bf19f70f6c97e4f395b"
+      "sha256": "0a7b66406e62dcf11e825ca56f8af7daca7fa0320abcd4c164c1db95f66d12ed"
     },
     {
       "mode": "100644",
@@ -1644,7 +1644,7 @@
     {
       "mode": "100644",
       "path": "test/api-run-holds-delegated-work.test.ts",
-      "sha256": "ea53b58643ad1d1cc50e00d9dca1c53dd8cc00c86797c0e5a0a5a656de4f0d6d"
+      "sha256": "eb88f12946fdc489e5a26ba76b9d95c021f58511f43c8e5abb8ed15dfcc14516"
     },
     {
       "mode": "100644",
@@ -4039,7 +4039,7 @@
     {
       "mode": "100644",
       "path": "test/startup-assessment-process.test.ts",
-      "sha256": "0437faae96e3d101c692cb2488c07e601327b71d1208a6f0fadf0a1546372802"
+      "sha256": "62466970918f8788986183e42bb3cc9ab930bc732757744c784daf71cd87dd73"
     },
     {
       "mode": "100644",
@@ -4695,5 +4695,5 @@
   "historyPolicy": "fresh-root; no source commits, tags, refs or deleted blobs",
   "pluginSHA": "051f67bcde84c4266b0076355256b326fa06edb5",
   "schema": 1,
-  "sourceSHA": "4a9553a583f664d34c7b55f4a8f36105b208ea47"
+  "sourceSHA": "3245935a24a8216ccfd53bfd74db22ae8a0d9f93"
 }
