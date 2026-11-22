@@ -261,6 +261,36 @@ test("REAL dispatcher path: oversized parser-valid experiment receipt survives c
   assert.deepEqual(experimentReceipts(task.result!), [receipt]);
 });
 
+test("INTEGRATION: real dispatcher task.result feeds ImprovementController; each valid performed receipt adopted exactly once after repeated adoption", async t => {
+  const { compactTaskReport } = await import("../src/context-artifacts.js");
+  const { ImprovementController } = await import("../src/improvement.js");
+  const { default: nightlyDefault } = await import("../src/builtin-plugins/nightly-default.js");
+  const { Harness } = await import("../src/harness.js");
+  const { FakeRuntime } = await import("./fakes.js");
+  const { mkdir, readFile } = await import("node:fs/promises");
+  const f = (n: number, tag: string) => `${tag} `.padEnd(n, "x");
+  const receipt = { execution: "performed", hypothesis: f(2000, "h"), baseline: f(2000, "b"), candidate: f(2000, "c"), evidence: f(2000, "e"), outcome: "improved" };
+  const report = "step result\n" + "Measured.\n".repeat(400) + "```improvement-experiment\n" + JSON.stringify(receipt) + "\n```\n" + "Notes.\n".repeat(400) + "\nSTEP-STATUS: complete";
+  const dir = await realpath(await mkdtemp(path.join(os.tmpdir(), "seq-int-")));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const env = await setup(t, { plan: steps(["do experiment", "simple"]), worker: () => report, verdict: '{"state":"completed"}' });
+  (env.runtime as AgentRuntime).compactResult = (_key, value) => compactTaskReport(dir, value);
+  const task = await env.run("Run the experiment, without external changes.");
+  assert.equal(task.status, "completed");
+  const home = await realpath(await mkdtemp(path.join(os.tmpdir(), "seq-int-home-")));
+  t.after(() => rm(home, { recursive: true, force: true }));
+  await mkdir(path.join(home, "improvement"));
+  await writeFile(path.join(home, "improvement/state.json"), JSON.stringify({ version: 1, night: "2026-11-21", turns: 6, results: [], experiments: [], recentHypotheses: [], noExperimentTurns: 0, done: false }));
+  const harness = new Harness({ runtime: new FakeRuntime(), tickMs: 60000 });
+  t.after(() => harness.stop(1000));
+  const child = { id: "child-1", parent: "improvement:nightly", status: "completed", result: task.result, dependency: { taskId: "improvement:2026-11-21:2", original: "nightly", depth: 0 } } as any;
+  const c = new ImprovementController(home, harness, "UTC", () => Date.parse("2026-11-22T10:00:00Z"), nightlyDefault, undefined, () => [child]);
+  await c.delegatedResult("child-1"); await c.delegatedResult("child-1"); await c.delegatedResult("child-1");
+  const st = JSON.parse(await readFile(path.join(home, "improvement/state.json"), "utf8"));
+  assert.equal(st.experiments.length, 1);
+  assert.deepEqual(st.delegatedResults, ["child-1"]);
+});
+
 test("a report above 64K reaches independent validation with material evidence in its middle", async t => {
   const report = "ordinary detail ".repeat(600) + "MATERIAL-MIDDLE: required receipt was never obtained\n" + "ordinary detail ".repeat(4200) + "\nSTEP-STATUS: complete";
   assert(report.length > 64000);
