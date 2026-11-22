@@ -47,7 +47,8 @@ export async function compactContext(directory: string, text: string, label: str
 /** Prefer the worker's own structured synthesis when supplied; never infer facts
  * from head/tail text or make a second model request. Ordinary reports stay valid. */
 const RECEIPT_FENCE = /^```improvement-experiment[^\S\r\n]*\r?\n(?:(?!^```improvement-experiment)[\s\S])*?^```[^\S\r\n]*\r?$/gm;
-const RECEIPT_BUDGET = 5000;
+// Parser caps each field at 2000 chars (5 fields + optional delivery), so one valid receipt can reach ~25k.
+const RECEIPT_BUDGET = 40000;
 
 /** Experiment receipts are parent accounting evidence, not narrative: shortening must not drop them.
  * Fence blocks are copied verbatim (no validation here; the receipt parser still decides) within a
@@ -66,6 +67,21 @@ export async function compactTaskReport(directory: string, text: string): Promis
   const nl = compact.indexOf("\n");
   const block = `\n[Experiment receipts retained verbatim from the full report]\n${missing.join("\n")}`;
   return nl < 0 ? compact + block : compact.slice(0, nl) + block + compact.slice(nl);
+}
+
+/** Hard length limit that never cuts away parser-visible receipt fences: the plain slice is kept and
+ * any fence it lost (or cut in half) is re-attached verbatim, bounded by RECEIPT_BUDGET. */
+export function sliceKeepingReceipts(text: string, limit: number): string {
+  if (text.length <= limit) return text;
+  let head = text.slice(0, limit);
+  const fences = [...text.matchAll(RECEIPT_FENCE)];
+  const lost = fences.filter(m => m.index! + m[0].length > limit);
+  if (!lost.length) return head;
+  const cut = Math.min(...lost.map(m => m.index!));
+  if (cut < limit) head = head.slice(0, cut); // drop a half-cut fence; it is re-attached whole below
+  const kept: string[] = []; let used = 0;
+  for (const [f] of lost) { if (kept.includes(f) || head.includes(f) || used + f.length > RECEIPT_BUDGET) continue; kept.push(f); used += f.length; }
+  return kept.length ? `${head}\n[Experiment receipts retained verbatim from the full report]\n${kept.join("\n")}` : head;
 }
 
 async function compactTaskReportBase(directory: string, text: string): Promise<string> {

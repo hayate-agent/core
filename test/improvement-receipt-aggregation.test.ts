@@ -9,7 +9,7 @@ import path from "node:path";
 import { ImprovementController } from "../src/improvement.js";
 import nightlyDefault from "../src/builtin-plugins/nightly-default.js";
 import { experimentReceipts } from "../src/builtin-plugins/improvement-report.js";
-import { compactTaskReport } from "../src/context-artifacts.js";
+import { compactTaskReport, sliceKeepingReceipts } from "../src/context-artifacts.js";
 import { stepStatus } from "../src/dispatcher-sequential.js";
 import { Harness } from "../src/harness.js";
 import { FakeRuntime } from "./fakes.js";
@@ -33,7 +33,7 @@ const finalResult = (steps: string[]) => `Sequenzieller Plan abgeschlossen (${st
 
 async function dispatcherStep(dir: string, report: string): Promise<string> {
   assert.equal(stepStatus(report), "complete");
-  return (await compactTaskReport(dir, report)).slice(0, 8000); // dispatcher-sequential.ts:730-732
+  return sliceKeepingReceipts(await compactTaskReport(dir, report), 8000); // dispatcher-sequential.ts:730-732
 }
 
 async function adopt(t: any, result: string) {
@@ -89,4 +89,34 @@ test("END-TO-END: invalid/prose-only results still adopt zero experiments (no in
   const r = await adopt(t, finalResult([await dispatcherStep(dir, proseStep), await dispatcherStep(dir, `ok\n${fence(artifact2)}\nSTEP-STATUS: complete`)]));
   assert.equal(r.experiments, 0);
   assert.deepEqual(r.adoptedIds, ["child-1"]);
+});
+
+// Parser caps each field at 2000 chars with no total cap: a valid receipt can be ~10k chars (> old 5000 budget, > 8000 step limit).
+const oversized = { execution: "performed", hypothesis: s(2000, "h"), baseline: s(2000, "b"), candidate: s(2000, "c"), evidence: s(2000, "e"), outcome: "improved" };
+
+test("oversized parser-valid receipt (>5000 and >8000 chars) survives compaction and the step slice", async t => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "acct-ctx-")); t.after(() => rm(dir, { recursive: true, force: true }));
+  const report = `## Step\n${"Measured.\n".repeat(400)}${fence(oversized)}\n${"Notes.\n".repeat(400)}\nSTEP-STATUS: complete`;
+  assert.ok(fence(oversized).length > 8000);
+  assert.equal(experimentReceipts(report).length, 1);
+  const out = await dispatcherStep(dir, report);
+  assert.equal(experimentReceipts(out).length, 1);
+  assert.deepEqual(experimentReceipts(out)[0], experimentReceipts(report)[0]);
+});
+
+test("END-TO-END: oversized valid receipt is adopted exactly once; invalid oversized stays rejected", async t => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "acct-ctx-")); t.after(() => rm(dir, { recursive: true, force: true }));
+  const mk = (r: unknown) => `## Step\n${"Measured.\n".repeat(400)}${fence(r)}\n${"Notes.\n".repeat(400)}\nSTEP-STATUS: complete`;
+  const ok = finalResult([await dispatcherStep(dir, proseStep), await dispatcherStep(dir, mk(oversized))]);
+  assert.deepEqual(await adopt(t, ok), { experiments: 1, adoptedIds: ["child-1"], results: 1 });
+  const bad = finalResult([await dispatcherStep(dir, mk({ ...oversized, evidence: s(2001, "e") }))]);
+  assert.equal((await adopt(t, bad)).experiments, 0); // parser limit unchanged
+});
+
+test("sliceKeepingReceipts: short text and receipt-free text behave like plain slice; no half fences", () => {
+  assert.equal(sliceKeepingReceipts("abc", 10), "abc");
+  const plain = "p".repeat(9000);
+  assert.equal(sliceKeepingReceipts(plain, 8000), plain.slice(0, 8000));
+  const out = sliceKeepingReceipts("p".repeat(7900) + "\n" + fence(artifact1) + "\ntail", 8000);
+  assert.equal(experimentReceipts(out).length, 1);
 });
