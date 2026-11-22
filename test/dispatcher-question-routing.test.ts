@@ -102,6 +102,21 @@ test("durable Harness inbox retains the original question across ack and restart
   assert.equal(calls, 1, "processed input is not replayed");
 });
 
+test("answer preserves only the admitted host turn's original mandate, not replayed receipts", async t => {
+  const f = await fixture(t);
+  const bridge = new DispatcherRuntime(f.harness, f.store);
+  f.harness.sessions.get("main")!.current = f.input;
+  bridge.guardHostEvent("main", f.input);
+  await f.store.answer("main", f.child.id, f.input.hostEvent!.question!.id, "Continue with the retained evidence");
+  assert.equal(f.store.questionAllowed(f.input), false, "answered receipt cannot be admitted again");
+  bridge.guardHostEvent("main", f.input);
+  assert.equal(f.harness.resultMandate(f.input)?.taskId, f.parent.id);
+  assert.equal(f.harness.resultMandate(structuredClone(f.input)), undefined, "replay is not the current turn");
+  await f.store.control(f.child.id, "cancel");
+  assert.throws(() => bridge.guardHostEvent("main", f.input), /no longer belongs/);
+  f.harness.sessions.get("main")!.current = undefined;
+});
+
 for (const drift of ["foreign", "event", "question", "text", "expired", "stopped", "answered"])
   test(`question receipt rejects ${drift}`, async t => {
     const f = await fixture(t);

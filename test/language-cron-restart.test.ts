@@ -16,7 +16,7 @@ import type { ReportProcessing } from "../src/report-processing.js";
 test("pending cron occurrence keeps admitted language across disk/restart, archive and analysis; legacy reports stay English", async () => {
   const home = await mkdtemp(path.join(os.tmpdir(), "cron-language-restart-"));
   let language = "es"; const pending: Inbound[] = [];
-  const ingress = { withForegroundWork: (work: () => Promise<void>) => work(), accept: async (input: Inbound) => { pending.push(input); } } as unknown as Harness;
+  const ingress = { recurringWorkHeld: () => false, withForegroundWork: (work: () => Promise<void>) => work(), accept: async (input: Inbound) => { pending.push(input); } } as unknown as Harness;
   await new Scheduler(ingress, { timezone: "UTC", language: () => language }).runJob({ name: "weather", schedule: "0 * * * *", prompt: "Inspect weather", audience: "agent" });
   await writeFile(path.join(home, "inbox.json"), JSON.stringify(pending));
   language = "de";

@@ -7,7 +7,7 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import { SessionLock } from "./session-lock.js";
-import { NativeSoftwareUpdates, containerRuntime, softwareUpdatePolicy, type SoftwareUpdatePolicy } from "./software-updates.js";
+import { NativeSoftwareUpdates, containerRuntime, softwareUpdatePolicy, webuiActivatedFromHome, type SoftwareUpdatePolicy } from "./software-updates.js";
 
 export interface ForegroundOptions { updates?: { home: string; policy: SoftwareUpdatePolicy; external?: boolean }; delegateOwner?: boolean }
 export async function foregroundOptions(args: string[]): Promise<ForegroundOptions> {
@@ -44,12 +44,13 @@ export async function runForeground(entrypoint: string, args: string[], nodeArgs
   };
   const ack = (id: string) => { clearTimeout(receipts.get(id)); receipts.delete(id); flush(); };
   const clearReceipts = () => { for (const timer of receipts.values()) clearTimeout(timer); receipts.clear(); };
-  const makeOwner = (policy: SoftwareUpdatePolicy) => {
+  const makeOwner = async (policy: SoftwareUpdatePolicy) => {
+    const webui = await webuiActivatedFromHome(options.updates!.home);
     const owner = new NativeSoftwareUpdates(options.updates!.home, policy, (event, detail) => {
       if (owner !== updates) return;
       if (event === "prepared") { preparedNotice = detail; flush(); }
       else send({ type: "hayate-software-event", event, detail });
-    }, undefined, options.updates!.external, baseline(entrypoint));
+    }, undefined, options.updates!.external, baseline(entrypoint), webui);
     return owner;
   };
   const delegate = async (selected: string) => {
@@ -63,7 +64,7 @@ export async function runForeground(entrypoint: string, args: string[], nodeArgs
     lock = await SessionLock.acquire(path.join(directory, "owner.lock"));
   }
   try {
-    if (options.updates) { updates = makeOwner(options.updates.policy); await updates.open(); }
+    if (options.updates) { updates = await makeOwner(options.updates.policy); await updates.open(); }
     const selected = updates?.entrypoint(entrypoint) ?? entrypoint;
     if (options.delegateOwner && realpathSync(selected) !== realpathSync(ownEntrypoint)) return await delegate(selected);
   } catch (error) { await updates?.close(); await lock?.release(); throw error; }
@@ -74,10 +75,11 @@ export async function runForeground(entrypoint: string, args: string[], nodeArgs
       const { loadConfig } = await import("./config.js");
       const policy = softwareUpdatePolicy((await loadConfig(options.updates.home)).softwareUpdates);
       if (stopping) return;
-      if (JSON.stringify(policy) !== JSON.stringify(updates?.policy) || updates?.baseline !== baseline(entrypoint)) {
+      const webui = await webuiActivatedFromHome(options.updates.home);
+      if (JSON.stringify(policy) !== JSON.stringify(updates?.policy) || updates?.baseline !== baseline(entrypoint) || updates?.webuiEnabled !== webui) {
         await updates?.close();
         if (stopping) return;
-        preparedNotice = undefined; updates = makeOwner(policy); await updates.open();
+        preparedNotice = undefined; updates = await makeOwner(policy); await updates.open();
         if (stopping) updates.stop();
       }
     });

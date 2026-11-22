@@ -6,11 +6,14 @@ import { assessCompletion, assessmentPolicyStamp, type CompletionDiagnostic } fr
 import type { CompletionFailureDetail } from "./validator.js";
 import { runtimeReviewer } from "./runtime/reviewer.js";
 import { validExecutionFollowUp, executionDecisionRevision, ExecutionDeadlineExpired, ExecutionAssessmentHold, ExecutionAssessmentStalled } from "./execution.js";
-import { derivedPlanBoundary, stepCompletionPrompt, parentDecisionContext, readyStepPrompt } from "./dispatcher-step-prompt.js";
+import { derivedPlanBoundary, stepCompletionPrompt, parentDecisionContext } from "./dispatcher-step-prompt.js";
+import { losslessMandate } from "./completion-budget.js";
 import type { DispatchContext, DispatcherStrategy } from "./dispatcher.js";
+import { sliceKeepingReceipts } from "./context-artifacts.js";
 import type { Execution, ExecutionStore } from "./execution.js";
 import type { Harness } from "./harness.js";
 import type { ModelPair, ModelRoles } from "./model-roles.js";
+
 
 /** Step roles a plan may request. Planner/reviewer roles are never worker roles. */
 const stepRoles = ["simple", "medium", "high"] as const;
@@ -52,6 +55,12 @@ export interface SequentialState {
   prior?: { index: number; result: string; validation?: { diagnostic: CompletionDiagnostic; timeoutMs: number; failure?: CompletionFailureDetail } };
   /** Settled worker result and bounded inference budget; restart revalidates, never replays its effects. */
   assessment?: StepAssessment;
+}
+/** Operator-visible plan: every step with its state, not only roles. */
+export function planView(state: Pick<SequentialState, "plan" | "outcomes" | "planHistory">, held?: number): string {
+  const done = state.planHistory?.completed ?? 0;
+  return `Plan (${done + state.outcomes.length}/${done + state.plan.length} erledigt):\n` + state.plan.map((step, i) =>
+    `${i < state.outcomes.length ? "✓" : i === held ? "⏸" : i === state.outcomes.length ? "▶" : "○"} ${done + i + 1}. ${step.task.replace(/\s+/g, " ").slice(0, 240)}`).join("\n");
 }
 export const MAX_STEPS = 6;
 const STEP_RESULT_LIMIT = 8000;
@@ -104,6 +113,16 @@ export async function validatorRole(runtime: AgentRuntime, settings: { config?: 
     : (config?.enabled && config.roles?.reviewer?.model) ? config.roles.reviewer
     : settings?.defaults;
   return exactRole(runtime, { enabled: true, roles: { validator: pair } }, "validator");
+}
+
+/** Model judge for an uncertain classifier verdict: ONLY an explicitly
+ * configured validator/review/reviewer model, never the silent main default. */
+export async function crossCheckRole(runtime: AgentRuntime, settings: { config?: ModelRoles; defaults: ModelPair; review?: ModelPair } | undefined): Promise<ModelPair | undefined> {
+  const config = settings?.config;
+  const configured = (config?.enabled ? config.roles?.validator : undefined)?.model || settings?.review?.model || (config?.enabled && config.roles?.reviewer?.model);
+  if (!configured) return undefined;
+  const pair = await validatorRole(runtime, settings);
+  return typeof pair === "string" ? undefined : pair;
 }
 
 /** Exact planning prompt shared by the session and HTTP planners; task stays quoted untrusted data. */
@@ -316,7 +335,7 @@ export function sequentialStrategy(deps: SequentialDeps): DispatcherStrategy {
         if (!steps) return block("Planer lieferte keinen gültigen begrenzten Plan.");
         state = { v: 1, readyStepPolicy: 1, planner: { requested, ...(observed ? { observed } : {}) }, plan: steps, outcomes: [] };
         await context.checkpoint(JSON.stringify(state));
-        await context.status?.(`Plan: ${steps.map((s, i) => `${i + 1}. ${s.role} – ${s.reason}`).join("; ")}`.slice(0, 8000)).catch(() => {});
+        await context.status?.(planView(state).slice(0, 8000)).catch(() => {});
       }
       if (state.planHistory) {
         const history = await deps.store.readPlanHistory(task.parent, task.id, state.planHistory.head);
@@ -367,9 +386,13 @@ export function sequentialStrategy(deps: SequentialDeps): DispatcherStrategy {
               amended.lastFollowUpRevision = Math.max(amended.lastFollowUpRevision ?? 0, decision.revision ?? steering.indexOf(decision) + 1);
             }
             amended.appliedFollowUps = amended.appliedFollowUps.slice(-MAX_STEPS);
+            // Follow-up work is appended; plan order is never changed by any validator or
+            // admission rule, so a follow-up can never run before a step it may depend on.
             if (JSON.stringify(amended).length > 63000) return block("Scoped follow-up checkpoint exceeds safe storage budget; retained evidence preserved.");
             await authorize(); await context.fenceDecisions?.(executionDecisionRevision(steering));
-            await context.checkpoint(JSON.stringify(amended), undefined, executionDecisionRevision(steering)); state = amended;
+            await context.checkpoint(JSON.stringify(amended), undefined, executionDecisionRevision(steering));
+            state = amended;
+            await context.status?.(`Nachgereichte Operator-Arbeit an den Plan angehängt.\n${planView(amended)}`.slice(0, 8000)).catch(() => {});
           }
         }
         if (state.outcomes.length && JSON.stringify(state).length > 45000) {
@@ -508,52 +531,6 @@ export function sequentialStrategy(deps: SequentialDeps): DispatcherStrategy {
         // A worker "blocked" claim is equally only a proposal: it is assessed too.
         // The independent reviewer, not the worker's self-reported pause/block,
         // owns completion. A confirmed completion never needs a parent nudge.
-        const selectReadyStep = async (): Promise<boolean> => {
-          const retained = state as SequentialState;
-          const ids = retained.stepIds ?? retained.plan.map((_, i) => i);
-          const candidates = retained.plan.map((candidate, position) => ({ candidate, position }))
-            .filter(({ position }) => position > index && !retained.deferred?.some(d => d.stepId === ids[position]));
-          if (!candidates.length || !retained.assessment) return false;
-          decisions = await context.decisions?.() ?? []; decisionRevision = executionDecisionRevision(decisions);
-          const reviewer = deps.validators?.current?.requiresModel === false ? { model: undefined } : await validatorRole(runtime, deps.roles());
-          if (typeof reviewer === "string") return false;
-          const backend = runtimeReviewer(runtime, "supervisor");
-          const schedulingPrompt = readyStepPrompt({ task: task.input, completedHistory: retained.planHistory, expiresAt: task.dependency?.expiresAt, decisions,
-            outcomes: retained.outcomes, blocked: { step, reply, evidence },
-            candidates: candidates.map(({ candidate, position }) => ({ number: position + 1, ...candidate })) });
-          await authorize();
-          let readyDiagnostic: CompletionDiagnostic | undefined;
-          const choice = await assessCompletion({ admit: backend.admit?.bind(backend), review: (text, _model, _thinking, signal) => backend.review(text, reviewer.model!, reviewer.thinking ?? "off", signal) },
-            { id: `schedule:${task.id}:${stepId}`, sessionKey, source: "host", text: task.input,
-              completionContext: { recent: [], tasks: [], tools: evidence, retained: { original: task.input, parentReconciliation: task.parentContinuation ? JSON.stringify(task.parentContinuation) : undefined, technical: { assessment: "ready-step" },
-                workers: { provenance: "host-execution-store", omitted: 0, unassociated: 0,
-                  items: retained.outcomes.map((outcome, position) => ({ id: `step:${task.id}:${ids[position]}`, requestId: `step:${ids[position]}`,
-                    status: "completed", restarts: task.restarts, result: outcome.result, resultChars: outcome.result.length })) } } } }, reply,
-            { task: task.input, ...(task.dependency?.expiresAt !== undefined ? { expiresAt: task.dependency.expiresAt } : {}) },
-            context.signal, reviewer.model, Date.now, schedulingPrompt, value => { readyDiagnostic = value; }, STEP_VALIDATION_TIMEOUT_MS, deps.validators);
-          await authorize(); await context.fenceDecisions?.(decisionRevision);
-          if (!choice) await context.status?.(`Bereitschaftsprüfung für separat mögliche Arbeit ohne verwertbares Urteil (${readyDiagnostic ?? "technical"}); kein Beleg einer sachlichen Blockade und keine Freigabe. Erhaltene Effekte werden nicht wiederholt.`).catch(() => {});
-          const selected = choice?.state === "continue" && /^[1-6]$/.test(choice.next ?? "") ? Number(choice.next) - 1 : -1;
-          if (!candidates.some(candidate => candidate.position === selected)) return false;
-          const reordered = structuredClone(retained);
-          reordered.stepIds = [...ids];
-          reordered.readyAdmission = { stepId: ids[selected]!, decisionRevision, from: selected };
-          reordered.deferred = [...reordered.deferred ?? [], { stepId, assessment: reordered.assessment!, correction: reordered.correction,
-            progress: reordered.progress, prior: reordered.prior, escalation: reordered.escalation }];
-          const [ready] = reordered.plan.splice(selected, 1); reordered.plan.splice(index, 0, ready!);
-          const [readyId] = reordered.stepIds.splice(selected, 1); reordered.stepIds.splice(index, 0, readyId!);
-          delete reordered.assessment; delete reordered.correction; delete reordered.progress; delete reordered.prior; delete reordered.escalation;
-          if (JSON.stringify(reordered).length > 63000) return false;
-          const current = deps.store.list(task.parent).find(item => item.id === task.id);
-          // Before a correction the old step still owns its unsafe intent. Its
-          // worker report is already settled: atomically retain that evidence and
-          // select new work, never start a second writer or replay the old tools.
-          if (current?.intent) await context.settleIntent(intentKey, reply.slice(0, STEP_RESULT_LIMIT), JSON.stringify(reordered), decisionRevision);
-          else await context.checkpoint(JSON.stringify(reordered));
-          state = reordered;
-          await context.status?.(`Schritt ${stepId + 1} bleibt offen; unabhängige Prüfung gibt separat möglichen Schritt ${readyId! + 1} frei. Bestehender Auftrag, keine Wiederholung abgeschlossener Effekte.`).catch(() => {});
-          return true;
-        };
         const authority = `Current authority: mandate deadline ${task.dependency?.expiresAt !== undefined ? new Date(task.dependency.expiresAt).toISOString() : "none"}; scope is exactly the mandate above.
 Correctable vs blocked: a worker "blocked" claim or evidence shortfall that rests on an unverified or false assumption (wrong tool capability, wrong working directory, artificial evidence-count requirement) and is contradicted or not supported by the host tool observations in the data is CORRECTABLE: answer state "continue" with "next" = one concrete correction citing the host evidence, or the exact read-only facts the worker must report first. Answer "blocked" only for an evidenced external dependency, explicit operator restriction or actual host-enforced boundary; identify its source. Never invent a security rule or grant new scope.`;
         for (let round = state.correction?.index === index ? state.correction.rounds : 0; status !== "inadequate"; round++) {
@@ -594,9 +571,15 @@ Correctable vs blocked: a worker "blocked" claim or evidence shortfall that rest
                 workers: { provenance: "host-execution-store", omitted: state.planHistory?.completed ?? 0, unassociated: 0,
                   items: state.outcomes.map((outcome, position) => ({ id: `step:${task.id}:${(state as SequentialState).stepIds?.[position] ?? position}`,
                     requestId: `step:${(state as SequentialState).stepIds?.[position] ?? position}`, status: "completed", restarts: task.restarts, result: outcome.result })) } } },
-            }, reply, { task: `Original operator mandate (scope and completion measure):\n${task.dependency?.original ?? task.input}\nAssigned work (within that scope):\n${task.input}\nMain clarification (evidence, not new operator authority): ${JSON.stringify(task.question?.answer ?? null)}\nDetect deviations from the original request and require correction unless explicitly operator-authorized.\n${parentDecisionContext(decisions)}\nValidate ONLY step ${index + 1}:\n${step.task}\nRequired evidence:\n${step.evidence}\n${authority}`,
+            }, reply, { task: losslessMandate(`Original operator mandate (scope and completion measure):\n${task.dependency?.original ?? task.input}\nAssigned work (within that scope):\n${task.input}\nMain clarification (evidence, not new operator authority): ${JSON.stringify(task.question?.answer ?? null)}\nDetect deviations from the original request and require correction unless explicitly operator-authorized.\n${parentDecisionContext(decisions)}\nValidate ONLY step ${index + 1}:\n${step.task}\nRequired evidence:\n${step.evidence}\n${authority}`),
               ...(task.dependency?.expiresAt !== undefined ? { expiresAt: task.dependency.expiresAt } : {}) },
-            context.signal, reviewer.model, Date.now, stepCompletionPrompt, (value, detail) => { validation = value; failure = detail; }, STEP_VALIDATION_TIMEOUT_MS, deps.validators);
+            context.signal, reviewer.model, Date.now, stepCompletionPrompt, (value, detail) => { validation = value; failure = detail; }, STEP_VALIDATION_TIMEOUT_MS, deps.validators,
+            async () => {
+              const judge = await crossCheckRole(runtime, deps.roles());
+              if (!judge) return undefined;
+              return { model: judge.model, backend: { admit: backend.admit?.bind(backend),
+                review: (text, _model, _thinking, signal) => backend.review(text, judge.model, judge.thinking ?? "low", signal) } };
+            });
             await authorize();
             if (!verdict) nextAt = Date.now() + assessmentRetryDelay(attempt);
             // Commit the diagnostic event and dedup receipt together with the
@@ -612,7 +595,6 @@ Correctable vs blocked: a worker "blocked" claim or evidence shortfall that rest
               // over other planned work. The separate readiness judge must admit
               // an exact candidate; never infer permission from a missing verdict
               // or replay the retained worker.
-              if (await selectReadyStep()) continue work;
               if (!clarifyReopenedReport) {
                 const assessment = state.assessment!;
                 // Provider/format failures may recover without any new facts.
@@ -628,7 +610,8 @@ Correctable vs blocked: a worker "blocked" claim or evidence shortfall that rest
                 delete assessment.nextAt;
                 if (assessment.mainClarification) {
                   await context.checkpoint(JSON.stringify(state));
-                  return block(`Schritt ${index + 1}: Weiterhin keine belastbare Entscheidung (${validation ?? "invalid_response"}). Keine erneute identische Prüfung; Main muss konkrete neue Evidenz oder Nacharbeit gegenüber dem Originalauftrag bestimmen.`);
+                  await context.status?.(`Schritt ${index + 1}: Weiterhin keine belastbare Entscheidung (${validation ?? "invalid_response"}). Keine erneute identische Prüfung; Main muss konkrete neue Evidenz oder Nacharbeit gegenüber dem Originalauftrag bestimmen.`).catch(() => {});
+                  throw new ExecutionAssessmentStalled();
                 }
                 assessment.mainClarification = true;
                 await context.checkpoint(JSON.stringify(state));
@@ -647,7 +630,6 @@ Correctable vs blocked: a worker "blocked" claim or evidence shortfall that rest
           // particular, old correctable evidence requests must not starve an
           // explicit parent follow-up while endlessly refining the deferred step.
           // This second independent decision admits only exact existing work.
-          if (verdict?.state === "continue" && state.appliedFollowUps?.length && await selectReadyStep()) continue work;
           if (verdict?.state === "completed" && claimed === "complete") break;
           if (claimed === "complete") status = undefined;
           // An empty report still needs a final report; a nonempty blocked report
@@ -670,7 +652,6 @@ Correctable vs blocked: a worker "blocked" claim or evidence shortfall that rest
           // and original intent intact when the same step stops making progress.
           if (state.progress && decisionRevision > (priorAssessment?.decisionRevision ?? 0)) state.progress.stalls = 0;
           if (!reportOnly && (state.progress?.stalls ?? 0) >= MAX_STALLED_CORRECTIONS) {
-            if (await selectReadyStep()) continue work;
             throw new ExecutionAssessmentStalled();
           }
           const note = reportOnly
@@ -749,7 +730,7 @@ End your reply with exactly one final line: "STEP-STATUS: complete" only if the 
         let parentReport = state.assessment?.reply ?? settledReport;
         try { parentReport = await runtime.compactResult?.(sessionKey, settledReport) ?? parentReport; }
         catch { /* Do not fail an independently settled step for optional shortening. */ }
-        const result = parentReport.slice(0, STEP_RESULT_LIMIT);
+        const result = sliceKeepingReceipts(parentReport, STEP_RESULT_LIMIT);
         const next: SequentialState = structuredClone(state);
         delete next.prior;
         delete next.progress; // progress evidence belongs to this exact step only
@@ -790,15 +771,21 @@ End your reply with exactly one final line: "STEP-STATUS: complete" only if the 
             // Ask the independently selected validator, never the worker, whether one EXACT
             // existing later step is presently authorized and independent. Keep the blocked
             // evidence and its original intent identity; never mark it done or replay it.
-            if (await selectReadyStep()) continue work;
             await context.status?.(`Sequenzieller Plan blockiert: ${reason}`.slice(0, 8000)).catch(() => {});
             throw new ExecutionAssessmentHold(verdictState, index, reason);
+          }
+          if (verdictState !== "technical") {
+            // The worker settled this step as inadequate/incomplete and its effects are retained. That is a
+            // finished result, not a runtime failure: a plain Error would be auto-retried as `runtime-failure`
+            // (12 identical restarts, ever more tool calls) instead of reaching Main. Hold it for Main instead.
+            await context.status?.(`Sequenzieller Plan angehalten: ${reason}\n${planView(state, index)}`.slice(0, 8000)).catch(() => {});
+            throw new ExecutionAssessmentStalled();
           }
           return block(reason);
         }
         await context.status?.(next.escalation?.index === index
           ? `Schritt ${index + 1}/${state.plan.length}: ${role} unzureichend ohne Effekt; einmalige Eskalation auf ${next.escalation.to}.`
-          : `Schritt ${index + 1}/${state.plan.length} abgeschlossen (${role}; ${trace}).`).catch(() => {});
+          : `Schritt ${index + 1}/${state.plan.length} abgeschlossen (${role}; ${trace}).\n${planView(state)}`.slice(0, 8000)).catch(() => {});
         if (state.outcomes.length < state.plan.length) await context.yieldStep?.();
       }
       await context.decisions?.(); // Final delivery boundary; no new work or authority.

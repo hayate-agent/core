@@ -20,9 +20,12 @@ export function prefix(text: string, limit: number): string {
  * explicitly incomplete legacy text. IDs are never shortened or invented. */
 export function projectObservation(text: string, role: string, limit: number): { text: string; truncated: boolean; totalChars: number } {
   const result = (value: string, truncated: boolean) => ({ text: value, truncated, totalChars: text.length });
-  if (text.length <= limit) return result(text, false);
   let payload: Record<string, any> | undefined;
   try { payload = JSON.parse(text); } catch { /* Do not repair legacy JSON. */ }
+  if (text.length <= limit) {
+    const known = payload?.type === "toolCall" || payload?.type === "toolResult" || payload?.type === "assistantBlocks";
+    return result(text, known && payload?.truncated === true);
+  }
   const tool = (value: Record<string, any>, size: number): object => {
     const call = value.type === "toolCall";
     const ids = call ? [value.id, value.name] : [value.toolCallId, value.toolName];
@@ -53,6 +56,49 @@ export function projectObservation(text: string, role: string, limit: number): {
     if (candidate.length <= limit) { accepted = candidate; low = middle + 1; } else high = middle - 1;
   }
   return result(accepted, true);
+}
+
+/** Lossless authority compaction: wake prompts (e.g. Paperclip) embed the same
+ * issue text verbatim several times, raw and JSON-escaped. A later exact repeat
+ * of a long line is replaced by a reference to its first, retained occurrence.
+ * Nothing unique is removed, nothing is shortened; text without repeats is
+ * returned unchanged. */
+export function losslessMandate(text: string, minimum = 160): string {
+  const seen = new Set<string>();
+  // Choose a namespace absent from the original, so operator prose cannot be
+  // mistaken for an inserted anchor. Each retained line gets its own identity;
+  // a preview alone cannot distinguish rules with the same opening wording.
+  let namespace = "mandate-line";
+  while (text.includes(namespace)) namespace += "-";
+  let nextId = 0;
+  let out = text;
+  for (const line of text.split("\n")) {
+    if (line.length < minimum || seen.has(line)) continue;
+    seen.add(line);
+    const escaped = JSON.stringify(line).slice(1, -1);
+    const forms = escaped === line ? [line] : [line, escaped];
+    const first = Math.min(...forms.map(form => out.indexOf(form)).filter(index => index >= 0));
+    if (!Number.isFinite(first)) continue;
+    const retained = forms.find(form => out.startsWith(form, first))!;
+    const ranges: { start: number; length: number }[] = [];
+    for (const form of forms) {
+      for (let index = out.indexOf(form, first + retained.length); index >= 0; index = out.indexOf(form, index + form.length)) {
+        ranges.push({ start: index, length: form.length });
+      }
+    }
+    if (!ranges.length) continue;
+    const id = `${namespace}-${++nextId}`;
+    const reference = `[exact repeat of the earlier line ${id}]`;
+    // Select non-overlapping exact occurrences before changing any offsets.
+    let end = first + retained.length;
+    const repeats = ranges.sort((a, b) => a.start - b.start || b.length - a.length).filter(range => {
+      if (range.start < end) return false;
+      end = range.start + range.length; return true;
+    });
+    for (const range of repeats.reverse()) out = out.slice(0, range.start) + reference + out.slice(range.start + range.length);
+    out = out.slice(0, first) + `[${id}]` + out.slice(first);
+  }
+  return out;
 }
 
 /** One existing collector; immutable projection only. Each candidate is fully

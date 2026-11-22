@@ -135,6 +135,24 @@ test("Core migration fences historical auto-resume before any validator call", a
   assert.equal(checks, 0); assert.equal(turns, 0); assert.equal(store.tasks()[0].operatorStatus, "unresolved");
 });
 
+test("legacy migration preserves empty-scope records without aborting startup or granting authority", async t => {
+  const { store } = await storeFixture(t);
+  const h = new Harness({ runtime: new FakeRuntime(() => "must not run"), executionStore: store, taskLifecycle: { enabled: true } });
+  let saves = 0; h.onStateChange = async () => { saves++; }; t.after(() => h.stop(0));
+  h.restoreSessions([{ key: "main", tasks: [
+    { id: "empty", original: "", state: "active", depth: 0, recoveryEnrollment: "current", next: "historical next" },
+    { id: "valid", original: "Authentic retained request", state: "blocked", depth: 0 },
+  ] }]);
+  await h.migrateTaskAuthority();
+  const empty = h.sessions.get("main")!.tasks!.find(t => t.id === "empty")!;
+  assert.equal(empty.original, ""); assert.equal(empty.next, "historical next");
+  assert.equal(empty.recoveryEnrollment, "held-legacy"); assert.equal(empty.recoveryHeldState, "active");
+  assert.equal(empty.taskRef, undefined);
+  assert.equal(store.tasks().length, 1); assert.equal(store.tasks()[0].original, "Authentic retained request");
+  assert.equal(store.tasks()[0].operatorStatus, "unresolved");
+  await h.migrateTaskAuthority(); assert.equal(saves, 1);
+});
+
 test("simple Main task needs no Dispatcher or plan and closed authority survives session replacement", async t => {
   const { store, file } = await storeFixture(t); let turns = 0;
   const h = new Harness({ runtime: new FakeRuntime(() => { turns++; return "42"; }), executionStore: store, taskLifecycle: { enabled: true },

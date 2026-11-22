@@ -1,4 +1,5 @@
 import { enrollTask, operatorTransition, commitTaskOutcome, expireInactiveTasks, validateTaskBook, taskOpen, type TaskBook, type TaskRef, type TaskOutcome, type CoreTask, type TaskReceipt, taskDigest, renderTask } from "./task-lifecycle.js";
+import { validCronCheckpoint } from "./cron-checkpoint.js";
 import { executionMetadata, type ExecutionMetadata } from "./builtin-plugins/execution-metadata.js";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, stat } from "node:fs/promises";
@@ -8,6 +9,7 @@ import { PartitionedJson } from "./partitioned-json.js";
 import { ExecutionDependencyStorage, freezeExecutionDependency } from "./execution-dependency-storage.js";
 import { TaskBookStorage } from "./task-book-storage.js";
 import { recoveryBlock, type RecoveryStrategy, type ExecutionRecoveryPolicy } from "./execution-recovery.js";
+import { message, resolveLanguage } from "./language.js";
 
 /** Exact host state fence for evidence-backed parent continuation. */
 export function executionRecoveryHash(task: Readonly<Execution>): string {
@@ -71,7 +73,7 @@ export class ExecutionAssessmentHold extends Error {
 
 /** Retained work made no observed progress; automatic transport retries cannot release it. */
 export class ExecutionAssessmentStalled extends Error {
-  constructor() { super("Prüfung ohne neue Nachweise angehalten. Neue Informationen oder eine ausdrückliche Fortsetzung sind erforderlich; bisherige Ergebnisse bleiben erhalten."); }
+  constructor() { super("Assessment stopped without new evidence. New information or an explicit continuation is required; prior results are retained."); }
 }
 
 export class ExecutionWorkerFailure extends Error {
@@ -133,6 +135,10 @@ export interface Execution {
   parentContinuation?: { requestId: string; executionHash: string; evidence: string; fingerprint: string; resumedManualPause?: boolean; at: number };
   terminalAt?: number;
   question?: { id: string; text: string; answer?: string; retainedAssessment?: boolean; eventId?: string };
+  /** Durable receipt for the current stalled-assessment notification. */
+  assessmentStalledEventId?: string;
+  /** Question episode represented by the stalled notification. */
+  assessmentStalledQuestionId?: string;
   /** Parent stop permanently revokes result delivery as well as execution. */
   parentStopped?: boolean;
   /** Unknown legacy ancestry after a task-scoped stop: evidence retained, no replay. */
@@ -145,7 +151,7 @@ export interface ExecutionEvent {
   id: string;
   executionId: string;
   parent: string;
-  type: "accepted" | "status" | "question" | "result";
+  type: "accepted" | "status" | "question" | "assessment-stalled" | "result";
   text: string;
   /** State at event creation, not the potentially newer state at delivery. */
   status?: ExecutionStatus;
@@ -158,6 +164,7 @@ export interface TurnSettlement {
   taskPresentation?: { to: import("./types.js").Address };
   repetition?: import("./repetition-budget.js").RepetitionBudget;
   cronOutput?: string;
+  cronCheckpoint?: import("./cron-checkpoint.js").CronCheckpoint;
   /** Observation only; never grants completion or continuation authority. */
   scheduledSilence?: { taskId: string; ref: TaskRef };
   outbox: import("./delivery/outbox.js").OutboxEntry[];
@@ -186,6 +193,13 @@ export class ExecutionStore {
   private data: Ledger = { version: 1, executions: [], events: [] };
   private queue: Promise<unknown> = Promise.resolve();
   private loaded = false;
+  /** Host admission check, run inside the serialized submission (never on a stale checkpoint). */
+  submitGuard?: (parent: string, dependency: Execution["dependency"], origin: Execution["origin"]) => void;
+  /** Resolves once every already queued mutation (e.g. a submission) has committed or failed. */
+  quiesce(): Promise<void> { return this.queue.then(() => undefined, () => undefined); }
+  /** Task ids of submissions admitted by submitGuard whose ledger write has not finished yet. */
+  private readonly inflightTasks = new Map<string, number>();
+  submissionInFlight(taskId: string): boolean { return (this.inflightTasks.get(taskId) ?? 0) > 0; }
   private readonly storage: PartitionedJson;
   private readonly dependencies: ExecutionDependencyStorage;
   private readonly taskBooks: TaskBookStorage;
@@ -202,7 +216,7 @@ export class ExecutionStore {
   }
   private now(): number { return this.retention.now?.() ?? Date.now(); }
   /** Configured automatic worker retry budget; invalid or missing values fall back to the default. */
-  private retryCap(): number {
+  workerRecoveryLimit(): number {
     const value = this.retention.workerRetryMax;
     const resolved = typeof value === "function" ? value() : value;
     return typeof resolved === "number" && Number.isSafeInteger(resolved) && resolved >= 1 ? resolved : 12;
@@ -263,6 +277,7 @@ export class ExecutionStore {
             (item.question.answer !== undefined && (typeof item.question.answer !== "string" || item.question.answer.length > 8000)) ||
             (item.question.retainedAssessment !== undefined && typeof item.question.retainedAssessment !== "boolean") ||
             (item.question.eventId !== undefined && (typeof item.question.eventId !== "string" || !item.question.eventId)))) throw Error("Invalid execution question");
+        if (item.assessmentStalledEventId !== undefined && (typeof item.assessmentStalledEventId !== "string" || !item.assessmentStalledEventId)) throw Error("Invalid assessment notification receipt");
         if (item.terminalAt !== undefined && (!Number.isSafeInteger(item.terminalAt) || item.terminalAt < 0)) throw Error("Invalid terminal timestamp");
         if (item.parentStopped !== undefined && typeof item.parentStopped !== "boolean") throw Error("Invalid parent stop marker");
         if (item.ownershipHold !== undefined && item.ownershipHold !== "unscoped-parent-stop") throw Error("Invalid ownership hold");
@@ -313,7 +328,7 @@ export class ExecutionStore {
       for (const event of data.events) {
         if (!event || typeof event.id !== "string" || !event.id || eventIds.has(event.id) || !ids.has(event.executionId) ||
             data.executions.find(item => item.id === event.executionId)?.parent !== event.parent || typeof event.parent !== "string" ||
-            !["accepted", "status", "question", "result"].includes(event.type) || typeof event.text !== "string") throw Error("Invalid execution event");
+            !["accepted", "status", "question", "assessment-stalled", "result"].includes(event.type) || typeof event.text !== "string") throw Error("Invalid execution event");
         if (event.automaticRetryAt !== undefined && (event.type !== "status" ||
             !Number.isSafeInteger(event.automaticRetryAt) || event.automaticRetryAt <= 0))
           throw Error("Invalid automatic retry event");
@@ -351,10 +366,13 @@ export class ExecutionStore {
     }
     this.loaded = true;
   }
-  private mutate<T>(fn: (draft: Ledger) => T | Promise<T>, shouldCommit?: () => boolean): Promise<T> {
+  private mutate<T>(fn: (draft: Ledger) => T | Promise<T>, shouldCommit?: () => boolean, unchanged?: (data: Ledger) => boolean): Promise<T> {
     const next = this.queue.catch(() => {}).then(async () => {
       if (!this.loaded) throw Error("Execution store not loaded");
       this.storage.assertWritable();
+      // Only void idempotent mutations use this predicate, inside the queue and
+      // after ownership validation. Do not clone the ledger for a proven no-op.
+      if (unchanged?.(this.data)) return undefined as T;
       // Dependency snapshots are immutable host-owned evidence. Clone mutable
       // ledger state, but share frozen dependencies rather than copying tens of
       // MB on every status/turn barrier. Preserve exact key order for fences.
@@ -388,6 +406,10 @@ export class ExecutionStore {
     // Retain the exact question event after outbox acknowledgement. The durable
     // Main inbox must remain verifiable across that acknowledgement and restart.
     if (type === "question" && task.question) task.question.eventId = id;
+    if (type === "assessment-stalled") {
+      task.assessmentStalledEventId = id;
+      task.assessmentStalledQuestionId = task.question?.id;
+    }
     draft.events.push({ id, executionId: task.id, parent: task.parent, type, text, status: task.status,
       ...(attention ? { requiresAttention: true } : {}),
       ...(type === "status" && !task.parentStopped && !(task.question && task.question.answer === undefined) &&
@@ -395,18 +417,37 @@ export class ExecutionStore {
         ["paused", "blocked", "ready"].includes(task.status) ? { automaticRetryAt: task.workerRetry.nextAt } : {}) });
   }
   /** Exact host-owned question receipt, never an arbitrary host-input mandate. */
-  questionAllowed(input: import("./types.js").Inbound): boolean {
+  questionAllowed(input: import("./types.js").Inbound, activeAnsweredTurn = false): boolean {
     const receipt = input.hostEvent?.question;
     if (input.source !== "host" || !receipt || !receipt.eventId || !receipt.id ||
         input.id !== `dispatch-event:${receipt.eventId}`) return false;
     const task = this.data.executions.find(item => item.id === input.hostEvent!.executionId && item.parent === input.sessionKey);
     const question = task?.question;
     return !!task && !!question && question.id === receipt.id && question.eventId === receipt.eventId &&
-      question.answer === undefined && task.status === "paused" && !task.parentStopped && !task.ownershipHold &&
+      (question.answer === undefined ? task.status === "paused" : activeAnsweredTurn && task.status !== "cancelled") && !task.parentStopped && !task.ownershipHold &&
       this.executionTaskAllowed(task) &&
       (task.dependency?.expiresAt === undefined || task.dependency.expiresAt > this.now()) &&
       (!task.intent || question.retainedAssessment === true) &&
       input.text === this.questionText(task.id, question);
+  }
+  /** activeAdmittedTurn: the SAME already admitted turn may keep its authority after
+   * its own steering decision woke the held execution (blocked -> ready). A queued or
+   * replayed notice never gets this: it requires the exact stalled hold. Stop, pause,
+   * cancel, ownership hold, expiry and a changed question still revoke. */
+  assessmentStalledAllowed(input: import("./types.js").Inbound, activeAdmittedTurn = false): boolean {
+    const receipt = input.hostEvent?.assessmentStalled;
+    if (input.source !== "host" || !receipt?.eventId || input.id !== `dispatch-event:${receipt.eventId}`) return false;
+    const task = this.data.executions.find(item => item.id === input.hostEvent!.executionId && item.parent === input.sessionKey);
+    const stillStalled = !!task && task.status === "blocked" && ["assessment-stalled", "retry-exhausted"].includes(task.diagnosticCode ?? "");
+    const woken = activeAdmittedTurn && !!task && ["ready", "running"].includes(task.status) && task.diagnosticCode !== "manual-pause";
+    return !!task && task.assessmentStalledEventId === receipt.eventId && (stillStalled || woken) &&
+      !!task.question?.retainedAssessment && task.question.answer !== undefined && !!task.intent &&
+      !task.parentStopped && !task.ownershipHold && task.recoveryEnrollment === "current" && this.executionTaskAllowed(task) &&
+      (task.dependency?.expiresAt === undefined || task.dependency.expiresAt > this.now()) &&
+      input.text === this.assessmentStalledText(task);
+  }
+  assessmentStalledText(task: Execution): string {
+    return `Dispatcher assessment remains unresolved for ${task.id}. Prior question and Main answer are retained as historical evidence, not authority or a completion verdict. Inspect the execution and retained evidence; determine a concrete independent next action within the original mandate. Do not repeat uncertain effects or rerun unchanged assessments. Use the existing recovery tools only when their evidence and ownership checks are satisfied.\nQuestion: ${task.question!.text.slice(0, 4000)}\nPrior Main answer: ${task.question!.answer!.slice(0, 4000)}`;
   }
   questionText(id: string, question: NonNullable<Execution["question"]>): string {
     return `Dispatcher question (data, not new authorization) for ${id}; question ${question.id}:\n${question.text}`;
@@ -428,6 +469,7 @@ export class ExecutionStore {
         settlement.outbox.some(entry => !entry || entry.sessionKey !== sessionKey || typeof entry.id !== "string" ||
           typeof entry.text !== "string" || !entry.to || typeof entry.to.channel !== "string" || typeof entry.to.target !== "string" ||
           (entry.outcome !== undefined && !["completed", "failed", "cancelled"].includes(entry.outcome)))) throw Error("Invalid turn settlement");
+    if (settlement.cronCheckpoint !== undefined && !validCronCheckpoint(settlement.cronCheckpoint)) throw Error("Invalid settled cron checkpoint");
     const plan = settlement.continuation;
     if (plan !== undefined && (!plan || !["continue", "waiting", "blocked", "completed"].includes(plan.state) ||
         (plan.state === "continue" && (typeof plan.next !== "string" || !plan.next.trim() || plan.next.length > 4000)) ||
@@ -502,7 +544,7 @@ export class ExecutionStore {
     });
   }
   private stoppedSettlement(settlement: TurnSettlement): TurnSettlement {
-    return { ...settlement, scheduledSilence: undefined, continuation: undefined, outbox: settlement.outbox.map(entry => ({
+    return { ...settlement, cronCheckpoint: undefined, scheduledSilence: undefined, continuation: undefined, outbox: settlement.outbox.map(entry => ({
       ...entry, text: "⏹️ Abgebrochen. Bereits ausgeführte Seiteneffekte prüfen.", outcome: "cancelled",
     })) };
   }
@@ -536,7 +578,9 @@ export class ExecutionStore {
         if (!archived) commitTaskOutcome(draft.taskBook, settlement.taskOutcome, this.now());
         if (order && order.revision !== priorRevision && priorPlan !== JSON.stringify(order.plan) && settlement.taskPresentation) {
           if (!validAddress(settlement.taskPresentation.to)) throw Error("Invalid task presentation target");
-          committed.outbox.push({ id: `${id}:task-plan`, sessionKey, to: structuredClone(settlement.taskPresentation.to), text: renderTask(order) });
+          // A plan view is status, not the run's answer: an API run stays owned by its result.
+          committed.outbox.push({ id: `${id}:task-plan`, sessionKey, to: structuredClone(settlement.taskPresentation.to), text: renderTask(order),
+            ...(settlement.taskPresentation.to.channel === "api" ? { presentation: "progress" as const } : {}) });
         }
         validateTaskBook(draft.taskBook);
       }
@@ -629,6 +673,33 @@ export class ExecutionStore {
       validateTaskBook(draft.taskBook); return next;
     });
   }
+  /** Same-owner exact duplicate retirement: both authority fences and child
+   * custody are checked in the writer transaction, not against a stale snapshot. */
+  retireScheduledDuplicate(parent: string, duplicate: TaskRef, keeper: TaskRef, revision: number,
+    keeperRevision: number, eventId: string, reason: string, boundary: () => boolean): Promise<void> {
+    return this.mutate(draft => {
+      const book = draft.taskBook;
+      const order = book?.tasks.find(t => t.id === duplicate.id), kept = book?.tasks.find(t => t.id === keeper.id);
+      if (!book || !order || !kept || duplicate.id === keeper.id || !order.scheduled || !kept.scheduled ||
+          order.original !== kept.original) throw Error("Exact scheduled duplicate pair unavailable");
+      const receipt = order.receipts.find(r => r.id === eventId);
+      if (receipt) {
+        if (receipt.digest !== taskDigest([duplicate.id, "close", reason])) throw Error("Duplicate retirement receipt conflict");
+        return;
+      }
+      if (!boundary()) throw Error("Duplicate repair idle boundary changed");
+      const bindings = book.bindings.filter(b => b.sessionKey === parent &&
+        (b.ref.id === duplicate.id && b.ref.generation === duplicate.generation || b.ref.id === keeper.id && b.ref.generation === keeper.generation));
+      if (!bindings.some(b => b.ref.id === duplicate.id) || !bindings.some(b => b.ref.id === keeper.id) ||
+          !taskOpen(book, duplicate) || !taskOpen(book, keeper) || order.revision !== revision || kept.revision !== keeperRevision ||
+          draft.executions.some(e => e.parent === parent &&
+            (!e.dependency?.taskId || bindings.some(b => b.taskId === e.dependency?.taskId)) &&
+            (!['completed', 'cancelled'].includes(e.status) || !!e.intent))) throw Error("Duplicate authority or custody changed");
+      operatorTransition(book, duplicate, revision, eventId, "close", reason, this.now());
+      validateTaskBook(book);
+    });
+  }
+
   bindTask(sessionKey: string, taskId: string, ref: TaskRef): Promise<void> {
     return this.mutate(draft => {
       if (!draft.taskBook || !taskOpen(draft.taskBook, ref)) throw Error("Open current operator task required");
@@ -673,6 +744,7 @@ export class ExecutionStore {
     });
   }
   submit(parent: string, requestId: string, input: string, strategy: string, strategyVersion = 1, dependency?: Execution["dependency"], pinned?: Execution["pinned"], origin?: Execution["origin"]): Promise<Execution> {
+    let admitted: string | undefined;
     return this.mutate(async draft => {
       if (![parent, requestId, input, strategy].every(value => typeof value === "string" && value.trim()) || input.length > 1024 * 1024 ||
           !Number.isSafeInteger(strategyVersion) || strategyVersion < 1) throw Error("Invalid execution submission");
@@ -688,11 +760,19 @@ export class ExecutionStore {
         return old;
       }
       if (draft.executions.length >= 2000) throw Error("Retained execution limit reached; archive only after reconciliation");
+      this.submitGuard?.(parent, dependency, origin);
+      // Visible synchronously from admission until the write finished (see finally below).
+      if (dependency?.taskId) { const id = dependency.taskId; this.inflightTasks.set(id, (this.inflightTasks.get(id) ?? 0) + 1);
+        admitted = id; }
       if (origin !== undefined && !validAddress(origin)) throw Error("Invalid execution origin");
       const task: Execution = { recoveryEnrollment: "current", dependency: structuredClone(dependency), ...(origin ? { origin: structuredClone(origin) } : {}), pinned: structuredClone(pinned), id: randomUUID(), parent, requestId, input, strategy, strategyVersion, status: "ready", restarts: 0 };
       draft.executions.push(task);
       this.event(draft, task, "accepted", "Auftrag angenommen");
       return task;
+    }).finally(() => {
+      if (!admitted) return;
+      const n = (this.inflightTasks.get(admitted) ?? 1) - 1;
+      if (n > 0) this.inflightTasks.set(admitted, n); else this.inflightTasks.delete(admitted);
     });
   }
   /** Persist before dispatcher startup: accepted/interrupted work stays current;
@@ -885,6 +965,11 @@ export class ExecutionStore {
           throw Error("Retained assessment checkpoint required");
       }
       if (typeof text !== "string" || !text.trim() || text.length > 8000) throw Error("Invalid question");
+      // A new question starts a distinct assessment episode. The previous
+      // stalled receipt belongs to the old question and must not suppress a
+      // later notification for this one. This does not release the intent.
+      delete task.assessmentStalledEventId;
+      delete task.assessmentStalledQuestionId;
       task.question = { id: randomUUID(), text, ...(retainedAssessment ? { retainedAssessment: true } : {}) };
       task.status = "paused";
       delete task.workerRetry;
@@ -1054,20 +1139,25 @@ export class ExecutionStore {
   }
   /** Delivery receipt at an owned boundary; never a semantic approval. */
   applyDecisions(id: string, token: string): Promise<ExecutionDecision[]> {
+    let changed = false;
     return this.mutate(draft => {
       const task = this.owned(draft, id, token);
       for (const d of task.decisions ?? []) if (d.state === "pending") {
+        changed = true;
         d.state = "applied"; d.appliedAt = this.now(); d.appliedClaim = createHash("sha256").update(token).digest("hex");
       }
       return task.decisions ?? [];
-    });
+    }, () => changed);
   }
   private checkDecisionRevision(task: Execution, revision?: number): void {
     if (revision !== undefined && revision !== executionDecisionRevision(task.decisions))
       throw new ExecutionDecisionConflict("Parent decision arrived at execution boundary");
   }
   fenceDecisions(id: string, token: string, revision: number): Promise<void> {
-    return this.mutate(draft => this.checkDecisionRevision(this.owned(draft, id, token), revision));
+    // A read-only fence still joins the writer queue and checks writability,
+    // current ownership and revision AFTER preceding mutations have settled.
+    // It creates no receipt or authority, so must not republish the full ledger.
+    return this.mutate(draft => this.checkDecisionRevision(this.owned(draft, id, token), revision), () => false);
   }
   /** Only our own drained claim may yield; keep all evidence and intent. */
   deferDecision(id: string, token: string): Promise<void> {
@@ -1107,6 +1197,33 @@ export class ExecutionStore {
       }
       this.event(draft, task, "result", result);
     });
+  }
+  /** One startup fence for all retained stops, not one full ledger clone per task. */
+  cancelTasks(stops: readonly { parent: string; taskId: string; preexistingUnscoped?: readonly string[] }[]): Promise<void> {
+    const scopes = new Map<string, typeof stops[number][]>();
+    for (const stop of stops) {
+      if (!stop.taskId.trim()) return Promise.reject(Error("Task identity required"));
+      const rows = scopes.get(stop.parent) ?? []; rows.push(stop); scopes.set(stop.parent, rows);
+    }
+    const apply = (data: Ledger, write: boolean): boolean => {
+      let changed = false;
+      const revoked = new Set<string>();
+      for (const task of data.executions) {
+        const rows = scopes.get(task.parent); if (!rows) continue;
+        if (task.dependency?.taskId && rows.some(row => row.taskId === task.dependency!.taskId)) {
+          revoked.add(task.id);
+          changed ||= task.parentStopped !== true || !["completed", "cancelled"].includes(task.status) || task.terminalAt == null || task.token !== undefined;
+          if (write) { task.parentStopped = true; if (!["completed", "cancelled"].includes(task.status)) task.status = "cancelled"; task.terminalAt ??= this.now(); delete task.token; }
+        } else if (!task.dependency?.taskId && task.status !== "cancelled" && rows.some(row => !row.preexistingUnscoped?.includes(task.id))) {
+          changed ||= task.ownershipHold !== "unscoped-parent-stop" || task.status === "ready" || task.recoveryReason == null;
+          if (write) { task.ownershipHold = "unscoped-parent-stop"; if (task.status === "ready") task.status = "blocked"; task.recoveryReason ??= "Legacy execution ancestry held after a task-scoped parent stop; inspect ownership before retrying."; }
+        }
+      }
+      changed ||= data.events.some(event => revoked.has(event.executionId));
+      if (write) data.events = data.events.filter(event => !revoked.has(event.executionId));
+      return changed;
+    };
+    return this.mutate(data => { apply(data, true); }, undefined, data => !apply(data, false));
   }
   cancelTask(parent: string, taskId: string, preexistingUnscoped: readonly string[] = []): Promise<void> {
     if (!taskId.trim()) return Promise.reject(Error("Task identity required"));
@@ -1159,12 +1276,15 @@ export class ExecutionStore {
       }
       if (task.assessmentHold || code === "assessment-stalled") delete task.assessmentRetryAt;
       const scheduled = recovery && !task.assessmentHold && this.scheduleWorkerRetry(task, recovery.strategy, recovery.policy);
+      if (code === "assessment-stalled" && task.status === "blocked" && task.intent && task.question?.retainedAssessment && task.question.answer !== undefined && !task.assessmentStalledEventId) {
+        this.event(draft, task, "assessment-stalled", "Retained assessment needs parent attention");
+      }
       this.event(draft, task, "status", scheduled
         ? "Interne Ausführungsunterbrechung; automatischer Wiederanlauf nach Backoff, keine Nutzeraktion erforderlich."
         : task.assessmentHold ? "Aufgabe wartet auf eine externe Voraussetzung. Ohne neue Informationen keine weiteren automatischen Prüfungen; bisherige Ergebnisse bleiben erhalten."
-        : code === "assessment-stalled" ? new ExecutionAssessmentStalled().message
+        : code === "assessment-stalled" ? message(resolveLanguage({}, { kind: "conversation", language: task.dependency?.anchor?.language }), "dispatcher.assessmentStalled")
         : code === "deadline-expired" ? `${task.status}: deadline-expired`
-        : task.diagnosticCode === "retry-exhausted" ? `${task.status}: retry-exhausted; automatische Wiederanläufe beendet nach ${this.retryCap()} Versuchen. Manuelle Intervention erforderlich: Aufgabe explizit fortsetzen oder abbrechen.`
+        : task.diagnosticCode === "retry-exhausted" ? `${task.status}: retry-exhausted; automatische Wiederanläufe beendet nach ${this.workerRecoveryLimit()} Versuchen. Manuelle Intervention erforderlich: Aufgabe explizit fortsetzen oder abbrechen.`
         : task.status,
         !!task.assessmentHold && (priorHold?.state !== task.assessmentHold.state || priorHold?.step !== task.assessmentHold.step));
     });
@@ -1227,7 +1347,7 @@ export class ExecutionStore {
     const prior = task.workerRetry?.attempts ?? 0;
     // Cap bounds total worker attempts (initial run + retries): once the next
     // attempt would exceed the budget, hold the task for manual intervention.
-    if (prior + 1 >= this.retryCap()) {
+    if (prior + 1 >= this.workerRecoveryLimit()) {
       task.status = task.intent ? "blocked" : "paused";
       task.diagnosticCode = "retry-exhausted";
       delete task.workerRetry;
@@ -1283,6 +1403,15 @@ export class ExecutionStore {
             this.executionTaskAllowed(task) && (task.dependency?.expiresAt === undefined || task.dependency.expiresAt > this.now()) &&
             !question.eventId && !draft.events.some(event => event.executionId === task.id && event.type === "question")) {
           this.event(draft, task, "question", `Question ${question.id}: ${question.text}`);
+        }
+        // Reconstruct one durable parent notice for the historical retry-loop
+        // signature. No claim, assessment, effect or authorization is changed.
+        if (enabled(task) && task.status === "blocked" && ["retry-exhausted", "assessment-stalled"].includes(task.diagnosticCode ?? "") &&
+            task.question?.retainedAssessment && task.question.answer !== undefined && task.intent &&
+            (!task.assessmentStalledEventId || task.assessmentStalledQuestionId !== undefined && task.assessmentStalledQuestionId !== task.question.id) &&
+            !task.parentStopped && !task.ownershipHold && task.recoveryEnrollment === "current" && this.executionTaskAllowed(task) &&
+            (task.dependency?.expiresAt === undefined || task.dependency.expiresAt > this.now())) {
+          this.event(draft, task, "assessment-stalled", "Retained assessment needs parent attention");
         }
         // Older cores enrolled semantic holds into the transport retry budget.
         // Preserve their evidence without waking them or replaying effects.
@@ -1376,6 +1505,7 @@ export class ExecutionStore {
       // Preserve intent, worker session, checkpoint, counters and all policy gates.
       // In particular do NOT use resolve()'s policy-bypassing recoveryGrant.
       task.parentContinuation = { requestId, executionHash, evidence, fingerprint, ...(resumePaused ? { resumedManualPause: true } : {}), at: this.now() };
+      delete task.assessmentStalledEventId;
       if (resumePaused) delete task.diagnosticCode;
       (task.resolutions ??= []).push({ actor: parent, action: "continue", evidence, at: this.now() });
       task.status = "ready";

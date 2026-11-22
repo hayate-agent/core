@@ -159,8 +159,15 @@ Only after validation does the owner request restart. **Only after the old runti
 exits** does it commit `selected.json` and start Core from that installation.
 The selection includes all three component paths/revisions for consumers. A
 separately supervised WebUI service or custom external plugin module must use the
-selected installation in its own launch configuration; this mechanism does not
-silently rewrite or restart unrelated services. Core's bundled plugins are active
+selected installation in its own launch configuration (for example
+`WorkingDirectory=<home>/software-updates/current/webui`); this mechanism does not
+silently rewrite or restart unrelated services. For an **activated** agent WebUI
+(`gatewayPlugins.webui.module` set and not disabled), configure
+`softwareUpdates.webuiRestart` as an argv list, for example
+`[systemctl, --user, try-restart, hayate-webui.service]`. After `selected.json`
+and `current` are committed, the owner runs it once without a shell. A disabled or
+unactivated WebUI is never restarted. A restart failure keeps the new Core
+selection and is reported in `/update status software`. Core's bundled plugins are active
 with the replacement Core process.
 
 Preparation/status receipts survive owner restart. Interrupted preparation may be

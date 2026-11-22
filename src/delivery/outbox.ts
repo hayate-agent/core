@@ -14,6 +14,12 @@ export interface OutboxEntry {
   progressId?: string;
   /** Routine status uses a stable update row, not a final reply. */
   statusKey?: string;
+  /** Turn settlement only: an API answer held until this run deadline (restored as task.apiHold). */
+  apiHeldUntil?: number;
+  /** Settlement marker: the held answer waits behind a fenced older run (task.apiDeferred). */
+  apiDeferredHold?: boolean;
+  /** Nonterminal presentation (e.g. a task-plan view): never finishes an API run. */
+  presentation?: "progress";
 }
 
 export interface OutboxDeps {
@@ -23,6 +29,14 @@ export interface OutboxDeps {
   /** Durable state write; throws if not durable. */
   save: () => Promise<void>;
   log: (msg: string) => void;
+  /** Clock for rate-limit backoff (tests). */
+  now?: () => number;
+}
+
+/** Server-requested wait (Matrix `retry_after_ms`) from a failed delivery; undefined if none. */
+export function retryAfterMs(err: unknown): number | undefined {
+  const m = /"retry_after_ms"\s*:\s*(\d{1,9})\b/.exec(err instanceof Error ? err.message : String(err));
+  return m ? Math.min(Number(m[1]), 3_600_000) : undefined;
 }
 
 /**
@@ -36,6 +50,8 @@ export interface OutboxDeps {
  */
 export class OutboxDelivery {
   held = false;
+  /** Per-session earliest next attempt after a rate-limit; entries stay queued meanwhile. */
+  private readonly notBefore = new Map<string, number>();
   private readonly blocked = new Set<OutboxEntry>();
 
   constructor(private readonly deps: OutboxDeps) {}
@@ -46,6 +62,10 @@ export class OutboxDelivery {
 
   block(entry: OutboxEntry): void {
     this.blocked.add(entry);
+  }
+
+  isBlocked(entry: OutboxEntry): boolean {
+    return this.blocked.has(entry);
   }
 
   get hasBlocked(): boolean {
@@ -63,13 +83,16 @@ export class OutboxDelivery {
   async flush(sessionKey: string, outbox: OutboxEntry[]): Promise<boolean> {
     while (outbox.length) {
       if (this.held) return false;
+      if ((this.notBefore.get(sessionKey) ?? 0) > (this.deps.now ?? Date.now)()) return false;
       const entry = outbox[0]!;
       if (this.blocked.has(entry)) return false;
       try {
         entry.id ??= randomUUID();
-        await this.deps.deliver(entry.to, labelOutput(entry.text, entry.to.channel === "dispatch" ? undefined : entry.outputTags), { deliveryId: entry.id, ...(entry.statusKey ? { statusKey: entry.statusKey } : {}), ...(entry.progressId ? { progressId: entry.progressId } : {}), ...(entry.outcome ? { outcome: entry.outcome } : {}), ...(entry.maintenance ? { maintenance: entry.maintenance } : {}) });
+        await this.deps.deliver(entry.to, labelOutput(entry.text, entry.to.channel === "dispatch" ? undefined : entry.outputTags), { deliveryId: entry.id, ...(entry.statusKey ? { statusKey: entry.statusKey } : {}), ...(entry.progressId ? { progressId: entry.progressId } : {}), ...(entry.outcome ? { outcome: entry.outcome } : {}), ...(entry.maintenance ? { maintenance: entry.maintenance } : {}), ...(entry.presentation ? { presentation: entry.presentation } : {}) });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
+        const wait = retryAfterMs(err);
+        if (wait !== undefined) this.notBefore.set(sessionKey, (this.deps.now ?? Date.now)() + wait + 250);
         if (!(err instanceof PermanentDeliveryError) || !this.deps.park) {
           this.deps.log(`reply delivery failed in ${sessionKey}, kept in outbox: ${message}`);
           return false;
@@ -83,6 +106,7 @@ export class OutboxDelivery {
         this.deps.log(`reply undeliverable in ${sessionKey}, parked: ${message}`);
       }
       outbox.shift();
+      this.notBefore.delete(sessionKey);
       void this.deps.save().catch((err) => this.deps.log(`state save failed: ${err instanceof Error ? err.message : err}`));
     }
     return true;

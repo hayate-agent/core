@@ -12,6 +12,6 @@ test("ready dispatcher does not install a Main-only shell or edit guard", async 
     registeredTools: ["plugin_dispatch", "bash", "edit", "write"], dispatcherEnabled: true,
     dispatcherReady: true, reviewInstructions: "" });
   assert.match(guidance, /Main may use its available tools directly/);
-  assert.match(guidance, /worker actually executing the same work concurrently/);
-  assert.match(guidance, /blocked, stalled or failed worker is not by itself a reason to prevent Main from taking over/);
+  assert.match(guidance, /delegation is optional/);
+  assert.doesNotMatch(guidance, /Submit with|requestId=|Blocked dispatcher resume/);
 });

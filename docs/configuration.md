@@ -200,9 +200,8 @@ operator configuration, not a sandbox against an operator replacing parent paths
 
 ## Hashtag metadata model
 
-Use `hashtag.model: provider/model` for an explicit metadata model; when unset,
-classification uses the effective Main `model` only, never reviewer/dispatcher
-roles. `/hashtag-model reset` removes the local override. Overlay model changes
+Model order: `hashtag.model`, else the Basic model (`modelRoles.roles.basic.model`, an explicit optional key; only when `modelRoles.enabled`), else Main of the current scope (the conversation's active model incl. a local `/model` choice, otherwise the installation/overlay `model`). Thinking is always `off`; Main is never changed. Use `hashtag.model: provider/model` for an explicit metadata model; when unset,
+the fallback chain above applies; reviewer/dispatcher roles are never used. `/hashtag-model reset` removes the local override. Overlay model changes
 are live; `hashtag.provider` (`default`, `tags-only`, or a trusted service suffix)
 is restart-bound. Legacy `modelRoles.roles.hashtag` no longer selects the model.
 See [topic label configuration and provider contracts](topic-labels.md) for YAML,

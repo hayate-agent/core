@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { TurnEvent } from "./types.js";
+import { resourceUsageLabel } from "./resource-usage-label.js";
 import { executionMetadata, type ExecutionMetadata } from "./builtin-plugins/execution-metadata.js";
 
 /** Host evidence only. No model text, arguments, results or authorization are accepted. */
@@ -13,7 +14,7 @@ export interface ActivitySnapshot {
   outputTags?: string[];
   context: "operator" | "host" | "scheduled" | "worker";
   phase: "starting" | "running" | "tool" | "completed" | "failed" | "cancelled";
-  activity: "opening session" | "selecting model" | "runtime active" | "tool running" | "tool settled" | "turn settled" | "compacting context" | "compaction completed" | "compaction failed; original retained" | "compaction cancelled; original retained" | "model reasoning active" | "preparing tool arguments" | "waiting for local model capacity" | "local model request admitted" | "local model wait cancelled";
+  activity: "opening session" | "selecting model" | "runtime active" | "tool running" | "tool settled" | "turn settled" | "compacting context" | "compaction completed" | "compaction failed; original retained" | "compaction cancelled; original retained" | "model reasoning active" | "preparing tool arguments" | "waiting for local model capacity" | "local model request admitted" | "local model wait cancelled" | "skill reference loaded" | "skill created" | "skill updated" | "working memory recalled";
   tools: Array<{ callId: string; name: string }>;
   execution?: ExecutionMetadata;
   executionState?: "pending" | "observed" | "unavailable";
@@ -21,7 +22,7 @@ export interface ActivitySnapshot {
   inactiveMs: number;
 }
 export interface ActivityPolicy { enabled?: boolean; intervalMs?: number; maxAlive?: number }
-export type ActivityEvent = { type: "activity"; kind: "progress" | "alive"; snapshot: ActivitySnapshot; tool?: { callId: string; name: string; state: "started" | "completed" | "failed" } };
+export type ActivityEvent = { type: "activity"; kind: "progress" | "alive"; snapshot: ActivitySnapshot; tool?: { callId: string; name: string; state: "started" | "completed" | "failed" }; resource?: { kind: "skill" | "memory"; action: "loaded" | "recalled" | "created" | "updated"; name?: string; locale?: string; label?: string } };
 
 let nextSequence = 0;
 const identity = (value: string) => createHash("sha256").update(value).digest("hex").slice(0, 12);
@@ -64,10 +65,10 @@ export class TurnActivity {
       execution: this.execution ? { ...this.execution } : undefined, executionState: this.executionState,
       phase: this.phase, activity: this.activity, tools: [...this.tools.values()].map(tool => ({ ...tool })), elapsedMs: Math.max(0, now - this.started), inactiveMs: Math.max(0, now - this.last) };
   }
-  private publish(kind: ActivityEvent["kind"], tool?: ActivityEvent["tool"]): void {
+  private publish(kind: ActivityEvent["kind"], tool?: ActivityEvent["tool"], resource?: ActivityEvent["resource"]): void {
     if (!this.enabled) return;
     this.lastEmitted = this.now();
-    try { this.emit({ type: "activity", kind, snapshot: this.snapshot(), ...(tool ? { tool } : {}) }); } catch { /* Telemetry cannot fail execution. */ }
+    try { this.emit({ type: "activity", kind, snapshot: this.snapshot(), ...(tool ? { tool } : {}), ...(resource ? { resource } : {}) }); } catch { /* Telemetry cannot fail execution. */ }
   }
   running(observationExpected = false): void {
     if (this.closed) return;
@@ -99,6 +100,13 @@ export class TurnActivity {
       this.publish("progress");
       return;
     }
+    if (event.type === "resource_usage") {
+      this.phase = "running";
+      this.activity = event.resource === "memory" ? "working memory recalled" : event.action === "created" ? "skill created" : event.action === "updated" ? "skill updated" : "skill reference loaded";
+      const name = event.name && /^[\p{L}\p{N}_.-]{1,80}$/u.test(event.name) ? event.name : undefined;
+      this.publish("progress", undefined, { kind: event.resource, action: event.action, ...(name ? { name } : {}), ...(event.locale ? { locale: event.locale } : {}), label: resourceUsageLabel(event) });
+      return;
+    }
     if (event.type === "model_progress") {
       const next = event.phase === "reasoning" ? "model reasoning active" : "preparing tool arguments";
       const changed = this.activity !== next;
@@ -121,14 +129,16 @@ export class TurnActivity {
       this.publish("progress");
     }
     if (event.type !== "tool") return;
-    const name = safeName(event.name);
+    let name = safeName(event.name);
     const key = event.callId ?? (event.phase === "start" ? `legacy-${++this.legacy}` : [...this.tools].find(([, tool]) => tool.name === name)?.[0]);
     if (!key) return;
     if (event.phase === "start") {
       if (this.tools.has(key) || this.tools.size >= 50) return;
       this.tools.set(key, { callId: identity(key), name });
     } else {
-      if (!this.tools.has(key)) return;
+      const started = this.tools.get(key);
+      if (!started) return;
+      name = started.name;
       this.tools.delete(key);
     }
     this.phase = this.tools.size ? "tool" : "running";

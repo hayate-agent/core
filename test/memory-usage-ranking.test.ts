@@ -44,3 +44,125 @@ test("returned-hit usage survives reindex/restart without changing source revisi
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test("hourly maintenance archives stale unused turn records only; keeps handoff, explicit knowledge, sources, scopes and replay identity", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "memory-maint-"));
+  const store = new FileMemoryStore(dir, memoryConfig({ scanSeconds: 3600 }));
+  try {
+    await store.start();
+    const old = new Date(Date.now() - 8 * 86400000).toISOString();
+    const op = (key: string, sessionKey: string, reviewAfter = old) => store.put({ sessionKey }, { key, kind: "operation", title: `turn ${key}`, text: `dispatcher queue ${key}`, source: key, reviewAfter });
+    const stale = await op("a1", "matrix:a");
+    const used = await op("a2", "matrix:a");
+    const fresh = await op("a3", "matrix:a", new Date(Date.now() + 86400000).toISOString());
+    await new Promise(r => setTimeout(r, 5));
+    const newest = await op("a4", "matrix:a"); // newest per session: handoff continuity
+    const otherOnly = await op("b1", "matrix:b");
+    const lesson = await store.put({ sessionKey: "matrix:a" }, { key: "l1", kind: "lesson", title: "lesson", text: "dispatcher queue lesson", source: "operator", reviewAfter: old });
+    await store.search({ sessionKey: "matrix:a" }, "a2"); // recalled once → keep
+    assert.equal(await store.maintain(), 1);
+    const state = async (sessionKey: string, id: string) => (await store.get({ sessionKey }, id))?.state;
+    assert.equal(await state("matrix:a", stale.id), "archived");
+    for (const e of [used, fresh, newest, lesson]) assert.equal(await state("matrix:a", e.id), "active", e.title);
+    assert.equal(await state("matrix:b", otherOnly.id), "active");
+    // Archived knowledge is not deleted: source, scope and historical recall stay intact.
+    const archived = await store.get({ sessionKey: "matrix:a" }, stale.id);
+    assert.equal(archived?.source, "a1"); assert.equal(archived?.sessionKey, "matrix:a");
+    assert.equal(await store.get({ sessionKey: "matrix:b" }, stale.id), undefined);
+    assert.ok(!(await store.search({ sessionKey: "matrix:a" }, "a1")).some(h => h.entry.id === stale.id));
+    assert.ok((await store.search({ sessionKey: "matrix:a" }, "a1", { historical: true })).some(h => h.entry.id === stale.id));
+    // Replay of the queued capture after archiving stays idempotent (no duplicate, no conflict).
+    assert.equal((await op("a1", "matrix:a")).id, stale.id);
+    assert.equal((await store.status()).entries, 6);
+    // Second run is a no-op; status reports the maintenance time; survives restart (Markdown authoritative).
+    assert.equal(await store.maintain(), 0);
+    assert.ok((await store.status()).lastMaintenance);
+    await store.close();
+    const reopened = new FileMemoryStore(dir, memoryConfig({ scanSeconds: 3600 }));
+    await reopened.start(); await reopened.reindex();
+    assert.equal((await reopened.get({ sessionKey: "matrix:a" }, stale.id))?.state, "archived");
+    assert.equal((await reopened.get({ sessionKey: "matrix:a" }, newest.id))?.state, "active");
+    await reopened.close();
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test("maintenance runs from the existing scan owner at most hourly and never concurrently with writes", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "memory-maint-tick-"));
+  const store = new FileMemoryStore(dir, memoryConfig({ scanSeconds: 3600 }));
+  try {
+    await store.start();
+    await store.reindex(); // the existing scan owner performs the first maintenance run
+    const first = (await store.status()).lastMaintenance;
+    assert.ok(first);
+    const old = new Date(Date.now() - 8 * 86400000).toISOString();
+    const a = await store.put({ sessionKey: "s" }, { key: "x1", kind: "operation", title: "t1", text: "one", reviewAfter: old });
+    await new Promise(r => setTimeout(r, 5));
+    // Queued write and scan share one serial owner; a scan within the hour does not re-run maintenance.
+    await Promise.all([store.put({ sessionKey: "s" }, { key: "x2", kind: "operation", title: "t2", text: "two", reviewAfter: old }), store.reindex()]);
+    assert.equal((await store.status()).lastMaintenance, first);
+    assert.equal((await store.get({ sessionKey: "s" }, a.id))?.state, "active");
+    // Next hourly run (simulated clock) archives the stale record and keeps the newest.
+    assert.equal(await store.maintain(Date.now() + 3600000), 1);
+    assert.equal((await store.get({ sessionKey: "s" }, a.id))?.state, "archived");
+    await store.close(); // drain: close waits for the serial queue
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test("archived records free the active entry budget across restart; replay stays idempotent; reactivation is still bounded", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "memory-budget-"));
+  const ctx = { sessionKey: "one" };
+  const past = new Date(Date.now() - 86400000).toISOString();
+  let store = new FileMemoryStore(dir, memoryConfig({ maxEntries: 3 }));
+  try {
+    await store.start();
+    const old = [];
+    for (const key of ["t1", "t2", "t3"]) old.push(await store.put(ctx, { key, kind: "operation", title: `turn ${key}`, text: "routine", reviewAfter: past }));
+    await assert.rejects(store.put(ctx, { key: "lesson", kind: "lesson", title: "lesson", text: "durable" }), /entry budget/);
+    assert.equal(await store.maintain(Date.now()), 2); // newest turn kept for handoff
+    const lesson = await store.put(ctx, { key: "lesson", kind: "lesson", title: "lesson", text: "durable" });
+    // Restart + reindex: archived files are loaded, not rejected as over-budget, and stay historical.
+    await store.close();
+    store = new FileMemoryStore(dir, memoryConfig({ maxEntries: 3 }));
+    await store.start(); await store.reindex();
+    assert.equal((await store.status()).entries, 4);
+    assert.equal((await store.put(ctx, { key: "lesson", kind: "lesson", title: "lesson", text: "durable" })).id, lesson.id); // replay
+    assert.equal((await store.search(ctx, "turn", { historical: true })).length, 3);
+    assert.equal((await store.search({ sessionKey: "other" }, "lesson")).length, 0);
+    const another = await store.put(ctx, { key: "n2", kind: "note", title: "note", text: "x" });
+    assert.ok(another.id);
+    await assert.rejects(store.put(ctx, { key: "n3", kind: "note", title: "note3", text: "x" }), /entry budget/);
+    const archived = (await store.search(ctx, "turn", { historical: true })).find(h => h.entry.state === "archived")!.entry;
+    await assert.rejects(store.revise(ctx, archived.id, archived.revision, { state: "active" }), /entry budget/);
+  } finally { await store.close(); await rm(dir, { recursive: true, force: true }); }
+});
+
+test("graceful drain: close settles queued writes and an in-flight maintenance run before returning; reopened store has both", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "memory-drain-"));
+  const ctx = { sessionKey: "matrix:a" };
+  const old = new Date(Date.now() - 8 * 86400000).toISOString();
+  const store = new FileMemoryStore(dir, memoryConfig({ scanSeconds: 3600 }));
+  try {
+    await store.start();
+    const stale = await store.put(ctx, { key: "d1", kind: "operation", title: "turn d1", text: "routine", reviewAfter: old });
+    await new Promise(r => setTimeout(r, 5));
+    await store.put(ctx, { key: "d2", kind: "operation", title: "turn d2", text: "routine", reviewAfter: old });
+    // Queue a write and a maintenance run without awaiting them, then close immediately.
+    const settled: string[] = [];
+    const write = store.put(ctx, { key: "queued", kind: "lesson", title: "queued lesson", text: "written during shutdown" }).then(e => { settled.push("write"); return e; });
+    const maint = store.maintain(Date.now()).then(n => { settled.push("maintain"); return n; });
+    await store.close();
+    settled.push("close");
+    assert.deepEqual(settled, ["write", "maintain", "close"]);
+    const queued = await write;
+    assert.equal(await maint, 1);
+    // Cleanup: closing again is harmless and durable state survives a restart.
+    await store.close();
+    const reopened = new FileMemoryStore(dir, memoryConfig({ scanSeconds: 3600 }));
+    await reopened.start(); await reopened.reindex();
+    try {
+      assert.equal((await reopened.get(ctx, queued.id))?.text, "written during shutdown");
+      assert.equal((await reopened.get(ctx, stale.id))?.state, "archived");
+      assert.equal(await reopened.get({ sessionKey: "matrix:b" }, queued.id), undefined);
+    } finally { await reopened.close(); }
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});

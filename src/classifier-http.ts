@@ -35,7 +35,6 @@ export async function classifyHttp(runtime: ModelRuntime, assessment: Classifier
   check();
   const first = await resolveHttpAssessment(runtime, assessment.requested, signal);
   if (!first) return;
-  const fallback = await resolveHttpAssessment(runtime, assessment.defaults, signal).catch(() => undefined);
   check();
   const run = async (selected: NonNullable<typeof first>, phase: "initial" | "fallback") => {
     await assessment.persist({ phase, actual: selected.actual });
@@ -48,10 +47,14 @@ export async function classifyHttp(runtime: ModelRuntime, assessment: Classifier
   };
   let selected = first;
   let outcome = await run(first, "initial");
-  if (outcome.eligible && fallback && fallback.actual.model !== first.actual.model) {
+  if (outcome.eligible) {
     check();
-    selected = fallback;
-    outcome = await run(fallback, "fallback");
+    const fallback = await resolveHttpAssessment(runtime, assessment.defaults, signal).catch(() => undefined);
+    check();
+    if (fallback && fallback.actual.model !== first.actual.model) {
+      selected = fallback;
+      outcome = await run(fallback, "fallback");
+    }
   }
   if (outcome.result.stopReason !== "stop" && !outcome.eligible) {
     throw Error("Classifier HTTP outcome unknown; retained receipt forbids replay");

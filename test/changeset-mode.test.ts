@@ -1,0 +1,30 @@
+import assert from 'node:assert/strict';
+import { chmod, mkdtemp, writeFile, rm } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { test } from 'node:test';
+import { git, captureChangeset } from '../src/changeset.js';
+
+test('untracked executable mode participates in review evidence and fingerprint', async (t) => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'changeset-mode-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  await git(dir, ['init']);
+  await git(dir, ['config', 'user.name', 'Fixture']);
+  await git(dir, ['config', 'user.email', 'fixture@example.invalid']);
+  await writeFile(path.join(dir, 'base'), 'base');
+  await git(dir, ['add', '.']);
+  await git(dir, ['commit', '-m', 'base']);
+  const file = path.join(dir, 'new.sh');
+  await writeFile(file, '#!/bin/sh\necho fixture\n');
+  await chmod(file, 0o644);
+  const plain = await captureChangeset(dir, 'HEAD');
+  await chmod(file, 0o600);
+  assert.equal((await captureChangeset(dir, 'HEAD')).fingerprint, plain.fingerprint);
+  await chmod(file, 0o755);
+  const executable = await captureChangeset(dir, 'HEAD');
+  assert.notEqual(executable.fingerprint, plain.fingerprint);
+  assert.match(plain.diff, /100644/);
+  assert.match(executable.diff, /100755/);
+  assert.equal((await captureChangeset(dir, 'HEAD')).fingerprint, executable.fingerprint);
+  assert.deepEqual(executable.files, plain.files);
+});

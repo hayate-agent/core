@@ -294,16 +294,13 @@ test('legacy blocked checkpoints remain ambiguous even with exhaustion prose', a
   }
 });
 
-test('host budget notice explains scope, pending work, reason and authenticated command', async () => {
+test('stagnation notice gives a simple continuation without internal mechanics', async () => {
   const f = fixture({ state: 'active', termination: undefined, explicitBlocked: undefined });
   await f.h.tick(); await f.h.drained();
   const text = f.ch.sent.map(s => s.text).join('\n');
   assert.match(text, /authorized task/);
-  assert.match(text, /verify effects first/);
-  assert.match(text, /20/);
-  assert.ok(text.includes(`/task-budget inspect ${key} a`));
-  assert.match(text, /Setze das Budget zurück für Aufgabe a und fahre fort/);
-  assert.match(text, /authentifiziert/);
+  assert.match(text, /continue/i);
+  assert.doesNotMatch(text, /budget|administrator|task-budget/i);
 });
 
 
@@ -361,7 +358,19 @@ test('natural authenticated ingress persists grant before reset and deduplicates
   await f.h.accept(input);
   assert.equal(f.task().budgetReceipts?.length, 1);
   await new Promise(r => setImmediate(r));
-  assert.ok(f.ch.sent.some(m => /reset performed/.test(m.text)));
+  assert.ok(f.ch.sent.some(m => /Continuing the existing task/.test(m.text)));
+});
+
+test('plain continue resumes the uniquely held task, preserving other tasks and effects', async () => {
+  const f = fixture();
+  await f.h.accept({ ...msg('Weiter', 'owner'), id: 'plain-continue' });
+  assert.equal(f.task().state, 'active');
+  assert.equal(f.task().repetition?.repetitions, 0);
+  assert.equal(f.task().budgetReceipts?.length, 1);
+  assert.equal(f.h.taskBudgetStatus(key, 'other').task.state, 'blocked');
+  await f.h.accept({ ...msg('Weiter', 'owner'), id: 'plain-continue' });
+  assert.equal(f.task().budgetReceipts?.length, 1);
+  assert.equal(f.runtime.sessions.size, 0, 'duplicate command must not become a conversational turn');
 });
 
 test('natural reset rejects unauthenticated and model ingress, quotes and tool prose', async () => {

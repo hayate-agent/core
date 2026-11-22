@@ -53,14 +53,20 @@ export class DispatcherRuntime {
   isWorker(key: string): boolean { return key.startsWith("dispatch:"); }
   hostEventAllowed(input: Inbound): boolean {
     if (!input.hostEvent) return false;
+    if (input.hostEvent.assessmentStalled) return this.store.assessmentStalledAllowed(input);
     if (!input.hostEvent.question) return this.resultAllowed(input.sessionKey, input.hostEvent.executionId);
     return this.store.questionAllowed(input);
   }
   guardHostEvent(parent: string, input: Inbound): void {
     if (input.sessionKey !== parent || !input.hostEvent) throw new ToolGuardError("authority_revoked", "Host event parent mismatch");
+    if (input.hostEvent.assessmentStalled) {
+      if (!this.store.assessmentStalledAllowed(input, this.harness.sessions.get(parent)?.current === input) || !this.harness.resultMandate(input))
+        throw new ToolGuardError("authority_revoked", "Dispatcher assessment notice no longer belongs to this active parent mandate");
+      return;
+    }
     if (!input.hostEvent.question) return this.guardResult(parent, input.hostEvent.executionId);
-    if (!this.store.questionAllowed(input) || !this.harness.resultMandate(input))
-      throw new ToolGuardError("authority_revoked", "Dispatcher question no longer awaits this parent under its original mandate");
+    if (!this.harness.resultMandate(input))
+      throw new ToolGuardError("authority_revoked", "Dispatcher question no longer belongs to this parent under its original mandate");
   }
   resultAllowed(parent: string, id: string): boolean {
     const task = this.store.list(parent).find(item => item.id === id);

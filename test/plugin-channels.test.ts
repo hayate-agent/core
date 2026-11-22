@@ -59,6 +59,22 @@ test("plugin channel routes through Harness, namespaces inputs and preserves adm
   }
 });
 
+test('plugin channels preserve attachment references without trusting transport routing', async () => {
+ try {
+  await fixture(transport, async host => {
+   const channel = host.channels.get('remote')!;
+   let received: any;
+   await channel.start(async input => { received = input; });
+   const reference = { sessionKey: 'plugin:remote:local', sha256: 'a'.repeat(64), size: 8, name: 'image.png' };
+   await (globalThis as any).testPluginDeliver({ session: 'local', target: 'room', text: '', attachments: [reference], sessionKey: 'forged' });
+   assert.equal(received.sessionKey, 'plugin:remote:local');
+   assert.deepEqual(received.attachments, [reference]);
+   reference.name = 'changed';
+   assert.equal(received.attachments[0].name, 'image.png', 'host input is detached from plugin mutations');
+  });
+ } finally { for (const key of ['testPluginReplies','testPluginDeliver','testPluginStopped']) delete (globalThis as any)[key]; }
+});
+
 test("plugin channels reject non-string names at startup", async () => {
   for (const name of ['undefined', 'null', "{toString(){return 'remote'}}"]) {
     await assert.rejects(fixture(transport.replace("name:'remote'", `name:${name}`), async () => {}), /Invalid plugin channel/);

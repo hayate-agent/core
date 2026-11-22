@@ -59,7 +59,7 @@ single-owner locking remains responsible for preventing two agent processes.
 
 ## Freeze a loop for scheduler handoff
 
-The same private owner socket accepts `{ "op": "freeze-loop", "parent": "<exact conversation key>", "digest": "<sha256>" }`. The digest is SHA-256 of UTF-8 `JSON.stringify({prompt: loop.prompt, everyMs: loop.everyMs})`, using the exact inspected prompt and interval. The host checks this fingerprint before setting the existing loop paused and durably saving it. It does not change the schedule, remaining count, tasks, HOLDs, or any already queued turn; unlike `/loop pause`, it does not filter the queue. A retry of the same operation is safe. A lost response requires reinspection, not assumptions. Existing timer turns retain their existing crash-durability semantics; this operation does not make them newly durable.
+The same private owner socket accepts `{ "op": "freeze-loop", "parent": "<exact conversation key>", "digest": "<sha256>" }`. The digest is SHA-256 of UTF-8 `JSON.stringify({prompt: loop.prompt, everyMs: loop.everyMs, sourceId: loop.sourceId})`, using the exact inspected prompt, interval and source identity. Legacy loops without a source ID retain the older digest shape; a newly created replacement always has a new source ID. The host checks this fingerprint before setting the existing loop paused and durably saving it. It does not change the schedule, remaining count, tasks, HOLDs, or any already queued turn; unlike `/loop pause`, it does not filter the queue. A retry of the same operation is safe. The inverse `{ "op": "resume-loop", "parent": "<exact conversation key>", "digest": "<same scope sha256>" }` uses the same checks and resumes only that unchanged loop. It preserves the original next-at time, remaining count, queued work and task authority; it does not request an extra immediate run. Both operations acknowledge only after persistence. A lost response requires reinspection, not assumptions. Existing timer turns retain their existing crash-durability semantics; this operation does not make them newly durable.
 
 This is only a handoff primitive, **not** a migration transaction: provision and validate the intended cron job separately, freeze the verified source before enabling it, and reconcile an interruption at each boundary. Never enable both schedules at once. Check the new destination, timezone, original prompt and cadence. The host owner must explicitly authorize every handoff; this endpoint is not exposed to model tools or network clients.
 
@@ -139,3 +139,12 @@ references that durable report rather than duplicating it into `prior` and
 recreating a checkpoint overflow. Completion likewise consumes the budgeted
 report, not the larger pre-projection variable; original transcripts/effect
 identities remain untouched.
+
+## Duplicate retirement waits for the turn boundary
+
+`retire-scheduled-duplicate` no longer fails while the conversation is busy. It
+validates the exact pair and revisions, reserves the session (the pump yields at
+its next turn boundary, nothing is interrupted), waits for the running turn to
+settle (bounded, default 10 min), re-reads the exact pair and then retires only
+the duplicate. Custody, native child, stop/reset and uncertain-effect fences are
+checked again after the wait; the keeper's normal progress does not invalidate it.

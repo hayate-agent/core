@@ -52,7 +52,7 @@ test("critical admission pressure triggers archive-backed handover despite stale
     summarize: async () => { throw Error("over-budget session must not summarize itself"); } } as unknown as RuntimeSession;
   const next = { status: () => ({ sessionId: "new" }) } as RuntimeSession;
   const notice = await maintenance.boundary("chat", old, async () => { rotations++; return next; }, undefined, "before");
-  assert.equal(rotations, 1); assert.equal(assessments, 0); assert.match(notice!, /Neue Sitzung/);
+  assert.equal(rotations, 1); assert.equal(assessments, 0); assert.match(notice!, /Switched to a new session/);
   assert.equal((await maintenance.status("chat")).sessionId, "new");
 });
 
@@ -73,7 +73,7 @@ test("boundary compacts with preservation instructions and cooldown survives res
   const maintenance = new ContextMaintenance(home, () => contextPolicy());
   await maintenance.request("chat", { action: "compact", preserve: "PR #22", resume: "run tests" });
   assert.equal(summaries.length, 0, "tool request must not compact during execution");
-  assert.equal(await maintenance.boundary("chat", session, rotate), "♻️ Kontext kompaktiert.");
+  assert.equal(await maintenance.boundary("chat", session, rotate), "♻️ Context compacted.");
   assert.match(summaries[0], /PR #22/);
   assert.equal(await new ContextMaintenance(home, () => contextPolicy()).boundary("chat", session, rotate), undefined);
   assert.equal(summaries.length, 1);
@@ -96,7 +96,7 @@ test("completion and durable notice survive restart and failed outbox adoption",
     assert.equal(notice.id, id);
     assert.equal(notice.sessionKey, "chat");
     assert.deepEqual(notice.to, target);
-    assert.match(notice.text, /Kontext kompaktiert/);
+    assert.match(notice.text, /Context compacted/);
   });
   await restarted.flushNotices(async () => { assert.fail("already acknowledged"); });
   await restarted.boundary("chat", session, rotate, target);
@@ -113,7 +113,7 @@ test("unknown usage does not trigger automatic compaction; handover is explicit"
   await maintenance.boundary("chat", session, async () => { rotations++; return next; });
   assert.equal(rotations, 0);
   await maintenance.request("chat", { action: "handover", preserve: "state", resume: "tests" });
-  assert.match((await maintenance.beforeTurn("chat", session, async (handover) => { assert.match(handover!.text, /Verified/); rotations++; return next; }))!, /Neue Sitzung übernommen/);
+  assert.match((await maintenance.beforeTurn("chat", session, async (handover) => { assert.match(handover!.text, /Verified/); rotations++; return next; }))!, /Switched to a new session/);
   assert.equal(rotations, 1);
 });
 
@@ -166,7 +166,7 @@ test("prepared handover refreshes intervening context after rotation failure", a
   const restarted = new ContextMaintenance(home, () => contextPolicy());
   await restarted.beforeTurn("chat", session, async () => { assert.fail("uncertain rotation must not repeat automatically"); });
   await restarted.admit("chat", "reconcile", { action: "handover", preserve: "state", resume: "tests" });
-  assert.match((await restarted.beforeTurn("chat", session, async () => next))!, /Neue Sitzung übernommen/);
+  assert.match((await restarted.beforeTurn("chat", session, async () => next))!, /Switched to a new session/);
   assert.equal(summaries, 1, "unchanged transcript must not compact a second time");
 });
 

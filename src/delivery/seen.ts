@@ -27,7 +27,11 @@ export class SeenWindow {
   }
 
   pin(ids: Iterable<string>): void {
-    for (const id of ids) this.pinned.add(id);
+    for (const id of ids) {
+      // An explicit owner pin survives unrelated post-restart checkpoints.
+      this.provisional.delete(id);
+      this.pinned.add(id);
+    }
   }
 
   unpin(ids: Iterable<string>): void {

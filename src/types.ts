@@ -28,10 +28,17 @@ export interface Inbound {
   sessionKey: string;
   text: string;
   source: InputSource;
+  /** Set only by authenticated external API ingress, not synthetic API work. */
+  operatorIngress?: true;
   /** Explicitly admitted loop occurrence, durably retained independently of timer ticks. */
   explicitLoopRun?: boolean;
   /** Host event identity for authority checks; event data never grants continuation. */
-  hostEvent?: { executionId: string; question?: { id: string; eventId: string } };
+  hostEvent?: { executionId: string; nativeSubagent?: true; question?: { id: string; eventId: string }; assessmentStalled?: { eventId: string } };
+  /** Host scheduler fingerprint; model text cannot establish source scope. */
+  cronScope?: string;
+  /** Host recurring source/configuration identity; not inferred from equal prompt text.
+   * Explicit operator/API occurrences deliberately omit it. */
+  recurringSource?: string;
   /** Trusted scheduler metadata; output never expands the configured follow-up scope. */
   cronReport?: { job: string; runId: string; createdAt: number; audience: "agent" | "user";
     original: string; authorization?: string; maxTasks: number; output?: string; completedOutput?: string };
@@ -109,6 +116,8 @@ export interface Inbound {
   started?: boolean;
   /** Stable first-start timestamp, persisted before execution for replay-safe memory capture. */
   memoryRecordedAt?: number;
+  /** Host clock at durable API acceptance; anchors the API run window (persisted with the inbox). */
+  apiAcceptedAt?: number;
   /** Durable logical message identity used by edit-capable gateways across restarts. */
   progressId?: string;
   /** Crashes (OOM, kill) that interrupted this input's turn so far. */
@@ -119,7 +128,7 @@ export interface Inbound {
 export interface TurnOptions {
   /** Local inference scheduling hint, never execution authority or permission. */
   modelWork?: "interactive" | "background";
-  /** Extra system instructions for this turn only. */
+  /** Extra host instructions for this turn only; runtime preserves their host provenance. */
   instructions?: string;
   /** "provider/model". */
   model?: string;
@@ -135,7 +144,9 @@ export type TurnEvent =
   /** Known host-local capacity wait; never evidence of provider/GPU progress. */
   | { type: "model_queue"; state: "waiting" | "admitted" | "cancelled" }
   | { type: "compaction"; state: "started" | "completed" | "failed" | "cancelled"; reason: "manual" | "threshold" | "overflow" }
-  | { type: "tool"; phase: "start" | "end"; name: string; callId?: string; error?: boolean; detail?: string }
+  | { type: "tool"; phase: "start" | "end"; name: string; callId?: string; error?: boolean; detail?: string; locale?: string }
+  /** Host-observed use, not proof of successful application; no content or paths. */
+  | { type: "resource_usage"; resource: "skill" | "memory"; action: "loaded" | "recalled" | "created" | "updated"; name?: string; locale?: string }
   /** One assistant message finished; usage is for that message only. */
   | {
       type: "usage";
@@ -151,6 +162,8 @@ export type TurnEvent =
 export interface PromptOptions extends TurnOptions {
   /** Host-owned per-turn presentation snapshot; not part of transport TurnOptions. */
   languagePolicy?: import("./language.js").LanguagePolicy;
+  /** Resolved host presentation locale for this exact turn. */
+  presentationLocale?: string;
   images?: PromptImage[];
   onEvent?: (event: TurnEvent) => void;
   /** Host-only authorization guard, invoked after asynchronous runtime setup. */

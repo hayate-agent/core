@@ -63,7 +63,7 @@ export interface HarnessConfig {
   protectedContent?: import("./protected-content.js").ProtectedContentConfig;
   skillUpdateSource?: import("./skill-updates.js").SkillUpdateSource;
   /** Trusted plugin binding; reference only, never inline credentials. */
-  typeSafeDecisions?: import("./builtin-plugins/typesafe-api-plugin.js").TypeSafeAPIConfig;
+  typeSafeDecisions?: import("./builtin-plugins/typesafe-api-plugin.js").TypeSafeAPIConfig & { minConfidence?: number };
   /** Infrastructure-owned semantic continuation grants, keyed by exact conversation. */
   completionCheck?: { provider?: string | false; authorizations?: Record<string, import("./completion-check.js").CompletionAuthorization>; timeoutMs?: number };
   /** No invented default inactivity period; explicit operator policy only. */
@@ -151,6 +151,8 @@ export function defaultConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
       (typeof overrides.completionCheck.provider !== "string" || !/^[a-z][a-z0-9-]{0,79}$/.test(overrides.completionCheck.provider))) throw Error("Invalid completionCheck.provider");
   if (overrides.completionCheck?.timeoutMs !== undefined && (!Number.isSafeInteger(overrides.completionCheck.timeoutMs) ||
       overrides.completionCheck.timeoutMs < 1000 || overrides.completionCheck.timeoutMs > 120000)) throw Error("completionCheck.timeoutMs must be between 1000 and 120000 milliseconds");
+  if (overrides.typeSafeDecisions?.minConfidence !== undefined && (typeof overrides.typeSafeDecisions.minConfidence !== "number" ||
+      !Number.isFinite(overrides.typeSafeDecisions.minConfidence) || overrides.typeSafeDecisions.minConfidence < 0.5 || overrides.typeSafeDecisions.minConfidence > 0.9)) throw Error("typeSafeDecisions.minConfidence must be between 0.5 and 0.9");
   if (overrides.modelRoles !== undefined) validateModelRoles(overrides.modelRoles);
   validateHashtagConfig(overrides.hashtag);
   dispatcherConfig(overrides.dispatcher);
@@ -235,7 +237,7 @@ export function defaultConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
         overlaysDir: path.resolve(home, instructionPaths([overrides.persona.overlaysDir])[0]!),
       }),
     },
-    skills: { paths: [path.join(home, "skills")], context: "auto", ...overrides.skills },
+    skills: { paths: [path.join(home, "skills")], context: "auto", adaptive: true, ...overrides.skills },
     language: { default: "en", ...overrides.language },
     cron: { jobsFile: path.join(home, "cron", "jobs.yaml"), ...overrides.cron },
     loop,

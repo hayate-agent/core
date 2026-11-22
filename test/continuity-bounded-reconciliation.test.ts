@@ -143,7 +143,7 @@ test("real handover and compaction preserve retry authority across serialized re
     const h = new Harness(opts); h.restoreSessions([{ key, task: task() }]); h.onStateChange = async () => {};
     try {
       await h.tick(); await h.drained(); assert.equal(calls, 1);
-      if (action === "handover") assert.match(await h.handover(key, "Verify existing effects only"), /Neue Sitzung/);
+      if (action === "handover") assert.match(await h.handover(key, "Verify existing effects only"), /Switched to a new session/);
       else {
         h.state(key).session = await runtime.open(key);
         await maintenance.admit(key, "compact-retry", { action: "compact", preserve: "Effect already completed", resume: "Verification only" });

@@ -39,6 +39,8 @@ export interface MemoryStatus {
   ready: boolean;
   semantic: "ready" | "disabled" | "degraded";
   lastScan?: string;
+  /** Last hourly content maintenance (local provider). */
+  lastMaintenance?: string;
   error?: string;
 }
 /** Provider v1: durable writes, isolated reads, bounded hybrid retrieval. No backend paths in API. */

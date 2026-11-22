@@ -413,6 +413,31 @@ history fails closed. A fully unfinished window keeps extra directives queued;
 plan admission and exposes active/completed/history counts and queue causes.
 Unsupported, out-of-scope or dependent follow-ups receive no execution admission.
 
+## Foreground response boundaries
+
+The parent queue rechecks foreground priority after asynchronous preparation,
+including the durable turn-start barrier, immediately before a working prompt.
+Already-durable ready operator/API inputs may defer an unstarted background step
+using its original input, turn ID, task binding and admission. Completed
+`beforeTurn` preparation is not repeated. This does not abort or replay a running
+model/tool, preempt an independent child lane, run an uncommitted inbox entry or
+remove a stop, deadline, recovery hold or structural startup barrier.
+
+A finished operator/API answer still crosses its own review, execution-ledger
+settlement, task projection and durable inbox→outbox checkpoint before delivery.
+After that checkpoint, an unrelated retained-task supervisor need not finish
+before the answer is sent. Its bounded supervision still runs before the next
+queued prompt, so a continuous foreground queue cannot starve it. A failed send
+retains the same durable delivery ID for normal retry; no model/effect replay.
+
+Decision revision checks still join the serialized writer queue and check current
+writer/claim ownership after earlier decisions or revocations settle. A read-only
+revision fence does not republish the entire ledger. `applyDecisions` commits
+only an actual pending→applied receipt transition; already-applied/no-decision
+reads do not refresh timestamps or rewrite historical task/effect evidence. Failed
+receipt commits remain pending and must be retried durably. These checks create
+no execution/replay permission and do not replace durable claim/intent fences.
+
 ## Persistence and restart
 
 `executions.json` under Harness home holds tasks, claims, checkpoints, effect

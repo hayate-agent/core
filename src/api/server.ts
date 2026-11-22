@@ -306,6 +306,7 @@ export class ApiChannel implements Channel {
       sessionKey: record.session_key,
       text: input,
       source: "api",
+      operatorIngress: true,
       replyTo: { channel: API_CHANNEL, target: record.run_id },
       turn: {
         ...(modelWork ? { modelWork } : {}),

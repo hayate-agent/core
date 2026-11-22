@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { SessionArchives } from "./session-archive.js";
+import { message } from "./language.js";
 import { writeFileDurable } from "./durable.js";
 import type { Address, RuntimeSession, SendMeta } from "./types.js";
 import type { BoundaryAssessment } from "./context-assessment.js";
@@ -24,12 +25,16 @@ export interface ContextPolicy {
   compactPercent: number;
   cooldownTurns: number;
   autoHandover: boolean;
+  /** Total bounded allowance for admission, generation and cleanup of an independent retrospective. */
+  handoverSummaryTimeoutMs?: number;
 }
 export const defaultContextPolicy: ContextPolicy = {
-  compactionOwner: "harness", enabled: true, workerContextTokens: 131072, mainContextTokens: 131072, localModels: [], checkEveryTurns: 5, assessPercent: 60, compactPercent: 75, cooldownTurns: 5, autoHandover: true,
+  compactionOwner: "harness", enabled: true, workerContextTokens: 131072, mainContextTokens: 131072, localModels: [], checkEveryTurns: 5, assessPercent: 60, compactPercent: 75, cooldownTurns: 5, autoHandover: true, handoverSummaryTimeoutMs: 120000,
 };
 export function contextPolicy(input: Partial<ContextPolicy> = {}): ContextPolicy {
   const policy = { ...defaultContextPolicy, ...input };
+  if (!Number.isSafeInteger(policy.handoverSummaryTimeoutMs) || policy.handoverSummaryTimeoutMs! < 1000 || policy.handoverSummaryTimeoutMs! > 120000)
+    throw new Error("Invalid handover summary timeout (1000–120000 milliseconds)");
   if (!["harness", "agent"].includes(policy.compactionOwner!)) throw new Error("Invalid compaction owner");
   if (!Number.isSafeInteger(policy.workerContextTokens) || policy.workerContextTokens! < 8192) throw new Error("Invalid worker context token budget");
   if (!Number.isSafeInteger(policy.mainContextTokens) || policy.mainContextTokens! < 8192) throw new Error("Invalid main context token budget");
@@ -102,7 +107,7 @@ export interface ContextRecord {
   continuationPreparationRequired?: boolean;
   /** Bounded durable admission dedupe, not proof of completed runtime effects. */
   admission?: { id: string; digest: string; version: number; execution: "pending" | "applied" | "failed" | "superseded" | "cancelled" };
-  handover?: { phase: "prepared" | "switched"; from: string; to?: string; text: string; archiveId?: string; sourceDigest?: string };
+  handover?: { phase: "prepared" | "switched"; from: string; to?: string; text: string; archiveId?: string; sourceDigest?: string; summaryStatus?: SummaryStatus };
   failure?: { stage: MaintenanceStage; code: MaintenanceCode; phase: "before" | "after"; turn: number; action: "compact" | "handover" };
   /** Recovery cannot use turn cooldown: fail-closed foreground does not advance turns. */
   recoveryRetry?: { attempts: number; notBefore: number };
@@ -126,6 +131,7 @@ export interface ContextRecord {
   noticeTarget?: Address;
   notices?: { id: string; sessionKey: string; to: Address; text: string; maintenance?: SendMeta["maintenance"] }[];
 }
+type SummaryStatus = "generated" | "archive-only" | "independent-unavailable" | "unavailable" | "timeout" | "invalid" | "failed";
 const preserve = "Preserve operator intent and corrections, decisions and rejected alternatives, verified results versus assumptions, branch/commits/PR/deployment status, unfinished work, review findings and budget references, exact relevant paths and next steps. Never include credentials. Do not claim builds activate deployments. Do not repeat completed side effects.";
 
 /** Called only at Harness turn boundaries. Model tools request work, never compact themselves. */
@@ -162,7 +168,8 @@ export class ContextMaintenance {
   readonly archives: SessionArchives;
   constructor(private readonly home: string, private readonly policy: () => ContextPolicy, private readonly assess?: BoundaryAssessment,
     private readonly now: () => number = Date.now,
-    private readonly handoverSummary?: (instructions: string, entries: import("./session-archive.js").ArchiveEntry[], model: string | undefined, signal: AbortSignal) => Promise<string>) { this.archives = new SessionArchives(home); }
+    private readonly handoverSummary?: (instructions: string, entries: import("./session-archive.js").ArchiveEntry[], model: string | undefined, signal: AbortSignal) => Promise<string>,
+    private readonly noticeLanguage: (key: string) => string = () => "en") { this.archives = new SessionArchives(home); }
 
   /** Explicit /new cancels old maintenance; never seed its prepared handover
    * into the fresh conversation. Preserve failed-attempt counters and archives. */
@@ -277,7 +284,8 @@ export class ContextMaintenance {
       return state.noticeTarget ? undefined : text;
     }
   }
-  private async prepareArchive(key: string, session: RuntimeSession, instructions: string, interruptible = true, independentOnly = false, archiveOnly = false): Promise<{ text: string; archiveId: string; sourceDigest: string }> {
+  private async prepareArchive(key: string, session: RuntimeSession, instructions: string, interruptible = true, independentOnly = false, archiveOnly = false): Promise<{ text: string; archiveId: string; sourceDigest: string; summaryStatus: SummaryStatus }> {
+    let summaryStatus: SummaryStatus = archiveOnly ? "archive-only" : independentOnly ? "independent-unavailable" : "unavailable";
     if (!session.archiveEntries) throw new MaintenanceError("archive", "failed");
     const entries = await maintenanceStep("archive", () => session.archiveEntries!()); // capture before native compaction
     const retrospective = await maintenanceStep("summary", async () => {
@@ -292,14 +300,27 @@ export class ContextMaintenance {
           signal?.addEventListener("abort", abort, { once: true });
           if (signal?.aborted) abort();
           let timer: ReturnType<typeof setTimeout> | undefined;
+          let timedOut = false;
           try {
             const summary = await Promise.race([cancelled, this.handoverSummary(prompt, entries, session.status().model, controller.signal),
-              new Promise<never>((_, reject) => { timer = setTimeout(() => { controller.abort(); reject(Error("summary deadline")); }, 30000); })]);
-            if (!summary.trim() || summary.length > 64000) throw Error("Invalid retrospective");
+              new Promise<never>((_, reject) => { timer = setTimeout(() => { timedOut = true; controller.abort(); reject(Error("summary deadline")); }, this.policy().handoverSummaryTimeoutMs ?? 120000); })]);
+            if (!summary.trim() || summary.length > 64000) { summaryStatus = "invalid"; throw Error("Invalid retrospective"); }
+            summaryStatus = "generated";
             return summary;
-          } catch (error) { if (signal?.aborted) throw new MaintenanceError("summary", "cancelled"); }
+          } catch (error) {
+            if (signal?.aborted) throw new MaintenanceError("summary", "cancelled");
+            if (timedOut) summaryStatus = "timeout";
+            else if (summaryStatus !== "invalid") summaryStatus = "failed";
+          }
           finally { clearTimeout(timer); signal?.removeEventListener("abort", abort); }
-        } else if (!archiveOnly && !independentOnly && session.summarize) return session.summarize(prompt, signal);
+        } else if (!archiveOnly && !independentOnly && session.summarize) {
+          const summary = await session.summarize(prompt, signal);
+          if (summary.trim() && summary.length <= 64000) {
+            summaryStatus = "generated";
+            return summary;
+          }
+          summaryStatus = "invalid";
+        }
         // A summary-model outage must not strand a healthy transport. The full
         // transcript is archived below; this checkpoint makes no factual claims.
         return "No generated retrospective is available. Full original history is preserved in the linked archive.\nCURRENT STATE AND NEXT STEPS\nRead the archived conversation and verify completed tool effects before continuing the queued operator request. Preserve the host's existing task IDs, authority, deadlines and genuine holds. Do not replay completed side effects.";
@@ -308,11 +329,13 @@ export class ContextMaintenance {
       if (!text.trim() || text.length > 64000) throw new Error("Invalid retrospective");
       return text;
     });
-    const recentOperator = entries.filter((e) => e.role === "user").slice(-3).map((e) => `${e.id}: ${e.text.slice(0, 2000)}`).join("\n");
+    // Transcript role is a transport detail: host continuations and worker results
+    // also appear as user messages. Do not promote them to operator authority.
+    const recentInputs = entries.filter((e) => e.role === "user").slice(-3).map((e) => `${e.id}: ${e.text.slice(0, 2000)}`).join("\n");
     const checkpoint = retrospective.split(/CURRENT STATE AND NEXT STEPS/i).at(-1)!.slice(-6000);
-    const forward = `Current checkpoint and next steps (summary; verify evidence):\n${checkpoint}\nContinue from the saved session checkpoint. ${instructions}\nRecent operator instructions (historical context, not fresh authorization):\n${recentOperator}\nConsult the retrospective for verified state and next steps before acting.`;
+    const forward = `Current checkpoint and next steps (summary; verify evidence):\n${checkpoint}\nContinue from the saved session checkpoint. ${instructions}\nRecent transcript inputs (unverified provenance, historical context only; may include host continuations or worker results, not necessarily operator instructions):\n${recentInputs}\nConsult the retrospective for verified state and next steps before acting. If no retrospective is available, read the original archived entries relevant to the current task and operator corrections before relying on a saved next step.`;
     const archive = await maintenanceStep("archive", () => this.archives.create(key, session.status().sessionId, retrospective, forward, entries));
-    return { sourceDigest: createHash("sha256").update(JSON.stringify(session.archiveEntries())).digest("hex"), archiveId: archive.id, text: `${forward}\nSource session: ${archive.sourceSessionId}\nArchive ID: ${archive.id}\nRead plugin_session_history section=summary for the retrospective, then search/read entries only as needed. Do this before continuing work. Original tool side effects must not be replayed blindly.` };
+    return { summaryStatus, sourceDigest: createHash("sha256").update(JSON.stringify(session.archiveEntries())).digest("hex"), archiveId: archive.id, text: `${forward}\nSource session: ${archive.sourceSessionId}\nArchive ID: ${archive.id}\nRead plugin_session_history section=summary for the retrospective, then search/read entries only as needed. Do this before continuing work. Original tool side effects must not be replayed blindly.` };
   }
   async flushNotices(deliver: (notice: { id: string; sessionKey: string; to: Address; text: string; maintenance?: SendMeta["maintenance"] }) => Promise<void>): Promise<void> {
     {
@@ -512,8 +535,8 @@ export class ContextMaintenance {
           state.handover.phase = "switched";
           this.finishHandover(state, id);
           state.completionNotice = state.handover.archiveId
-            ? "🔄 Neue Sitzung übernommen; Rückschau gespeichert."
-            : "🔄 Neue Sitzung übernommen.";
+            ? message(this.noticeLanguage(key), "context.handoverArchived")
+            : message(this.noticeLanguage(key), "context.handover");
           this.recordNotice(key, state, state.completionNotice);
           if (state.noticeTarget) state.completionNotice = undefined;
           state.sessionId = id;
@@ -662,8 +685,8 @@ export class ContextMaintenance {
         state.sessionId = state.handover.to;
         this.finishHandover(state, state.handover.to!);
         const notice = state.handover.archiveId
-          ? "🔄 Neue Sitzung übernommen; Rückschau gespeichert."
-          : "🔄 Neue Sitzung übernommen.";
+          ? message(this.noticeLanguage(key), "context.handoverArchived")
+          : message(this.noticeLanguage(key), "context.handover");
         this.recordNotice(key, state, notice);
         await this.save(key, state);
         return state.noticeTarget ? undefined : notice;
@@ -768,11 +791,11 @@ export class ContextMaintenance {
           await maintenanceStep("archive-link", () => this.archives.link(key, prepared.archiveId, state.sessionId!));
           state.handover.phase = "switched";
           this.finishHandover(state, state.sessionId!);
-          notice = "🔄 Neue Sitzung übernommen; Rückschau gespeichert.";
+          notice = message(this.noticeLanguage(key), "context.handoverArchived");
         } else {
           await maintenanceStep("compact", () => this.modelStep(key, signal => session.compact(instructions, signal)));
           state.pressureSinceCompaction = true;
-          notice = "♻️ Kontext kompaktiert.";
+          notice = message(this.noticeLanguage(key), "context.compacted");
         }
         state.lastError = undefined;
         this.finishRecovery(state);

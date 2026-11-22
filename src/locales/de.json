@@ -1,4 +1,11 @@
 {
+  "context.handoverArchived": "🔄 Neue Sitzung übernommen; Verlauf archiviert. Die Rückschau kann unvollständig sein.",
+  "context.handover": "🔄 Neue Sitzung übernommen.",
+  "context.compacted": "♻️ Kontext kompaktiert.",
+  "task.cancelled": "⏹️ Abgebrochen.",
+  "task.failed": "❌ Fehlgeschlagen.",
+  "task.budget": "Bei dieser Aufgabe komme ich gerade nicht weiter: {original}. Antworte mit „Weiter“, um es erneut zu versuchen. Falls mehrere Aufgaben pausiert sind, frage ich nach.",
+  "task.noNext": "Kein sicherer nächster Schritt gespeichert; erneute Prüfung erforderlich.",
   "lifecycle.ready": "✅ {agent}: Gestartet und bereit.",
   "lifecycle.restarted": "✅ {agent}: Neustart abgeschlossen – wieder bereit.",
   "software.heading": "Softwarestand:",
@@ -95,5 +102,13 @@
   "cron.usage": "Verwendung: /cron list|run|pause|resume|reload|language <name> <BCP-47 tag|reset>",
   "language.listing": "Standardsprache, System-, Hintergrund-, Gesprächs- oder MCP-Sprache anzeigen/festlegen (BCP-47)",
   "command.failure": "⚠️ /{name}: Befehl fehlgeschlagen (Details zurückgehalten)",
-  "conversation.reset": "🆕 Neuer Gesprächskontext. Bisherige Aufgaben, Fortsetzungen und untergeordnete Ausführungen dieser Konversation wurden gestoppt; konversationseigene Loops, Heartbeat und Ziel wurden gelöscht. Andere Konversationen und unabhängige Zeitpläne bleiben unverändert."
+  "conversation.reset": "🆕 Neuer Gesprächskontext. Bisherige Aufgaben, Fortsetzungen und untergeordnete Ausführungen dieser Konversation wurden gestoppt; konversationseigene Loops, Heartbeat und Ziel wurden gelöscht. Andere Konversationen und unabhängige Zeitpläne bleiben unverändert.",
+  "usage.skill.loaded": "Skill {name} geladen (Anwendung nicht bestätigt)",
+  "usage.skill.created": "Skill {name} erstellt",
+  "usage.skill.updated": "Skill {name} aktualisiert",
+  "usage.memory.recalled": "Arbeitsgedächtnis abgerufen",
+  "usage.tool.started": "gestartet",
+  "usage.tool.completed": "beendet",
+  "usage.tool.failed": "fehlgeschlagen",
+  "dispatcher.assessmentStalled": "Prüfung ohne neue Nachweise angehalten. Neue Informationen oder eine ausdrückliche Fortsetzung sind erforderlich; bisherige Ergebnisse bleiben erhalten."
 }

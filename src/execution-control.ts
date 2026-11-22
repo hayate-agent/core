@@ -13,7 +13,8 @@ import type { Scheduler } from "./scheduler.js";
  * Same-UID filesystem authority is required, as for native lifecycle control.
  * It never edits a ledger or bypasses Dispatcher decision/admission checks. */
 export function executionControlPlugin(get: () => Dispatcher | undefined, directory: string,
-  resetConversation?: (parent: string) => Promise<void>, freezeLoop?: (parent: string, digest: string) => Promise<void>, scheduler?: Scheduler): PluginModule {
+  resetConversation?: (parent: string) => Promise<void>, freezeLoop?: (parent: string, digest: string, paused?: boolean) => Promise<void>, scheduler?: Scheduler,
+  retireDuplicate?: (parent: string, duplicate: string, keeper: string, revision: number, keeperRevision: number, requestId: string) => Promise<void>): PluginModule {
   return { apiVersion: 1, async activate(api) {
     if (!process.getuid) return;
     try { await mkdir(directory, { mode: 0o700 }); } catch (e) { if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e; }
@@ -45,8 +46,8 @@ export function executionControlPlugin(get: () => Dispatcher | undefined, direct
           try {
             if (buffer.slice(end + 1).length) throw Error("One request per connection");
             const frame = JSON.parse(buffer.slice(0, end));
-            if (frame?.op === "reset-conversation") socket.setTimeout(0); // owned script drain may take its full deadline
-            const result = await executionControlRequest(get(), frame, resetConversation, freezeLoop, scheduler);
+            if (frame?.op === "reset-conversation" || frame?.op === "retire-scheduled-duplicate") socket.setTimeout(0); // owned script drain may take its full deadline
+            const result = await executionControlRequest(get(), frame, resetConversation, freezeLoop, scheduler, retireDuplicate);
             if (!closed && !socket.destroyed) socket.end(JSON.stringify({ ok: true, result }) + "\n");
           } catch { if (!socket.destroyed) socket.end('{"ok":false,"error":"request rejected; inspect exact execution and ownership before retry"}\n'); }
         })();
@@ -73,7 +74,8 @@ export function executionControlPlugin(get: () => Dispatcher | undefined, direct
  * Explicit consolidation reuses existing audited same-owner follow-up admission.
  * No resume/cancel, deadline extension, original-scope replacement or new job. */
 export async function executionControlRequest(dispatcher: Dispatcher | undefined, input: unknown,
-  resetConversation?: (parent: string) => Promise<void>, freezeLoop?: (parent: string, digest: string) => Promise<void>, scheduler?: Scheduler): Promise<unknown> {
+  resetConversation?: (parent: string) => Promise<void>, freezeLoop?: (parent: string, digest: string, paused?: boolean) => Promise<void>, scheduler?: Scheduler,
+  retireDuplicate?: (parent: string, duplicate: string, keeper: string, revision: number, keeperRevision: number, requestId: string) => Promise<void>): Promise<unknown> {
   if (!input || typeof input !== "object") throw Error("Control unavailable");
   const frame = input as Record<string, unknown>;
   if (frame.op === "cron-reload") {
@@ -89,10 +91,21 @@ export async function executionControlRequest(dispatcher: Dispatcher | undefined
   }
   if (!dispatcher) throw Error("Dispatcher control unavailable");
   if (typeof frame.parent !== "string" || !frame.parent.trim() || frame.parent.length > 1000 || /^(dispatch|subagent):/.test(frame.parent)) throw Error("Invalid exact parent scope");
-  if (frame.op === "freeze-loop") {
+  if (frame.op === "retire-scheduled-duplicate") {
+    if (!retireDuplicate || Object.keys(frame).length !== 7 ||
+        [frame.duplicate, frame.keeper].some(id => typeof id !== "string" || !/^[a-f0-9-]{36}$/.test(id)) ||
+        !Number.isSafeInteger(frame.expectedRevision) || Number(frame.expectedRevision) < 1 ||
+        !Number.isSafeInteger(frame.keeperRevision) || Number(frame.keeperRevision) < 1 ||
+        typeof frame.requestId !== "string" || !/^[A-Za-z0-9_-]{1,100}$/.test(frame.requestId)) throw Error("Invalid duplicate retirement");
+    await retireDuplicate(frame.parent, frame.duplicate as string, frame.keeper as string,
+      Number(frame.expectedRevision), Number(frame.keeperRevision), frame.requestId);
+    return { duplicate: frame.duplicate, keeper: frame.keeper, retired: true, evidenceRetained: true, businessCompleted: false };
+  }
+  if (frame.op === "freeze-loop" || frame.op === "resume-loop") {
     if (!freezeLoop || Object.keys(frame).length !== 3 || typeof frame.digest !== "string" || !/^[a-f0-9]{64}$/.test(frame.digest)) throw Error("Invalid loop handoff");
-    await freezeLoop(frame.parent, frame.digest);
-    return { parent: frame.parent, frozen: true, queuedWorkRetained: true };
+    const paused = frame.op === "freeze-loop";
+    await freezeLoop(frame.parent, frame.digest, paused);
+    return { parent: frame.parent, frozen: paused, queuedWorkRetained: true };
   }
   if (frame.op === "reset-conversation") {
     if (!resetConversation || Object.keys(frame).length !== 2) throw Error("Conversation reset unavailable or invalid");

@@ -29,7 +29,7 @@ for (const action of ["compact", "handover"] as const) test(`${action} uncertain
   assert.equal(calls, 1, "a rejected compact/summary may already have applied effects");
   fail = false;
   await restarted.admit("chat", "reconcile", { ...request, action: "handover" });
-  assert.match((await restarted.beforeTurn("chat", session, rotate))!, /Neue Sitzung/);
+  assert.match((await restarted.beforeTurn("chat", session, rotate))!, /Switched to a new session/);
   assert.equal(calls, 2);
   assert.equal((await restarted.status("chat")).pending, undefined);
   assert.equal((await restarted.status("chat")).failure, undefined);
@@ -50,7 +50,7 @@ test("archive link failure remains recoverable after rotation and restart", asyn
   assert.equal(failed.failure?.code, "ENOSPC");
   assert.equal(failed.handover?.phase, "prepared");
   const restarted = new ContextMaintenance(home, policy, undefined, () => Date.now() + 1001);
-  assert.match((await restarted.beforeTurn("chat", next, async () => { throw Error("must not rotate twice"); }))!, /Neue Sitzung/);
+  assert.match((await restarted.beforeTurn("chat", next, async () => { throw Error("must not rotate twice"); }))!, /Switched to a new session/);
   assert.equal(seeds, 1); assert.equal(rotations, 1);
   assert.equal((await maintenance.status("chat")).pending, undefined);
   assert.equal((await maintenance.status("chat")).failure, undefined);

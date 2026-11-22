@@ -1,5 +1,6 @@
 {
   "files": {
+    "automation-delivery-context.ts": "643b9e8d896f6d0da7956945a638c4a5eb4d56ab8630b3749997864c0de3fb1e",
     "boundary-assessor.ts": "50673771d39126c132829704b5b2ab6172092e867245f8edca8c9b0eb71615cb",
     "compaction-strategy-plugin.ts": "8dadb434b15443524827b302af9c98c22ce40e892e0c0c2bc60e558dae33c932",
     "completion-prompt.ts": "e687f87dc0505ae6cbb43899bad62e587bd696ff0688d56c27e305b4b47af9b1",
@@ -8,7 +9,7 @@
     "context-plugin.ts": "1da424038b5f5dd8e88999d86c4b26fecca5d21ca4170b83fdba9958eef787f0",
     "context-strategy-plugin.ts": "104c0e4a9b9619d361a8089b43724986366bc3665993c2146268e5f847698643",
     "continuation-plugin.ts": "e5485881f09b871912fa5574af6fe9c7b323abe01b03b8876cd235b436595a7d",
-    "cron-report-plugin.ts": "76129c76f18f73f86c961c56bc40bccf0b1061f36a1166c52555270a514ef871",
+    "cron-report-plugin.ts": "528d1f1e91ba62871dad23bbdea8a9b61185964bd54ba37f14e858dc4762cd21",
     "cron-report-processing.ts": "c2dd4c396ffd53066ae26de5eac7158b4d0bcd0d8bb3a23c0d873c0af37814c2",
     "cron-reports.ts": "259683d237e6322917e1f41df26a8221b7fbb20a85c505669bebc521e68f8b9f",
     "dispatcher-plugin.ts": "8dcafde10d1aa6676835b89571ef9dfaf51bdbb026cec81aa133b7e9c7be27c6",
@@ -29,7 +30,7 @@
     "memory-orchestration-plugin.ts": "c796ff18def036016ac47095d18a490fab0d15ff8eaff342e463babc16bf78ea",
     "memory-plugin.ts": "a73c9c479e9665472732db1648059991430386fe5d764ad5417dbc553acdb104",
     "memory-service.ts": "83e0202810ddb172976caba9fbff2df9131c12e245746c33e0a3622b79d173db",
-    "native-activity.ts": "b9878941092065a395c9333f0533080a258dbb8a0c28e2c901a60fb8ac20a6cc",
+    "native-activity.ts": "881bb43183c892702b096d320e4c4d7f68d76d5a647e6ec7988d8f9bbc8d0a3d",
     "nightly-default.ts": "e2669a2947bc9060d68f1dd8d4f903c4646b37ea91ca96ff492ecfb0c012b79f",
     "nightly-strategy-plugin.ts": "f2307c66003387167318055b7e49ce84e115ffd5d8e7d1a21ae8106318dbc0a8",
     "output-language.ts": "7ddc3dbeb169dfdb168b0b63fe5129c998b368cb51d2621613a2cf5f00ff652a",
@@ -55,6 +56,6 @@
     "wasm-tools-plugin.ts": "438c6ac8899e283e4268f51ef451275bf16a37b584db84ee8302a26200cc70de"
   },
   "repository": "https://git.vanillacore.net/harness/plugins",
-  "revision": "7d601ded685913e74b27639e1a3fd65184c1c895",
+  "revision": "051f67bcde84c4266b0076355256b326fa06edb5",
   "schema": 1
 }

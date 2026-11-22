@@ -23,6 +23,7 @@ test("child contract: workers lose parent-owned orchestration tools, main keeps 
     assert.ok(childDeniedTools(key).includes("plugin_task_continuation"));
     assert.ok(childDeniedTools(key).includes("plugin_loop"));
     assert.ok(childDeniedTools(key).includes("plugin_subagent"));
+    assert.ok(childDeniedTools(key).includes("plugin_dispatch"));
   }
   assert.ok(childDeniedTools("dispatch:a:b").includes("plugin_dispatch"));
   assert.ok(childDeniedTools("dispatch:a:b").includes("plugin_worker_tasks"));
@@ -47,7 +48,7 @@ for(const tools of [undefined,['read','bash','plugin_task_continuation','plugin_
  for(const [key,hidden,visible] of [
    ['main',[],['read','bash','plugin_task_continuation','plugin_loop','plugin_dispatch','plugin_memory']],
    ['dispatch:x:y',['plugin_task_continuation','plugin_loop','plugin_subagent','plugin_dispatch','plugin_worker_tasks','plugin_improvement_evaluate'],['plugin_memory','read','bash']],
-   ['subagent:z',['plugin_task_continuation','plugin_loop','plugin_subagent','plugin_improvement_evaluate'],['plugin_memory','plugin_dispatch','read']],
+   ['subagent:z',['plugin_task_continuation','plugin_loop','plugin_subagent','plugin_dispatch','plugin_improvement_evaluate'],['plugin_memory','read']],
  ]) {
   const wrapped=await runtime.open(key);
   try {

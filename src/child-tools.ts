@@ -4,7 +4,7 @@
  * and the model-visible tool selection, so advertised tools match enforcement.
  */
 const WORKER = ["plugin_tasks", "plugin_dispatch_recovery", "plugin_worker_tasks", "plugin_dispatch", "plugin_subagent", "plugin_loop", "plugin_task_continuation", "plugin_improvement_evaluate"] as const;
-const SUBAGENT = ["plugin_tasks", "plugin_dispatch_recovery", "plugin_subagent", "plugin_loop", "plugin_task_continuation", "plugin_improvement_evaluate"] as const;
+const SUBAGENT = ["plugin_tasks", "plugin_dispatch_recovery", "plugin_dispatch", "plugin_subagent", "plugin_loop", "plugin_task_continuation", "plugin_improvement_evaluate"] as const;
 
 export function childDeniedTools(sessionKey: string): readonly string[] {
   if (sessionKey.startsWith("dispatch:")) return WORKER;

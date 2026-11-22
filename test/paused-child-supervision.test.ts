@@ -41,9 +41,12 @@ async function pausedLikeD2494ffb(home: string) {
     const prompt = session.prompt.bind(session);
     session.prompt = async (text: string, o: PromptOptions = {}) => {
       o.onEvent?.({ type: "execution", selection: { model: o.model ?? "p/default", thinking: o.thinking ?? "high" } } as never);
-      if (options.assessmentPurpose === "supervisor") return ++continues <= 5
-        ? `{"state":"continue","next":"inventory the remaining legacy executions (${continues})"}`
-        : "technical validator failure";
+      if (options.assessmentPurpose === "supervisor") {
+        if (text.startsWith("Select at most ONE")) return '{"state":"blocked"}';
+        return ++continues <= 5
+          ? `{"state":"continue","next":"inventory the remaining legacy executions (${continues})"}`
+          : "technical validator failure";
+      }
       await prompt(text, o);
       if (key.startsWith("plan:")) return plan;
       workerTurns++;

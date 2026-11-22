@@ -15,6 +15,7 @@ export function startupNoticeTarget(home: Address | undefined,
         !session.key.startsWith(`${to.channel}:`)) continue;
     const target = { channel: to.channel, target: to.target };
     targets.set(JSON.stringify(target), target); // one room, even with multiple historical threads
+    if (targets.size > 1) return undefined; // Later sessions cannot remove ambiguity.
   }
   return targets.size === 1 ? targets.values().next().value : undefined;
 }

@@ -36,9 +36,27 @@ test("plugin_skill_search matches skills by keyword and reports misses", async t
   assert.ok(tool, "plugin_skill_search registered");
   const hit = await tool.execute({ query: "firecrawl" }, { sessionKey: "test:1" });
   assert.match(hit, /web-search/);
-  assert.match(hit, /Read the named SKILL\.md/);
+  assert.ok(hit.includes(path.join(home, '.pi', 'skills', 'web-search', 'SKILL.md')), 'search supplies the actual readable path');
+  assert.match(hit, /automatic loading is not guaranteed/);
   const miss = await tool.execute({ query: "quantumfloristics" }, { sessionKey: "test:1" });
   assert.match(miss, /No matching skills/);
+});
+
+test("search discovers created and updated skills without a manual reload or restart", async t => {
+  const home = await mkdtemp(path.join(os.tmpdir(), "skill-search-refresh-"));
+  t.after(() => rm(home, { recursive: true, force: true }));
+  const catalog = await catalogWith(t, home, "web-search", "Old description for browser");
+  await catalog.refresh();
+  const tools = new Map<string, unknown>(); await skillSearchPlugin(catalog).activate(api(tools));
+  const tool = tools.get("plugin_skill_search") as any;
+  const file = path.join(home, ".pi", "skills", "web-search", "SKILL.md");
+  await writeFile(file, "---\nname: web-search\ndescription: Newly updated retrieval workflow\n---\nUpdated instructions.\n");
+  assert.match(await tool.execute({ query: "retrieval" }), /web-search/);
+  const added = path.join(home, ".pi", "skills", "new-skill"); await mkdir(added);
+  await writeFile(path.join(added, "SKILL.md"), "---\nname: new-skill\ndescription: Newly created unique workflow\n---\nNew instructions.\n");
+  assert.match(await tool.execute({ query: "unique workflow" }), /new-skill/);
+  await rm(added, { recursive: true });
+  assert.match(await tool.execute({ query: "unique workflow" }), /No matching skills/);
 });
 
 test("plugin_skill_search stays empty-safe when no skills exist", async t => {
