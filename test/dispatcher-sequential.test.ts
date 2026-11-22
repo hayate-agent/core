@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile, realpath } from "node:fs/promises";
 import { readExecutionLedgerFixture } from "./execution-ledger-fixture.js";
 import os from "node:os";
 import path from "node:path";
@@ -242,6 +242,23 @@ test("each new step gets a small fresh context; independent validation sees the 
   assert.equal(workerOpens.length, 2); assert.equal(workerOpens[1]!.fresh, true);
   assert.equal(env.runtime.sessions.get(workerOpens[1]!.key)!.prompts.length, 1, "no prior-step tool history inherited");
   assert.equal(shortened, 2); assert.doesNotMatch(task.result!, /RAW TOOL DETAIL/);
+});
+
+test("REAL dispatcher path: oversized parser-valid experiment receipt survives compactResult and the step slice into task.result", async t => {
+  const { compactTaskReport } = await import("../src/context-artifacts.js");
+  const { experimentReceipts } = await import("../src/builtin-plugins/improvement-report.js");
+  const f = (n: number, tag: string) => `${tag} `.padEnd(n, "x");
+  const receipt = { execution: "performed", hypothesis: f(2000, "h"), baseline: f(2000, "b"), candidate: f(2000, "c"), evidence: f(2000, "e"), outcome: "improved" };
+  const fence = "```improvement-experiment\n" + JSON.stringify(receipt) + "\n```";
+  const report = "step result\n" + "Measured.\n".repeat(400) + fence + "\n" + "Notes.\n".repeat(400) + "\nSTEP-STATUS: complete";
+  assert.ok(fence.length > 8000 && experimentReceipts(report).length === 1);
+  const dir = await realpath(await mkdtemp(path.join(os.tmpdir(), "seq-receipt-")));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const env = await setup(t, { plan: steps(["do experiment", "simple"]), worker: () => report, verdict: '{"state":"completed"}' });
+  (env.runtime as AgentRuntime).compactResult = (_key, value) => compactTaskReport(dir, value);
+  const task = await env.run("Run the experiment, without external changes.");
+  assert.equal(task.status, "completed");
+  assert.deepEqual(experimentReceipts(task.result!), [receipt]);
 });
 
 test("a report above 64K reaches independent validation with material evidence in its middle", async t => {
