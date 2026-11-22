@@ -30,7 +30,11 @@ export class PartitionedJson {
   private fenced = false;
   private initialized = false;
   constructor(readonly file: string, private readonly arrays: Readonly<Record<string, number>>,
-    private readonly write: typeof writeFileDurable = writeFileDurable) {}
+    private readonly write: typeof writeFileDurable = writeFileDurable) {
+    for (const [name, chunk] of Object.entries(arrays)) {
+      if (!Number.isSafeInteger(chunk) || chunk < 1) throw Error(`Invalid partition chunk size for ${name}`);
+    }
+  }
 
   private blob(hash: string): string { return path.join(`${this.file}.parts`, `${hash}.json`); }
   private safePrivate(info: import("node:fs").Stats): boolean {

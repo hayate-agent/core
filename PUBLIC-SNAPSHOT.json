@@ -1,5 +1,5 @@
 {
-  "contentDigest": "e4451091d8b01e53766f15f38003b4be2fc0c14875408fc42fddb73fa6656086",
+  "contentDigest": "d5688085f28212fd0b0ab6a31d2a8f4c5e38f93b5ea09aa33e3a606ecdf6f8d5",
   "files": [
     {
       "mode": "100644",
@@ -734,7 +734,7 @@
     {
       "mode": "100644",
       "path": "src/classifier-http.ts",
-      "sha256": "53b2f045df253bb09b22971fd25255aaa0798704af4800d3ab54075546aef040"
+      "sha256": "3a3c5bdb5ca78621ca6932ea06ce6f41e7befcb7141905c311e18ddff3847303"
     },
     {
       "mode": "100644",
@@ -1194,7 +1194,7 @@
     {
       "mode": "100644",
       "path": "src/partitioned-json.ts",
-      "sha256": "c0cf7f2d20048692b27c7bcc351167b7792d54887faa90cb30995e620c1712d9"
+      "sha256": "02f257c44522b475455bc2bbec35bd47a49b59c9f1ce04ad56a978389fc5014a"
     },
     {
       "mode": "100644",
@@ -1849,7 +1849,7 @@
     {
       "mode": "100644",
       "path": "test/classifier-http.test.ts",
-      "sha256": "ac6821f0b8a42cb6a3aa0f9d71a51d3f855f26bc487b5dedf71b1216799201b5"
+      "sha256": "de53f945e2b22780fc653b3b9c04dc53f6606b704e8e04a6ccebe0324bc634c3"
     },
     {
       "mode": "100644",
@@ -3373,6 +3373,11 @@
     },
     {
       "mode": "100644",
+      "path": "test/partition-chunk-validation.test.ts",
+      "sha256": "7d4a42e4975934c2ec7a3c55dd8b888641050f127e88cabd9c9f892c7e602fa5"
+    },
+    {
+      "mode": "100644",
       "path": "test/partitioned-json.test.ts",
       "sha256": "86744b5e7d7a062b760b2538b2ad61648de1d4f38ed4b807b6e199da39899e52"
     },
@@ -4685,5 +4690,5 @@
   "historyPolicy": "fresh-root; no source commits, tags, refs or deleted blobs",
   "pluginSHA": "5f8f26c8c8c975c3d534d395004e758daa21539e",
   "schema": 1,
-  "sourceSHA": "988d0f9bb700fed515d7f33330851ad866a2bc16"
+  "sourceSHA": "dc66c7ebb27f8d98f79acf85a1c726c83c71f586"
 }
