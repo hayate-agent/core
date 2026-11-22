@@ -5,6 +5,7 @@ import path from "node:path";
 import { test } from "node:test";
 import { RunRegistry } from "../src/api/runs.js";
 import { ApiChannel } from "../src/api/server.js";
+import { Dispatcher } from "../src/dispatcher.js";
 import { ExecutionStore } from "../src/execution.js";
 import { DEFAULT_API_RESULT_HOLD_MS, Harness } from "../src/harness.js";
 import { FakeRuntime, MemoryChannel } from "./fakes.js";
@@ -1809,4 +1810,25 @@ test("a paused (retryable) legacy unscoped worker alone is held as well", async 
   harness.restoreSessions([{ key: "api:issue-80", tasks: [{ id: "api:run_80", original: "Work SHR-80", state: "active", depth: 1, recoveryEnrollment: "current", apiRunDeadline: Date.now() + 600_000 }] }]);
   for (let i = 0; i < 3; i++) { await harness.tick(); for (let j = 0; j < 30; j++) await settle(); }
   assert.equal(store.list("api:issue-80")[0].ownershipHold, "unscoped-parent-stop", "its retry cannot resume");
+});
+
+test("startup ordering: the dispatcher never runs run-less or legacy API work, even before the first tick", async t => {
+  const { harness, store } = await setup(t);
+  harness.restoreSessions([
+    { key: "api:issue-81", tasks: [{ id: "api:run_81", original: "Work SHR-81", state: "active", depth: 1, recoveryEnrollment: "current" }] },
+    { key: "api:issue-82", tasks: [{ id: "api:run_82", original: "Work SHR-82", state: "active", depth: 1, recoveryEnrollment: "current", apiRunDeadline: Date.now() + 600_000 }] }]);
+  await store.submit("api:issue-81", "req-81", "Run-less scoped work", "fixture", 1, { taskId: "api:run_81", original: "Work SHR-81", depth: 1 });
+  await store.submit("api:issue-81", "req-81b", "Legacy unscoped work", "fixture", 1);
+  const open = await store.submit("api:issue-82", "req-82", "Work of an open run", "fixture", 1, { taskId: "api:run_82", original: "Work SHR-82", depth: 1 });
+  const ran: string[] = [];
+  const strategy = { name: "fixture", version: 1, replaySafe: true, reconcile: false,
+    execute: async (task: import("../src/execution.js").Execution) => { ran.push(task.id); return "done"; } };
+  /* no harness.tick() at all: only the dispatcher's own startup scheduling */
+  const dispatcher = new Dispatcher(store, strategy, 4, async () => {}, () => {}, undefined, undefined, undefined, [], undefined, undefined, undefined, undefined,
+    task => harness.apiExecutionRunnable(task));
+  t.after(() => dispatcher.stop());
+  await dispatcher.start();
+  for (let i = 0; i < 5; i++) { await dispatcher.kick(); await settle(); }
+  for (let i = 0; i < 100 && !ran.includes(open.id); i++) await new Promise(r => setTimeout(r, 5));
+  assert.deepEqual(ran, [open.id], "only the open run's work ran");
 });

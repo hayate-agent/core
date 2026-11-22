@@ -948,7 +948,7 @@ async function main(argv: string[]): Promise<void> {
     }, error => log(`[dispatcher] ${String(error)}`), key => harness.dependencyCheckpoint(key), undefined, () => harness.updateFenced || harness.stopping,
     // Built-ins stay registered so tasks queued before a strategy switch are not stranded.
     [dispatchRuntime.strategy, dispatchRuntime.sequential], sessionEnabled, parallelAdmission, key => harness.dispatchOrigin(key),
-    task => harness.taskPriority(task.parent, task.dependency?.taskId));
+    task => harness.taskPriority(task.parent, task.dependency?.taskId), task => harness.apiExecutionRunnable(task));
   }
   plugins.memoryOrchestration.select(config.memory.enabled ? config.memory.orchestration ?? "default" : "none");
   const memoryProvider = new MemoryProviderLifecycle(async () => {

@@ -133,3 +133,6 @@ results are dropped before they can start a model turn. Work of other sessions i
 Paused or blocked (retryable) executions count as live for both rules, so a retry can never
 resume them after the run ended. The owner abort for held legacy workers is retried on every
 tick until it succeeds.
+Independently of the tick, the dispatcher never schedules or starts such work: its scheduling
+filter and the post-claim check ask `Harness.apiExecutionRunnable`, so after a restart nothing
+run-less or legacy runs before the first tick has held or revoked it.

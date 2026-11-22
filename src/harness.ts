@@ -4352,6 +4352,14 @@ export class Harness {
     return s.key.startsWith("api:") && this.apiHoldMs() > 0 && task.apiRunDeadline === undefined &&
       !task.apiHold && !task.apiDeferred?.length && !this.apiRebinding.has(task) && task.apiRebindIntent === undefined;
   }
+  /** Dispatcher scheduling fence (also before the first tick after startup): API-session work
+   * runs only for a task with an open run; legacy unscoped work never. */
+  apiExecutionRunnable(execution: import("./execution.js").Execution): boolean {
+    if (!execution.parent.startsWith("api:") || this.apiHoldMs() <= 0) return true;
+    const s = this.sessions.get(execution.parent), taskId = execution.dependency?.taskId;
+    const task = s && taskId ? this.tasks(s).find(t => t.id === taskId) : undefined;
+    return !!task && !this.apiRunGone(s!, task);
+  }
   private readonly apiLegacyHolding = new Set<string>();
   private readonly apiLegacyAbort = new Set<string>();
   /** Any non-terminal unscoped execution not yet held: paused/blocked ones can still be retried. */
