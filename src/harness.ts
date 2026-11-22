@@ -1249,7 +1249,7 @@ export class Harness {
         s.key === "improvement:nightly" || s.key.startsWith("cron:") || this.stoppingHostParents.has(s.key) ||
         this.opts.externallyRecoveredSession?.(s.key)) return false;
     // A retained proposal without admission must not starve later admitted work.
-    const candidates = this.tasks(s).filter(task => this.taskAllowed(task) && task.recoveryEnrollment !== "held-legacy" && task.state === "active" && task.recoveryAdmission && task.next?.trim() &&
+    const candidates = this.tasks(s).filter(task => this.taskAllowed(task) && !this.apiRunGone(s, task) && task.recoveryEnrollment !== "held-legacy" && task.state === "active" && task.recoveryAdmission && task.next?.trim() &&
       !this.supersededByNewerTopic(s, task) && !this.hasPendingDependency(s.key, task.id) &&
       Number.isSafeInteger(task.depth) && task.depth >= 0 && repetitions(task) < 20 &&
       (task.expiresAt === undefined || (Number.isSafeInteger(task.expiresAt) && task.expiresAt > this.now())));
@@ -2527,7 +2527,7 @@ export class Harness {
       if (this.opts.externallyRecoveredSession?.(s.key)) continue;
       if (await this.opts.contextMaintenance?.recoveryStatus?.(s.key)) continue;
       for (const task of [...this.tasks(s)].sort((a, b) => priorityRank(this.committedPriority(b)) - priorityRank(this.committedPriority(a)))) {
-      if (task.recoveryEnrollment === "held-legacy" || !this.taskAllowed(task)) continue;
+      if (task.recoveryEnrollment === "held-legacy" || !this.taskAllowed(task) || this.apiRunGone(s, task)) continue;
       // Older turn finalization persisted a missing decision as an explicit
       // block. Repair only that recorded contradiction, never semantic blocks,
       // operator termination, or unresolved dependency custody. This admits an
@@ -3110,6 +3110,13 @@ export class Harness {
           s.unsaved = true;
           continue;
         }
+        // Internal work (restored continuation, recovery, host result) of an API task whose run
+        // is gone has no write authority: dropped, never run. Fresh API runs are unaffected.
+        if (input.source !== "api" && this.apiRunGoneFor(s, input)) {
+          this.log(`input for ${s.key} dropped: its API run has ended`);
+          s.unsaved = true;
+          continue;
+        }
         if (input.source === "channel" || input.source === "api") s.lastInput = input;
         if (input.source === "channel") this.rememberCompletion(s, "user", input.text);
         s.current = input;
@@ -3461,7 +3468,7 @@ export class Harness {
           // owns this boundary, but queueRunnableTask may now select another
           // admitted task. The previous task's admission remains intact.
           if (!s.queue.length) this.queueRunnableTask(s, targetId);
-          if ((input.source !== "host" || this.resultMandate(input)) && input.continuation?.state === "continue" && input.continuation.next && repetitions(task ?? { depth: input.continuationDepth ?? 0 }) < 20 && input.source !== "api" && s.key !== "improvement:nightly" && !s.key.startsWith("cron:") && !s.queue.length && !this.stopping && !this.hasPendingDependency(s.key, input.taskId)) {
+          if ((input.source !== "host" || this.resultMandate(input)) && input.continuation?.state === "continue" && input.continuation.next && !(task && this.apiRunGone(s, task)) && repetitions(task ?? { depth: input.continuationDepth ?? 0 }) < 20 && input.source !== "api" && s.key !== "improvement:nightly" && !s.key.startsWith("cron:") && !s.queue.length && !this.stopping && !this.hasPendingDependency(s.key, input.taskId)) {
             s.queue.push({ id: task?.recoveryAdmission?.id ?? randomUUID(), sessionKey: s.key, source: "cron", replyTo: input.replyTo ?? s.replyTo,
               text: continuationRequest(task?.original ?? input.completionAnchor?.task ?? input.text, input.continuation.next),
               taskId: targetId,
@@ -4240,6 +4247,16 @@ export class Harness {
           .finally(() => { if (!this.apiCancelDelivered.has(entry)) this.apiCancelDelivering.delete(entry); });
       }
       for (const task of this.tasks(s)) {
+        // Delegated work of an API task without an open run cannot write back: revoke it
+        // (also legacy workers started before run windows existed).
+        // Through the single fenced revocation chain: admission and rebinding stay closed
+        // until the work is durably revoked, so a fresh run never loses its own work to it.
+        if (this.apiRunGone(s, task) && !this.apiClosings.has(task) && this.apiChildrenLive(s, task) &&
+            !(s.current && this.apiTaskFor(s, s.current) === task)) {
+          this.log(`task ${task.id}: revoking delegated work without an open API run`);
+          void this.closeApiWindow(s, task).catch(err => this.log(`run-less API work revocation retained for retry: ${err instanceof Error ? err.message : err}`));
+          continue;
+        }
         const held = task.apiHold;
         // A pending (possibly restored) revocation fence is retried first, with or without a
         // held answer; nothing for this task is released before it succeeded.
@@ -4305,6 +4322,21 @@ export class Harness {
   }
 
   /** Any non-terminal dispatcher/native child of the run's owned tasks still live. */
+  /** An API session's task acts only inside its caller's open run (Paperclip authorizes writes
+   * only then). Without one - ended, or legacy state from before run windows - it is never
+   * resumed and its delegated work is revoked: there is nobody it may write for. */
+  private apiRunGone(s: SessionState, task: DurableTask): boolean {
+    return s.key.startsWith("api:") && this.apiHoldMs() > 0 && task.apiRunDeadline === undefined &&
+      !task.apiHold && !task.apiDeferred?.length && !this.apiRebinding.has(task) && task.apiRebindIntent === undefined;
+  }
+  private apiRunGoneFor(s: SessionState, input: Inbound): boolean {
+    if (!s.key.startsWith("api:")) return false;
+    const id = input.hostEvent?.executionId;
+    const taskId = input.taskId ?? (id ? (input.hostEvent?.nativeSubagent ? this.opts.nativeResultTask?.(s.key, id) : undefined) ??
+      this.opts.executionStore?.list(s.key).find(e => e.id === id)?.dependency?.taskId : undefined);
+    const task = taskId ? this.tasks(s).find(t => t.id === taskId) : undefined;
+    return !!task && this.apiRunGone(s, task);
+  }
   private apiChildrenLive(s: SessionState, task: DurableTask): boolean {
     if (this.opts.pendingNativeSubagent?.(s.key, task.id)) return true;
     return this.opts.executionStore?.list(s.key).some(e => e.dependency?.taskId === task.id && !e.parentStopped &&
@@ -4571,7 +4603,7 @@ export class Harness {
       if (s.resetPending || this.opts.sessionEnabled?.(s.key) === false || s.running || s.queue.length || s.outbox.length || s.unsaved || this.stoppingHostParents.has(s.key)) continue;
       if (await this.opts.contextMaintenance?.recoveryStatus?.(s.key)) continue;
       for (const task of this.tasks(s)) {
-      if (task.recoveryEnrollment === "held-legacy" || !this.taskAllowed(task)) continue;
+      if (task.recoveryEnrollment === "held-legacy" || !this.taskAllowed(task) || this.apiRunGone(s, task)) continue;
       // Reconcile pre-upgrade exhausted checkpoints without a model nudge.
       if ((task.state === "blocked" || task.state === "active") && repetitions(task) >= 20 && !task.budgetAttentionId) {
         this.budgetAttention(s, task);

@@ -7,7 +7,7 @@ import { RunRegistry } from "../src/api/runs.js";
 import { ApiChannel } from "../src/api/server.js";
 import { ExecutionStore } from "../src/execution.js";
 import { DEFAULT_API_RESULT_HOLD_MS, Harness } from "../src/harness.js";
-import { FakeRuntime } from "./fakes.js";
+import { FakeRuntime, MemoryChannel } from "./fakes.js";
 
 const KEY = ["test", "api", "key"].join("-");
 const settle = () => new Promise(resolve => setTimeout(resolve, 30));
@@ -1671,4 +1671,79 @@ test("a local ended-run record never hides a live carrier of the same task in an
   other.tasks = [{ ...structuredClone(task), apiRunEndedAt: undefined, apiRunId: "run_live", apiRunDeadline: 5_000_000 }] as never;
   assert.throws(() => harness["guardApiAdmission"]("api:issue-1", task.id, { channel: "matrix", target: "!room" }), /another session/);
   assert.doesNotThrow(() => harness["guardApiAdmission"]("api:issue-carrier", task.id, { channel: "api", target: "run_live" }));
+});
+
+test("a legacy API task without an open run gets its live delegated work revoked by the tick", async t => {
+  const { harness, store } = await setup(t);
+  const child = await store.submit("api:issue-70", "req-70", "Update SHR-70", "direct", 1, { taskId: "api:run_legacy70", original: "Work SHR-70", depth: 0 });
+  await store.claim(child.id);
+  harness.restoreSessions([{ key: "api:issue-70", tasks: [{ id: "api:run_legacy70", original: "Work SHR-70", state: "active", depth: 1, recoveryEnrollment: "current" }] }]);
+  await harness.tick(); for (let i = 0; i < 50 && store.list("api:issue-70")[0].status !== "cancelled"; i++) await settle();
+  assert.equal(store.list("api:issue-70")[0].status, "cancelled", "nobody can write for this worker any more");
+});
+
+for (const variant of ["ended run", "legacy state"] as const) test(`an API task without an open run (${variant}) is never resumed by recovery; other sessions still are`, async () => {
+  const prompts: string[] = []; let ran!: () => void; const working = new Promise<void>(r => { ran = r; });
+  const dir = await mkdtemp(path.join(tmpdir(), "api-runless-"));
+  const store = new ExecutionStore(path.join(dir, "e.json")); await store.load();
+  const h = new Harness({ runtime: new FakeRuntime((text, key) => { prompts.push(`${key}: ${text}`); if (key === "mem:room71") ran(); return "verified"; }),
+    executionStore: store, completionCheck: async () => ({ state: "completed" }) });
+  h.onStateChange = async () => {}; h.addChannel(new MemoryChannel());
+  const retained = (id: string) => ({ id, original: "Work SHR-71", state: "active", recoveryEnrollment: "current", depth: 0, next: "Post the summary",
+    ...(variant === "ended run" ? { apiRunEndedAt: 999_000 } : {}),
+    recoveryAdmission: { id: `${id}:1`, depth: 1, original: "Work SHR-71", next: "Post the summary" } });
+  h.restoreSessions([{ key: "api:issue-71", task: retained("api:run_71") }, { key: "mem:room71", task: retained("room-71") }] as never);
+  const scan = h.recoverTasks(true);
+  try { await working; await scan; for (let i = 0; i < 50; i++) await settle(); }
+  finally { await h.stop(0); await rm(dir, { recursive: true, force: true }); }
+  assert.ok(!prompts.some(p => p.startsWith("api:issue-71:")), "no turn without the caller's run");
+});
+
+test("a restored queued continuation of an API task without an open run is dropped, never run", async t => {
+  const { harness, runtime } = await setup(t);
+  const prompts: string[] = []; runtime.answer = (text, key) => { prompts.push(`${key}: ${text}`); return "ok"; };
+  harness.restoreSessions([{ key: "api:issue-72", tasks: [{ id: "api:run_72", original: "Work SHR-72", state: "active", depth: 1, recoveryEnrollment: "current", apiRunEndedAt: 999_000,
+    next: "Post the summary", recoveryAdmission: { id: "cont-72", depth: 2, next: "Post the summary", original: "Work SHR-72" } }] }]);
+  /* an admitted continuation already queued in the persisted session (checkpointed before a restart) */
+  harness.state("api:issue-72").queue.push({ id: "cont-72", source: "cron", sessionKey: "api:issue-72", taskId: "api:run_72", continuationDepth: 2, text: "Continue: post the summary" });
+  void harness["pump"](harness.state("api:issue-72"));
+  for (let i = 0; i < 3; i++) { await harness.tick(); for (let j = 0; j < 30; j++) await settle(); }
+  assert.ok(!prompts.some(p => p.startsWith("api:issue-72:")), "no turn without the caller's run");
+  assert.deepEqual(runtime.sessions.get("api:issue-72")?.prompts ?? [], [], "no model turn at all");
+  assert.equal(harness.state("api:issue-72").queue.length, 0);
+});
+
+test("run-less revocation goes through the fence: no admission until the work is revoked", async t => {
+  let release!: () => void; const gate = new Promise<void>(r => { release = r; });
+  const { harness, store } = await setup(t, { taskStopped: () => gate });
+  const child = await store.submit("api:issue-73", "req-73", "Update SHR-73", "direct", 1, { taskId: "api:run_73", original: "Work SHR-73", depth: 0 });
+  await store.claim(child.id);
+  harness.restoreSessions([{ key: "api:issue-73", tasks: [{ id: "api:run_73", original: "Work SHR-73", state: "active", depth: 1, recoveryEnrollment: "current" }] }]);
+  await harness.tick(); for (let i = 0; i < 30; i++) await settle();
+  assert.throws(() => harness["guardApiAdmission"]("api:issue-73", "api:run_73", { channel: "api", target: "run_fresh" }), /closing/);
+  release(); for (let i = 0; i < 50 && harness["tasks"](harness.state("api:issue-73"))[0].apiRevoking; i++) await settle();
+  assert.equal(store.list("api:issue-73")[0].status, "cancelled");
+  assert.equal(harness["tasks"](harness.state("api:issue-73"))[0].apiRevoking, undefined, "the fence lifts after revocation");
+});
+
+test("a queued native result for an API task without an open run is dropped (ownership via nativeResultTask)", async t => {
+  const { harness, runtime } = await setup(t, { nativeResultTask: (_k, id) => id === "native-74" ? "api:run_74" : undefined,
+    nativeSubagentExecution: (input: { hostEvent?: { executionId?: string } }) => input.hostEvent?.executionId === "native-74"
+      ? { id: "native-74", parent: "api:issue-74", status: "completed", result: "done", dependency: { taskId: "api:run_74", original: "Work SHR-74", depth: 1 } } as never : undefined });
+  harness.restoreSessions([{ key: "api:issue-74", tasks: [{ id: "api:run_74", original: "Work SHR-74", state: "active", depth: 1, recoveryEnrollment: "current", apiRunEndedAt: 999_000 }] }]);
+  harness.state("api:issue-74").queue.push({ id: "native-result-74", source: "host", sessionKey: "api:issue-74", hostEvent: { executionId: "native-74", nativeSubagent: true }, text: "Native subagent result: done" });
+  void harness["pump"](harness.state("api:issue-74"));
+  for (let i = 0; i < 3; i++) { await harness.tick(); for (let j = 0; j < 30; j++) await settle(); }
+  assert.deepEqual(runtime.sessions.get("api:issue-74")?.prompts ?? [], [], "no model turn for the result");
+  assert.equal(harness.state("api:issue-74").queue.length, 0);
+});
+
+test("while a run-less revocation (also a restored one) is in flight, queued internal work is dropped", async t => {
+  const { harness, runtime } = await setup(t);
+  harness.restoreSessions([{ key: "api:issue-75", tasks: [{ id: "api:run_75", original: "Work SHR-75", state: "active", depth: 1, recoveryEnrollment: "current",
+    apiRevoking: true, next: "Post", recoveryAdmission: { id: "cont-75", depth: 2, next: "Post", original: "Work SHR-75" } }] }]);
+  harness.state("api:issue-75").queue.push({ id: "cont-75", source: "cron", sessionKey: "api:issue-75", taskId: "api:run_75", continuationDepth: 2, text: "Continue: post" });
+  void harness["pump"](harness.state("api:issue-75"));
+  for (let i = 0; i < 3; i++) { await harness.tick(); for (let j = 0; j < 30; j++) await settle(); }
+  assert.deepEqual(runtime.sessions.get("api:issue-75")?.prompts ?? [], [], "no model turn while revoking");
 });
