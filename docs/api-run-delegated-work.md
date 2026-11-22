@@ -112,3 +112,27 @@ its task's window, so a later run can resume the same order.
 
 This feature is first released with this change; no earlier version persisted run
 ownership (`apiRunDeadline` and related fields), so there is no legacy state to migrate.
+
+## No API work without an open run
+
+An API session's task acts only inside its caller's open run. A task without one (its run
+ended, or legacy state from before run windows existed) is never resumed by recovery or by a
+model-requested continuation, and the tick revokes its still-live delegated work: Paperclip
+rejects every write with the ended run id (401 `run_expired`), so the work could only fail.
+The next Paperclip heartbeat run for the issue picks the work up with fresh authority.
+Already queued internal inputs of such a task (a continuation checkpointed before a restart,
+recovery, a dispatcher or native worker result) are dropped before they run, also while its
+revocation (live or restored) is in flight; fresh API runs are unaffected. The
+revocation runs through the same durable fence as a window close, so no work is admitted and
+the task cannot be rebound to a fresh run until the old work is revoked.
+Unscoped live workers in an API session are legacy: admission is always task-scoped and an
+unscoped result has no mandate, so no run - open or fresh - can own them. The tick holds them
+in one serialized ledger step independent of any task's run state (blocked as
+`unscoped-parent-stop`, never rescheduled; the dispatcher aborts them), and their queued
+results are dropped before they can start a model turn. Work of other sessions is untouched.
+Paused or blocked (retryable) executions count as live for both rules, so a retry can never
+resume them after the run ended. The owner abort for held legacy workers is retried on every
+tick until it succeeds.
+Independently of the tick, the dispatcher never schedules or starts such work: its scheduling
+filter and the post-claim check ask `Harness.apiExecutionRunnable`, so after a restart nothing
+run-less or legacy runs before the first tick has held or revoked it.
