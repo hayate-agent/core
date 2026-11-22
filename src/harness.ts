@@ -153,6 +153,9 @@ export interface UpdateAdmissionStatus {
   expires_at?: number;
 }
 
+/** Task scope that matches no task: a scoped stop with it ownership-holds exactly the unscoped executions. */
+const API_LEGACY_SCOPE = "api:legacy-unscoped";
+
 export class Harness {
   readonly sessions = new Map<string, SessionState>();
   private updateLease?: { id: string; expires: number; requestId?: string };
@@ -4246,12 +4249,32 @@ export class Harness {
           .then(() => this.apiCancelDelivered.add(entry), err => this.log(`expired queued API run delivery retained for retry: ${err instanceof Error ? err.message : err}`))
           .finally(() => { if (!this.apiCancelDelivered.has(entry)) this.apiCancelDelivering.delete(entry); });
       }
+      // Unscoped live workers in an API session are legacy: admission is always task-scoped and an
+      // unscoped result has no mandate, so no run (open or fresh) can own them. Hold them in one
+      // serialized ledger step (blocked, never rescheduled) and let their owner abort them.
+      // The owner abort stays pending until it succeeded (retried every tick); a restart ends
+      // the workers themselves, and the durable hold keeps them from being rescheduled.
+      if (s.key.startsWith("api:") && this.apiHoldMs() > 0 && !this.apiLegacyHolding.has(s.key) &&
+          (this.apiLegacyAbort.has(s.key) || this.opts.executionStore?.list(s.key).some(e => this.apiLegacyLive(e)))) {
+        this.apiLegacyHolding.add(s.key);
+        this.log(`${s.key}: holding legacy unscoped workers (no API run can own them)`);
+        void (async () => {
+          if (this.opts.executionStore?.list(s.key).some(e => this.apiLegacyLive(e))) {
+            await this.opts.executionStore?.cancelTask(s.key, API_LEGACY_SCOPE, []);
+            this.apiLegacyAbort.add(s.key);
+          }
+          await this.opts.taskStopped?.(s.key, API_LEGACY_SCOPE, []);
+          this.apiLegacyAbort.delete(s.key);
+        })().catch(err => this.log(`legacy API worker hold retained for retry: ${err instanceof Error ? err.message : err}`))
+          .finally(() => this.apiLegacyHolding.delete(s.key));
+      }
       for (const task of this.tasks(s)) {
         // Delegated work of an API task without an open run cannot write back: revoke it
         // (also legacy workers started before run windows existed).
         // Through the single fenced revocation chain: admission and rebinding stay closed
         // until the work is durably revoked, so a fresh run never loses its own work to it.
-        if (this.apiRunGone(s, task) && !this.apiClosings.has(task) && this.apiChildrenLive(s, task) &&
+        if (this.apiRunGone(s, task) && !this.apiClosings.has(task) && (this.apiChildrenLive(s, task) ||
+            this.opts.executionStore?.list(s.key).some(e => e.dependency?.taskId === task.id && e.status !== "completed" && e.status !== "cancelled")) &&
             !(s.current && this.apiTaskFor(s, s.current) === task)) {
           this.log(`task ${task.id}: revoking delegated work without an open API run`);
           void this.closeApiWindow(s, task).catch(err => this.log(`run-less API work revocation retained for retry: ${err instanceof Error ? err.message : err}`));
@@ -4329,9 +4352,20 @@ export class Harness {
     return s.key.startsWith("api:") && this.apiHoldMs() > 0 && task.apiRunDeadline === undefined &&
       !task.apiHold && !task.apiDeferred?.length && !this.apiRebinding.has(task) && task.apiRebindIntent === undefined;
   }
+  private readonly apiLegacyHolding = new Set<string>();
+  private readonly apiLegacyAbort = new Set<string>();
+  /** Any non-terminal unscoped execution not yet held: paused/blocked ones can still be retried. */
+  private apiLegacyLive(e: import("./execution.js").Execution): boolean {
+    return !e.dependency?.taskId && !e.ownershipHold && e.status !== "completed" && e.status !== "cancelled";
+  }
   private apiRunGoneFor(s: SessionState, input: Inbound): boolean {
     if (!s.key.startsWith("api:")) return false;
     const id = input.hostEvent?.executionId;
+    // A legacy unscoped dispatcher result has no run that could own it.
+    if (id && !input.taskId && !input.hostEvent?.nativeSubagent && this.apiHoldMs() > 0) {
+      const execution = this.opts.executionStore?.list(s.key).find(e => e.id === id);
+      if (execution && !execution.dependency?.taskId) return true;
+    }
     const taskId = input.taskId ?? (id ? (input.hostEvent?.nativeSubagent ? this.opts.nativeResultTask?.(s.key, id) : undefined) ??
       this.opts.executionStore?.list(s.key).find(e => e.id === id)?.dependency?.taskId : undefined);
     const task = taskId ? this.tasks(s).find(t => t.id === taskId) : undefined;

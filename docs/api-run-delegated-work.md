@@ -125,3 +125,11 @@ recovery, a dispatcher or native worker result) are dropped before they run, als
 revocation (live or restored) is in flight; fresh API runs are unaffected. The
 revocation runs through the same durable fence as a window close, so no work is admitted and
 the task cannot be rebound to a fresh run until the old work is revoked.
+Unscoped live workers in an API session are legacy: admission is always task-scoped and an
+unscoped result has no mandate, so no run - open or fresh - can own them. The tick holds them
+in one serialized ledger step independent of any task's run state (blocked as
+`unscoped-parent-stop`, never rescheduled; the dispatcher aborts them), and their queued
+results are dropped before they can start a model turn. Work of other sessions is untouched.
+Paused or blocked (retryable) executions count as live for both rules, so a retry can never
+resume them after the run ended. The owner abort for held legacy workers is retried on every
+tick until it succeeds.

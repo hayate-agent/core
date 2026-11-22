@@ -1747,3 +1747,66 @@ test("while a run-less revocation (also a restored one) is in flight, queued int
   for (let i = 0; i < 3; i++) { await harness.tick(); for (let j = 0; j < 30; j++) await settle(); }
   assert.deepEqual(runtime.sessions.get("api:issue-75")?.prompts ?? [], [], "no model turn while revoking");
 });
+
+for (const variant of ["no open run", "a fresh run is open (no race with its admission)"]) {
+  test(`a live unscoped legacy worker in an API session is held (${variant}); other sessions' unscoped work is untouched`, async t => {
+    const stopped: string[] = [];
+    const { harness, store } = await setup(t, { taskStopped: async key => { stopped.push(key); } });
+    const legacy = await store.submit("api:issue-76", "req-76", "Legacy work SHR-76", "direct", 1); await store.claim(legacy.id);
+    const other = await store.submit("mem:room76", "req-76b", "Unrelated room work", "direct", 1); await store.claim(other.id);
+    /* recorded as pre-existing at acceptance: no run may own it */
+    harness.restoreSessions([{ key: "api:issue-76", tasks: [{ id: "api:run_76", original: "Work SHR-76", state: "active", depth: 1, recoveryEnrollment: "current", preexistingUnscoped: [legacy.id],
+      ...(variant === "no open run" ? {} : { apiRunDeadline: Date.now() + 600_000 }) }] }]);
+    for (let i = 0; i < 3; i++) { await harness.tick(); for (let j = 0; j < 30; j++) await settle(); }
+    assert.equal(store.list("api:issue-76")[0].ownershipHold, "unscoped-parent-stop", "held: blocked, never rescheduled");
+    assert.ok(stopped.includes("api:issue-76"), "its owner is told to abort it (dispatcher aborts ownership-held workers)");
+    assert.equal(store.list("mem:room76")[0].ownershipHold, undefined, "unrelated work stays");
+    assert.equal(store.list("mem:room76")[0].status, "running");
+  });
+}
+
+test("a queued result of a legacy unscoped worker in an API session never starts a model turn", async t => {
+  const { harness, runtime, store } = await setup(t, { hostEventAllowed: () => true });
+  const legacy = await store.submit("api:issue-77", "req-77", "Legacy work SHR-77", "direct", 1);
+  harness.restoreSessions([{ key: "api:issue-77", tasks: [{ id: "api:run_77", original: "Work SHR-77", state: "active", depth: 1, recoveryEnrollment: "current", apiRunDeadline: Date.now() + 600_000 }] }]);
+  harness.state("api:issue-77").queue.push({ id: "legacy-result-77", source: "host", sessionKey: "api:issue-77", hostEvent: { executionId: legacy.id }, text: "Worker result: done" });
+  void harness["pump"](harness.state("api:issue-77"));
+  for (let j = 0; j < 30; j++) await settle();
+  assert.deepEqual(runtime.sessions.get("api:issue-77")?.prompts ?? [], [], "no model turn");
+  assert.equal(harness.state("api:issue-77").queue.length, 0);
+});
+
+test("a failed legacy-worker abort is retried by later ticks until it succeeds", async t => {
+  let calls = 0; const ok: string[] = [];
+  const { harness, store } = await setup(t, { taskStopped: async key => { calls++; if (calls === 1) throw Error("owner unavailable"); ok.push(key); } });
+  const legacy = await store.submit("api:issue-78", "req-78", "Legacy work SHR-78", "direct", 1); await store.claim(legacy.id);
+  harness.restoreSessions([{ key: "api:issue-78", tasks: [{ id: "api:run_78", original: "Work SHR-78", state: "active", depth: 1, recoveryEnrollment: "current" }] }]);
+  for (let i = 0; i < 4; i++) { await harness.tick(); for (let j = 0; j < 30; j++) await settle(); }
+  assert.equal(store.list("api:issue-78")[0].ownershipHold, "unscoped-parent-stop");
+  assert.ok(calls >= 2 && ok.includes("api:issue-78"), "the abort was retried after its failure");
+  const after = calls;
+  for (let i = 0; i < 2; i++) { await harness.tick(); for (let j = 0; j < 30; j++) await settle(); }
+  assert.equal(calls, after, "no further aborts once delivered");
+});
+
+test("paused (retryable) work is revoked too: a legacy unscoped worker is held, a run-less task's worker is cancelled", async t => {
+  const { harness, store } = await setup(t);
+  const legacy = await store.submit("api:issue-79", "req-79", "Legacy work SHR-79", "direct", 1);
+  const lt = await store.claim(legacy.id); await store.fail(legacy.id, lt.token!, "worker-failed");
+  const scoped = await store.submit("api:issue-79", "req-79b", "Scoped work SHR-79", "direct", 1, { taskId: "api:run_79", original: "Work SHR-79", depth: 1 });
+  const st = await store.claim(scoped.id); await store.fail(scoped.id, st.token!, "worker-failed");
+  assert.ok(store.list("api:issue-79").every(e => e.status === "paused" || e.status === "blocked"), "precondition: both paused/blocked");
+  harness.restoreSessions([{ key: "api:issue-79", tasks: [{ id: "api:run_79", original: "Work SHR-79", state: "active", depth: 1, recoveryEnrollment: "current" }] }]);
+  for (let i = 0; i < 4; i++) { await harness.tick(); for (let j = 0; j < 30; j++) await settle(); }
+  assert.equal(store.list("api:issue-79").find(e => e.id === legacy.id)!.ownershipHold, "unscoped-parent-stop", "legacy retry cannot resume");
+  assert.equal(store.list("api:issue-79").find(e => e.id === scoped.id)!.status, "cancelled", "run-less task's retry cannot resume");
+});
+
+test("a paused (retryable) legacy unscoped worker alone is held as well", async t => {
+  const { harness, store } = await setup(t);
+  const legacy = await store.submit("api:issue-80", "req-80", "Legacy work SHR-80", "direct", 1);
+  const lt = await store.claim(legacy.id); await store.fail(legacy.id, lt.token!, "worker-failed");
+  harness.restoreSessions([{ key: "api:issue-80", tasks: [{ id: "api:run_80", original: "Work SHR-80", state: "active", depth: 1, recoveryEnrollment: "current", apiRunDeadline: Date.now() + 600_000 }] }]);
+  for (let i = 0; i < 3; i++) { await harness.tick(); for (let j = 0; j < 30; j++) await settle(); }
+  assert.equal(store.list("api:issue-80")[0].ownershipHold, "unscoped-parent-stop", "its retry cannot resume");
+});
