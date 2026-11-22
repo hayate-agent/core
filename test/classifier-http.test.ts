@@ -88,6 +88,22 @@ function success(api: string) {
   return new Response(events.map(e => `event: ${"type" in e ? e.type : "message"}\ndata: ${JSON.stringify(e)}\n\n`).join("") + (api === "openai-completions" ? "data: [DONE]\n\n" : ""), { headers: { "content-type": "text/event-stream" } });
 }
 for (const api of ["anthropic-messages", "openai-responses", "openai-completions"]) {
+  test(`${api}: successful initial classification does not preflight fallback credentials`, async () => {
+    const rt = await runtime(api);
+    const auth = rt.getAuth.bind(rt);
+    const lookedUp: string[] = [];
+    rt.getAuth = async (model, options) => { lookedUp.push(model.id); return auth(model, options); };
+    const receipts: ClassifierReceipt[] = [];
+    let sends = 0;
+    const result = await classifyHttp(rt, { task: 'work', requested, defaults, signal: new AbortController().signal,
+      authorize() {}, persist: async receipt => { receipts.push(receipt); },
+    }, async () => { sends++; return success(api); });
+    assert.equal(result, 'simple');
+    assert.equal(sends, 1);
+    assert.deepEqual(receipts.map(r => r.phase), ['initial', 'observed']);
+    // Initial preflight and SDK send each authenticate the selected model.
+    assert.deepEqual(lookedUp, ['first', 'first']);
+  });
   test(`${api}: real SDK, first 429 -> different default, durable before both sends`, async () => {
     const rt = await runtime(api);
     const receipts: ClassifierReceipt[] = [];
