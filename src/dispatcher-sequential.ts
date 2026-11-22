@@ -9,6 +9,7 @@ import { validExecutionFollowUp, executionDecisionRevision, ExecutionDeadlineExp
 import { derivedPlanBoundary, stepCompletionPrompt, parentDecisionContext } from "./dispatcher-step-prompt.js";
 import { losslessMandate } from "./completion-budget.js";
 import type { DispatchContext, DispatcherStrategy } from "./dispatcher.js";
+import { sliceKeepingReceipts } from "./context-artifacts.js";
 import type { Execution, ExecutionStore } from "./execution.js";
 import type { Harness } from "./harness.js";
 import type { ModelPair, ModelRoles } from "./model-roles.js";
@@ -729,7 +730,7 @@ End your reply with exactly one final line: "STEP-STATUS: complete" only if the 
         let parentReport = state.assessment?.reply ?? settledReport;
         try { parentReport = await runtime.compactResult?.(sessionKey, settledReport) ?? parentReport; }
         catch { /* Do not fail an independently settled step for optional shortening. */ }
-        const result = parentReport.slice(0, STEP_RESULT_LIMIT);
+        const result = sliceKeepingReceipts(parentReport, STEP_RESULT_LIMIT);
         const next: SequentialState = structuredClone(state);
         delete next.prior;
         delete next.progress; // progress evidence belongs to this exact step only

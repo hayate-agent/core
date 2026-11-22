@@ -1,5 +1,5 @@
 {
-  "contentDigest": "609e3cbf55c6cb568a2b8f6f21c7e6fcfd8423eea6d6e2f43859d7413b207486",
+  "contentDigest": "db39736e931068fe6a7aac64de7ae322104b46d899ddaf290ebfbfa9efbb30b4",
   "files": [
     {
       "mode": "100644",
@@ -794,7 +794,7 @@
     {
       "mode": "100644",
       "path": "src/context-artifacts.ts",
-      "sha256": "45f6e39e1c9c4b92faebd3dd0081dc1f195ff6956324f3086a06b4dd57d016c6"
+      "sha256": "6361da3424891d0de44fd51fc01c93c97ede67997a5759c517121537d13c2257"
     },
     {
       "mode": "100644",
@@ -884,7 +884,7 @@
     {
       "mode": "100644",
       "path": "src/dispatcher-sequential.ts",
-      "sha256": "88fbcdf59a9827d123835c454fa28ffffaebcf2e9fb4591ec0467fd9d48eac40"
+      "sha256": "dd9e4d6dc041b9eacb4b9d87bf28c23060bc21d94107c5d9cecd043337845cda"
     },
     {
       "mode": "100644",
@@ -2334,7 +2334,7 @@
     {
       "mode": "100644",
       "path": "test/dispatcher-sequential.test.ts",
-      "sha256": "2bde8a84d3ee181cf7fc4a509e39281a81c2898f1bce9a9919c0a6a9175119ac"
+      "sha256": "61a772defabcc8240c21e220b9761cb6e2f6e6f06c1d9297284fefb473ab227e"
     },
     {
       "mode": "100644",
@@ -2715,6 +2715,11 @@
       "mode": "100644",
       "path": "test/improvement-local-report.test.ts",
       "sha256": "aab06c4d242c6016154e54fb258aff1fdd54e62dde526f542f9b347c99483db7"
+    },
+    {
+      "mode": "100644",
+      "path": "test/improvement-receipt-aggregation.test.ts",
+      "sha256": "87f853cc07cec91f2dc93ad4c9599b45ed19cd467650318a0cbf92092c2df693"
     },
     {
       "mode": "100644",
@@ -4690,5 +4695,5 @@
   "historyPolicy": "fresh-root; no source commits, tags, refs or deleted blobs",
   "pluginSHA": "051f67bcde84c4266b0076355256b326fa06edb5",
   "schema": 1,
-  "sourceSHA": "bc0c32b143ec12feceabc22f20e52e6090d9fc79"
+  "sourceSHA": "4a9553a583f664d34c7b55f4a8f36105b208ea47"
 }
