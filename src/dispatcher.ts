@@ -74,6 +74,8 @@ export class Dispatcher {
     private readonly origin?: (parent: string) => Execution["origin"],
     /** Live parent metadata, never supplied by workers; undefined means normal. */
     private readonly parentPriority?: (task: Execution) => TaskPriority | undefined,
+    /** Host run authority: false keeps an execution unscheduled (e.g. API work without an open run). */
+    private readonly executionAllowed: (task: Execution) => boolean = () => true,
   ) {
     if (!Number.isSafeInteger(capacity) || capacity < 1) throw Error("Invalid dispatcher capacity");
     for (const item of [strategy, ...retained])
@@ -213,7 +215,7 @@ export class Dispatcher {
     void this.flushEvents().catch(this.report);
     const tasks = this.store.list().filter(task => this.store.executionTaskAllowed(task) && !task.ownershipHold && task.recoveryEnrollment !== "held-legacy" &&
       !this.store.parentTakeoverActive(task) &&
-      !this.active.has(task.id) && this.parentEnabled(task.parent) && !!this.strategyFor(task) &&
+      !this.active.has(task.id) && this.parentEnabled(task.parent) && !!this.strategyFor(task) && this.executionAllowed(task) &&
       (task.status === "ready" && this.store.assessmentDue(task) ||
         ["worker-failed", "runtime-failure"].includes(task.diagnosticCode ?? "") && ["blocked", "paused", "ready"].includes(task.status) &&
         (!task.workerRetry || this.store.assessmentDue(task) || task.dependency?.expiresAt !== undefined && task.dependency.expiresAt <= Date.now())));
@@ -249,7 +251,7 @@ export class Dispatcher {
       if (this.stopped) return;
       const current = this.store.list().find(item => item.id === claimed.id);
       if (current?.status !== "running" || current.token !== claimed.token) continue;
-      if (this.admissionFenced() || !this.parentEnabled(claimed.parent)) {
+      if (this.admissionFenced() || !this.parentEnabled(claimed.parent) || !this.executionAllowed(current)) {
         await this.store.releaseUnstartedClaim(claimed.id, claimed.token!, claimed.claimedRecoveryAction);
         continue;
       }
