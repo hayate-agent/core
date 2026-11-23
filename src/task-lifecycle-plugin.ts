@@ -23,7 +23,7 @@ export function taskLifecyclePlugin(harness: Harness, authorize: (key: string, p
       },
     });
     api.registerTool({ name: "plugin_tasks",
-      description: "Core agent-wide operator orders, independent of sessions and Dispatcher. Use list/show to inspect; close/reopen/clarify ONLY for an actual current operator instruction (including clear natural-language completion), never a validator/worker suggestion. Clarify reuses the existing original order rather than creating another 'Weiter' mandate. For complex work propose-plan when useful: visible durable todos with original sourceId, choosing only steps relevant to the request. Done/omitted todos need outcome evidence. Changes are proposals, checked against operator scope and committed only at successful turn settlement. Simple questions need no plan. Never repeatedly validate closed tasks or reopen them on restart.",
+      description: "Core agent-wide operator orders, independent of sessions and Dispatcher. Use list/show to inspect; close/reopen/clarify ONLY for an actual current operator instruction (including clear natural-language completion), never a validator/worker suggestion. Clarify reuses the existing original order rather than creating another 'Weiter' mandate. For complex work propose-plan when useful: durable todos (not pushed to the operator's chat; they inspect them via /orders show) with original sourceId, choosing only steps relevant to the request. Done/omitted todos need outcome evidence. Changes are proposals, checked against operator scope and committed only at successful turn settlement. Simple questions need no plan. Never repeatedly validate closed tasks or reopen them on restart.",
       parameters: { type: "object", properties: {
         action: { type: "string", enum: ["list", "show", "close", "reopen", "clarify", "propose-plan"] },
         id: { type: "string" }, plan: { type: "array", maxItems: 48, items: { type: "object", properties: {
@@ -51,7 +51,7 @@ export function taskLifecyclePlugin(harness: Harness, authorize: (key: string, p
         if (args.action === "propose-plan") {
           if (input.taskRef?.id !== task.id || !Array.isArray(args.plan)) throw Error("Plan must belong to the current open order");
           harness.proposeTaskPlan(ctx.sessionKey, args.plan as TaskTodo[]);
-          return "Planvorschlag vorgemerkt; wird erst mit dem Turn-Ergebnis dauerhaft übernommen und im Main-Thread angezeigt.";
+          return "Planvorschlag vorgemerkt; wird erst mit dem Turn-Ergebnis dauerhaft übernommen (nicht in den Chat gepostet; einsehbar per /orders show).";
         }
         if (!["close", "reopen", "clarify"].includes(String(args.action))) throw Error("Invalid task lifecycle action");
         return harness.operatorTaskDecision(task.id, args.action as "close" | "reopen" | "clarify", input.id ?? `operator:${randomUUID()}`, input.text, ctx.sessionKey, input);

@@ -1,5 +1,5 @@
 {
-  "contentDigest": "7657ba73f444206ac7ddf4ea2db97084f9c405cf69ad35812b1f581cc5ece1ff",
+  "contentDigest": "5ed73a3490f2d0d8c562a0a6191051723d17f4d51346f3846f834b1822b6bfb3",
   "files": [
     {
       "mode": "100644",
@@ -454,7 +454,7 @@
     {
       "mode": "100644",
       "path": "docs/task-lifecycle.md",
-      "sha256": "e6d7aa7ebd620cbd96fc523f6af580d9010e4e70473d07fd4a19b1b56edc8a34"
+      "sha256": "efcf1c2603e4bb6213b131d1d4cb30d82a02e3ec82a8f7615b92e5fb3f60788d"
     },
     {
       "mode": "100644",
@@ -534,7 +534,7 @@
     {
       "mode": "100644",
       "path": "package.json",
-      "sha256": "15f303590cedd53f97466d961ccf7a5a6ccd8508ac16d5efafc60103bec7d63f"
+      "sha256": "3b45c96500d2ee9f5484ebceea057928094e4f770abe5c81eab0e80cd04d6c37"
     },
     {
       "mode": "100644",
@@ -924,7 +924,7 @@
     {
       "mode": "100644",
       "path": "src/execution.ts",
-      "sha256": "73f9784129eea04de9f6c229120d33de6b6bf6cfc036e2685b1e1701bd59481a"
+      "sha256": "484a7ea498cb9cf89329887fcb4475f780bc0b8f69a191b447e26709371b7874"
     },
     {
       "mode": "100644",
@@ -1479,7 +1479,7 @@
     {
       "mode": "100644",
       "path": "src/task-lifecycle-plugin.ts",
-      "sha256": "f9e3706b61ff8cfa0a9f229c6e8c31f4220354dfae190c20dd44c3f2d98ef9ef"
+      "sha256": "7f994ba7bae5470b589e46f65c04379429ad19ec05574a0eac5afec77e6dae26"
     },
     {
       "mode": "100644",
@@ -4144,7 +4144,7 @@
     {
       "mode": "100644",
       "path": "test/task-lifecycle.test.ts",
-      "sha256": "d419214f2339cf73e2a76af38b425aa9edfc7bf548d687b1290b7781f1c426bc"
+      "sha256": "c0cffaba9ae6f566605c71560458847b8fe51efa0ceb6fc7e8a71911fe7ca181"
     },
     {
       "mode": "100644",
@@ -4705,5 +4705,5 @@
   "historyPolicy": "fresh-root; no source commits, tags, refs or deleted blobs",
   "pluginSHA": "0f3a4adb866c06589fa922078efa91a5113ca985",
   "schema": 1,
-  "sourceSHA": "88a4f60fe61b413d2cd486e3e9210b3767f67717"
+  "sourceSHA": "8ebfba5fd43ca0e9429c227d37b6fa4935b26a5e"
 }
