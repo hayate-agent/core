@@ -3684,8 +3684,11 @@ export class Harness {
         await s.session?.dispose(); s.session = undefined;
         s.session = await this.runtime.open(s.key, { sessionId: cronTask.runtimeSessionId });
       }
-      const freshCron = !!cronTask && !cronTask.runtimeSessionId && input.source === "cron" &&
+      const freshCron = (!!cronTask && !cronTask.runtimeSessionId || s.key === "improvement:nightly") && input.source === "cron" &&
         input.continuationDepth === undefined && !input.waitCheck && !input.waitRecheck && !this.restoredTaskInputs.has(input);
+      // Each nightly turn is a small, self-contained experiment: its controller carries
+      // the durable state (results, experiments, hypotheses) in the next prompt. Reusing
+      // one transcript made every later model call re-read all earlier turns (27k→160k).
       let session = await this.sessionFor(s.key, freshCron);
       if (cronTask && !cronTask.runtimeSessionId) {
         if (freshCron) {
