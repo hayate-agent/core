@@ -1,5 +1,5 @@
 {
-  "contentDigest": "a5603324188d5d94b51ea31cc6c5e8b7fc0c81688f039f429366de5f61a283b8",
+  "contentDigest": "42e1d5058f08123290c1301af7b92598b1813a1ca149306b3c89f2ace9ad4a36",
   "files": [
     {
       "mode": "100644",
@@ -539,7 +539,7 @@
     {
       "mode": "100644",
       "path": "plugins.lock.json",
-      "sha256": "6a344e0fbb84bc1859a0366a6017448e7d42a4741673ce8935ca38e8d42c4d1e"
+      "sha256": "d5f8c0c5b23dae4a267dbc7e857b24d97c3e3073c49d2b6e2548a66a660fac67"
     },
     {
       "mode": "100644",
@@ -884,12 +884,12 @@
     {
       "mode": "100644",
       "path": "src/dispatcher-sequential.ts",
-      "sha256": "dd9e4d6dc041b9eacb4b9d87bf28c23060bc21d94107c5d9cecd043337845cda"
+      "sha256": "a8c5918677da31a528239cdf6e5867d33c7fa3cba2bdd71811e3af5f17f7de8b"
     },
     {
       "mode": "100644",
       "path": "src/dispatcher-step-prompt.ts",
-      "sha256": "c296493684430081d5d53288d305c2c1ed0cbaf03961476a815c5897f76f8ae6"
+      "sha256": "149b4c53f889f2e65a400704867be741780962756fede6279ec029056677b382"
     },
     {
       "mode": "100644",
@@ -2334,7 +2334,7 @@
     {
       "mode": "100644",
       "path": "test/dispatcher-sequential.test.ts",
-      "sha256": "61a772defabcc8240c21e220b9761cb6e2f6e6f06c1d9297284fefb473ab227e"
+      "sha256": "244789a6a597057a38f91e7911be57ea7baa0f8f38705895ed96a52e8d82ba03"
     },
     {
       "mode": "100644",
@@ -3265,6 +3265,11 @@
       "mode": "100644",
       "path": "test/nightly-strategy.test.ts",
       "sha256": "ab4b941c8a8271a2a6a171c311afc5405599e4a24f8f65527ff37d041114cb98"
+    },
+    {
+      "mode": "100644",
+      "path": "test/nightly-worker-result-contract.test.ts",
+      "sha256": "be2eabb4439ca435a24073df31926e13d8c402fa735c801eb4d5168b4326d0a8"
     },
     {
       "mode": "100644",
@@ -4693,7 +4698,7 @@
     }
   ],
   "historyPolicy": "fresh-root; no source commits, tags, refs or deleted blobs",
-  "pluginSHA": "3823ee81af902985191726124fc2b335be6c41c2",
+  "pluginSHA": "0f3a4adb866c06589fa922078efa91a5113ca985",
   "schema": 1,
-  "sourceSHA": "b02b3c2d68f789fd8b9f626e85c53ad600afc752"
+  "sourceSHA": "9a0c1b982b346256aee60778ccfe58884087cc24"
 }
