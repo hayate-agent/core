@@ -164,7 +164,7 @@ test("simple Main task needs no Dispatcher or plan and closed authority survives
   const reload = new ExecutionStore(file); await reload.load(); assert.equal(reload.tasks()[0].operatorStatus, "done");
 });
 
-test("planned Main work commits and displays research/skill todos from the same stored outcome", async t => {
+test("planned Main work commits research/skill todos from the same stored outcome without pushing the checklist into chat", async t => {
   const { store } = await storeFixture(t); let h!: Harness;
   const runtime = new FakeRuntime(() => {
     const input = h.sessions.get("mem:room1")!.current!;
@@ -183,9 +183,9 @@ test("planned Main work commits and displays research/skill todos from the same 
   const channel = new MemoryChannel(); h.addChannel(channel); h.onStateChange = async () => {}; t.after(() => h.stop(0));
   await h.submit({ ...msg("Implement a multi-step fix"), id: "operator" }); await h.drained();
   assert.equal(checked, true); assert.equal(store.tasks()[0].plan![0].status, "done");
-  const text = channel.sent.map(s => s.text).join("\n"); assert.match(text, /\[x\] todo-0: memory-research/);
-  assert.match(text, /skill-research/); assert.match(text, /internet-research/); assert.match(text, /skill-check/);
-  assert.equal(channel.sent.filter(s => s.text.includes("Generation 1, Revision")).length, 1);
+  const kinds = store.tasks()[0].plan!.map(todo => todo.kind);
+  for (const kind of ["memory-research", "skill-research", "internet-research", "skill-check"]) assert.ok(kinds.includes(kind as TaskTodo["kind"]), kind);
+  assert.equal(channel.sent.filter(s => s.text.includes("Generation 1, Revision")).length, 0, "checklist is pull-only (/orders show)");
 });
 
 test("validator adds a scoped todo only from the current settled outcome", async t => {
@@ -202,7 +202,7 @@ test("validator adds a scoped todo only from the current settled outcome", async
     anchor: { id: "original", task: "Implement a multi-step fix", receivedAt: 1, replyTo: ROOM } }] }]);
   await h.submit({ ...msg("Continue the authorized task"), id: "original", taskId: "original", taskRef: ref, replyTo: ROOM }); await h.drained();
   assert.equal(checked, true, "validator invoked"); assert.ok(store.coreTask(ref.id)!.plan!.some(todo => todo.id === "new-check"));
-  assert.match(channel.sent.map(item => item.text).join("\n"), /new-check/);
+  assert.doesNotMatch(channel.sent.map(item => item.text).join("\n"), /new-check/, "plan edits are not pushed into chat");
 });
 
 test("late child outcome for an operator-completed order is delivered as evidence without any Main or validator call", async t => {
@@ -369,6 +369,21 @@ test("receipt capacity archives exact originals and cannot block operator closur
   await reload.beginTurn("progress-1", "room");
   await reload.settleTurn("progress-1", "room", { consumed: [], outbox: [], taskOutcome: { ref, expectedRevision: 1, eventId: "progress-1", technical: { state: "open" } } });
   assert.equal(reload.coreTask(ref.id)!.operatorStatus, "done"); assert.equal(reload.coreTask(ref.id)!.revision, 513);
+});
+
+test("plan changes are never pushed into a chat conversation; only API progress receives the checklist", async t => {
+  const { store } = await storeFixture(t);
+  const ref = await store.enrollTask("room", "operator", "Original", "operator", "operator");
+  await store.beginTurn("turn", "room");
+  const chat = await store.settleTurn("turn", "room", { consumed: [], outbox: [], taskPresentation: { to: ROOM },
+    taskOutcome: { ref, expectedRevision: 1, eventId: "turn", technical: { state: "open" }, plan: plan() } });
+  assert.deepEqual(chat.outbox, [], "a Matrix/chat operator pulls the checklist via /orders show");
+  assert.equal(store.coreTask(ref.id)!.plan!.length, 8, "the plan itself is still committed");
+  const api = await store.enrollTask("api:run", "operator", "Original", "operator", "operator");
+  await store.beginTurn("turn2", "api:run");
+  const result = await store.settleTurn("turn2", "api:run", { consumed: [], outbox: [], taskPresentation: { to: { channel: "api", target: "run" } },
+    taskOutcome: { ref: api, expectedRevision: 1, eventId: "turn2", technical: { state: "open" }, plan: plan() } });
+  assert.equal(result.outbox.length, 1); assert.equal(result.outbox[0].presentation, "progress");
 });
 
 test("a queued operator decision wins over settlement and its checklist presentation", async t => {
