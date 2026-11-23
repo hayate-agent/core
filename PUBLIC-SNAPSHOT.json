@@ -1,5 +1,5 @@
 {
-  "contentDigest": "4ac004a8007baaa71a940a8c119d895436ef37726263149cd50f576295934a31",
+  "contentDigest": "d51d75efb3be3ce9dce5dde0f00a3b5df0fc7c64779e3d8eb8f326451bb85088",
   "files": [
     {
       "mode": "100644",
@@ -819,7 +819,7 @@
     {
       "mode": "100644",
       "path": "src/continuation-provenance.ts",
-      "sha256": "06719f49ec00db34691dcfa92b0e0d2743b33f0afb23bcdf61b1afb394727a1b"
+      "sha256": "2b547a8abedf105f0a7910aa9a8fbe848347ec836b970a4857bd1298ba4f54a3"
     },
     {
       "mode": "100644",
@@ -959,7 +959,7 @@
     {
       "mode": "100644",
       "path": "src/harness.ts",
-      "sha256": "0a7b66406e62dcf11e825ca56f8af7daca7fa0320abcd4c164c1db95f66d12ed"
+      "sha256": "3a3f5c1af4e7afe77abb326d910a13cb8d15f86e9462301fd9f5453214e840c5"
     },
     {
       "mode": "100644",
@@ -989,7 +989,7 @@
     {
       "mode": "100644",
       "path": "src/improvement.ts",
-      "sha256": "f9fff171d5b356fa5ab003600f63ecd058f1fe3197a1112d7d9410c46f84a631"
+      "sha256": "055d3beab626bbf4dea0b79bcf2b28080f39f9c7bdf418b91c37b69eca64bf72"
     },
     {
       "mode": "100644",
@@ -1339,7 +1339,7 @@
     {
       "mode": "100644",
       "path": "src/runtime/pi.ts",
-      "sha256": "034b8e6da2f38f67d542081735c8aec6995282a73ac9faadb04e7e6d5c7b0b46"
+      "sha256": "96a835d360e6265b158a7d7d2992126bf3931b18db9336dc555a426103b93b4e"
     },
     {
       "mode": "100644",
@@ -1624,7 +1624,7 @@
     {
       "mode": "100644",
       "path": "test/adaptive-skills.test.ts",
-      "sha256": "df82ea865e04404e8e995e974c31abace0fea53dd545965b7fa00ae82951f082"
+      "sha256": "745d9e3657273f9d039c6775aed6b86e07aa853221d431d270e04aba793f3446"
     },
     {
       "mode": "100644",
@@ -2734,7 +2734,7 @@
     {
       "mode": "100644",
       "path": "test/improvement.test.ts",
-      "sha256": "f331139f4d9a39cd84ee348bd0a9aab6544025ccd4df87763a83148e2396000a"
+      "sha256": "a88bd230ece25ffda83e844cf644b2a65cdda059f1cca63d3cdc08fcc9a8a3e4"
     },
     {
       "mode": "100644",
@@ -4695,5 +4695,5 @@
   "historyPolicy": "fresh-root; no source commits, tags, refs or deleted blobs",
   "pluginSHA": "3823ee81af902985191726124fc2b335be6c41c2",
   "schema": 1,
-  "sourceSHA": "99b77e1fbcef38a1dad513a1df30646a25d9f0d9"
+  "sourceSHA": "82df007494db4406e602b5495eec5ada4bc11ef8"
 }
