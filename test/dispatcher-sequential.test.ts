@@ -169,6 +169,30 @@ test("uncertain assessment asks Main once, retains effects, and stops identical 
   assert.equal(f.calls.review.length, reviews);
 });
 
+test("sequential worker prompts carry the result contract only for the trusted nightly parent", async t => {
+  for (const parent of ["improvement:nightly", "parent", "improvement:nightly-extra"]) {
+    const f = await setup(t, {
+      plan: steps(["Measure one local hypothesis", "simple"]),
+      worker: prompt => {
+        if (parent === "improvement:nightly") {
+          assert.match(prompt, /```improvement-experiment\n/);
+          assert.match(prompt, /reporting a measured experiment does not complete blocked delivery/);
+        } else {
+          assert.doesNotMatch(prompt, /NIGHTLY EXPERIMENT RESULT CONTRACT/);
+        }
+        return "No experiment performed in this fixture.\nSTEP-STATUS: complete";
+      },
+      tools: () => 1,
+      verdict: () => '{"state":"completed"}',
+    });
+    await f.dispatcher.start();
+    const task = await f.dispatcher.submit(parent, "contract-test", "Measure one local hypothesis");
+    await f.dispatcher.waitForExecution(task.id);
+    assert.equal(f.store.list().find(item => item.id === task.id)!.status, "completed");
+    assert.equal(f.calls.worker.length, 1);
+  }
+});
+
 test("fresh parent evidence reopens a stalled assessment without replaying the settled worker", async t => {
   let assessments = 0;
   const f = await setup(t, {
