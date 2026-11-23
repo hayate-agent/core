@@ -1058,10 +1058,10 @@ test("one bounded escalation only for effect-free inadequacy; otherwise visible 
   assert.match(env.calls.worker[1]!.prompt, /PREVIOUS ATTEMPT OF THIS STEP \(untrusted; reconcile its effects first\)/);
 
   const withTools = await setup(t, { worker: () => "partial\nSTEP-STATUS: inadequate", tools: () => 1 });
-  const limited = await withTools.run("analyse");
-  assert.equal(limited.status, "paused");
-  assert.deepEqual(withTools.calls.worker.map(c => c.model), ["p/cheap"]);
-  assert.ok(withTools.events.some(e => /keine sichere Eskalation \(1 Werkzeugaufrufe/.test(e.text)));
+  await withTools.run("analyse");
+  /* After tool work, "inadequate" is unfinished work assessed by the validator: no unsafe escalation, no immediate stop. */
+  assert.ok(withTools.calls.worker.length >= 2, "the step continues instead of stopping");
+  assert.ok(withTools.calls.worker.every(c => c.model === "p/cheap"), "never an escalation after possible effects");
 
   const blocked = await setup(t, { worker: () => "no credentials\nSTEP-STATUS: blocked: credentials missing", verdict: '{"state":"blocked"}' });
   assert.equal((await blocked.run("deploy")).status, "paused");
@@ -1953,19 +1953,52 @@ test("Akira d3ff43d9: inadequate step with tool effects holds for Main once, kee
   const env = await setup(t, {
     plan: steps(["write records of the new experiment", "simple"], ["run the new experiment", "medium"]),
     ready: '{"state":"continue","next":"2"}',
-    toolEvents: () => [{ name: "bash", detail: "read records", result: `records listed ${Date.now()}` }],
+    /* The same unchanged listing every turn: no new results, so no progress. */
+    toolEvents: () => [{ name: "bash", detail: "read records", result: "records listed: none new" }],
     worker: () => "No new experiment exists yet; nothing to record.\nSTEP-STATUS: inadequate",
     verdict: () => { reviews++; return '{"state":"continue","next":"write the record"}'; },
   });
-  const task = await env.run("nightly improvement");
+  let task = await env.run("nightly improvement");
+  /* The same retained step continues; identical results never count as progress, so the existing stall bound holds it. */
+  for (let i = 0; i < 12 && task.status === "ready"; i++) task = await env.retry(task.id);
   const saved = state(task.checkpoint);
-  assert.equal(task.status, "paused");
-  assert.equal(task.diagnosticCode, "assessment-stalled", "settled inadequacy reaches Main, not 12 runtime-failure retries");
-  assert.equal(env.calls.worker.length, 1, "no automatic worker restart loop");
+  assert.ok(["paused", "blocked"].includes(task.status), task.status);
+  assert.equal(task.diagnosticCode, "assessment-stalled", "no-progress continuation reaches Main, not 12 runtime-failure retries");
+  assert.ok(env.calls.worker.length > 1 && env.calls.worker.length <= 1 + 3, `bounded continuation, got ${env.calls.worker.length}`);
   assert.equal(task.workerRetry, undefined);
   assert.equal(saved.stepIds, undefined, "no validator reordering of plan steps");
   assert.equal(env.calls.review.filter(p => p.startsWith("Select at most ONE")).length, 0);
   const texts = env.events.map(e => String(e.text));
   assert.ok(texts.some(t => /Plan \(0\/2 erledigt\):\n▶ 1\. write records of the new experiment\n○ 2\. run the new experiment/.test(t)), "plan visible at start");
-  assert.ok(texts.some(t => /angehalten[\s\S]*⏸ 1\. write records/.test(t)), "held step visible in plan");
+  assert.equal(texts.filter(t => /Validator verlangt Fortsetzung desselben Schritts/.test(t)).length, 3, "exactly the bounded no-progress rounds");
+});
+
+test("cross-agent: a long step whose turns keep producing new results continues to completion instead of stopping as inadequate/blocked", async t => {
+  let turns = 0;
+  const env = await setup(t, {
+    plan: steps(["evidence ledger for 63 tickets", "simple"], ["apply dispositions", "simple"]),
+    toolEvents: () => [{ name: "bash", detail: "jira", result: `batch ${turns + 1} rows` }],
+    worker: prompt => {
+      if (/apply dispositions/.test(prompt) && !/CONTINUE STEP 1/.test(prompt) && /STEP 2\/2/.test(prompt)) return "applied\nSTEP-STATUS: complete";
+      turns++;
+      if (turns === 1) return "batch 1 done\nSTEP-STATUS: inadequate";
+      if (turns === 2) return "batch 2 done; my remaining work, not an external blocker\nSTEP-STATUS: blocked: remaining review of 40 tickets";
+      if (turns === 3) return "batch 3 done\nSTEP-STATUS: progress: 20 tickets left";
+      return "ledger complete\nSTEP-STATUS: complete";
+    },
+    verdict: text => /ledger complete|applied/.test(JSON.parse(text.slice(text.lastIndexOf("DATA: ") + 6)).reply) ? '{"state":"completed"}' : '{"state":"continue","next":"continue the ledger with the next batch"}',
+  });
+  let task = await env.run("Analyse the 63 tickets and dispose them.");
+  for (let i = 0; i < 12 && task.status === "ready"; i++) task = await env.retry(task.id);
+  assert.equal(task.status, "completed", "the task finishes; it never pauses as assessment-stalled while results keep coming");
+  assert.equal(turns, 4);
+  assert.ok(!env.events.some(e => /Assessment stopped without new evidence/.test(String(e.text))));
+  assert.match(env.calls.worker[0]!.prompt, /STEP-STATUS: progress: <remaining work>/, "workers can report unfinished progress");
+});
+
+test("STEP-STATUS progress is unfinished work, never completion or a blocker", () => {
+  assert.equal(stepStatus("x\nSTEP-STATUS: progress: 20 left"), undefined);
+  assert.equal(stepStatus("x\nSTEP-STATUS: progress"), undefined);
+  assert.equal(stepStatus("x\nSTEP-STATUS: inadequate: needs more"), "inadequate");
+  assert.equal(stepStatus("x\nSTEP-STATUS: complete"), "complete");
 });
