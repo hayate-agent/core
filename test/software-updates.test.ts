@@ -1,13 +1,13 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { NativeSoftwareUpdates, softwareUpdatePolicy, updateCommand, type UpdateCommand } from "../src/software-updates.js";
 import { defaultConfig } from "../src/config.js";
 
 const revisions = { core: "a".repeat(40), plugins: "b".repeat(40), webui: "c".repeat(40) };
-async function fixture(options: { vendored?: boolean; tags?: string; history?: string; metadataFailure?: boolean; webuiRestart?: string[]; webuiEnabled?: boolean } = {}) {
+async function fixture(options: { vendored?: boolean; tags?: string; history?: string; metadataFailure?: boolean; webuiRestart?: string[]; webuiEnabled?: boolean; noAgentLink?: boolean; linkBuildFails?: boolean; noLock?: boolean } = {}) {
   const home = await mkdtemp(path.join(os.tmpdir(), "hy-update-"));
   const events: string[] = [], commands: Array<{ command: string; args: string[]; cwd: string; env?: NodeJS.ProcessEnv }> = [];
   let fail = "";
@@ -27,6 +27,11 @@ async function fixture(options: { vendored?: boolean; tags?: string; history?: s
     }
     if (args[0] === "checkout") {
       if (component === "core" || component === "webui") await writeFile(path.join(cwd, "package.json"), '{"scripts":{"build":"test"}}');
+      if (component === "plugins" && !options.noAgentLink) {
+        await mkdir(path.join(cwd, "agent-link"), { recursive: true });
+        await writeFile(path.join(cwd, "agent-link/package.json"), '{"scripts":{"build":"x"}}');
+        if (!options.noLock) await writeFile(path.join(cwd, "agent-link/package-lock.json"), "{}");
+      }
       if (component === "core" && options.vendored) {
         await mkdir(path.join(cwd, "vendor/plugins"), { recursive: true });
         await mkdir(path.join(cwd, "vendor/plugin-assets", "f".repeat(40)), { recursive: true });
@@ -36,6 +41,9 @@ async function fixture(options: { vendored?: boolean; tags?: string; history?: s
       return "";
     }
     if (args[0] === "rev-parse") return heads[component] + "\n";
+    if (command === "npm" && args[0] === "run" && component === "agent-link" && !options.linkBuildFails) {
+      await mkdir(path.join(cwd, "vendor"), { recursive: true }); await writeFile(path.join(cwd, "vendor/websocket.mjs"), "export {}");
+    }
     if (command === "npm" && args[0] === "run" && component === "core") {
       await mkdir(path.join(cwd, "dist")); await writeFile(path.join(cwd, "dist/cli.js"), "// validated fixture");
       await writeFile(path.join(cwd, "dist/launcher.js"), "export function runForeground() {};");
@@ -116,7 +124,11 @@ test("install is durably scheduled outside command turn; three sources built, no
     const persisted = JSON.parse(await readFile(path.join(f.home, "software-updates/status.json"), "utf8")); assert.equal(persisted.requestId, queued.requestId);
     assert.equal((await f.settled()).phase, "prepared");
     assert.equal(f.commands.filter(c => c.args[0] === "checkout").length, 3);
-    assert.equal(f.commands.filter(c => c.command === "npm" && c.args[0] === "run").length, 2);
+    assert.equal(f.commands.filter(c => c.command === "npm" && c.args[0] === "run" && !c.cwd.endsWith("/agent-link")).length, 2);
+    const link = f.commands.filter(c => c.cwd.endsWith("/plugins/agent-link"));
+    assert.deepEqual(link.map(c => c.args.slice(0, 2).join(" ")), ["ci --include=dev", "run build"], "agent-link WebSocket runtime is built by the updater");
+    assert.ok(link.every(c => c.command === "npm"));
+    await readFile(path.join(f.home, "software-updates/releases", (await readdir(path.join(f.home, "software-updates/releases")))[0]!, "plugins/agent-link/vendor/websocket.mjs"), "utf8");
     assert.ok(!f.commands.some(c => c.command === "npm" && c.args[0] === "test"), "development suites must not block installation or restart");
     assert.match(f.events.join("\n"), /available/); assert.match(f.events.join("\n"), /prepared/);
     await assert.rejects(readFile(path.join(f.home, "software-updates/selected.json")), /ENOENT/);
@@ -287,4 +299,32 @@ test("WebUI activation is explicit and fail-closed: enabled module activates, di
     await mkdir(path.join(home, "settings.local.yaml"));
     assert.equal(await webuiActivatedFromHome(home), false, "unreadable overlay is not activation and does not throw");
   } finally { await rm(home, { recursive: true, force: true }); }
+});
+
+test("a missing agent-link WebSocket runtime fails preparation instead of installing a broken plugin tree", async () => {
+  const f = await fixture({ linkBuildFails: true });
+  try {
+    await f.owner.request("update");
+    const value = await f.settled();
+    assert.equal(value.phase, "failed");
+    await assert.rejects(readFile(path.join(f.home, "software-updates/selected.json")), /ENOENT/);
+  } finally { await f.cleanup(); }
+});
+
+test("plugin trees without agent-link are prepared without an agent-link build", async () => {
+  const f = await fixture({ noAgentLink: true });
+  try {
+    await f.owner.request("update");
+    assert.equal((await f.settled()).phase, "prepared");
+    assert.ok(!f.commands.some(c => c.cwd.endsWith("/plugins/agent-link")));
+  } finally { await f.cleanup(); }
+});
+
+test("agent-link without a lockfile is never installed unpinned", async () => {
+  const f = await fixture({ noLock: true });
+  try {
+    await f.owner.request("update");
+    assert.equal((await f.settled()).phase, "prepared");
+    assert.ok(!f.commands.some(c => c.cwd.endsWith("/plugins/agent-link")), "no unpinned npm install");
+  } finally { await f.cleanup(); }
 });
