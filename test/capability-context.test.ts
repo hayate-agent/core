@@ -82,3 +82,21 @@ test("selected review instructions and fresh capability facts reach working turn
     assert.doesNotMatch(opts[1].instructions!,/ALWAYS vertical slices|ALWAYS KISS/);
   }finally{await h.stop(0);}
 });
+
+test("long work is small-step behavior for Main, cron and workers: binding plan, one step, automation, filtered output", () => {
+  for (const sessionKey of ["mem:room1", "cron:daily-report", "improvement:nightly"]) {
+    const text = capabilityContext({ ...facts, sessionKey });
+    assert.match(text, /binding step plan \(plugin_tasks propose-plan/);
+    assert.match(text, /plugin_cron_checkpoint pending items/);
+    assert.match(text, /one bounded step at a time/);
+    assert.match(text, /Give workers exactly one small step/);
+    assert.match(text, /script or automation/);
+    assert.match(text, /filter at the source/);
+  }
+  for (const sessionKey of ["dispatch:child", "subagent:child"]) {
+    const text = capabilityContext({ ...facts, sessionKey });
+    assert.match(text, /only this one step/);
+    assert.match(text, /concrete split proposal/);
+    assert.doesNotMatch(text, /propose-plan/);
+  }
+});
