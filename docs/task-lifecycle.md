@@ -58,9 +58,10 @@ step. Further skill changes become scoped todos, not an endless optimization loo
 Plan updates are proposals, not direct ledger writes. They are independently
 checked against the request, clarifications and available tool/worker outcomes.
 Successful turn settlement atomically commits the plan, technical outcome and
-ordinary durable outbox entries. Main displays the committed checklist in its
-normal thread. Failed/cancelled turns cannot adopt pending plan proposals.
-Unchanged lists are not emitted again. A new outcome cannot silently delete or
+ordinary durable outbox entries. The committed checklist is pull-only in chat:
+operators inspect it with `/orders show <id>`; plan edits are never pushed into
+the conversation. API runs still receive it as nonterminal progress.
+Failed/cancelled turns cannot adopt pending plan proposals. A new outcome cannot silently delete or
 reopen an already settled todo. The original operator request still bounds scope.
 
 The Core completion context for these orders includes the scoped original,

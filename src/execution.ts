@@ -576,11 +576,13 @@ export class ExecutionStore {
         const archived = order && await this.archivedTaskReceipt(order.id, settlement.taskOutcome.eventId);
         if (archived && archived.digest !== taskDigest(settlement.taskOutcome)) throw Error("Archived outcome identity conflict");
         if (!archived) commitTaskOutcome(draft.taskBook, settlement.taskOutcome, this.now());
-        if (order && order.revision !== priorRevision && priorPlan !== JSON.stringify(order.plan) && settlement.taskPresentation) {
+        // The checklist is pull-only for chat operators (/orders show): re-posting the
+        // whole order on every plan edit floods the conversation. API callers still
+        // receive it as nonterminal progress; their run remains owned by its result.
+        if (order && order.revision !== priorRevision && priorPlan !== JSON.stringify(order.plan) && settlement.taskPresentation?.to.channel === "api") {
           if (!validAddress(settlement.taskPresentation.to)) throw Error("Invalid task presentation target");
-          // A plan view is status, not the run's answer: an API run stays owned by its result.
           committed.outbox.push({ id: `${id}:task-plan`, sessionKey, to: structuredClone(settlement.taskPresentation.to), text: renderTask(order),
-            ...(settlement.taskPresentation.to.channel === "api" ? { presentation: "progress" as const } : {}) });
+            presentation: "progress" as const });
         }
         validateTaskBook(draft.taskBook);
       }
