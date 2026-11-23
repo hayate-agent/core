@@ -205,6 +205,20 @@ function withDetail<T extends object>(event: T, value: unknown): T {
 }
 
 /** PI session event → harness turn event (undefined: not relevant). */
+/** Streamed text of one run is a concatenation of deltas. A new text block (after a tool call or in the next
+ * assistant message) must start on its own paragraph, otherwise sentences run together ("…mit.Daniel…"). */
+export const TEXT_BLOCK_SEPARATOR = "\n\n";
+export function textBlockTracker(): (event: AgentSessionEvent) => TurnEvent | undefined {
+  let any = false;
+  return (event) => {
+    if (event.type !== "message_update") return undefined;
+    const kind = event.assistantMessageEvent.type;
+    if (kind === "text_delta" && event.assistantMessageEvent.delta) { any = true; return undefined; }
+    if (kind === "text_start" && any) return { type: "text", delta: TEXT_BLOCK_SEPARATOR };
+    return undefined;
+  };
+}
+
 export function toTurnEvent(event: AgentSessionEvent): TurnEvent | undefined {
   if (event.type === "compaction_start") return { type: "compaction", state: "started", reason: event.reason };
   if (event.type === "compaction_end") return { type: "compaction", state: event.result ? "completed" : event.aborted ? "cancelled" : "failed", reason: event.reason };
@@ -341,6 +355,7 @@ export class PiSession implements RuntimeSession {
       }
       prevModel = this.session.model;
       prevThinking = this.session.thinkingLevel;
+      const separator = textBlockTracker();
       unsubscribe = this.session.subscribe((event) => {
         // Attribute results to this invocation, never to a historical transcript lookup.
         if (event.type === "message_end" && event.message.role === "assistant") last = event.message;
@@ -355,6 +370,8 @@ export class PiSession implements RuntimeSession {
           }
         }
         if (!turn.aborted && onEvent) {
+          const gap = separator(event);
+          if (gap) onEvent(gap);
           const mapped = toTurnEvent(event);
           if (mapped) {
             if (mapped.type === "tool" && options.presentationLocale) mapped.locale = options.presentationLocale;
