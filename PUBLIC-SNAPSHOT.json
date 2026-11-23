@@ -1,5 +1,5 @@
 {
-  "contentDigest": "5ed73a3490f2d0d8c562a0a6191051723d17f4d51346f3846f834b1822b6bfb3",
+  "contentDigest": "d5cb1ede7cd2f13f003a96a77b6634a78b741cf783e9f2a9166e7881c33ff9dc",
   "files": [
     {
       "mode": "100644",
@@ -1429,7 +1429,7 @@
     {
       "mode": "100644",
       "path": "src/software-updates.ts",
-      "sha256": "be979cbb95d87845af54eb35a3b90597bbe8cd021c81488a5cf4d485ae2aaf75"
+      "sha256": "3bc0a15794fcf3788bd1858266658b1f22e8e2020f1c81ff99f99256807564fb"
     },
     {
       "mode": "100644",
@@ -4014,7 +4014,7 @@
     {
       "mode": "100644",
       "path": "test/software-updates.test.ts",
-      "sha256": "c108c1e15ca9fb23926dd3783bd3b1705446b0580629835a221787da858dcfa5"
+      "sha256": "37b6abdeb5c2764aea267ab91d77ef1be4c3862d3fda8a4f25042e54ffa7a2ea"
     },
     {
       "mode": "100644",
@@ -4705,5 +4705,5 @@
   "historyPolicy": "fresh-root; no source commits, tags, refs or deleted blobs",
   "pluginSHA": "0f3a4adb866c06589fa922078efa91a5113ca985",
   "schema": 1,
-  "sourceSHA": "8ebfba5fd43ca0e9429c227d37b6fa4935b26a5e"
+  "sourceSHA": "c84168ed76ab755e606619508fac26b58a0ebf5e"
 }

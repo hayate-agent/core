@@ -330,6 +330,17 @@ export class NativeSoftwareUpdates {
       } catch (error) { if (variant || (error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
       const buildEnv = { HAYATE_PLUGIN_SOURCE: bundledPlugins,
         PATH: `${path.dirname(process.execPath)}${path.delimiter}${process.env.PATH ?? ""}` };
+      // The agent-link plugin ships its WebSocket runtime as a build artifact
+      // (vendor/websocket.mjs is git-ignored). Without it the relay client and
+      // dashboard live socket cannot load from the installed plugins tree, so
+      // agents would need a hand-built overlay. Build it here, like Core/WebUI.
+      component = "plugins"; stage = "plugin runtime preparation";
+      const linkDirectory = path.join(root, "plugins", "agent-link");
+      if (existsSync(path.join(linkDirectory, "package.json")) && existsSync(path.join(linkDirectory, "package-lock.json"))) {
+        await this.command("npm", ["ci", "--include=dev", "--ignore-scripts", "--no-audit", "--no-fund"], linkDirectory, buildEnv);
+        await this.command("npm", ["run", "build"], linkDirectory, buildEnv);
+        if (!existsSync(path.join(linkDirectory, "vendor/websocket.mjs"))) throw Error("agent-link WebSocket runtime was not built");
+      }
       for (component of ["core", "webui"] as const) {
         stage = "dependency installation";
         const cwd = path.join(root, component);
