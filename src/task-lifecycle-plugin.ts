@@ -51,7 +51,7 @@ export function taskLifecyclePlugin(harness: Harness, authorize: (key: string, p
         if (args.action === "propose-plan") {
           if (input.taskRef?.id !== task.id || !Array.isArray(args.plan)) throw Error("Plan must belong to the current open order");
           harness.proposeTaskPlan(ctx.sessionKey, args.plan as TaskTodo[]);
-          return "Planvorschlag vorgemerkt; wird erst mit dem Turn-Ergebnis dauerhaft übernommen und im Main-Thread angezeigt.";
+          return "Planvorschlag vorgemerkt; wird erst mit dem Turn-Ergebnis dauerhaft übernommen (nicht in den Chat gepostet; einsehbar per /orders show).";
         }
         if (!["close", "reopen", "clarify"].includes(String(args.action))) throw Error("Invalid task lifecycle action");
         return harness.operatorTaskDecision(task.id, args.action as "close" | "reopen" | "clarify", input.id ?? `operator:${randomUUID()}`, input.text, ctx.sessionKey, input);
