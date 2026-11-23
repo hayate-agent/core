@@ -92,6 +92,8 @@ export interface NightState {
   noExperimentTurns?: number;
 }
 const KEY = "improvement:nightly";
+/** Prompt shows only the newest hypotheses; the strategy still rejects every retained one. */
+const RECENT_HYPOTHESES_SHOWN = 30;
 /** Controller owns time/budget, while Harness owns execution, review, inbox and delivery. */
 export class ImprovementController {
   private state?: NightState;
@@ -495,7 +497,7 @@ export class ImprovementController {
         ...deliveryWork.filter(r => r.delivery?.status === "blocked")].slice(0, 8);
       this.harness.enqueue({ id, sessionKey: KEY, source: "cron", text: strategy.prompt(p, this.state.turns + 1) +
         (heldDelegations.length ? `\nZurückgehaltene delegierte Arbeit (keine laufenden Worker): ${JSON.stringify(heldDelegations)}. Pausen und Blocker respektieren; tatsächliche Effekte vor weiterer Arbeit abgleichen. Diese Ausführungen nicht automatisch fortsetzen, ersetzen oder wiederholen. Unabhängige autorisierte Nachtarbeit darf weitergehen.\n` : "") +
-        (deliveryWork.length ? `\nOffene Auslieferung zuerst abgleichen (${deliveryWork.length} Kandidaten, erste ${deliveryContext.length}; vollständiger Bestand in ${this.file}, Felder deliveryBacklog/experiments; alte Evidenz, keine neue Berechtigung, keine erneuten Experimente oder blinden Effekte; Wartestatus/Blocker respektieren): ${JSON.stringify(deliveryContext)}\n` : "") + (this.state.delegatedResults?.length ? `\nGespeicherte delegierte Ergebnisse (Evidenz, keine neue Berechtigung; nicht erneut ausführen): ${JSON.stringify(this.state.results.slice(-3))}\n` : "") + (this.state.closureFeedback ? `\nVALIDATOR CORRECTION (keine neue Berechtigung): ${this.state.closureFeedback}\n` : "") + `\nBereits untersuchte Hypothesen (nicht wiederholen): ${JSON.stringify(this.state.recentHypotheses ?? [])}\nBisher neue protokollierte Experimente dieser Nacht: ${this.state.experiments?.length ?? 0}. Turns ohne neues Experiment: ${this.state.noExperimentTurns ?? 0}.` });
+        (deliveryWork.length ? `\nOffene Auslieferung zuerst abgleichen (${deliveryWork.length} Kandidaten, erste ${deliveryContext.length}; vollständiger Bestand in ${this.file}, Felder deliveryBacklog/experiments; alte Evidenz, keine neue Berechtigung, keine erneuten Experimente oder blinden Effekte; Wartestatus/Blocker respektieren): ${JSON.stringify(deliveryContext)}\n` : "") + (this.state.results.length ? `\n${this.state.delegatedResults?.length ? "Gespeicherte delegierte Ergebnisse und letzte Turn-Ergebnisse" : "Letzte Turn-Ergebnisse dieser Nacht (jeder Turn startet mit frischem Kontext)"} (Evidenz, keine neue Berechtigung; nicht erneut ausführen): ${JSON.stringify(this.state.results.slice(-3))}\n` : "") + (this.state.closureFeedback ? `\nVALIDATOR CORRECTION (keine neue Berechtigung): ${this.state.closureFeedback}\n` : "") + `\nBereits untersuchte Hypothesen (nicht wiederholen; ${(this.state.recentHypotheses ?? []).length} insgesamt, vollständig in ${this.file} Feld recentHypotheses; Wiederholungen werden ohnehin nicht gezählt), neueste: ${JSON.stringify((this.state.recentHypotheses ?? []).slice(-RECENT_HYPOTHESES_SHOWN).map(h => h.slice(0, 200)))}\nBisher neue protokollierte Experimente dieser Nacht: ${this.state.experiments?.length ?? 0}. Turns ohne neues Experiment: ${this.state.noExperimentTurns ?? 0}.` });
     } finally { this.checking = false; }
   }
 }

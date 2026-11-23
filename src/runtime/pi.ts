@@ -70,19 +70,26 @@ export function installAdaptiveSkillHooks(pi: ExtensionAPI, adaptive: AdaptiveSk
   });
   // PI may continue the same working run after agent_end (retry, compaction,
   // or before-settle continuation). Only settlement ends the working turn.
-  pi.on("agent_settled", () => { adaptive.end(sessionKey); });
+  // Skill references found for a discovery call, attached to that call's own result.
+  const pending = new Map<string, string>();
+  pi.on("agent_settled", () => { pending.clear(); adaptive.end(sessionKey); });
   pi.on("tool_call", async event => {
     if (event.toolName === "plugin_skill_learn") return;
-    // SDK tool_call has no context-injection result. A bounded block carries reference
-    // data before execution; a retry still traverses ordinary approvals and guards.
+    // The reference is appended to the discovery result instead of blocking the call:
+    // a block forced an extra model round trip plus a retry of the same search.
     // Tool names/arguments (commands, paths) are model-generated, not operator intent: only an
     // explicit skill discovery query may trigger a reference.
     const query = event.toolName === "plugin_skill_search" && typeof (event.input as any)?.query === "string" ? (event.input as any).query : "";
     if (!query) return;
     const reference = await adaptive.match(sessionKey, query, report);
-    if (reference) return { block: true, reason: `Relevant skill reference loaded before action. Consider it then retry if still authorized.${reference}` };
+    if (reference) pending.set(event.toolCallId, reference);
   });
   pi.on("tool_result", event => {
+    const reference = pending.get(event.toolCallId);
+    if (reference !== undefined) {
+      pending.delete(event.toolCallId);
+      if (event.toolName === "plugin_skill_search") return { content: [...event.content, { type: "text" as const, text: `\nRelevant skill reference:${reference}` }] };
+    }
     const receipt = adaptive.observe(sessionKey, event.toolCallId, event.toolName, event.isError);
     if (receipt) {
       if (isBoundedReadResult(event)) {
