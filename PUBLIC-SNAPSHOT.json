@@ -1,5 +1,5 @@
 {
-  "contentDigest": "d51d75efb3be3ce9dce5dde0f00a3b5df0fc7c64779e3d8eb8f326451bb85088",
+  "contentDigest": "a5603324188d5d94b51ea31cc6c5e8b7fc0c81688f039f429366de5f61a283b8",
   "files": [
     {
       "mode": "100644",
@@ -694,7 +694,7 @@
     {
       "mode": "100644",
       "path": "src/capability-context.ts",
-      "sha256": "964f69d1c0f84f765dc2d6b11e434b5b0712178333f09f0cc49c0a31169d96ea"
+      "sha256": "1c7be1c72246416c3eac8bb82db8ea6ab6406fdbd45fb729aaf1b7456d122c88"
     },
     {
       "mode": "100644",
@@ -1794,7 +1794,7 @@
     {
       "mode": "100644",
       "path": "test/capability-context.test.ts",
-      "sha256": "2e6cc1bfb6ab8e673eb6b242e254b77e95ee5249bb1f6475836b435350f5ca7a"
+      "sha256": "a8848f4c0fe37445354ff327a49f8b07ac86b47f8a233d0d5b2b839236896988"
     },
     {
       "mode": "100644",
@@ -4695,5 +4695,5 @@
   "historyPolicy": "fresh-root; no source commits, tags, refs or deleted blobs",
   "pluginSHA": "3823ee81af902985191726124fc2b335be6c41c2",
   "schema": 1,
-  "sourceSHA": "82df007494db4406e602b5495eec5ada4bc11ef8"
+  "sourceSHA": "b02b3c2d68f789fd8b9f626e85c53ad600afc752"
 }
