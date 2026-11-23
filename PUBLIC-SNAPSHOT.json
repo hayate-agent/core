@@ -1,5 +1,5 @@
 {
-  "contentDigest": "42e1d5058f08123290c1301af7b92598b1813a1ca149306b3c89f2ace9ad4a36",
+  "contentDigest": "7657ba73f444206ac7ddf4ea2db97084f9c405cf69ad35812b1f581cc5ece1ff",
   "files": [
     {
       "mode": "100644",
@@ -1339,7 +1339,7 @@
     {
       "mode": "100644",
       "path": "src/runtime/pi.ts",
-      "sha256": "96a835d360e6265b158a7d7d2992126bf3931b18db9336dc555a426103b93b4e"
+      "sha256": "d66d842b897b7e2fd0deccc46571f549ee49634827936a148dcb5807041989dd"
     },
     {
       "mode": "100644",
@@ -4183,6 +4183,11 @@
     },
     {
       "mode": "100644",
+      "path": "test/text-block-separator.test.ts",
+      "sha256": "12a91eacef7d3162459dfc6142f9881b83a983a528e613b1de678986cb54b5e4"
+    },
+    {
+      "mode": "100644",
       "path": "test/tool-args.test.ts",
       "sha256": "3aee6984e796512549d5d3d0f002a95f743801e37c399a0f4bd549fdb659b6e6"
     },
@@ -4700,5 +4705,5 @@
   "historyPolicy": "fresh-root; no source commits, tags, refs or deleted blobs",
   "pluginSHA": "0f3a4adb866c06589fa922078efa91a5113ca985",
   "schema": 1,
-  "sourceSHA": "9a0c1b982b346256aee60778ccfe58884087cc24"
+  "sourceSHA": "88a4f60fe61b413d2cd486e3e9210b3767f67717"
 }
