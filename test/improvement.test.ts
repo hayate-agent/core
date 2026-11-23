@@ -100,6 +100,10 @@ test("new measured hypothesis counts once and is excluded on the following night
   assert.equal((await read()).experiments.length, 0); assert.equal((await read()).done, false);
   assert.equal(closureChecks, 1, "a duplicate historical receipt cannot request closure");
   assert.match(runtime.sessions.get("improvement:nightly")!.prompts.at(-1)!, /new bounded test/);
+  /* Instructions never repeat the whole nightly prompt as originalTask. */
+  const instructions = runtime.sessions.get("improvement:nightly")!.options.at(-1)!.instructions!;
+  assert.doesNotMatch(instructions, /Bereits untersuchte Hypothesen/);
+  assert.match(instructions, /original task is exactly the current message/);
   runtime.answer = () => receipt + '\n```improvement-experiment\n' + JSON.stringify({ execution: "performed", hypothesis: "second new hypothesis", baseline: "measured baseline", candidate: "tested candidate", evidence: "synthetic test receipt", outcome: "inconclusive" }) + '\n```';
   await controller.tick(); await harness.drained();
   assert.equal((await read()).experiments.length, 1);
@@ -131,7 +135,10 @@ test("persistent improvement budget, early completion and unsolicited morning re
   controller = new ImprovementController(home, harness, "UTC", () => now);
   await controller.tick(); await harness.drained();
   await controller.tick(); await harness.drained();
-  assert.equal(harness.sessions.get("improvement:nightly")?.session?.status().messages, 4);
+  /* Each nightly turn starts a fresh small context; the controller carries the state in the prompt. */
+  assert.equal(harness.sessions.get("improvement:nightly")?.session?.status().messages, 2);
+  const opened = (harness as any).runtime.opened.filter((o: any) => o.key === "improvement:nightly");
+  assert.deepEqual(opened.map((o: any) => o.fresh), [true, true]);
   now = Date.parse("2026-10-25T05:00:00Z");
   await controller.tick(); await harness.drained();
   assert.equal(channel.texts().filter((x) => x.startsWith("Nachtbericht")).length, 1);
@@ -148,5 +155,29 @@ test("persistent improvement budget, early completion and unsolicited morning re
   const state = JSON.parse(await (await import("node:fs/promises")).readFile(path.join(home, "improvement", "state.json"), "utf8"));
   assert.equal(state.night, "2026-10-26");
   assert.equal(state.turns, 1);
+  await harness.stop(1000);
+});
+
+test("nightly prompt shows only the newest hypotheses, bounded, while all stay excluded", async t => {
+  const home = await mkdtemp(path.join(os.tmpdir(), "improvement-hyp-"));
+  t.after(() => rm(home, { recursive: true, force: true }));
+  await writeFile(path.join(home, "improvement.yaml"), "enabled: true\nmaxTurns: 5\ntimezone: UTC\n");
+  const now = Date.parse("2026-10-24T23:00:00Z");
+  const { mkdir } = await import("node:fs/promises");
+  await mkdir(path.join(home, "improvement"), { recursive: true });
+  const many = Array.from({ length: 200 }, (_, i) => `hypothesis-${i} ` + "x".repeat(400));
+  await writeFile(path.join(home, "improvement", "state.json"), JSON.stringify({ version: 1, night: "2026-10-24", turns: 0, results: [], recentHypotheses: many }));
+  const runtime = new FakeRuntime(() => "no experiment");
+  const harness = new Harness({ runtime, tickMs: 60000 });
+  const controller = new ImprovementController(home, harness, "UTC", () => now);
+  const opts = (harness as any).opts;
+  opts.beforeTurn = (input: any) => controller.before(input);
+  opts.afterTurn = async (input: any, reply: string) => { await controller.completed(input, reply); return reply; };
+  await controller.tick(); await harness.drained();
+  const prompt = runtime.sessions.get("improvement:nightly")!.prompts[0]!;
+  assert.match(prompt, /hypothesis-199 /);
+  assert.doesNotMatch(prompt, /hypothesis-169 /);
+  assert.match(prompt, /200 insgesamt/);
+  assert(prompt.length < 15000, `nightly prompt stays small: ${prompt.length}`);
   await harness.stop(1000);
 });

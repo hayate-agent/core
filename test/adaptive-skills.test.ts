@@ -131,20 +131,21 @@ test("tool names and arguments never trigger skill references; explicit discover
   // Native memory file check must not be treated as operator intent either.
   assert.equal(await pre({ toolName: "read", input: { path: "/Users/karsten/.hayate-agent/memory/index.json" } }), undefined);
   // Legitimate explicit discovery keeps working.
-  const block = await pre({ toolName: "plugin_skill_search", input: { query: "extract PDF tables" } });
-  assert.equal(block.block, true);
-  assert.match(block.reason, /column boundaries/);
+  assert.equal(await pre({ toolName: "plugin_skill_search", toolCallId: "d1", input: { query: "extract PDF tables" } }), undefined);
+  const result = hooks.get("tool_result")!({ toolName: "plugin_skill_search", toolCallId: "d1", isError: false, content: [{ type: "text", text: "found" }] });
+  assert.match(result.content[1].text, /column boundaries/);
 });
 
-test("supported PI hook and plugin lifecycle: preaction block/retry, successful receipt, save/load, cleanup", async t => {
+test("supported PI hook and plugin lifecycle: discovery result carries reference, successful receipt, save/load, cleanup", async t => {
   const { service, input } = await fixture(t);
   const hooks = new Map<string, Function>();
   installAdaptiveSkillHooks({ on: (event: string, handler: Function) => hooks.set(event, handler) } as any, service, "user:a");
-  const call = { toolName: "plugin_skill_search", input: { query: "extract PDF tables" } };
-  const block = await hooks.get("tool_call")!(call);
-  assert.equal(block.block, true);
-  assert.match(block.reason, /column boundaries/);
-  assert.equal(await hooks.get("tool_call")!(call), undefined); // native execution may now proceed through guards
+  const call = { toolName: "plugin_skill_search", toolCallId: "s1", input: { query: "extract PDF tables" } };
+  /* Discovery is never blocked (no extra model round trip); the reference rides on its own result. */
+  assert.equal(await hooks.get("tool_call")!(call), undefined);
+  const found = hooks.get("tool_result")!({ ...call, isError: false, content: [{ type: "text", text: "found" }] });
+  assert.match(found.content[1].text, /column boundaries/);
+  assert.equal(hooks.get("tool_result")!({ ...call, isError: false, content: [{ type: "text", text: "again" }] }), undefined);
   // Regression: tool names and arguments (git/file paths) are not operator intent.
   assert.equal(await hooks.get("tool_call")!({ toolName: "bash", input: { command: "extract PDF tables" } }), undefined);
   assert.equal(await hooks.get("tool_call")!({ toolName: "bash", input: { command: "git log --oneline -- src/adaptive-skills.ts" } }), undefined);
@@ -244,8 +245,9 @@ test("real PI SDK resource loader and extension runner carry bounded learning co
   assert.equal(await runner.emitToolCall({ type: "tool_call", toolName: "bash", toolCallId: "unrelated", input: { command: "echo unrelated" } }), undefined);
   assert.equal(warnings.length, 0);
   const call: any = { type: "tool_call", toolName: "plugin_skill_search", toolCallId: "sdk-call", input: { query: "extract PDF tables" } };
-  assert.equal((await runner.emitToolCall(call))?.block, true);
   assert.equal(await runner.emitToolCall(call), undefined);
+  const found: any = await runner.emitToolResult({ ...call, type: "tool_result", content: [{ type: "text", text: "found" }], isError: false });
+  assert.match(found.content[1].text, /column boundaries/);
   // Receipts come only from successful native work, so the verified result is a bash call.
   const result = await runner.emitToolResult({ ...call, toolName: "bash", type: "tool_result", content: [{ type: "text", text: "verified" }], isError: false });
   const receipt = (result!.content![1] as any).text.match(/[a-f0-9]{24}/)[0];
