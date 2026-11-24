@@ -414,3 +414,15 @@ test("real agent calls: receipts cited inside prose, prose-only evidence and omi
   const c = JSON.parse((await service.save("user:a", { ...input, name: "third-ok", description: "Still within the budget", evidence: undefined })).split("\n")[0]);
   assert.equal(c.action, "created");
 });
+
+test("prose evidence quoting a current-run receipt id is accepted", async t => {
+  const { service, input } = await fixture(t);
+  assert.match(await service.save("user:a", { ...input, evidence: [`Host receipt ${input.evidence[0]} (bash succeeded), operator correction in this session`] }), /"saved":true/);
+});
+
+test("rejections name the actual cause", async t => {
+  const { service, input } = await fixture(t);
+  await assert.rejects(service.save("user:a", { ...input, name: "Bad Name" }), /Invalid skill name/);
+  service.begin("user:a");
+  await assert.rejects(service.save("user:a", { ...input, evidence: ["free text without any receipt id"] }), /No verified work in this run/);
+});
