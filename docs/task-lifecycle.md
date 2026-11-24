@@ -69,6 +69,33 @@ clarifications, plan, task-local retained observations and worker outcomes. It n
 longer needs every old task or the conversation's recent unrelated topics merely
 to judge one order. Existing prompt byte limits remain binding.
 
+## Evidence-based self-closure
+
+Operator decision (2026-11-23): an agent closes an open order itself when its result
+is independently assessed as complete; the operator does not have to close it.
+
+- Only the existing independent completion check (selected `completionCheck` provider,
+  e.g. the TypeSafe Decision Model, with the configured model cross-check below its
+  confidence floor) can close. A worker's or Main's self-report never does; uncertain,
+  unavailable or `continue` verdicts keep the order open.
+- The closure is recorded as a separate `evidence-close` receipt (not `operator-close`),
+  with the assessed result as technical evidence. `/orders reopen <id>` remains available.
+- Schedule occurrences, Dispatcher/subagent sessions, orders with live child work and
+  stale revisions are never closed this way. Open plan todos block closure unless later
+  authentic operator input in the same conversation exists.
+- A foreground chat reply already is the single message. A background closure sends exactly
+  one notice; there are no reminders. API run orders are owned by their run result (the
+  completion check does not assess source `api`) and are never self-closed; API input still
+  triggers the recheck of other orders below.
+- Later authentic operator messages of the same conversation (stored on other orders) are
+  included in each order's assessment evidence as `laterOperatorMessagesSameConversation`:
+  they can complete, narrow or supersede an older order, never widen it.
+- When a new operator message arrives, other orders' already admitted continuations are
+  withdrawn (not run) and go through one read-only reassessment that sees that message,
+  instead of blindly resuming. No effect is replayed or revoked.
+- Unfinished todos keep their title. A todo cannot be retitled as a rolling cursor
+  (for example `TEST-266` -> `TEST-267`); settle it with an outcome and add a new todo.
+
 ## Inactivity policy
 
 No timeout is invented by a model or hardcoded as a default. Operators may set:

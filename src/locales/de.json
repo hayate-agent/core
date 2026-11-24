@@ -110,5 +110,7 @@
   "usage.tool.started": "gestartet",
   "usage.tool.completed": "beendet",
   "usage.tool.failed": "fehlgeschlagen",
-  "dispatcher.assessmentStalled": "Prüfung ohne neue Nachweise angehalten. Neue Informationen oder eine ausdrückliche Fortsetzung sind erforderlich; bisherige Ergebnisse bleiben erhalten."
+  "dispatcher.assessmentStalled": "Prüfung ohne neue Nachweise angehalten. Neue Informationen oder eine ausdrückliche Fortsetzung sind erforderlich; bisherige Ergebnisse bleiben erhalten.",
+  "task.evidenceClosed": "✅ Erledigt und geschlossen (unabhängig geprüft): {original}. Falls doch noch etwas offen ist: /orders reopen {id}",
+  "task.evidenceStalled": "❓ Aufgabe wirkt erledigt, lässt sich aber nicht sicher abschließen: {original}. Ist sie fertig? Dann /orders done {id} – sonst bitte sagen, was noch fehlt. (Einmalige Rückfrage, keine Erinnerungen.)"
 }

@@ -9,14 +9,15 @@ export interface TaskTodo {
   sourceId: string; outcome?: string;
 }
 export interface TaskReceipt {
-  id: string; kind: "created" | "legacy-held" | "operator-close" | "operator-reopen" | "clarification" | "outcome" | "inactivity" | "scheduled-silence";
+  id: string; kind: "created" | "legacy-held" | "operator-close" | "operator-reopen" | "clarification" | "outcome" | "inactivity" | "scheduled-silence" | "evidence-close";
   at: number; sourceId: string; generation: number; revision: number; digest: string; reason?: string;
 }
 export interface CoreTask {
   id: string; generation: number; revision: number;
   operatorStatus: "open" | "done" | "unresolved";
   original: string;
-  sources: Array<{ id: string; text: string; at: number; kind: "operator" | "schedule" }>;
+  /** `seq`: book-wide monotonic ingress order (clock-independent); absent on legacy sources. */
+  sources: Array<{ id: string; text: string; at: number; kind: "operator" | "schedule"; seq?: number }>;
   lastOperatorAt: number; createdAt: number;
   /** Explicit schedules never expire just because nobody mentions them in chat. */
   scheduled: boolean;
@@ -26,7 +27,17 @@ export interface CoreTask {
   receiptArchive?: { head: string; count: number };
 }
 export interface TaskBinding { sessionKey: string; taskId: string; ref: TaskRef }
-export interface TaskBook { tasks: CoreTask[]; bindings: TaskBinding[] }
+export interface TaskBook { tasks: CoreTask[]; bindings: TaskBinding[]; /** Last issued source seq. */ sourceSeq?: number }
+/** A durable acceptance-time reservation keeps ingress order even when enrollment is delayed
+ * (handoff, restart); otherwise the next sequence is issued now. */
+function nextSourceSeq(book: TaskBook, reserved?: number): number {
+  if (reserved !== undefined && Number.isSafeInteger(reserved) && reserved >= 1) {
+    book.sourceSeq = Math.max(book.sourceSeq ?? 0, reserved); return reserved;
+  }
+  const legacyMax = Math.max(0, ...book.tasks.flatMap(t => t.sources.map(s => s.seq ?? 0)));
+  book.sourceSeq = Math.max(book.sourceSeq ?? 0, legacyMax) + 1;
+  return book.sourceSeq;
+}
 export interface TaskOutcome {
   ref: TaskRef; expectedRevision: number; eventId: string;
   technical: CoreTask["technical"];
@@ -48,7 +59,8 @@ export function validateTaskBook(book: TaskBook): void {
         !["open", "done", "unresolved"].includes(t.operatorStatus) || !nonempty(t.original, 16 * 1024 * 1024) ||
         !Number.isSafeInteger(t.createdAt) || !Number.isSafeInteger(t.lastOperatorAt) || typeof t.scheduled !== "boolean" ||
         !Array.isArray(t.sources) || !t.sources.length || t.sources.length > 64 ||
-        t.sources.some(s => !nonempty(s.id, 256) || !nonempty(s.text, 16 * 1024 * 1024) || !Number.isSafeInteger(s.at) || !["operator", "schedule"].includes(s.kind)) ||
+        t.sources.some(s => !nonempty(s.id, 256) || !nonempty(s.text, 16 * 1024 * 1024) || !Number.isSafeInteger(s.at) || !["operator", "schedule"].includes(s.kind) ||
+          s.seq !== undefined && (!Number.isSafeInteger(s.seq) || s.seq < 1)) ||
         !t.technical || !["unknown", "open", "running", "waiting", "blocked", "completed", "failed"].includes(t.technical.state) ||
         t.technical.evidence !== undefined && !nonempty(t.technical.evidence, 8000) ||
         !Array.isArray(t.receipts) || !t.receipts.length || t.receipts.length > 512 ||
@@ -56,7 +68,7 @@ export function validateTaskBook(book: TaskBook): void {
         t.receipts.some(r => !nonempty(r.id, 256) || !nonempty(r.sourceId, 256) || !Number.isSafeInteger(r.at) ||
           !Number.isSafeInteger(r.generation) || r.generation < 1 || r.generation > t.generation ||
           !Number.isSafeInteger(r.revision) || r.revision < 1 || r.revision > t.revision || !/^[a-f0-9]{64}$/.test(r.digest) || r.reason !== undefined && !nonempty(r.reason, 8000) ||
-          !["created", "legacy-held", "operator-close", "operator-reopen", "clarification", "outcome", "inactivity", "scheduled-silence"].includes(r.kind))) throw Error("Invalid core task");
+          !["created", "legacy-held", "operator-close", "operator-reopen", "clarification", "outcome", "inactivity", "scheduled-silence", "evidence-close"].includes(r.kind))) throw Error("Invalid core task");
     if (t.receiptArchive && (!/^[a-f0-9]{64}$/.test(t.receiptArchive.head) || !Number.isSafeInteger(t.receiptArchive.count) || t.receiptArchive.count < 1)) throw Error("Invalid task receipt archive");
     ids.add(t.id); if (t.plan) validatePlan(t, t.plan);
   }
@@ -87,8 +99,12 @@ function receipt(task: CoreTask, id: string, kind: TaskReceipt["kind"], sourceId
   if (task.receipts.length >= 512) throw Error("Task receipt limit reached; explicit archival required");
   task.receipts.push({ id, kind, sourceId, at, digest, generation: task.generation, revision: task.revision, ...(reason ? { reason } : {}) });
 }
+/** Highest issued source sequence of the book (including legacy-recorded sources). */
+export function sourceSeqOf(book: TaskBook | undefined): number {
+  return book ? Math.max(book.sourceSeq ?? 0, 0, ...book.tasks.flatMap(t => t.sources.map(s => s.seq ?? 0))) : 0;
+}
 export function enrollTask(book: TaskBook, binding: Omit<TaskBinding, "ref">, original: string, sourceId: string,
-  kind: "operator" | "schedule" | "legacy", now: number): TaskRef {
+  kind: "operator" | "schedule" | "legacy", now: number, reservedSeq?: number): TaskRef {
   const old = book.bindings.find(b => b.sessionKey === binding.sessionKey && b.taskId === binding.taskId);
   if (old) {
     if (book.tasks.find(t => t.id === old.ref.id)?.original !== original) throw Error("Task original scope conflict");
@@ -96,13 +112,13 @@ export function enrollTask(book: TaskBook, binding: Omit<TaskBinding, "ref">, or
   }
   if (!nonempty(original, 16 * 1024 * 1024) || !nonempty(sourceId, 256)) throw Error("Invalid task ingress");
   const task: CoreTask = { id: randomUUID(), generation: 1, revision: 1, operatorStatus: kind === "legacy" ? "unresolved" : "open",
-    original, sources: [{ id: sourceId, text: original, at: now, kind: kind === "schedule" ? "schedule" : "operator" }],
+    original, sources: [{ id: sourceId, text: original, at: now, kind: kind === "schedule" ? "schedule" : "operator", seq: nextSourceSeq(book, kind === "schedule" ? undefined : reservedSeq) }],
     lastOperatorAt: now, createdAt: now, scheduled: kind === "schedule", technical: { state: "unknown" }, receipts: [] };
   receipt(task, `create:${sourceId}`, kind === "legacy" ? "legacy-held" : "created", sourceId, now, taskDigest([original, kind, binding]));
   const ref = { id: task.id, generation: 1 }; book.tasks.push(task); book.bindings.push({ ...binding, ref }); return ref;
 }
 export function operatorTransition(book: TaskBook, ref: TaskRef, expected: number, eventId: string,
-  action: "close" | "reopen" | "clarify", text: string, now: number): TaskRef {
+  action: "close" | "reopen" | "clarify", text: string, now: number, reservedSeq?: number): TaskRef {
   const task = book.tasks.find(t => t.id === ref.id);
   if (!task || !nonempty(eventId, 256) || !nonempty(text, 8000)) throw Error("Task and authentic operator source required");
   const digest = taskDigest([ref.id, action, text]); // stable across a successful command's revision/generation change
@@ -114,12 +130,50 @@ export function operatorTransition(book: TaskBook, ref: TaskRef, expected: numbe
   else if (action === "close") task.operatorStatus = "done";
   if (action !== "close") {
     if (task.sources.length >= 64) throw Error("Task source limit reached");
-    task.sources.push({ id: eventId, text, at: now, kind: "operator" });
+    // The ingress reservation of the operator input that carries the transition, so a delayed
+    // clarification or reopen keeps its arrival position against later messages.
+    task.sources.push({ id: eventId, text, at: now, kind: "operator", seq: nextSourceSeq(book, reservedSeq) });
   }
   if (action !== "close") task.technical = { state: "open", ...(task.technical.evidence ? { evidence: `Historical outcome before this operator change:\n${task.technical.evidence}`.slice(0, 8000) } : {}) };
   task.revision++; task.lastOperatorAt = now;
   receipt(task, eventId, action === "close" ? "operator-close" : action === "reopen" ? "operator-reopen" : "clarification", eventId, now, digest, text);
   return { id: task.id, generation: task.generation };
+}
+/** Operator-delegated self-closure (operator decision 2026-11-23): only an independently
+ * assessed, evidenced completion of an open, non-scheduled order. Distinct receipt kind so
+ * inspection shows who closed it; operator reopen remains available. */
+export function evidenceClose(book: TaskBook, ref: TaskRef, expected: number, eventId: string, evidence: string, now: number): boolean {
+  const task = book.tasks.find(t => t.id === ref.id);
+  if (!task || !nonempty(eventId, 256) || !nonempty(evidence, 8000)) throw Error("Task and evidence required");
+  if (task.receipts.some(r => r.id === eventId)) return false;
+  if (!taskOpen(book, ref) || task.scheduled || task.revision !== expected) return false;
+  task.operatorStatus = "done";
+  task.technical = { state: "completed", evidence };
+  task.revision++;
+  receipt(task, eventId, "evidence-close", eventId, now, taskDigest([ref.id, "evidence-close", evidence]), evidence);
+  return true;
+}
+/** Authentic operator input of the same conversation received after this order's last
+ * operator activity. Evidence that may complete, narrow or supersede it — never new scope. */
+/** Bounded projection for assessment evidence. Anything not shown in full is marked
+ * `truncated` (text cut or older messages omitted: first item carries the omission), and
+ * self-closure fails closed on any truncation. */
+export function laterOperatorInput(book: TaskBook, sessionKey: string, ref: TaskRef, limit = 6): Array<{ at: number; text: string; truncated?: true }> {
+  const order = book.tasks.find(t => t.id === ref.id);
+  if (!order) return [];
+  const siblings = new Set(book.bindings.filter(b => b.sessionKey === sessionKey && b.ref.id !== ref.id).map(b => b.ref.id));
+  // "Later" by the clock-independent ingress sequence: a sibling operator source issued after
+  // this order's newest operator source. Legacy sources without seq fall back to time (>=).
+  const ownSeq = Math.max(0, ...order.sources.filter(s => s.kind === "operator").map(s => s.seq ?? 0));
+  // Conservative for mixed legacy data: a sequenced sibling source issued after an unsequenced
+  // (pre-upgrade) order is always later; two unsequenced sources compare by time (>=).
+  const later = (s: CoreTask["sources"][number]) => s.seq !== undefined ? s.seq >= ownSeq : ownSeq === 0 && s.at >= order.lastOperatorAt;
+  const all = book.tasks.filter(t => siblings.has(t.id) && !t.scheduled)
+    .flatMap(t => t.sources.filter(s => s.kind === "operator" && later(s)))
+    .map((s, index) => ({ s, index })).sort((a, b) => (a.s.seq ?? 0) - (b.s.seq ?? 0) || a.s.at - b.s.at || a.index - b.index).map(({ s }) => s);
+  const omitted = all.length > limit;
+  return all.slice(-limit).map((s, index) => ({ at: s.at, text: s.text.slice(0, 1000),
+    ...(omitted && index === 0 || s.text.length > 1000 ? { truncated: true as const } : {}) }));
 }
 export function commitTaskOutcome(book: TaskBook, update: TaskOutcome, now: number): void {
   const task = book.tasks.find(t => t.id === update.ref.id); if (!task) throw Error("Unknown outcome task");
@@ -135,6 +189,10 @@ export function commitTaskOutcome(book: TaskBook, update: TaskOutcome, now: numb
       const next = update.plan.find(t => t.id === prior.id);
       if (!next || next.kind !== prior.kind || next.sourceId !== prior.sourceId ||
           ["done", "omitted"].includes(prior.status) && JSON.stringify(next) !== JSON.stringify(prior)) throw Error("Outcome cannot remove or reopen settled todos");
+      // An unfinished todo is not a rolling cursor: retitling it ("TEST-266" -> "TEST-267" ...)
+      // hides progress and never reaches an end. Settle it with its outcome and add a new todo.
+      if (!["done", "omitted"].includes(prior.status) && !["done", "omitted"].includes(next.status) && next.title !== prior.title)
+        throw Error("Unfinished todos keep their title; settle it with an outcome and add a new todo instead");
     }
     task.plan = structuredClone(update.plan);
   }

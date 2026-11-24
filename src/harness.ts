@@ -36,6 +36,8 @@ export { approvalPreview };
 const CRON_BINDING_YIELD = Symbol("cron binding save deferred before prompt");
 const MAINTENANCE_YIELD = Symbol("maintenance yielded before prompt");
 const FOREGROUND_YIELD = Symbol("foreground priority before background prompt");
+/** A stale continuation / wait recheck withdrawn before its prompt: no turn ran, nothing settles. */
+const OPERATOR_RECHECK_YIELD = Symbol("newer operator input before background prompt");
 
 export const NO_REPLY = "NO_REPLY";
 export const GOAL_DONE = "GOAL_DONE";
@@ -699,7 +701,7 @@ export class Harness {
     }
     if (changed) await this.onStateChange?.();
   }
-  async operatorTaskDecision(id: string, action: "close" | "reopen" | "clarify", sourceId: string, text: string, key: string, origin?: Inbound): Promise<string> {
+  async operatorTaskDecision(id: string, action: "close" | "reopen" | "clarify", sourceId: string, text: string, key: string, origin?: Inbound, reservedSeq?: number): Promise<string> {
     const store = this.opts.executionStore; const record = store?.coreTask(id);
     if (!this.opts.taskLifecycle?.enabled || !store || !record) throw Error("Unknown operator task");
     if (origin && this.sessions.get(key)?.current !== origin) throw Error("Originating operator turn changed");
@@ -741,7 +743,7 @@ export class Harness {
       await this.onStateChange?.();
     }
     const ref = await store.decideTask({ id, generation: record.generation }, record.revision, sourceId, action, text,
-      action !== "close" ? currentInput?.taskRef : undefined);
+      action !== "close" ? currentInput?.taskRef : undefined, reservedSeq ?? origin?.operatorSeq);
     if (action !== "close") {
       const s = this.state(key); const taskId = `order:${id}:${ref.generation}`;
       await store.bindTask(key, taskId, ref);
@@ -1117,6 +1119,7 @@ export class Harness {
         task.state = "blocked";
       }
       if (action !== "reset") {
+        task.closureOnly = undefined; // explicit operator resume is work authority
         task.state = "active";
         // Preserve the tighter wait deadline even when resuming a productive next step.
         for (const wait of [task.wait, task.lastWait]) if (wait)
@@ -1125,7 +1128,7 @@ export class Harness {
         // A failed assessment has no admitted next step to resume. Reset its
         // retry budget and reassess; do not manufacture an empty admission.
         if (!resetFailedAssessment && task.next?.trim())
-          task.recoveryAdmission = { id: this.taskQueueId(task, task.depth + 1), depth: task.depth + 1,
+          task.recoveryAdmission = { id: this.taskQueueId(task, task.depth + 1), depth: task.depth + 1, ...this.operatorSeen(s.key, undefined),
             next: task.next, original: task.original, expiresAt: task.expiresAt };
       }
       task.budgetReceipts = [...(task.budgetReceipts ?? []), receipt].slice(-16);
@@ -1252,7 +1255,11 @@ export class Harness {
         s.key === "improvement:nightly" || s.key.startsWith("cron:") || this.stoppingHostParents.has(s.key) ||
         this.opts.externallyRecoveredSession?.(s.key)) return false;
     // A retained proposal without admission must not starve later admitted work.
-    const candidates = this.tasks(s).filter(task => this.taskAllowed(task) && !this.apiRunGone(s, task) && task.recoveryEnrollment !== "held-legacy" && task.state === "active" && task.recoveryAdmission && task.next?.trim() &&
+    for (const task of this.tasks(s)) if (task.recoveryAdmission && this.admissionStale(s.key, task)) this.withdrawForRecheck(s, task);
+    if (this.recoverEvidenceClosures(s)) return false; // reconcile ALL first, schedule on the next pass
+    // Closure-only reassessment owners never run work, whichever path proposed an admission.
+    for (const task of this.tasks(s)) if (task.closureOnly && task.recoveryAdmission) this.withdrawForRecheck(s, task);
+    const candidates = this.tasks(s).filter(task => this.taskAllowed(task) && !this.apiRunGone(s, task) && task.recoveryEnrollment !== "held-legacy" && task.state === "active" && !task.closureOnly && task.recoveryAdmission && task.next?.trim() &&
       !this.supersededByNewerTopic(s, task) && !this.hasPendingDependency(s.key, task.id) &&
       Number.isSafeInteger(task.depth) && task.depth >= 0 && repetitions(task) < 20 &&
       (task.expiresAt === undefined || (Number.isSafeInteger(task.expiresAt) && task.expiresAt > this.now())));
@@ -1411,7 +1418,8 @@ export class Harness {
         receivedAt: task.anchor?.receivedAt, provenance: "host-task-anchor" }], task.completionObservations ?? [], scoped, !scoped.length && !task.completionObservations?.length);
       return { resolved, recent: [], tasks: [{ id: task.id, original: task.original.slice(0, 2000), state: task.state, next: task.next?.slice(0, 1000) }],
         retained: { original: task.original, savedNext: task.next, priorReply: task.lastReply,
-          order: { id: order.id, generation: order.generation, revision: order.revision, operatorStatus: order.operatorStatus, sources: order.sources.map(({ id, text }) => ({ id, text })), plan: input && this.taskPlans.get(input) || order.plan },
+          order: { id: order.id, generation: order.generation, revision: order.revision, operatorStatus: order.operatorStatus, sources: order.sources.map(({ id, text }) => ({ id, text })), plan: input && this.taskPlans.get(input) || order.plan,
+            ...this.laterOperatorEvidence(s.key, task.taskRef, input) },
           technical: { verdict: task.supervisorDecision?.verdict, diagnostic: task.supervisorDecision?.diagnostic }, workers: this.workerOutcomes(s.key, task.id) } };
     }
     const ingress = this.tasks(s).map(t => ({ id: t.id, text: t.original, state: t.state,
@@ -1448,7 +1456,7 @@ export class Harness {
 
     const order = task?.taskRef && this.opts.executionStore?.coreTask(task.taskRef.id);
     return { resolved, ...(task ? { retained: {
-      ...(order ? { order: { id: order.id, generation: order.generation, revision: order.revision, operatorStatus: order.operatorStatus, plan: order.plan } } : {}),
+      ...(order ? { order: { id: order.id, generation: order.generation, revision: order.revision, operatorStatus: order.operatorStatus, plan: order.plan, ...this.laterOperatorEvidence(s.key, task!.taskRef!, input) } } : {}),
       original: task.original.slice(0, 8000), savedNext: task.next?.slice(0, 4000), priorReply: task.lastReply?.slice(0, 8000),
       ...(this.opts.currentRuntime ? { runtime: { phase: "process-started" as const, ...this.opts.currentRuntime } } : {}),
       technical: { verdict: task.supervisorDecision?.verdict, diagnostic: task.supervisorDecision?.diagnostic,
@@ -1461,6 +1469,152 @@ export class Harness {
       ...(task.next ? { next: task.next.slice(0, 1000) } : {}),
       ...(task.wait ? { wait: { reason: task.wait.reason.slice(0, 1000), deadline: task.wait.deadline } } : {}),
     })) };
+  }
+
+  /** Authentic operator messages of the same conversation after this order's last operator
+   * activity (stored on other orders). Evidence that can complete or supersede it, never scope. */
+  /** Latest authentic operator input of the conversation each assessment's evidence saw. */
+  private readonly operatorSnapshot = new WeakMap<Inbound, string>();
+  /** In-flight evidence closure commit per conversation; operator ingress waits for it. */
+  private readonly closingOrders = new Map<string, Promise<boolean>>();
+  /** Turns whose durable settlement was replayed after a crash (their verdict was lost). */
+  private readonly replayedSettlement = new WeakSet<Inbound>();
+  /** Operator inputs of a conversation currently inside accept() (registered before any await). */
+  private readonly operatorIngress = new Map<string, number>();
+  /** Admission stamp: the newest operator input the admitting assessment saw. A newer one
+   * (any order of the conversation) voids the admission before it can run. */
+  private operatorSeen(key: string, input: Inbound | undefined): { operatorMark?: string } {
+    if (!this.opts.taskLifecycle?.enabled || /^(dispatch|subagent):/.test(key) || key.startsWith("cron:")) return {};
+    const seen = input && this.operatorSnapshot.has(input) ? this.operatorSnapshot.get(input)! : this.opts.executionStore?.operatorMark(key);
+    return seen === undefined ? {} : { operatorMark: seen };
+  }
+  private admissionStale(key: string, task: DurableTask): boolean {
+    return !!task.recoveryAdmission && this.markStale(key, task, task.recoveryAdmission.operatorMark);
+  }
+  /** A wait recheck is a resume too: newer operator input than the waiting verdict saw voids it. */
+  private waitStale(key: string, task: DurableTask): boolean {
+    return !!task.lastWait && this.markStale(key, task, task.lastWait.operatorMark);
+  }
+  private markStale(key: string, task: DurableTask, seen: string | undefined): boolean {
+    if (!this.opts.taskLifecycle?.enabled || /^(dispatch|subagent):/.test(key) || key.startsWith("cron:")) return false;
+    // Pre-upgrade admission without a watermark: fail closed whenever later operator input of
+    // the conversation exists (one read-only reassessment then stamps a fresh watermark).
+    if (seen === undefined) return !!task.taskRef && (this.opts.executionStore?.laterOperatorInput(key, task.taskRef).length ?? 0) > 0;
+    return (this.opts.executionStore?.operatorMark(key) ?? "") !== seen;
+  }
+
+  private laterOperatorEvidence(key: string, ref: TaskRef, input?: Inbound): { laterOperatorMessagesSameConversation?: Array<{ at: number; text: string; truncated?: true }> } {
+    if (!this.opts.taskLifecycle?.enabled) return {};
+    if (input) this.operatorSnapshot.set(input, this.opts.executionStore?.operatorMark(key) ?? "");
+    const later = this.opts.executionStore?.laterOperatorInput(key, ref) ?? [];
+    return later.length ? { laterOperatorMessagesSameConversation: later } : {};
+  }
+
+  /** Operator-delegated self-closure (operator decision 2026-11-23, "Variante B"): an open,
+   * non-scheduled order whose outcome was INDEPENDENTLY assessed as completed is closed with
+   * an evidence-close receipt. Open plan todos block it unless later authentic operator input
+   * exists. Background closures send exactly one notice; a foreground reply already is one. */
+  /** `assessedRevision` is the order revision the independent verdict actually saw: any later
+   * operator change (clarification, reopen) makes the revision differ and refuses closure. */
+  /** "ineligible": not a self-closable order (schedule, cron/worker session, closed, no lifecycle) —
+   * historical behavior applies unchanged. "refused": an eligible open order whose closure was not
+   * safe now (changed revision, live child, open todos, persistence failure) — it must stay recoverable. */
+  private async closeOrderByEvidence(s: SessionState, task: DurableTask, eventId: string, evidence: string, notify: boolean, assessedRevision: number | undefined,
+    assessedLater: Array<{ at: number; text: string; truncated?: true }> | undefined, assessedMark: string | undefined): Promise<"closed" | "refused" | "ineligible"> {
+    const store = this.opts.executionStore; const ref = task.taskRef;
+    if (!this.opts.taskLifecycle?.enabled || !store || !ref || /^(dispatch|subagent):/.test(s.key) || s.key.startsWith("cron:")) return "ineligible";
+    const order = store.coreTask(ref.id);
+    if (!order || order.scheduled || order.operatorStatus !== "open" || order.generation !== ref.generation) return "ineligible";
+    if (assessedRevision === undefined || order.revision !== assessedRevision) return "refused";
+    const openTodos = !!order.plan?.some(todo => !["done", "omitted"].includes(todo.status));
+    // Evaluated inside the closing ledger mutation (atomic with the close): no live child work,
+    // the later operator input must be exactly what the verdict saw (no newer, unassessed
+    // message), and open todos may only be overridden by such seen later input.
+    const guard = (view: { executions: readonly import("./execution.js").Execution[]; laterOperatorInput: (key: string) => Array<{ at: number; text: string; truncated?: true }>; operatorMark: (key: string) => string }) =>
+      // Identity watermark: no operator source of the conversation was added since the verdict's
+      // evidence snapshot (independent of clock resolution or rollback).
+      assessedMark !== undefined && view.operatorMark(s.key) === assessedMark &&
+      !this.pendingOperatorInput(s, task) && !this.opts.pendingNativeSubagent?.(s.key, task.id) &&
+      !view.executions.some(child => child.parent === s.key && ["ready", "running"].includes(child.status) && this.mayDependOn(child, task.id, task)) &&
+      JSON.stringify(view.laterOperatorInput(s.key)) === JSON.stringify(assessedLater ?? []) && !assessedLater?.some(item => item.truncated) &&
+      (!openTodos || !!assessedLater?.length);
+    if (!guard({ executions: store.list(s.key), laterOperatorInput: key => store.laterOperatorInput(key, ref), operatorMark: key => store.operatorMark(key) })) return "refused";
+    let closed = false;
+    // Serialized with operator ingress of this conversation (see accept): the guard's view of
+    // accepted input stays valid until the close is committed.
+    if (this.closingOrders.has(s.key) || this.operatorIngress.has(s.key)) return "refused";
+    // The receipt id records whether a background notice is owed, so a crash between the
+    // durable close and the session checkpoint can still deliver exactly that one notice.
+    const commit = store.closeTaskByEvidence(ref, assessedRevision, `evidence-close:${notify ? "n" : "q"}:${eventId}`.slice(0, 256), evidence.slice(0, 8000), guard);
+    this.closingOrders.set(s.key, commit);
+    try { closed = await commit; }
+    catch { this.log(`order ${ref.id}: evidence closure deferred`); return "refused"; }
+    finally { if (this.closingOrders.get(s.key) === commit) this.closingOrders.delete(s.key); }
+    if (!closed) return "refused";
+    this.log(`order ${ref.id}: closed by independently assessed evidence`);
+    this.settleEvidenceClosure(s, task, notify);
+    return "closed";
+  }
+
+  /** Session-side effects of a durable evidence closure; idempotent (fixed outbox id). Also
+   * replayed when the store shows an evidence closure the session checkpoint missed. */
+  private settleEvidenceClosure(s: SessionState, task: DurableTask, notify: boolean): void {
+    const ref = task.taskRef!;
+    task.state = "completed"; task.next = undefined; task.recoveryAdmission = undefined; task.wait = undefined;
+    task.recoveryAssessment = undefined; task.recoveryRetry = undefined; task.closureOnly = undefined;
+    task.evidenceSettled = ref.generation; // durable with the notice: replay never issues it twice
+    s.queue = s.queue.filter(queued => !(queued.taskId === task.id && queued.source === "cron" && !queued.started));
+    const to = task.anchor?.replyTo ?? s.replyTo ?? this.home;
+    const noticeId = `evidence-close:${ref.id}:${ref.generation}`;
+    if (notify && to && !s.outbox.some(entry => entry.id === noticeId)) {
+      const locale = resolveLanguage(this.opts.language?.() ?? {}, { kind: "conversation", sessionKey: s.key, language: task.anchor?.language });
+      s.outbox.push({ ...this.outbox.create(s.key, to, message(locale, "task.evidenceClosed", {
+        original: task.original.replace(/\s+/g, " ").trim().slice(0, 160), id: ref.id })), id: noticeId });
+    }
+    s.unsaved = true;
+  }
+
+  /** Crash between the durable turn settlement and the session-side closure attempt: the task
+   * is completed locally while its order stays open with a technically completed outcome and
+   * no closure decision. Give it exactly one read-only reassessment owner (once per order
+   * generation; same eligibility as a closure; never work). */
+  private recoverUnclosedCompletion(s: SessionState, task: DurableTask): void {
+    const ref = task.taskRef;
+    if (!ref || !this.opts.taskLifecycle?.enabled || task.evidenceReconciled === ref.generation) return;
+    if (/^(dispatch|subagent):/.test(s.key) || s.key.startsWith("cron:") || task.anchor?.replyTo?.channel === "api") return;
+    const order = this.opts.executionStore?.coreTask(ref.id);
+    if (!order || order.scheduled || order.operatorStatus !== "open" || order.generation !== ref.generation) return;
+    if (task.state === "completed" && order.technical.state === "completed") {
+      task.evidenceReconciled = ref.generation;
+      task.closureOnly = true; // the result was already final: reassess for closure only, never restart work
+      this.retainForReassessment(task, s);
+    } else if (task.state === "waiting" && !task.wait && !task.recoveryAdmission && !task.recoveryRetry &&
+        !this.opts.pendingNativeSubagent?.(s.key, task.id) &&
+        !this.opts.executionStore?.list(s.key).some(child => ["ready", "running"].includes(child.status) && this.mayDependOn(child, task.id, task))) {
+      // A completed verdict refused by open todos: real work remains, so this is the ordinary
+      // independent reassessment owner (same as a refused closure), not closure-only.
+      task.evidenceReconciled = ref.generation;
+      this.retainForReassessment(task, s);
+    } else return;
+    s.unsaved = true;
+  }
+
+  /** Reconciles every task of the session (never short-circuits); true if any was recovered. */
+  private recoverEvidenceClosures(s: SessionState): boolean {
+    let recovered = false;
+    for (const task of this.tasks(s)) recovered = this.recoverEvidenceClosure(s, task) || recovered;
+    return recovered;
+  }
+
+  /** Crash between the durable evidence close and the session checkpoint: finish it now. */
+  private recoverEvidenceClosure(s: SessionState, task: DurableTask): boolean {
+    // Not keyed on the local state: a checkpoint may already show "completed" (set before the
+    // close commit was awaited) while the notice was lost. The settled marker deduplicates.
+    if (!task.taskRef || task.evidenceSettled === task.taskRef.generation || !this.opts.taskLifecycle?.enabled) return false;
+    const order = this.opts.executionStore?.coreTask(task.taskRef.id), last = order?.receipts.at(-1);
+    if (!order || order.operatorStatus !== "done" || order.generation !== task.taskRef.generation || last?.kind !== "evidence-close") return false;
+    this.settleEvidenceClosure(s, task, last.id.startsWith("evidence-close:n:"));
+    return true;
   }
 
   /** Persisted execution outcomes deterministically bound by dependency.taskId.
@@ -1914,7 +2068,29 @@ export class Harness {
     else if (this.opts.language && this.turnLanguageContext(input) !== "conversation" && ["cron", "loop", "heartbeat", "goal"].includes(input.source))
       input.language = resolveLanguage(this.opts.language(), { kind: "background", job: backgroundLanguageKey(input.source, input.sessionKey) });
   }
+  /** Operator ingress and evidence closure of one conversation are mutually exclusive. Ingress is
+   * registered synchronously on entry (before any await such as attachment loading) and a closure
+   * refuses while any is registered; a message arriving during a closure commit waits for it and
+   * is then simply later input (the order stays reopenable). No interleaving gap exists. */
   async accept(input: Inbound): Promise<void> {
+    if (input.source !== "channel" && input.source !== "api") return this.acceptInput(input);
+    const key = input.sessionKey;
+    // Ingress order is fixed on entry, synchronously before any await (closure wait, attachment
+    // IO): a message delayed by attachment loading keeps its arrival position. Gaps from
+    // rejected or duplicate inputs are harmless (only the relative order matters).
+    if (this.opts.taskLifecycle?.enabled && this.opts.executionStore && input.operatorSeq === undefined)
+      input.operatorSeq = this.opts.executionStore.reserveSourceSeq();
+    this.operatorIngress.set(key, (this.operatorIngress.get(key) ?? 0) + 1);
+    try {
+      for (let closing = this.closingOrders.get(key); closing; closing = this.closingOrders.get(key))
+        await closing.catch(() => {});
+      return await this.acceptInput(input);
+    } finally {
+      const left = (this.operatorIngress.get(key) ?? 1) - 1;
+      if (left > 0) this.operatorIngress.set(key, left); else this.operatorIngress.delete(key);
+    }
+  }
+  private async acceptInput(input: Inbound): Promise<void> {
     this.captureLanguage(input);
     if (input.source === "api") input.apiAcceptedAt ??= this.now();
     if (this.resetAdmissionBlocked(input)) throw Error("Conversation reset in progress; retry input");
@@ -1940,6 +2116,9 @@ export class Harness {
       if (fresh.length < input.parts.length) input = { ...input, parts: fresh, id: fresh[0].id, text: fresh.map((p) => p.text).join("\n") };
     } else if (input.id && this.seen.has(input.id)) return duplicate();
     const ids = idsOf(input);
+    // Fallback only (accept() reserves on entry); persisted with the input itself.
+    if (this.opts.taskLifecycle?.enabled && this.opts.executionStore && (input.source === "channel" || input.source === "api") && input.operatorSeq === undefined)
+      input.operatorSeq = this.opts.executionStore.reserveSourceSeq();
     for (const id of ids) this.seen.mark(id);
     this.inbox.accepting.add(input);
     let applied = false;
@@ -2149,12 +2328,12 @@ export class Harness {
           this.inbox.handoff.delete(input);
           throw err;
         }
-        this.inbox.handoff.delete(input);
-        if (this.resetDiscarded.has(input)) return;
-        let steered = false;
+        // The handoff stays durable until the input is attached (s.steered) or queued below —
+        // including across the steered ledger write, so a concurrent settlement checkpoint
+        // still persists it.
+        if (this.resetDiscarded.has(input)) { this.inbox.handoff.delete(input); return; }
+        let steered = false, ledgerFailed = false;
         if (s.current === turn && s.prompting && s.session) {
-          // Still the same prompt running (not just outbox flushing): steer into it.
-          (s.steered ??= []).push(input);
           // Steering consumes inbox input with another turn's result, but does
           // not consume its independent mandate. Retain before the async steer:
           // turn settlement and stop may race it. A failed steer queues the same
@@ -2169,22 +2348,47 @@ export class Harness {
                 ...(!this.restoredTaskInputs.has(input) ? this.preexistingUnscoped(s.key) : {}) });
               s.tasks = tasks;
             }
+            // Ledger the message as an authentic operator source of its own order BEFORE it joins
+            // the running turn (s.steered): durable, assessable later-input evidence for every other
+            // order and a new operator watermark. Meanwhile it stays in the durable handoff set and
+            // is not yet part of any turn, so settlement cannot consume it undelivered.
+            const steeredTask = tasks.find(task => task.id === input.taskId);
+            if (this.opts.taskLifecycle?.enabled && steeredTask && !steeredTask.taskRef && !/^(dispatch|subagent):/.test(s.key) && !s.key.startsWith("cron:")) {
+              try {
+                steeredTask.taskRef = await this.opts.executionStore!.enrollTask(s.key, steeredTask.id, steeredTask.original,
+                  steeredTask.anchor?.id ?? steeredTask.id, "operator", input.operatorSeq);
+                s.unsaved = true;
+              } catch (err) {
+                // Fail closed: never deliver an unledgered operator message into a running turn.
+                // It runs as its own next turn instead (normal enrollment, foreground priority).
+                ledgerFailed = true;
+                this.log(`steered input not ledgered, queued as next turn: ${err instanceof Error ? err.message : err}`);
+              }
+              // A stop/cancel during the write discarded the follow-up: never resurrect it.
+              if (s.stopPending || s.cancelling === turn || steeredTask.state === "stopped") { this.inbox.handoff.delete(input); return; }
+            }
           }
-          try {
-            await s.session.steer(input.text);
-            steered = true;
-          } catch (err) {
-            // Already durable and accepted: never fail acceptance now, run it as the next turn.
-            s.steered = s.steered?.filter((x) => x !== input);
-            this.log(`steer failed, queued as next turn: ${err instanceof Error ? err.message : err}`);
+          // Steer only if the same prompt is still running (re-validated after any yield).
+          if (!ledgerFailed && s.current === turn && s.prompting && s.session && !this.resetDiscarded.has(input)) {
+            (s.steered ??= []).push(input);
+            this.inbox.handoff.delete(input); // now part of the running turn's snapshot
+            try {
+              await s.session.steer(input.text);
+              steered = true;
+            } catch (err) {
+              // Already durable and accepted: never fail acceptance now, run it as the next turn.
+              s.steered = s.steered?.filter((x) => x !== input);
+              this.log(`steer failed, queued as next turn: ${err instanceof Error ? err.message : err}`);
+            }
           }
         }
-        if (this.resetDiscarded.has(input)) return;
+        if (this.resetDiscarded.has(input)) { this.inbox.handoff.delete(input); return; }
         if (!steered) {
           // The turn ended meanwhile: run it as the next turn instead.
           s.queue.push(input);
           if (!deferPump) void this.pump(s);
         }
+        this.inbox.handoff.delete(input);
         return;
       }
       if (!yieldToOperator && this.busyMode === "interrupt" && s.session) {
@@ -2474,6 +2678,7 @@ export class Harness {
     this.releaseRestored();
   }
   restorePending(inputs: Inbound[], maxReplays = Harness.MAX_REPLAYS): void {
+    for (const input of inputs) if (input.operatorSeq !== undefined) this.opts.executionStore?.observeSourceSeq(input.operatorSeq);
     for (const input of inputs) {
       const owner = input.taskId && this.tasks(this.state(input.sessionKey)).find(task => task.id === input.taskId);
       if (["cron", "heartbeat", "loop", "goal"].includes(input.source) &&
@@ -2529,6 +2734,10 @@ export class Harness {
       if (s.resetPending || this.opts.sessionEnabled?.(s.key) === false) continue;
       if (this.opts.externallyRecoveredSession?.(s.key)) continue;
       if (await this.opts.contextMaintenance?.recoveryStatus?.(s.key)) continue;
+      // Durable evidence closures are reconciled for the whole session before any startup
+      // admission, assessment or release (crash between ledger close and checkpoint).
+      this.recoverEvidenceClosures(s);
+      for (const task of this.tasks(s)) this.recoverUnclosedCompletion(s, task);
       for (const task of [...this.tasks(s)].sort((a, b) => priorityRank(this.committedPriority(b)) - priorityRank(this.committedPriority(a)))) {
       if (task.recoveryEnrollment === "held-legacy" || !this.taskAllowed(task) || this.apiRunGone(s, task)) continue;
       // Older turn finalization persisted a missing decision as an explicit
@@ -2572,6 +2781,9 @@ export class Harness {
           s.current || s.queue.length || s.key === "improvement:nightly" || this.hasPendingDependency(s.key, task.id)) continue;
       const admission = task.recoveryAdmission;
       if (!admission || this.supersededByNewerTopic(s, task)) continue;
+      // Startup continuations obey the same operator-input fence: newer ledgered operator input
+      // than the admitting assessment saw → withdraw for a read-only reassessment, never resume.
+      if (this.pendingOperatorInput(s) || this.admissionStale(s.key, task)) { this.withdrawForRecheck(s, task); s.unsaved = true; continue; }
       if (admission.depth !== task.depth + 1 || admission.next !== task.next ||
           admission.original !== task.original || admission.expiresAt !== task.expiresAt) {
         this.recoveryAttention(s, task, "mismatched");
@@ -2727,7 +2939,10 @@ export class Harness {
         task.recoveryRetry!.nextAt = this.now() + assessmentRetryDelay(task.recoveryRetry!.attempts);
       }
       else task.recoveryRetry = undefined;
-      if (next) {
+      if (next && task.closureOnly) {
+        // Read-only closure owner: an independently proposed next step admits no work.
+        this.retainForReassessment(task, s, task.recoveryRetry?.attempts);
+      } else if (next) {
         task.state = "active";
         task.next = next;
         // A model-selected polling window is not an operator mandate expiry.
@@ -2737,7 +2952,7 @@ export class Harness {
         task.wait = undefined;
         task.explicitBlocked = false;
         if (deadlines.length) task.expiresAt = Math.min(...deadlines);
-        task.recoveryAdmission = { id: this.taskQueueId(task, task.depth + 1), depth: task.depth + 1,
+        task.recoveryAdmission = { id: this.taskQueueId(task, task.depth + 1), depth: task.depth + 1, ...this.operatorSeen(s.key, input),
           next, original: task.original, expiresAt: task.expiresAt,
           independent: { evidence, taskId: task.id, sessionKey: s.key } };
       } else this.recoveryAttention(s, task, diagnostic === "technical" ? "technical" : diagnostic === "unavailable" ? "unavailable" : "inconclusive", !!task.recoveryRetry);
@@ -2855,6 +3070,7 @@ export class Harness {
     task.recoveryAssessment = "claimed";
     if (policyStamp) task.recoveryPolicyStamp = policyStamp;
     const claimedAuthority = JSON.stringify(task);
+    const assessedRevision = task.taskRef && this.opts.taskLifecycle?.enabled ? this.opts.executionStore?.coreTask(task.taskRef.id)?.revision : undefined;
     await this.onStateChange?.();
     const unchanged = () => eligible() && JSON.stringify(task) === claimedAuthority &&
       !this.hasPendingDependency(s.key, task.id);
@@ -2894,7 +3110,13 @@ export class Harness {
       await this.outbox.barrier();
       return;
     }
-    if (plan?.state === "continue" && typeof plan.next === "string" && plan.next.trim() && plan.next.length <= 4000 &&
+    if (plan?.state === "continue" && task.closureOnly) {
+      // A read-only closure reassessment never (re)starts work on a locally completed result:
+      // the order stays open with the bounded backoff and, after the third, one question.
+      task.recoveryRetry = undefined;
+      task.supervisorDecision = { proposal: task.supervisorDecision?.proposal, verdict: "continue" };
+      this.retainForReassessment(task, s, attempts);
+    } else if (plan?.state === "continue" && typeof plan.next === "string" && plan.next.trim() && plan.next.length <= 4000 &&
         (plan.expiresAt === undefined || (Number.isSafeInteger(plan.expiresAt) && plan.expiresAt > this.now() &&
           (task.expiresAt === undefined || plan.expiresAt <= task.expiresAt)))) {
       task.state = "active";
@@ -2905,13 +3127,20 @@ export class Harness {
       task.supervisorDecision = { proposal: task.supervisorDecision?.proposal, verdict: "continue" };
       task.contextPreparation = plan.contextPreparation;
       if (plan.expiresAt !== undefined) task.expiresAt = plan.expiresAt;
-      task.recoveryAdmission = { id: this.taskQueueId(task, task.depth + 1), depth: task.depth + 1,
+      task.recoveryAdmission = { id: this.taskQueueId(task, task.depth + 1), depth: task.depth + 1, ...this.operatorSeen(s.key, input),
         next: task.next, original: task.original, expiresAt: task.expiresAt };
     } else if (plan?.state === "completed" && retainedReply) {
       // Unknown/legacy tasks cannot be closed without a task-bound result.
-      task.state = "completed";
+      const priorRetry = task.recoveryRetry; // refused closures keep counting toward the backoff/ask limit
       task.recoveryRetry = undefined;
       task.supervisorDecision = { proposal: task.supervisorDecision?.proposal, verdict: "completed" };
+      const closure = await this.closeOrderByEvidence(s, task, `assessment:${task.id}:${task.depth}:${task.taskRef?.generation ?? 0}`,
+        `Independent read-only reassessment of the retained result (no new work). Result:\n${task.lastReply}`, true, assessedRevision,
+        input.completionContext?.retained?.order?.laterOperatorMessagesSameConversation, this.operatorSnapshot.get(input));
+      // An order that stays open (open todos, live child, changed revision) must stay
+      // recoverable: same rule as turn settlement, never a silently completed open order.
+      if (closure === "refused") this.retainForReassessment(task, s, priorRetry?.attempts);
+      else task.state = "completed";
     } else if (plan?.state === "waiting" || plan?.state === "blocked") {
       task.state = plan.state; // No timer or executable next step is granted.
       task.recoveryRetry = undefined;
@@ -3031,6 +3260,84 @@ export class Harness {
   /** Already-admitted background continuations may wait while ONE unrelated
    * read-only supervisor runs at the settled boundary. Never admit alongside a
    * foreground input, an unsaved inbox, or the retained task's own queued step. */
+  /** Accepted operator input (queued, steered or the running turn) not yet in the ledger,
+   * other than the order's own current turn. It may narrow or stop older work. */
+  private pendingOperatorInput(s: SessionState, own?: DurableTask): boolean {
+    if (!this.opts.taskLifecycle?.enabled || /^(dispatch|subagent):/.test(s.key) || s.key.startsWith("cron:")) return false;
+    const operator = (input: Inbound | undefined) => !!input && (input.source === "channel" || input.source === "api") && (!own || input.taskId !== own.id);
+    // Includes inputs still being accepted or handed over (e.g. a steered follow-up waiting for
+    // its ledger write): accepted operator input in no queue yet still fences closure.
+    if (this.operatorIngress.has(s.key)) return true; // still entering accept() (e.g. attachments loading)
+    const inFlight = [...this.inbox.accepting, ...this.inbox.handoff, ...this.inbox.unsaved].filter(input => input.sessionKey === s.key);
+    return [...s.queue, ...(s.steered ?? []), ...inFlight].some(input => operator(input) && !input.started) ||
+      !!own && operator(s.current) && s.current!.taskId !== own.id;
+  }
+
+  /** A still-open order whose closure was refused keeps a bounded read-only reassessment
+   * owner with the existing exponential backoff; no work is admitted. After 3 refused
+   * closures it pauses with exactly one operator question (no reminders). */
+  /** `claimedAttempts`: the assessment already reserved (and counted) this attempt. */
+  private retainForReassessment(task: DurableTask, s?: SessionState, claimedAttempts?: number): void {
+    // Already paused with its one question: stay paused until the operator acts (no reminders).
+    if (task.state === "blocked" && task.recoveryAttentionId) { task.recoveryAdmission = undefined; task.recoveryRetry = undefined; return; }
+    const attempts = claimedAttempts ?? (task.recoveryRetry?.attempts ?? 0) + 1;
+    task.explicitBlocked = false; task.recoveryAdmission = undefined;
+    if (attempts >= 3 && s) {
+      task.recoveryRetry = undefined; task.recoveryAssessment = undefined;
+      this.recoveryAttention(s, task, "inconclusive"); // blocked + one diagnostic per epoch
+      if (task.taskRef && this.opts.taskLifecycle?.enabled) {
+        task.evidenceStalled = true;
+        const to = task.anchor?.replyTo ?? s.replyTo ?? this.home, id = `evidence-stalled:${task.taskRef.id}:${task.taskRef.generation}`;
+        // Exactly one question per order generation, durable beyond its outbox delivery.
+        if (to && task.evidenceQuestion !== task.taskRef.generation && !s.outbox.some(entry => entry.id === id)) {
+          task.evidenceQuestion = task.taskRef.generation;
+          const locale = resolveLanguage(this.opts.language?.() ?? {}, { kind: "conversation", sessionKey: s.key, language: task.anchor?.language });
+          s.outbox.push({ ...this.outbox.create(s.key, to, message(locale, "task.evidenceStalled", {
+            original: task.original.replace(/\s+/g, " ").trim().slice(0, 160), id: task.taskRef.id })), id });
+        }
+      }
+      s.unsaved = true;
+      return;
+    }
+    task.state = "active"; task.recoveryAssessment = "claimed";
+    task.recoveryRetry = { attempts, nextAt: this.now() + assessmentRetryDelay(attempts), diagnostic: "inconclusive" };
+  }
+
+  /** Empty durable settlement of a withdrawn, never-prompted turn (idempotent). */
+  private async settleWithdrawn(s: SessionState, input: Inbound): Promise<boolean> {
+    if (!input.executionTurnId || !this.opts.executionStore) return true;
+    try { await this.opts.executionStore.settleTurn(input.executionTurnId, s.key, { outbox: [], consumed: [] }); return true; }
+    catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (/already settled|Unknown durable turn/.test(message)) return true;
+      this.log(`withdrawn turn settlement deferred: ${message}`); return false;
+    }
+  }
+
+  private recheckOrdersAfterOperatorInput(s: SessionState, exceptTaskId?: string): void {
+    for (const task of this.tasks(s)) {
+      // The operator answered (or wrote anything) after the single stalled question: one fresh
+      // read-only reassessment that sees that message. Never a reminder, never work.
+      if (task.id !== exceptTaskId && task.evidenceStalled && task.state === "blocked" && task.taskRef && this.taskAllowed(task)) {
+        task.evidenceStalled = undefined; task.explicitBlocked = false; // diagnostic marker kept: no second notice; closureOnly kept (the reply runs as its own turn/order)
+        task.recoveryAdmission = undefined; task.recoveryAssessment = undefined; task.recoveryRetry = undefined;
+        task.state = "active"; s.unsaved = true; continue;
+      }
+      if (task.id === exceptTaskId || !task.taskRef || !task.recoveryAdmission || task.state !== "active" ||
+          task.recoveryEnrollment === "held-legacy" || !this.taskAllowed(task)) continue;
+      const queued = s.queue.filter(queuedInput => queuedInput.taskId === task.id);
+      if (queued.some(queuedInput => queuedInput.source !== "cron" || queuedInput.started || queuedInput.id !== task.recoveryAdmission!.id)) continue;
+      s.queue = s.queue.filter(queuedInput => !queued.includes(queuedInput));
+      this.withdrawForRecheck(s, task);
+    }
+  }
+
+  private withdrawForRecheck(s: SessionState, task: DurableTask): void {
+    s.queue = s.queue.filter(queued => !(queued.taskId === task.id && queued.source === "cron" && !queued.started && queued.id === task.recoveryAdmission?.id));
+    task.recoveryAdmission = undefined; task.recoveryAssessment = undefined; task.recoveryRetry = undefined;
+    s.unsaved = true;
+  }
+
   private admittedContinuationsOnly(s: SessionState, exceptTaskId?: string): boolean {
     return s.queue.every(input => {
       const task = this.tasks(s).find(task => task.id === input.taskId), admission = task?.recoveryAdmission;
@@ -3049,6 +3356,12 @@ export class Harness {
     s.running = true;
     try {
       while (!this.halting && !s.resetPending && !heldForUpdate() && !this.stoppingHostParents.has(s.key) && this.opts.sessionEnabled?.(s.key) !== false) {
+        // Durable evidence closures (e.g. after a crash between the ledger close and the session
+        // checkpoint) are reconciled before ANY queued work of the session runs; this also
+        // withdraws a restored continuation of the closed order and restores the owed notice.
+        let reconciled = false;
+        reconciled = this.recoverEvidenceClosures(s) || reconciled;
+        if (reconciled) continue;
         // A finished turn's reply goes out only once its completion is durable.
         if (s.unsaved) {
           try {
@@ -3109,12 +3422,33 @@ export class Harness {
           continue;
         }
         s.queue.shift();
+        // Withdrawn before its prompt (persisted marker): never executed again; only the durable
+        // empty settlement of its turn is retried. The task's retained evidence is untouched.
+        if (input.withdrawn) {
+          if (await this.settleWithdrawn(s, input)) { s.unsaved = true; continue; }
+          s.queue.unshift(input); break;
+        }
         if (input.source === "host" && (this.stoppingHostParents.has(s.key) || !this.opts.hostEventAllowed?.(input))) {
           s.unsaved = true;
           continue;
         }
         // Internal work (restored continuation, recovery, host result) of an API task whose run
         // is gone has no write authority: dropped, never run. Fresh API runs are unaffected.
+        if ((input.source === "cron" || input.source === "heartbeat") && input.taskId && !input.started) {
+          // Newer operator input than the admitting assessment saw: the continuation is a stale
+          // proposal. Withdraw it for a read-only reassessment that sees that input; never run it.
+          const owner = this.tasks(s).find(task => task.id === input.taskId);
+          // Accepted but not yet processed operator input (queued or steered) counts too: it is
+          // not in the ledger yet, but the continuation must not run ahead of it.
+          if (owner && owner.recoveryAdmission?.id === input.id && (this.pendingOperatorInput(s) || this.admissionStale(s.key, owner))) {
+            this.withdrawForRecheck(s, owner); s.unsaved = true; continue;
+          }
+          // A timer-driven wait recheck after newer operator input: one read-only reassessment
+          // that sees that input instead of a working recheck turn.
+          if (owner && input.waitCheck && owner.state === "active" && (this.pendingOperatorInput(s) || this.waitStale(s.key, owner))) {
+            this.withdrawForRecheck(s, owner); s.unsaved = true; continue;
+          }
+        }
         if (input.source !== "api" && this.apiRunGoneFor(s, input)) {
           this.log(`input for ${s.key} dropped: its API run has ended`);
           s.unsaved = true;
@@ -3184,8 +3518,11 @@ export class Harness {
           const task = this.tasks(s).find(t => t.id === input.taskId);
           if (task) {
             if (!task.taskRef) task.taskRef = await this.opts.executionStore!.enrollTask(s.key, task.id, task.original,
-              task.anchor?.id ?? task.id, (input.source === "channel" || input.source === "api") && !this.restoredTaskInputs.has(input)
-                ? "operator" : freshHostWork ? "schedule" : "legacy");
+              // A restored input that carries an acceptance-time ingress sequence was accepted as
+              // operator input by this host version: it stays an operator order in its ingress order.
+              task.anchor?.id ?? task.id, (input.source === "channel" || input.source === "api") &&
+                (!this.restoredTaskInputs.has(input) || Number.isSafeInteger(input.operatorSeq))
+                ? "operator" : freshHostWork ? "schedule" : "legacy", input.operatorSeq);
             input.taskRef ??= structuredClone(task.taskRef);
             input.taskRevision ??= this.opts.executionStore!.coreTask(input.taskRef.id)?.revision;
             if (!this.taskAllowed(task, input)) {
@@ -3251,6 +3588,12 @@ export class Harness {
               else s.outbox.push(entry);
             }
             input.continuation = structuredClone(settled.continuation);
+            // Replay after a crash past settlement: the settled result is restored as this turn's
+            // answer (completion evidence); the lost in-memory verdict is NOT, so a completed
+            // order is reconciled below by a closure-only read-only reassessment.
+            const replayedEvidence = settled.taskOutcome?.technical.evidence;
+            if (replayedEvidence && replayedEvidence.length <= 8000) this.settledReplies.set(input, replayedEvidence);
+            this.replayedSettlement.add(input);
             const settledTask = this.tasks(s).find(t => t.id === (input.continuation?.taskId ?? input.taskId));
             if (settledTask && settled.repetition) settledTask.repetition = structuredClone(settled.repetition);
             if (input.cronReport) input.cronReport.completedOutput = settled.cronOutput;
@@ -3340,6 +3683,23 @@ export class Harness {
             // Existing host tick owns retry; never spin on a failing disk.
             break;
           }
+          if (err === OPERATOR_RECHECK_YIELD) {
+            // No model turn/effect has started. The input is dropped (its admission was withdrawn);
+            // the task's retained evidence is untouched and reassessed read-only.
+            s.current = undefined;
+            s.prompted = undefined;
+            this.activities.get(input)?.activity.finish("cancelled");
+            this.activities.delete(input);
+            // Durably settle the never-prompted turn as empty: no task outcome, no reply, nothing
+            // consumed. On failure the input is retained WITH its withdrawal marker (never run).
+            input.withdrawn = true;
+            if (!(await this.settleWithdrawn(s, input))) {
+              s.queue.unshift(input); await Promise.resolve(this.onStateChange?.()).catch(() => {}); break;
+            }
+            s.unsaved = true;
+            await this.onStateChange?.();
+            continue;
+          }
           if (err === MAINTENANCE_YIELD || err === FOREGROUND_YIELD) {
             // No model turn/effect has started: retain the original ledger identity.
             s.current = undefined;
@@ -3374,6 +3734,9 @@ export class Harness {
         } finally { this.evidenceReaders--; }
         // Finished: never re-run. Input (and steered follow-ups) leave the inbox, the reply
         // is in the outbox; the next loop iteration saves that transition before sending.
+        // Steered operator follow-ups joined this turn after its evidence snapshot: a turn that
+        // received any cannot self-close its order on its verdict (they are ledgered separately).
+        const steeredOperatorInput = !!s.steered?.some(steered => steered.source === "channel" || steered.source === "api");
         s.current = undefined;
         s.steered = undefined;
         s.unsaved = true;
@@ -3387,11 +3750,13 @@ export class Harness {
         }
         const inheritedDeadline = Math.min((targetId !== input.taskId ? task?.expiresAt : input.continuationExpiresAt) ?? Infinity,
           input.continuation?.expiresAt ?? Infinity);
+        let orderClosure: { task: DurableTask; eventId: string; evidence: string; notify: boolean; assessedRevision?: number; liveChild?: boolean; assessedLater?: Array<{ at: number; text: string; truncated?: true }>; assessedMark?: string } | undefined;
         // A late child result may be delivered, but never reopens a terminal
         // parent. A settled reply is evidence, not renewed operator authority.
         if (task && this.taskAllowed(task, input) && task.state !== "stopped" && task.state !== "completed") {
           const independent = task.recoveryAdmission?.independent;
           const independentValid = !!independent && !this.hasPendingDependency(s.key, task.id);
+          task.closureOnly = undefined; // a real turn ran for this task: ordinary rules again
           const dependencyDecision = task.supervisorDecision?.dependencyHold;
           task.recoveryAdmission = undefined;
           const plan = input.continuation;
@@ -3415,7 +3780,7 @@ export class Harness {
             ? "waiting" : plan?.state === "continue" ? "active" : plan?.state ?? "active";
           task.next = plan?.state === "continue" || plan?.state === "blocked" || plan?.wait ? plan.next : undefined;
           task.wait = plan?.state === "waiting" && plan.wait ? { reason: plan.wait.reason,
-            nextAt: this.now() + plan.wait.retryAfterMs, deadline: Math.min(plan.wait.deadline, inheritedDeadline) } : undefined;
+            nextAt: this.now() + plan.wait.retryAfterMs, deadline: Math.min(plan.wait.deadline, inheritedDeadline), ...this.operatorSeen(s.key, input) } : undefined;
           task.contextPreparation = plan?.state === "continue" ? plan.contextPreparation : input.contextPreparation;
           task.depth = targetId !== input.taskId ? task.depth : input.continuationDepth ?? 0;
           task.expiresAt = inheritedDeadline === Infinity ? undefined : inheritedDeadline;
@@ -3439,6 +3804,27 @@ export class Harness {
           if (repetitions(task) >= 20 && task.state === "blocked") this.budgetAttention(s, task);
           const diagnostic = this.completionDiagnostics.get(input);
           task.supervisorDecision = this.supervisorDecisions.get(input);
+          if (plan?.state === "completed" && task.supervisorDecision?.verdict === "completed" && task.lastReply && s.cancelling !== input && input.executionTurnId && input.taskRef && input.source !== "api" && !steeredOperatorInput) {
+            // API runs are owned by their run result (no completion check for source "api"): never self-closed here.
+            // The verdict saw revision input.taskRevision. Only this turn's own committed outcome
+            // (latest receipt, exactly one revision later) may lie in between.
+            const order = this.opts.executionStore?.coreTask(input.taskRef.id), last = order?.receipts.at(-1);
+            const assessedRevision = order && input.taskRevision !== undefined && last?.id === input.executionTurnId && last.kind === "outcome" &&
+              order.revision === input.taskRevision + 1 ? order.revision : order?.revision === input.taskRevision ? input.taskRevision : undefined;
+            orderClosure = { task, eventId: input.executionTurnId, evidence: `Independent completion assessment of turn ${input.executionTurnId}. Result:\n${task.lastReply}`,
+              notify: input.source !== "channel", assessedRevision, liveChild: !!liveChild,
+              assessedLater: structuredClone(input.completionContext?.retained?.order?.laterOperatorMessagesSameConversation),
+              assessedMark: this.operatorSnapshot.get(input) };
+          }
+          // Replayed settlement of a completed order: the verdict was lost with the crash, so it
+          // gets the same closure-only read-only reassessment owner as the startup reconciliation.
+          if (this.replayedSettlement.has(input)) this.recoverUnclosedCompletion(s, task);
+          // A steered operator follow-up was not part of the assessed evidence: an order that
+          // is still open keeps a read-only reassessment owner (never a silently completed task,
+          // nor a "waiting" one with no wait, live child or admission to wake it).
+          if (steeredOperatorInput && input.taskRef && this.opts.executionStore?.taskIsOpen(input.taskRef) &&
+              (task.state === "completed" || task.state === "waiting" && !liveChild && !task.wait))
+            this.retainForReassessment(task, s);
           // Every non-decision retains a durable retry owner, including skipped,
           // interrupted, superseded and inconclusive assessments. A diagnostic
           // callback is not guaranteed to run. Never turn its absence into a hold.
@@ -3454,7 +3840,7 @@ export class Harness {
           if (dependencyDecision) task.supervisorDecision = {
             ...(task.supervisorDecision ?? { verdict: "unresolved" }), dependencyHold: dependencyDecision };
           if (plan?.state === "continue" && task.next && task.state === "active")
-            task.recoveryAdmission = { id: this.taskQueueId(task, task.depth + 1), depth: task.depth + 1,
+            task.recoveryAdmission = { id: this.taskQueueId(task, task.depth + 1), depth: task.depth + 1, ...this.operatorSeen(s.key, input),
               next: task.next, original: task.original, expiresAt: task.expiresAt,
               ...(independentValid ? { independent } : {}) };
           if (!plan && task.state === "active" && !task.recoveryRetry && (diagnostic === "inconclusive" || diagnostic === "unavailable") &&
@@ -3467,6 +3853,19 @@ export class Harness {
         this.completionDiagnostics.delete(input);
         let deliveryBlocked = false;
         try {
+          if (orderClosure && await this.closeOrderByEvidence(s, orderClosure.task, orderClosure.eventId, orderClosure.evidence, orderClosure.notify, orderClosure.assessedRevision, orderClosure.assessedLater, orderClosure.assessedMark) === "refused" &&
+              (orderClosure.task.state === "completed" || orderClosure.task.state === "waiting" && !orderClosure.liveChild && !orderClosure.task.wait)) {
+            // Refused closure (open todos, changed revision, live child, persistence failure): the
+            // order is still open, so its durable task keeps the ordinary independent reassessment
+            // owner. That assessment is read-only; only its independent "continue" verdict may
+            // admit the remaining work (e.g. open todos), exactly as for any retained task.
+            this.retainForReassessment(orderClosure.task, s); s.unsaved = true;
+          }
+          // New authentic operator input can complete or supersede OTHER open orders of this
+          // conversation ("the sprint is already started"). Their admitted continuations are
+          // model proposals: withdraw them for one read-only reassessment (below) that sees
+          // that input, instead of blindly resuming. No effect is replayed or revoked.
+          if ((input.source === "channel" || input.source === "api" || steeredOperatorInput) && this.opts.taskLifecycle?.enabled) this.recheckOrdersAfterOperatorInput(s, targetId);
           // s.current was cleared above after settling the turn. The pump still
           // owns this boundary, but queueRunnableTask may now select another
           // admitted task. The previous task's admission remains intact.
@@ -3628,6 +4027,22 @@ export class Harness {
         s.cancelling = input;
         throw Error("Task mandate explicitly stopped");
       }
+      // A closure-only reassessment owner never executes background work (any path, incl. restored
+      // queue and startup resume); it is withdrawn without failing (retained evidence kept).
+      if (task?.closureOnly && (input.source === "cron" || input.source === "heartbeat") && !input.waitCheck && !s.prompting) {
+        this.withdrawForRecheck(s, task);
+        throw OPERATOR_RECHECK_YIELD;
+      }
+      // Rechecked right before the prompt and every tool execution: operator input accepted or
+      // ledgered during turn preparation still stops a stale continuation / wait recheck.
+      if (task && (input.source === "cron" || input.source === "heartbeat") && !s.prompting &&
+          ((input.continuationDepth ?? 0) > 0 && task.recoveryAdmission?.id === input.id || input.waitCheck) &&
+          (this.pendingOperatorInput(s) || (input.waitCheck ? this.waitStale(s.key, task) : this.admissionStale(s.key, task)))) {
+        // Not a cancelled or failed turn: the order keeps its retained reply, next step and wait
+        // evidence; only the stale admission is withdrawn for one read-only reassessment.
+        this.withdrawForRecheck(s, task);
+        throw OPERATOR_RECHECK_YIELD;
+      }
       if (input.taskId && input.id && input.id === (task ? this.taskQueueId(task, input.continuationDepth ?? 0) : `task:${input.taskId}:${input.continuationDepth}`) &&
           (!task || task.state !== "active" || task.depth + 1 !== input.continuationDepth)) {
         s.cancelling = input;
@@ -3787,6 +4202,9 @@ export class Harness {
             this.preparedTurn.add(input); // beforeTurn already completed; do not repeat it
             throw FOREGROUND_YIELD;
           }
+          // Synchronously adjacent to the prompt (no await in between): operator input accepted
+          // or ledgered during any preparation await still stops a stale continuation.
+          checkExpiry();
           s.prompting = true; // only now may ingress steer into an actual prompt
           activity.running(session.executionObservation === true);
           reply = input.cronReport?.output !== undefined ? input.cronReport.output : (await session.prompt(attachments ? `${text}\n\n${attachments.description}` : text, promptOptions)).trim();
@@ -3831,7 +4249,7 @@ export class Harness {
         }
       }
     } catch (err) {
-      if (this.halting || err === MAINTENANCE_YIELD || err === FOREGROUND_YIELD || err === CRON_BINDING_YIELD) throw err;
+      if (this.halting || err === MAINTENANCE_YIELD || err === FOREGROUND_YIELD || err === CRON_BINDING_YIELD || err === OPERATOR_RECHECK_YIELD) throw err;
       reply = `⚠️ ${err instanceof Error ? err.message : String(err)}`;
       outcome = "failed";
       if (s.cancelling !== input) this.log(`turn failed in ${s.key}: ${reply}`);
@@ -4647,6 +5065,12 @@ export class Harness {
     for (const s of this.sessions.values()) {
       if (s.resetPending || this.opts.sessionEnabled?.(s.key) === false || s.running || s.queue.length || s.outbox.length || s.unsaved || this.stoppingHostParents.has(s.key)) continue;
       if (await this.opts.contextMaintenance?.recoveryStatus?.(s.key)) continue;
+      // Reconcile ALL durable evidence closures of the session before any scheduling: a crash
+      // between the ledger close and the session checkpoint never lets another task's
+      // continuation run first, and the owed notice is restored.
+      let recovered = false;
+      recovered = this.recoverEvidenceClosures(s) || recovered;
+      if (recovered) { void this.pump(s); continue; }
       for (const task of this.tasks(s)) {
       if (task.recoveryEnrollment === "held-legacy" || !this.taskAllowed(task) || this.apiRunGone(s, task)) continue;
       // Reconcile pre-upgrade exhausted checkpoints without a model nudge.
