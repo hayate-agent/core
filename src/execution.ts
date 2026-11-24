@@ -1,4 +1,4 @@
-import { enrollTask, operatorTransition, commitTaskOutcome, expireInactiveTasks, validateTaskBook, taskOpen, type TaskBook, type TaskRef, type TaskOutcome, type CoreTask, type TaskReceipt, taskDigest, renderTask } from "./task-lifecycle.js";
+import { enrollTask, sourceSeqOf, operatorTransition, commitTaskOutcome, expireInactiveTasks, validateTaskBook, taskOpen, type TaskBook, type TaskRef, type TaskOutcome, type CoreTask, type TaskReceipt, taskDigest, renderTask, evidenceClose, laterOperatorInput } from "./task-lifecycle.js";
 import { validCronCheckpoint } from "./cron-checkpoint.js";
 import { executionMetadata, type ExecutionMetadata } from "./builtin-plugins/execution-metadata.js";
 import { createHash, randomUUID } from "node:crypto";
@@ -159,6 +159,15 @@ export interface ExecutionEvent {
   automaticRetryAt?: number;
   requiresAttention?: boolean;
 }
+/** Identity watermark of all authentic operator sources of a conversation's non-scheduled
+ * orders: any new operator source changes it, independent of clock resolution or rollback. */
+function operatorMarkOf(book: TaskBook | undefined, sessionKey: string): string {
+  if (!book) return "";
+  const ids = new Set(book.bindings.filter(b => b.sessionKey === sessionKey).map(b => b.ref.id));
+  const sources = book.tasks.filter(t => ids.has(t.id) && !t.scheduled)
+    .flatMap(t => t.sources.filter(src => src.kind === "operator").map(src => `${t.id}:${src.id}`)).sort();
+  return createHash("sha256").update(JSON.stringify(sources)).digest("hex").slice(0, 32);
+}
 export interface TurnSettlement {
   taskOutcome?: TaskOutcome;
   taskPresentation?: { to: import("./types.js").Address };
@@ -193,6 +202,7 @@ export class ExecutionStore {
   private data: Ledger = { version: 1, executions: [], events: [] };
   private queue: Promise<unknown> = Promise.resolve();
   private loaded = false;
+  private seqFloor = 0;
   /** Host admission check, run inside the serialized submission (never on a stale checkpoint). */
   submitGuard?: (parent: string, dependency: Execution["dependency"], origin: Execution["origin"]) => void;
   /** Resolves once every already queued mutation (e.g. a submission) has committed or failed. */
@@ -379,7 +389,9 @@ export class ExecutionStore {
       const draft = structuredClone({ ...this.data, executions: this.data.executions.map(({ dependency, ...task }) => task) }) as Ledger;
       draft.executions = draft.executions.map((task, index) => Object.fromEntries(Object.keys(this.data.executions[index]!).map(key =>
         [key, key === "dependency" ? this.data.executions[index]!.dependency : task[key as keyof Execution]])) as unknown as Execution);
+      if (draft.taskBook && this.seqFloor > (draft.taskBook.sourceSeq ?? 0)) draft.taskBook.sourceSeq = this.seqFloor;
       const result = await fn(draft);
+      if (draft.taskBook) this.seqFloor = Math.max(this.seqFloor, draft.taskBook.sourceSeq ?? 0);
       // Only explicitly tracked idempotent operations may omit an unchanged
       // commit, AFTER joining the serialized queue and checking writability.
       // Never decide from an unlocked snapshot before preceding writes settle.
@@ -645,10 +657,20 @@ export class ExecutionStore {
   executionTaskAllowed(execution: Execution): boolean {
     return execution.dependency?.taskRef ? this.taskIsOpen(execution.dependency.taskRef) : !this.retention.enforceTaskAuthority;
   }
-  enrollTask(sessionKey: string, taskId: string, original: string, sourceId: string, kind: "operator" | "schedule" | "legacy"): Promise<TaskRef> {
+  /** Synchronous acceptance-time ingress sequence (clock-independent order). Durable through
+   * the input that carries it; every ledger-issued sequence stays above all reservations. */
+  reserveSourceSeq(): number {
+    this.seqFloor = Math.max(this.seqFloor, sourceSeqOf(this.data.taskBook)) + 1;
+    return this.seqFloor;
+  }
+  /** A restored input's reservation is never reissued. */
+  observeSourceSeq(seq: number): void {
+    if (Number.isSafeInteger(seq) && seq >= 1) this.seqFloor = Math.max(this.seqFloor, seq);
+  }
+  enrollTask(sessionKey: string, taskId: string, original: string, sourceId: string, kind: "operator" | "schedule" | "legacy", reservedSeq?: number): Promise<TaskRef> {
     return this.mutate(draft => {
       const book = draft.taskBook ??= { tasks: [], bindings: [] };
-      const ref = enrollTask(book, { sessionKey, taskId }, original, sourceId, kind, this.now());
+      const ref = enrollTask(book, { sessionKey, taskId }, original, sourceId, kind, this.now(), reservedSeq);
       for (const execution of draft.executions) if (execution.parent === sessionKey && execution.dependency?.taskId === taskId && !execution.dependency.taskRef) {
         if (execution.dependency.original !== original) throw Error("Execution/task original scope conflict");
         execution.dependency = { ...execution.dependency, taskRef: structuredClone(ref) };
@@ -656,7 +678,7 @@ export class ExecutionStore {
       validateTaskBook(book); return ref;
     });
   }
-  decideTask(ref: TaskRef, revision: number, eventId: string, action: "close" | "reopen" | "clarify", text: string, supersedes?: TaskRef): Promise<TaskRef> {
+  decideTask(ref: TaskRef, revision: number, eventId: string, action: "close" | "reopen" | "clarify", text: string, supersedes?: TaskRef, reservedSeq?: number): Promise<TaskRef> {
     return this.mutate(async draft => {
       if (!draft.taskBook) throw Error("Task book unavailable");
       const order = draft.taskBook.tasks.find(t => t.id === ref.id);
@@ -666,7 +688,7 @@ export class ExecutionStore {
         return { id: ref.id, generation: archived.generation };
       }
       if (order) await this.archiveTaskReceipts(order);
-      const next = operatorTransition(draft.taskBook, ref, revision, eventId, action, text, this.now());
+      const next = operatorTransition(draft.taskBook, ref, revision, eventId, action, text, this.now(), reservedSeq);
       if (supersedes && supersedes.id !== ref.id && taskOpen(draft.taskBook, supersedes)) {
         const provisional = draft.taskBook.tasks.find(t => t.id === supersedes.id)!;
         await this.archiveTaskReceipts(provisional);
@@ -674,6 +696,27 @@ export class ExecutionStore {
       }
       validateTaskBook(draft.taskBook); return next;
     });
+  }
+  /** `guard` runs inside the same ledger mutation, right before the close: live child work
+   * or operator input arriving after the caller's checks cannot slip in between. */
+  closeTaskByEvidence(ref: TaskRef, revision: number, eventId: string, evidence: string,
+    guard?: (view: { executions: readonly Execution[]; laterOperatorInput: (sessionKey: string) => Array<{ at: number; text: string; truncated?: true }>; operatorMark: (sessionKey: string) => string }) => boolean): Promise<boolean> {
+    return this.mutate(async draft => {
+      if (!draft.taskBook) return false;
+      const order = draft.taskBook.tasks.find(t => t.id === ref.id);
+      if (order) await this.archiveTaskReceipts(order);
+      const book = draft.taskBook;
+      if (guard && !guard({ executions: draft.executions, laterOperatorInput: sessionKey => laterOperatorInput(book, sessionKey, ref),
+        operatorMark: sessionKey => operatorMarkOf(book, sessionKey) })) return false;
+      const closed = evidenceClose(draft.taskBook, ref, revision, eventId, evidence, this.now());
+      validateTaskBook(draft.taskBook); return closed;
+    });
+  }
+  /** Identity watermark of all authentic operator sources of the conversation's non-scheduled
+   * orders: any new operator source changes it, independent of clock resolution. */
+  operatorMark(sessionKey: string): string { return operatorMarkOf(this.data.taskBook, sessionKey); }
+  laterOperatorInput(sessionKey: string, ref: TaskRef): Array<{ at: number; text: string; truncated?: true }> {
+    return this.data.taskBook ? laterOperatorInput(this.data.taskBook, sessionKey, ref) : [];
   }
   /** Same-owner exact duplicate retirement: both authority fences and child
    * custody are checked in the writer transaction, not against a stale snapshot. */
