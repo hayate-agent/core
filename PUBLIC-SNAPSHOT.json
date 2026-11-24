@@ -1,5 +1,5 @@
 {
-  "contentDigest": "33a9c5d5402fa30276c0c54a95f7b7c55249e92ee24205a019f1fa041bf36d9d",
+  "contentDigest": "ad7a5afe20277ea46f8439b279bdf05600d8de6ef1d144014d1b1791497781ed",
   "files": [
     {
       "mode": "100644",
@@ -954,12 +954,12 @@
     {
       "mode": "100644",
       "path": "src/harness-state.ts",
-      "sha256": "d603ef35c377b63a9f7594121ec5999234aa862d9b7998e31f4be611547d3202"
+      "sha256": "7ebd96936d5977324f395671edca706f7db7d95cff8ee2d665d83bc4bf14d1d6"
     },
     {
       "mode": "100644",
       "path": "src/harness.ts",
-      "sha256": "732ab440a00783d49c671d004ca7933de33849521a0e1e3aeb70702fd0aaab8d"
+      "sha256": "a2b48419f2191d6f995a69a0da7652877a0318495aaa3fa2d9b9067082e4a032"
     },
     {
       "mode": "100644",
@@ -1484,7 +1484,7 @@
     {
       "mode": "100644",
       "path": "src/task-lifecycle.ts",
-      "sha256": "649cea8f1b7cc6c6d053c35a353334b6d119a27da9dd110563b587505b0341ba"
+      "sha256": "c3dd9de70d93b18afccdf8c78751f75b954ece40d4d314d6809747750949155f"
     },
     {
       "mode": "100644",
@@ -3349,7 +3349,7 @@
     {
       "mode": "100644",
       "path": "test/order-self-completion.test.ts",
-      "sha256": "ef67075f7b03ec88be29b13385a7995d3f9a6045ee647200cd7762a74e06b146"
+      "sha256": "0d14d72590fa990a245bfa8bc09be15c0daa14b717e5ec7d93fa75a547c87c13"
     },
     {
       "mode": "100644",
@@ -4720,5 +4720,5 @@
   "historyPolicy": "fresh-root; no source commits, tags, refs or deleted blobs",
   "pluginSHA": "9d5373e49a1194f78386ad782236aa92c49d293c",
   "schema": 1,
-  "sourceSHA": "3f0ae5e0b43f6c24277fe0c66d3faabdaa3e5436"
+  "sourceSHA": "3924886d6888936d40da95302af4ab01bed39f7b"
 }
