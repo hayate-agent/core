@@ -385,3 +385,14 @@ test("full learning path: verified work -> reminder -> create -> later run finds
   assert.match(await service.match("user:a", "table-check"), /second sample table/); // updated recipe is what loads
   service.end("user:a"); service.end("user:b");
 });
+
+test("prose evidence quoting a current-run receipt id is accepted", async t => {
+  const { service, input } = await fixture(t);
+  assert.match(await service.save("user:a", { ...input, evidence: [`Host receipt ${input.evidence[0]} (bash succeeded), operator correction in this session`] }), /"saved":true/);
+});
+
+test("rejections name the actual cause", async t => {
+  const { service, input } = await fixture(t);
+  await assert.rejects(service.save("user:a", { ...input, evidence: ["free text without any receipt id"] }), /Missing current-run evidence: pass receipt IDs/);
+  await assert.rejects(service.save("user:a", { ...input, name: "Bad Name" }), /Invalid skill name/);
+});
