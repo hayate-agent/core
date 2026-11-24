@@ -282,12 +282,12 @@ test("a pre-upgrade admission without watermark fails closed once later operator
 test("later operator input that was cut or omitted marks truncation and blocks self-closure", async t => {
   const store = await storeFixture(t);
   const old = await store.enrollTask("mem:room1", "old", "Plan the sprint", "old", "operator");
-  await store.enrollTask("mem:room1", "long", "x".repeat(1500), "long", "operator");
+  await store.enrollTask("mem:room1", "long", "x".repeat(2500), "long", "operator");
   const later = store.laterOperatorInput("mem:room1", old);
   assert.equal(later[0].truncated, true);
-  for (let i = 0; i < 7; i++) await store.enrollTask("mem:room1", `m${i}`, `message ${i}`, `m${i}`, "operator");
+  for (let i = 0; i < 5; i++) await store.enrollTask("mem:room1", `m${i}`, `message ${i} ` + "y".repeat(1900), `m${i}`, "operator");
   const bounded = store.laterOperatorInput("mem:room1", old);
-  assert.equal(bounded.length, 6); assert.equal(bounded[0].truncated, true, "omitted older later messages are signalled");
+  assert.equal(bounded.length, 4); assert.equal(bounded[0].truncated, true, "omitted older later messages are signalled");
   let h!: Harness;
   h = new Harness({ runtime: new FakeRuntime(() => "unused"), executionStore: store, taskLifecycle: { enabled: true }, completionCheck: async () => ({ state: "completed" }) });
   const channel = new MemoryChannel(); h.addChannel(channel); h.onStateChange = async () => {}; t.after(() => h.stop(0));
@@ -303,7 +303,7 @@ test("cut later input never stands in for the order's own open todos either", as
   await store.beginTurn("plan", "mem:room1");
   await store.settleTurn("plan", "mem:room1", { consumed: [], outbox: [], taskOutcome: { ref: old, expectedRevision: 1, eventId: "plan", technical: { state: "open" },
     plan: [{ id: "t", title: "TEST-266", kind: "work", status: "running", sourceId: "old" }] } });
-  for (let i = 0; i < 7; i++) await store.enrollTask("mem:room1", `m${i}`, `message ${i}`, `m${i}`, "operator");
+  for (let i = 0; i < 5; i++) await store.enrollTask("mem:room1", `m${i}`, `message ${i} ` + "y".repeat(1900), `m${i}`, "operator");
   const h = new Harness({ runtime: new FakeRuntime(() => "unused"), executionStore: store, taskLifecycle: { enabled: true } });
   const channel = new MemoryChannel(); h.addChannel(channel); h.onStateChange = async () => {}; t.after(() => h.stop(0));
   h.restoreSessions([{ key: "mem:room1", replyTo: ROOM, tasks: [{ id: "old", taskRef: old, original: "Plan the sprint", state: "active", depth: 1,
@@ -370,6 +370,23 @@ test("a pre-upgrade completed verdict whose order stayed technically open is rea
   }
   assert.equal(seen.length, 0, "no work");
   assert.equal(store.coreTask(ref.id)!.operatorStatus, "done");
+});
+
+test("a busy conversation (dozens of later messages) is assessed in full and a finished order closes", async t => {
+  const store = await storeFixture(t);
+  const old = await store.enrollTask("mem:room1", "old", "Plan the sprint", "old", "operator");
+  for (let i = 0; i < 34; i++) await store.enrollTask("mem:room1", `m${i}`, `operator message ${i}: ` + "z".repeat(200), `m${i}`, "operator");
+  const later = store.laterOperatorInput("mem:room1", old);
+  assert.equal(later.length, 34); assert.ok(!later.some(item => item.truncated), "nothing cut");
+  let seenLater = 0;
+  const h = new Harness({ runtime: new FakeRuntime(() => "unused"), executionStore: store, taskLifecycle: { enabled: true },
+    completionCheck: async input => (seenLater = input.completionContext?.retained?.order?.laterOperatorMessagesSameConversation?.length ?? 0, { state: "completed" }) });
+  const channel = new MemoryChannel(); h.addChannel(channel); h.onStateChange = async () => {}; t.after(() => h.stop(0));
+  h.restoreSessions([{ key: "mem:room1", replyTo: ROOM, tasks: [{ id: "old", taskRef: old, original: "Plan the sprint", state: "active", depth: 1,
+    recoveryEnrollment: "current", lastReply: "Sprint planned.", anchor: { id: "old", task: "Plan the sprint", receivedAt: 1, replyTo: ROOM } }] }]);
+  await h.tick(); await h.drained();
+  assert.equal(seenLater, 34, "the verdict saw every later message");
+  assert.equal(store.coreTask(old.id)!.operatorStatus, "done");
 });
 
 test("an accepted but unprocessed operator message fences an already queued continuation", async t => {
