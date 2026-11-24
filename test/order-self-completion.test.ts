@@ -294,10 +294,10 @@ test("later operator input that was cut or omitted marks truncation and blocks s
   h.restoreSessions([{ key: "mem:room1", replyTo: ROOM, tasks: [{ id: "old", taskRef: old, original: "Plan the sprint", state: "active", depth: 1,
     recoveryEnrollment: "current", lastReply: "Sprint planned.", anchor: { id: "old", task: "Plan the sprint", receivedAt: 1, replyTo: ROOM } }] }]);
   await h.tick(); await h.drained();
-  assert.equal(store.coreTask(old.id)!.operatorStatus, "done", "a long conversation (each later message is its own order) never blocks closing a finished order");
+  assert.equal(store.coreTask(old.id)!.operatorStatus, "open", "incompletely assessed later input never closes");
 });
 
-test("cut later input never stands in for the order's own open todos", async t => {
+test("cut later input never stands in for the order's own open todos either", async t => {
   const store = await storeFixture(t);
   const old = await store.enrollTask("mem:room1", "old", "Plan the sprint", "old", "operator");
   await store.beginTurn("plan", "mem:room1");
@@ -333,6 +333,21 @@ test("many stalled orders of one conversation ask at most one question until the
   assert.equal(s.outbox.filter(entry => entry.id.startsWith("evidence-stalled:")).length, 2, "an unasked order may ask after the answer");
   for (let i = 0; i < 3; i++) h["retainForReassessment"](rearmed[0], s);
   assert.equal(s.outbox.filter(entry => entry.id.startsWith("evidence-stalled:")).length, 2, "never twice per order generation");
+});
+
+test("a stalled question from a pre-marker checkpoint still counts as the conversation's open question", async t => {
+  const store = await storeFixture(t);
+  const h = new Harness({ runtime: new FakeRuntime(() => "unused"), executionStore: store, taskLifecycle: { enabled: true } });
+  const channel = new MemoryChannel(); h.addChannel(channel); h.onStateChange = async () => {}; t.after(() => h.stop(0));
+  const a = await store.enrollTask("mem:room1", "a", "Order A", "a", "operator"), b = await store.enrollTask("mem:room1", "b", "Order B", "b", "operator");
+  h.restoreSessions([{ key: "mem:room1", replyTo: ROOM, tasks: [
+    { id: "a", taskRef: a, original: "Order A", state: "blocked", depth: 1, recoveryEnrollment: "current", evidenceStalled: true, evidenceQuestion: a.generation,
+      recoveryAttentionId: "task-recovery:mem:room1:a", anchor: { id: "a", task: "Order A", receivedAt: 1, replyTo: ROOM } },
+    { id: "b", taskRef: b, original: "Order B", state: "active", depth: 1, recoveryEnrollment: "current", anchor: { id: "b", task: "Order B", receivedAt: 1, replyTo: ROOM } }] }]);
+  const s = h.sessions.get("mem:room1")!; const task = h["tasks"](s).find((item: { id: string }) => item.id === "b");
+  for (let i = 0; i < 3; i++) h["retainForReassessment"](task, s);
+  assert.equal(task.state, "blocked");
+  assert.equal(s.outbox.filter(entry => entry.id.startsWith("evidence-stalled:")).length, 0, "no second question while the first is unanswered");
 });
 
 test("a pre-upgrade completed verdict whose order stayed technically open is reassessed for closure only", async t => {

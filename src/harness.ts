@@ -1536,11 +1536,8 @@ export class Harness {
       assessedMark !== undefined && view.operatorMark(s.key) === assessedMark &&
       !this.pendingOperatorInput(s, task) && !this.opts.pendingNativeSubagent?.(s.key, task.id) &&
       !view.executions.some(child => child.parent === s.key && ["ready", "running"].includes(child.status) && this.mayDependOn(child, task.id, task)) &&
-      JSON.stringify(view.laterOperatorInput(s.key)) === JSON.stringify(assessedLater ?? []) &&
-      // Later sibling messages are each their own enrolled order with their own lifecycle, so an
-      // older one cut from the bounded evidence window is never lost by closing this order. They
-      // can only stand in for this order's own open todos when the verdict saw all of them.
-      (!openTodos || !!assessedLater?.length && !assessedLater.some(item => item.truncated));
+      JSON.stringify(view.laterOperatorInput(s.key)) === JSON.stringify(assessedLater ?? []) && !assessedLater?.some(item => item.truncated) &&
+      (!openTodos || !!assessedLater?.length);
     if (!guard({ executions: store.list(s.key), laterOperatorInput: key => store.laterOperatorInput(key, ref), operatorMark: key => store.operatorMark(key) })) return "refused";
     let closed = false;
     // Serialized with operator ingress of this conversation (see accept): the guard's view of
@@ -3296,7 +3293,9 @@ export class Harness {
         // Exactly one question per order generation, durable beyond its outbox delivery, and at
         // most one per conversation while the operator has not answered: further stalled orders of
         // the session pause silently and are re-armed by the same next operator message.
-        const askedInSession = this.tasks(s).some(other => other !== task && other.evidenceStalled && other.evidenceAsked);
+        // Pre-marker checkpoints: a stalled order that already issued its question counts as asked.
+        const askedInSession = this.tasks(s).some(other => other !== task && other.evidenceStalled &&
+          (other.evidenceAsked || !!other.taskRef && other.evidenceQuestion === other.taskRef.generation));
         if (to && !askedInSession && task.evidenceQuestion !== task.taskRef.generation && !s.outbox.some(entry => entry.id === id)) {
           task.evidenceAsked = true;
           task.evidenceQuestion = task.taskRef.generation;
