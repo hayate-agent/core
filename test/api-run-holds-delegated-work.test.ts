@@ -21,7 +21,10 @@ async function setup(t: import("node:test").TestContext, extra: Partial<Construc
   let now = 1_000_000;
   const store = new ExecutionStore(path.join(dir, "executions.json")); await store.load();
   const runtime = new FakeRuntime(text => text.startsWith("Dispatcher result") ? "Final: SHR-1 updated with the worker result." : "Interim: worker dispatched.");
-  const harness = new Harness({ runtime, executionStore: store, tickMs: 600_000, busyMode: "queue", log: () => {}, now: () => now, hostEventAllowed: () => true, ...extra });
+  // Test-only delay of the turn's post-run settling (s.current stays set until progressEvidence resolves).
+  let settling: Promise<void> | undefined;
+  const delaySettling = () => { let open!: () => void; settling = new Promise<void>(r => { open = r; }); return () => { settling = undefined; open(); }; };
+  const harness = new Harness({ runtime, executionStore: store, progressEvidence: async () => { await settling; return undefined; }, tickMs: 600_000, busyMode: "queue", log: () => {}, now: () => now, hostEventAllowed: () => true, ...extra });
   const runs = new RunRegistry(path.join(dir, "runs.json"));
   const api = new ApiChannel({ key: KEY, host: "127.0.0.1", port: 0, agent: "minerva", runs, cancel: (k, id) => harness.cancel(k, id),
     models: async () => ["gw/model-a"], defaultModel: () => "gw/model-a", log: () => {} });
@@ -41,7 +44,7 @@ async function setup(t: import("node:test").TestContext, extra: Partial<Construc
     release(); await settle(); await settle();
     return { run_id, child };
   };
-  return { harness, runtime, runs, store, call, start, advance: (ms: number) => { now += ms; }, now: () => now };
+  return { harness, runtime, runs, store, call, start, delaySettling, advance: (ms: number) => { now += ms; }, now: () => now };
 }
 
 test("an API run stays open while its delegated work runs and ends with the real result", async t => {
@@ -97,16 +100,19 @@ test("an API run without delegated work still finishes with its answer", async t
 });
 
 test("a long Main turn cannot extend the run window past its acceptance-time anchor", async t => {
-  const { harness, runtime, runs, store, call, advance } = await setup(t);
+  const { harness, runtime, runs, store, call, advance, delaySettling } = await setup(t);
   await harness.sessionFor("api:issue-3");
   const release = runtime.sessions.get("api:issue-3")!.hold();
   const { run_id } = await (await call("POST", "/v1/runs", { input: "Work SHR-3", session_id: "issue-3" })).json() as { run_id: string };
   for (let i = 0; i < 100 && !harness.dispatchOrigin("api:issue-3"); i++) await settle();
   await store.submit("api:issue-3", "req-3", "Update SHR-3", "direct", 1, harness.dependencyCheckpoint("api:issue-3"), undefined, harness.dispatchOrigin("api:issue-3"));
   advance(DEFAULT_API_RESULT_HOLD_MS - 1000); // Main's own turn consumes almost the whole window
+  const openSettling = delaySettling(); // the turn's settling is delayed past the first tick
   release(); await settle(); await settle();
   advance(2000);
-  await harness.tick(); for (let i = 0; i < 100 && runs.get(run_id)!.status === "running"; i++) await settle();
+  await harness.tick(); setTimeout(openSettling, 150);
+  // Keep driving the scheduler while waiting (as the host does); a single tick may see the turn still settling.
+  for (let i = 0; i < 100 && runs.get(run_id)!.status === "running"; i++) { await settle(); await harness.tick(); }
   assert.equal(runs.get(run_id)!.status, "completed", "run ends at the acceptance-anchored deadline, not reply time + window");
   assert.match(runs.get(run_id)!.output!, /Status: blocked/);
 });
@@ -130,7 +136,7 @@ test("a reply after the closed window with live work still ends blocked, not as 
 });
 
 test("queue wait before the turn counts against the run window", async t => {
-  const { harness, runtime, runs, store, call, advance } = await setup(t);
+  const { harness, runtime, runs, store, call, advance, delaySettling } = await setup(t);
   await harness.sessionFor("api:issue-5");
   const blocker = runtime.sessions.get("api:issue-5")!.hold();
   await call("POST", "/v1/runs", { input: "Earlier run", session_id: "issue-5" });
@@ -141,9 +147,12 @@ test("queue wait before the turn counts against the run window", async t => {
   blocker(); for (let i = 0; i < 100 && harness.dispatchOrigin("api:issue-5")?.target !== run_id; i++) await settle();
   const child = await store.submit("api:issue-5", "req-5", "Update SHR-5", "direct", 1, harness.dependencyCheckpoint("api:issue-5"), undefined, harness.dispatchOrigin("api:issue-5"));
   assert.ok(child.dependency!.expiresAt! < 1_000_000 + DEFAULT_API_RESULT_HOLD_MS, "work window is anchored at acceptance, before the queue wait");
+  const openSettling = delaySettling(); // the turn's settling is delayed past the first tick
   release(); await settle(); await settle();
   advance(2000);
-  await harness.tick(); for (let i = 0; i < 100 && runs.get(run_id)!.status === "running"; i++) await settle();
+  await harness.tick(); setTimeout(openSettling, 150);
+  // Keep driving the scheduler while waiting (as the host does); a single tick may see the turn still settling.
+  for (let i = 0; i < 100 && runs.get(run_id)!.status === "running"; i++) { await settle(); await harness.tick(); }
   assert.equal(runs.get(run_id)!.status, "completed");
   assert.match(runs.get(run_id)!.output!, /Status: blocked/);
 });
