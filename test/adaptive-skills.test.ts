@@ -67,11 +67,19 @@ test("evidence cannot be provided by failures, foreign runs, web/plugin text or 
   const { service, input } = await fixture(t);
   assert.equal(service.observe("user:a", "web", "plugin_web", false), "");
   assert.equal(service.observe("user:a", "bad", "bash", true), "");
-  await assert.rejects(service.save("user:a", { ...input, evidence: ["invented"] }), /evidence/);
-  await assert.rejects(service.save("user:a", { ...input, name: "../SOUL.md" }), /Invalid/);
-  await assert.rejects(service.save("user:a", input), /budget/);
+  await assert.rejects(service.save("user:a", { ...input, name: "../SOUL.md" }), /Invalid skill name/);
+  // A fresh run without successful native work cannot save, whatever it cites (stale/foreign/invented).
   service.begin("user:a");
-  await assert.rejects(service.save("user:a", input), /evidence/);
+  await assert.rejects(service.save("user:a", input), /No verified work in this run/);
+  await assert.rejects(service.save("user:a", { ...input, evidence: ["invented"] }), /No verified work in this run/);
+  service.begin("user:b");
+  const foreign = service.observe("user:b", "b-call", "bash", false).match(/[a-f0-9]{24}/)![0];
+  await assert.rejects(service.save("user:a", { ...input, evidence: [foreign] }), /No verified work in this run/);
+  // Bounded: two saves per run.
+  service.observe("user:a", "a-call", "bash", false);
+  await service.save("user:a", { ...input, name: "one-recipe", description: "First bounded recipe", procedure: `${input.procedure} One.` });
+  await service.save("user:a", { ...input, name: "two-recipe", description: "Second bounded recipe", procedure: `${input.procedure} Two.` });
+  await assert.rejects(service.save("user:a", { ...input, name: "three-recipe", description: "Third bounded recipe", procedure: `${input.procedure} Three.` }), /budget/);
 });
 
 test("installed skills, conflicting revisions, duplicates, metadata and sizes fail closed", async t => {
@@ -360,7 +368,6 @@ test("full learning path: verified work -> reminder -> create -> later run finds
   const receipts = [input.evidence[0]];
   for (let n = 0; n < 7; n++) receipts.push(service.observe("user:a", `verified-${n}`, "read", false).match(/[a-f0-9]{24}/)![0]);
   assert.match(service.diagnostics("user:a"), /plugin_skill_learn/);
-  await assert.rejects(service.save("user:a", { ...input, evidence: ["not-a-host-receipt"] }), /./); // no blind save without receipts
   const created = JSON.parse((await service.save("user:a", { ...input, evidence: receipts.slice(0, 1) })).split("\n")[0]);
   assert.equal(created.action, "created");
   service.end("user:a");
@@ -386,6 +393,28 @@ test("full learning path: verified work -> reminder -> create -> later run finds
   service.end("user:a"); service.end("user:b");
 });
 
+test("real agent calls: receipts cited inside prose, prose-only evidence and omitted fields still save against this run's receipts", async t => {
+  const { service, input } = await fixture(t);
+  const r1 = input.evidence[0];
+  const r2 = service.observe("user:a", "second", "bash", false).match(/[a-f0-9]{24}/)![0];
+  // Peter 2026-11-23: ids wrapped in prose.
+  const a = JSON.parse((await service.save("user:a", { ...input, name: "batch-deliver", description: "Batch-deliver delivery branches",
+    evidence: [`Host receipts ${r1}, ${r2}: 16 branches verified, pushed, PRs opened`] })).split("\n")[0]);
+  assert.equal(a.action, "created");
+  service.end("user:a"); service.begin("user:a");
+  service.observe("user:a", "third", "read", false);
+  // Peter 2026-11-24: evidence described without ids, expectedRevision omitted.
+  const { expectedRevision: _omit, ...noRevision } = input;
+  const b = JSON.parse((await service.save("user:a", { ...noRevision, name: "smime-triage", description: "Triage expired S/MIME certificate",
+    evidence: ["Host receipts: bash/PUT run (definition 127 rev 62->63, restart verified)"] })).split("\n")[0]);
+  assert.equal(b.action, "created");
+  // Malformed calls are explained precisely and do not burn the save budget.
+  await assert.rejects(service.save("user:a", { ...input, name: "Bad Name" }), /Invalid skill name/);
+  await assert.rejects(service.save("user:a", { ...input, name: "short-proc", procedure: "too short" }), /Invalid skill procedure/);
+  const c = JSON.parse((await service.save("user:a", { ...input, name: "third-ok", description: "Still within the budget", evidence: undefined })).split("\n")[0]);
+  assert.equal(c.action, "created");
+});
+
 test("prose evidence quoting a current-run receipt id is accepted", async t => {
   const { service, input } = await fixture(t);
   assert.match(await service.save("user:a", { ...input, evidence: [`Host receipt ${input.evidence[0]} (bash succeeded), operator correction in this session`] }), /"saved":true/);
@@ -393,6 +422,7 @@ test("prose evidence quoting a current-run receipt id is accepted", async t => {
 
 test("rejections name the actual cause", async t => {
   const { service, input } = await fixture(t);
-  await assert.rejects(service.save("user:a", { ...input, evidence: ["free text without any receipt id"] }), /Missing current-run evidence: pass receipt IDs/);
   await assert.rejects(service.save("user:a", { ...input, name: "Bad Name" }), /Invalid skill name/);
+  service.begin("user:a");
+  await assert.rejects(service.save("user:a", { ...input, evidence: ["free text without any receipt id"] }), /No verified work in this run/);
 });
