@@ -49,6 +49,7 @@ on:
       - 'test/dispatcher*.test.ts'
       - 'test/execution*.test.ts'
       - 'test/scoped-stop-drain.test.ts'
+      - 'test/api-run-holds-delegated-work.test.ts'
 concurrency:
   group: decision-interface-${{ github.sha }}
   cancel-in-progress: false
