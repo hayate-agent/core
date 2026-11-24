@@ -635,7 +635,7 @@ async function main(argv: string[]): Promise<void> {
     return assessCompletion(supervisorReviewer(), request.input, request.reply,
       { task, purpose: "nightly-closure", expiresAt: request.expiresAt }, request.signal, effectiveModels().reviewModel,
       Date.now, completion.current, undefined, completionTimeout(config.completionCheck?.timeoutMs), plugins.validators);
-  }, () => executions.list("improvement:nightly"));
+  }, () => executions.list("improvement:nightly"), message => console.error(`[improvement] ${message}`));
   await improvement.initializeStrategy(nightly, settings.snapshot().nightlyStrategy);
   let nextLedgerCompact = 0;
   let ledgerRecoveryReady = false;
