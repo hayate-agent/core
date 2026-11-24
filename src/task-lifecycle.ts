@@ -158,7 +158,11 @@ export function evidenceClose(book: TaskBook, ref: TaskRef, expected: number, ev
 /** Bounded projection for assessment evidence. Anything not shown in full is marked
  * `truncated` (text cut or older messages omitted: first item carries the omission), and
  * self-closure fails closed on any truncation. */
-export function laterOperatorInput(book: TaskBook, sessionKey: string, ref: TaskRef, limit = 6): Array<{ at: number; text: string; truncated?: true }> {
+/** Every later operator message of the conversation, verbatim, as completion evidence. Bounded
+ * (count, per-message and total size); anything cut or omitted is marked `truncated`, which keeps
+ * the order fail-closed. The total stays within the smallest assessor prompt budget (typesafe 24 KB;
+ * previously up to 6 × 1000 chars) while covering a busy conversation without cuts. */
+export function laterOperatorInput(book: TaskBook, sessionKey: string, ref: TaskRef, limit = 64, maxChars = 2000, maxTotal = 8000): Array<{ at: number; text: string; truncated?: true }> {
   const order = book.tasks.find(t => t.id === ref.id);
   if (!order) return [];
   const siblings = new Set(book.bindings.filter(b => b.sessionKey === sessionKey && b.ref.id !== ref.id).map(b => b.ref.id));
@@ -171,9 +175,16 @@ export function laterOperatorInput(book: TaskBook, sessionKey: string, ref: Task
   const all = book.tasks.filter(t => siblings.has(t.id) && !t.scheduled)
     .flatMap(t => t.sources.filter(s => s.kind === "operator" && later(s)))
     .map((s, index) => ({ s, index })).sort((a, b) => (a.s.seq ?? 0) - (b.s.seq ?? 0) || a.s.at - b.s.at || a.index - b.index).map(({ s }) => s);
-  const omitted = all.length > limit;
-  return all.slice(-limit).map((s, index) => ({ at: s.at, text: s.text.slice(0, 1000),
-    ...(omitted && index === 0 || s.text.length > 1000 ? { truncated: true as const } : {}) }));
+  // Newest first within the total budget; an older message that no longer fits is omitted.
+  const kept: typeof all = []; let total = 0;
+  for (const s of [...all].reverse()) {
+    const size = Math.min(s.text.length, maxChars);
+    if (kept.length >= limit || total + size > maxTotal) break;
+    kept.unshift(s); total += size;
+  }
+  const omitted = kept.length < all.length;
+  return kept.map((s, index) => ({ at: s.at, text: s.text.slice(0, maxChars),
+    ...(omitted && index === 0 || s.text.length > maxChars ? { truncated: true as const } : {}) }));
 }
 export function commitTaskOutcome(book: TaskBook, update: TaskOutcome, now: number): void {
   const task = book.tasks.find(t => t.id === update.ref.id); if (!task) throw Error("Unknown outcome task");
