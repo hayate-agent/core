@@ -288,7 +288,11 @@ for (const ending of ["empty-abort", "partial-abort", "no-message", "empty", "to
       if (ending === "fresh") agent.last = "fresh answer";
       else if (ending !== "empty-abort") agent.last = "";
     };
-    assert.equal(await session.prompt("next"), ending === "fresh" ? "fresh answer" : "");
+    if (ending.endsWith("abort")) {
+      await assert.rejects(session.prompt("next"), /interrupted without host cancellation/);
+    } else {
+      assert.equal(await session.prompt("next"), ending === "fresh" ? "fresh answer" : "");
+    }
   });
 }
 
@@ -317,6 +321,16 @@ test("PiSession: old provider failure is not attributed to an empty new prompt",
   agent.messages.push({ role: "assistant", stopReason: "error", errorMessage: "old failure", content: [] });
   agent.prompt = async () => {};
   assert.equal(await session.prompt("next"), "");
+});
+
+test("PiSession: SDK abort without host cancellation cannot settle as an empty success", async () => {
+  const { agent, session } = make();
+  agent.prompt = async () => {
+    agent.messages.push({ role: "assistant", stopReason: "aborted", errorMessage: "Request aborted", content: [] });
+  };
+  // No session.abort() was requested. Do not run afterTurn/nightly completion
+  // with an empty success after a provider/SDK interruption.
+  await assert.rejects(session.prompt("next"), /abort|interrupt/i);
 });
 
 test("PiSession: provider error stop surfaces as a failure", async () => {

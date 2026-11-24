@@ -445,7 +445,10 @@ export class PiSession implements RuntimeSession {
     if (last?.stopReason === "error") {
       throw new Error(last.errorMessage || "model request failed");
     }
-    if (!last || last.stopReason === "aborted") return "";
+    // An SDK/provider interruption is not an explicit host cancellation and
+    // must not settle as a successful empty turn (including nightly accounting).
+    if (last?.stopReason === "aborted") throw new Error("Model request interrupted without host cancellation");
+    if (!last) return "";
     return last.content.filter(c => c.type === "text").map(c => c.text).join("").trim();
   }
 

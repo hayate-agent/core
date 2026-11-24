@@ -1,5 +1,5 @@
 {
-  "contentDigest": "a66c3f168dcfc843bbdd64b8bd538552c9e7760fa1665ee42d416ae247dcfaec",
+  "contentDigest": "04bde0841b89d0463ac48a1c6be95d1bbf097d84beeecad441955322e8cd99db",
   "files": [
     {
       "mode": "100644",
@@ -1339,7 +1339,7 @@
     {
       "mode": "100644",
       "path": "src/runtime/pi.ts",
-      "sha256": "d66d842b897b7e2fd0deccc46571f549ee49634827936a148dcb5807041989dd"
+      "sha256": "5305395a765e0a9a2ed98746d0c0c29ab29fb7ad44eeb78a58ed378366fffdf6"
     },
     {
       "mode": "100644",
@@ -1644,7 +1644,7 @@
     {
       "mode": "100644",
       "path": "test/api-run-holds-delegated-work.test.ts",
-      "sha256": "eb88f12946fdc489e5a26ba76b9d95c021f58511f43c8e5abb8ed15dfcc14516"
+      "sha256": "da92913e2c33d790a22ba29a2aa6fb46010e51028410dca54e1231df2caef469"
     },
     {
       "mode": "100644",
@@ -3224,7 +3224,7 @@
     {
       "mode": "100644",
       "path": "test/night-start-catchup.test.ts",
-      "sha256": "f403fa9b1b082215af9722ea17ee554ed5d3abfe8acf1164354e9fdbf895bf30"
+      "sha256": "fc3172f1a4edf557b58e4e164324abc2ef435117eb05a3d478aed4da299af3b5"
     },
     {
       "mode": "100644",
@@ -3255,6 +3255,11 @@
       "mode": "100644",
       "path": "test/nightly-product-scope.test.ts",
       "sha256": "21d31f1fab616556f008ffcc1340ebb406da317c9b7e935c03c4a938a26bf3c4"
+    },
+    {
+      "mode": "100644",
+      "path": "test/nightly-runtime-interruption.test.ts",
+      "sha256": "f89167fe95fc1476fa44e725d8641df752b3c532d3acdf1bdaa8e5ed057a153b"
     },
     {
       "mode": "100644",
@@ -3424,7 +3429,7 @@
     {
       "mode": "100644",
       "path": "test/pi-session.test.ts",
-      "sha256": "40b2499497a19a7b22ec0c390cb27fd186fb7379d1c1608d59b8198e48c8d29f"
+      "sha256": "d9c26248bd63664755172afa0673f24f258d0d4e76c6bba8ed7d4d6b6cfa452e"
     },
     {
       "mode": "100644",
@@ -4710,5 +4715,5 @@
   "historyPolicy": "fresh-root; no source commits, tags, refs or deleted blobs",
   "pluginSHA": "86d66c1056ca436bbd8ebeff4c4b1e29a9575a36",
   "schema": 1,
-  "sourceSHA": "387c9ccc91a3b2dca3cc10a7e9b395159183773a"
+  "sourceSHA": "b42b39f4461266f9c587b7b6c7c9477454aa4f9e"
 }
