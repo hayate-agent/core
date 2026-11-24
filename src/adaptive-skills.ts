@@ -175,10 +175,14 @@ export class AdaptiveSkills {
     const run = this.run(key);
     if (run.writes >= 2) throw Error("Adaptive skill write budget exhausted");
     run.writes++; // failed attempts also consume the bounded budget
-    if (typeof input.name !== "string" || !NAME.test(input.name) || !text(input.description, 8, 256) || !text(input.procedure, 40, 4096)
-      || !Array.isArray(input.evidence) || input.evidence.length < 1 || input.evidence.length > 4
-      || !input.evidence.every(id => typeof id === "string" && run.receipts.has(id))
-      || !(input.expectedRevision === null || typeof input.expectedRevision === "string" && /^[a-f0-9]{64}$/.test(input.expectedRevision))) throw Error("Invalid skill or missing current-run evidence");
+    if (typeof input.name !== "string" || !NAME.test(input.name)) throw Error("Invalid skill name: use lowercase letters, digits and hyphens, starting with a letter, at most 48 characters");
+    if (!text(input.description, 8, 256)) throw Error("Invalid description: 8-256 bytes of plain text");
+    if (!text(input.procedure, 40, 4096)) throw Error("Invalid procedure: 40-4096 bytes of plain text");
+    if (!(input.expectedRevision === null || typeof input.expectedRevision === "string" && /^[a-f0-9]{64}$/.test(input.expectedRevision))) throw Error("Invalid expectedRevision: null to create, otherwise the 64-hex revision of the existing recipe");
+    // Evidence must be host receipt IDs (24 hex characters) from this run. Agents often pass prose that quotes the IDs; accept those, ignore the rest.
+    const ids = Array.isArray(input.evidence) ? [...new Set(input.evidence.flatMap(e => typeof e === "string" ? e.match(/\b[a-f0-9]{24}\b/g) ?? [] : []))] : [];
+    const valid = ids.filter(id => run.receipts.has(id));
+    if (!valid.length || valid.length > 4) throw Error(valid.length ? "Too many evidence receipts: pass at most 4" : "Missing current-run evidence: pass receipt IDs (exactly 24 hex characters, e.g. from a 'Host skill evidence receipt: <id>' line appended to a successful read/bash/edit/write/grep/find/ls result of THIS run) in evidence, not free text. Receipts from earlier runs or from other tools are not valid");
     const name = String(input.name), dir = await this.dir(key), scope = this.scope(key);
     if (this.catalog.skills.some(s => s.name === name)) throw Error("Installed skills cannot be replaced");
     const lock = path.join(dir, ".lock");
@@ -193,7 +197,7 @@ export class AdaptiveSkills {
       const folder = path.join(dir, name);
       await mkdir(folder, { mode: 0o700 }).catch(e => { if (e.code !== "EEXIST") throw e; });
       if (!(await lstat(folder)).isDirectory() || await realpath(folder) !== folder) throw Error("Unsafe adaptive skill path");
-      const evidence = [...new Set((input.evidence as string[]).map(id => run.receipts.get(id)!.tool))];
+      const evidence = [...new Set(valid.map(id => run.receipts.get(id)!.tool))];
       const raw = `---\n${JSON.stringify({ schema: 1, owner: scope, name, description: input.description, evidence })}\n---\n${input.procedure}`;
       this.decode(raw, scope);
       stage = path.join(folder, `.${randomUUID()}.tmp`);
@@ -215,7 +219,7 @@ export class AdaptiveSkills {
     return { apiVersion: 1, activate: api => {
       api.registerTool({ name: "plugin_skill_learn", description: "Create or update a reusable adaptive skill recipe after verified work. expectedRevision null creates; use the loaded revision to update. For an existing installed SKILL.md, use ordinary read/edit tools on its actual path when within your task and permissions; this recipe tool does not replace installed files. Never save secrets or claim new permissions.",
         parameters: { type: "object", additionalProperties: false, required: ["name", "description", "procedure", "evidence", "expectedRevision"], properties: {
-          name: { type: "string", pattern: "^[a-z][a-z0-9-]{0,47}$" }, description: { type: "string", minLength: 8, maxLength: 256 }, procedure: { type: "string", minLength: 40, maxLength: 4096 }, evidence: { type: "array", minItems: 1, maxItems: 4, items: { type: "string" } }, expectedRevision: { type: ["string", "null"] },
+          name: { type: "string", pattern: "^[a-z][a-z0-9-]{0,47}$" }, description: { type: "string", minLength: 8, maxLength: 256 }, procedure: { type: "string", minLength: 40, maxLength: 4096 }, evidence: { type: "array", minItems: 1, maxItems: 4, items: { type: "string", description: "Host receipt ID: 24 hex characters from a 'Host skill evidence receipt' line of a successful native tool result in this run" } }, expectedRevision: { type: ["string", "null"] },
         } }, execute: (input, ctx) => this.save(ctx.sessionKey, input) });
     } };
   }
