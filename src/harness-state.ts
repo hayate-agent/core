@@ -110,6 +110,8 @@ export interface DurableTask {
   evidenceQuestion?: number;
   /** This stalled order carries the conversation's one unanswered question (others pause silently). */
   evidenceAsked?: true;
+  /** Host evidence policy under which this order stalled; a newer policy re-arms one reassessment. */
+  evidencePolicy?: number;
   /** Order generation whose settled-but-unclosed completion was reconciled at startup (once). */
   evidenceReconciled?: number;
   /** Read-only closure reassessment owner: a "continue" verdict admits no work (backoff, then one question). */

@@ -158,6 +158,9 @@ export interface UpdateAdmissionStatus {
 /** Task scope that matches no task: a scoped stop with it ownership-holds exactly the unscoped executions. */
 const API_LEGACY_SCOPE = "api:legacy-unscoped";
 
+/** Bump when the host shows the completion assessor materially more evidence (2: full later operator input, #863). */
+const EVIDENCE_POLICY = 2;
+
 export class Harness {
   readonly sessions = new Map<string, SessionState>();
   private updateLease?: { id: string; expires: number; requestId?: string };
@@ -2740,6 +2743,13 @@ export class Harness {
       // admission, assessment or release (crash between ledger close and checkpoint).
       this.recoverEvidenceClosures(s);
       for (const task of this.tasks(s)) this.recoverUnclosedCompletion(s, task);
+      // A final result paused under an older host evidence policy was refused on evidence the host
+      // could not show then: one reassessment under the current policy. Only closure-only owners
+      // (read-only by construction: a continue verdict never admits work); orders with remaining
+      // work wait for the operator as before. No new question: the conversation was already asked.
+      for (const task of this.tasks(s)) if (task.closureOnly && task.evidenceStalled && task.evidencePolicy !== EVIDENCE_POLICY && this.rearmStalled(task)) {
+        task.evidencePolicy = EVIDENCE_POLICY; if (task.taskRef) task.evidenceQuestion = task.taskRef.generation; s.unsaved = true;
+      }
       for (const task of [...this.tasks(s)].sort((a, b) => priorityRank(this.committedPriority(b)) - priorityRank(this.committedPriority(a)))) {
       if (task.recoveryEnrollment === "held-legacy" || !this.taskAllowed(task) || this.apiRunGone(s, task)) continue;
       // Older turn finalization persisted a missing decision as an explicit
@@ -3288,7 +3298,7 @@ export class Harness {
       task.recoveryRetry = undefined; task.recoveryAssessment = undefined;
       this.recoveryAttention(s, task, "inconclusive"); // blocked + one diagnostic per epoch
       if (task.taskRef && this.opts.taskLifecycle?.enabled) {
-        task.evidenceStalled = true;
+        task.evidenceStalled = true; task.evidencePolicy = EVIDENCE_POLICY;
         const to = task.anchor?.replyTo ?? s.replyTo ?? this.home, id = `evidence-stalled:${task.taskRef.id}:${task.taskRef.generation}`;
         // Exactly one question per order generation, durable beyond its outbox delivery, and at
         // most one per conversation while the operator has not answered: further stalled orders of
@@ -3326,11 +3336,7 @@ export class Harness {
     for (const task of this.tasks(s)) {
       // The operator answered (or wrote anything) after the single stalled question: one fresh
       // read-only reassessment that sees that message. Never a reminder, never work.
-      if (task.id !== exceptTaskId && task.evidenceStalled && task.state === "blocked" && task.taskRef && this.taskAllowed(task)) {
-        task.evidenceStalled = undefined; task.evidenceAsked = undefined; task.explicitBlocked = false; // diagnostic marker kept: no second notice; closureOnly kept (the reply runs as its own turn/order)
-        task.recoveryAdmission = undefined; task.recoveryAssessment = undefined; task.recoveryRetry = undefined;
-        task.state = "active"; s.unsaved = true; continue;
-      }
+      if (task.id !== exceptTaskId && task.evidenceStalled && this.rearmStalled(task)) { s.unsaved = true; continue; }
       if (task.id === exceptTaskId || !task.taskRef || !task.recoveryAdmission || task.state !== "active" ||
           task.recoveryEnrollment === "held-legacy" || !this.taskAllowed(task)) continue;
       const queued = s.queue.filter(queuedInput => queuedInput.taskId === task.id);
@@ -3338,6 +3344,15 @@ export class Harness {
       s.queue = s.queue.filter(queuedInput => !queued.includes(queuedInput));
       this.withdrawForRecheck(s, task);
     }
+  }
+
+  /** One fresh read-only reassessment of a paused (stalled) order. Never a reminder, never work. */
+  private rearmStalled(task: DurableTask): boolean {
+    if (!task.evidenceStalled || task.state !== "blocked" || !task.taskRef || !this.taskAllowed(task)) return false;
+    task.evidenceStalled = undefined; task.evidenceAsked = undefined; task.explicitBlocked = false; // diagnostic marker kept: no second notice; closureOnly kept (the reply runs as its own turn/order)
+    task.recoveryAdmission = undefined; task.recoveryAssessment = undefined; task.recoveryRetry = undefined;
+    task.state = "active";
+    return true;
   }
 
   private withdrawForRecheck(s: SessionState, task: DurableTask): void {
