@@ -1536,8 +1536,11 @@ export class Harness {
       assessedMark !== undefined && view.operatorMark(s.key) === assessedMark &&
       !this.pendingOperatorInput(s, task) && !this.opts.pendingNativeSubagent?.(s.key, task.id) &&
       !view.executions.some(child => child.parent === s.key && ["ready", "running"].includes(child.status) && this.mayDependOn(child, task.id, task)) &&
-      JSON.stringify(view.laterOperatorInput(s.key)) === JSON.stringify(assessedLater ?? []) && !assessedLater?.some(item => item.truncated) &&
-      (!openTodos || !!assessedLater?.length);
+      JSON.stringify(view.laterOperatorInput(s.key)) === JSON.stringify(assessedLater ?? []) &&
+      // Later sibling messages are each their own enrolled order with their own lifecycle, so an
+      // older one cut from the bounded evidence window is never lost by closing this order. They
+      // can only stand in for this order's own open todos when the verdict saw all of them.
+      (!openTodos || !!assessedLater?.length && !assessedLater.some(item => item.truncated));
     if (!guard({ executions: store.list(s.key), laterOperatorInput: key => store.laterOperatorInput(key, ref), operatorMark: key => store.operatorMark(key) })) return "refused";
     let closed = false;
     // Serialized with operator ingress of this conversation (see accept): the guard's view of
@@ -1584,7 +1587,9 @@ export class Harness {
     if (/^(dispatch|subagent):/.test(s.key) || s.key.startsWith("cron:") || task.anchor?.replyTo?.channel === "api") return;
     const order = this.opts.executionStore?.coreTask(ref.id);
     if (!order || order.scheduled || order.operatorStatus !== "open" || order.generation !== ref.generation) return;
-    if (task.state === "completed" && order.technical.state === "completed") {
+    // A locally final result whose verdict was independently "completed" (also pre-upgrade
+    // settlements that left the order's technical state open) is reassessed for closure only.
+    if (task.state === "completed" && (order.technical.state === "completed" || task.supervisorDecision?.verdict === "completed")) {
       task.evidenceReconciled = ref.generation;
       task.closureOnly = true; // the result was already final: reassess for closure only, never restart work
       this.retainForReassessment(task, s);
@@ -3288,8 +3293,12 @@ export class Harness {
       if (task.taskRef && this.opts.taskLifecycle?.enabled) {
         task.evidenceStalled = true;
         const to = task.anchor?.replyTo ?? s.replyTo ?? this.home, id = `evidence-stalled:${task.taskRef.id}:${task.taskRef.generation}`;
-        // Exactly one question per order generation, durable beyond its outbox delivery.
-        if (to && task.evidenceQuestion !== task.taskRef.generation && !s.outbox.some(entry => entry.id === id)) {
+        // Exactly one question per order generation, durable beyond its outbox delivery, and at
+        // most one per conversation while the operator has not answered: further stalled orders of
+        // the session pause silently and are re-armed by the same next operator message.
+        const askedInSession = this.tasks(s).some(other => other !== task && other.evidenceStalled && other.evidenceAsked);
+        if (to && !askedInSession && task.evidenceQuestion !== task.taskRef.generation && !s.outbox.some(entry => entry.id === id)) {
+          task.evidenceAsked = true;
           task.evidenceQuestion = task.taskRef.generation;
           const locale = resolveLanguage(this.opts.language?.() ?? {}, { kind: "conversation", sessionKey: s.key, language: task.anchor?.language });
           s.outbox.push({ ...this.outbox.create(s.key, to, message(locale, "task.evidenceStalled", {
@@ -3319,7 +3328,7 @@ export class Harness {
       // The operator answered (or wrote anything) after the single stalled question: one fresh
       // read-only reassessment that sees that message. Never a reminder, never work.
       if (task.id !== exceptTaskId && task.evidenceStalled && task.state === "blocked" && task.taskRef && this.taskAllowed(task)) {
-        task.evidenceStalled = undefined; task.explicitBlocked = false; // diagnostic marker kept: no second notice; closureOnly kept (the reply runs as its own turn/order)
+        task.evidenceStalled = undefined; task.evidenceAsked = undefined; task.explicitBlocked = false; // diagnostic marker kept: no second notice; closureOnly kept (the reply runs as its own turn/order)
         task.recoveryAdmission = undefined; task.recoveryAssessment = undefined; task.recoveryRetry = undefined;
         task.state = "active"; s.unsaved = true; continue;
       }

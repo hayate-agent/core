@@ -294,7 +294,67 @@ test("later operator input that was cut or omitted marks truncation and blocks s
   h.restoreSessions([{ key: "mem:room1", replyTo: ROOM, tasks: [{ id: "old", taskRef: old, original: "Plan the sprint", state: "active", depth: 1,
     recoveryEnrollment: "current", lastReply: "Sprint planned.", anchor: { id: "old", task: "Plan the sprint", receivedAt: 1, replyTo: ROOM } }] }]);
   await h.tick(); await h.drained();
-  assert.equal(store.coreTask(old.id)!.operatorStatus, "open", "incompletely assessed later input never closes");
+  assert.equal(store.coreTask(old.id)!.operatorStatus, "done", "a long conversation (each later message is its own order) never blocks closing a finished order");
+});
+
+test("cut later input never stands in for the order's own open todos", async t => {
+  const store = await storeFixture(t);
+  const old = await store.enrollTask("mem:room1", "old", "Plan the sprint", "old", "operator");
+  await store.beginTurn("plan", "mem:room1");
+  await store.settleTurn("plan", "mem:room1", { consumed: [], outbox: [], taskOutcome: { ref: old, expectedRevision: 1, eventId: "plan", technical: { state: "open" },
+    plan: [{ id: "t", title: "TEST-266", kind: "work", status: "running", sourceId: "old" }] } });
+  for (let i = 0; i < 7; i++) await store.enrollTask("mem:room1", `m${i}`, `message ${i}`, `m${i}`, "operator");
+  const h = new Harness({ runtime: new FakeRuntime(() => "unused"), executionStore: store, taskLifecycle: { enabled: true } });
+  const channel = new MemoryChannel(); h.addChannel(channel); h.onStateChange = async () => {}; t.after(() => h.stop(0));
+  h.restoreSessions([{ key: "mem:room1", replyTo: ROOM, tasks: [{ id: "old", taskRef: old, original: "Plan the sprint", state: "active", depth: 1,
+    recoveryEnrollment: "current", lastReply: "Planned.", anchor: { id: "old", task: "Plan the sprint", receivedAt: 1, replyTo: ROOM } }] }]);
+  const s = h.sessions.get("mem:room1")!; const task = h["tasks"](s).find((item: { id: string }) => item.id === "old");
+  const later = store.laterOperatorInput("mem:room1", old); assert.ok(later[0].truncated);
+  assert.equal(await h["closeOrderByEvidence"](s, task, "e1", "Planned", true, store.coreTask(old.id)!.revision, later, store.operatorMark("mem:room1")), "refused");
+});
+
+test("many stalled orders of one conversation ask at most one question until the operator answers", async t => {
+  const store = await storeFixture(t);
+  const h = new Harness({ runtime: new FakeRuntime(() => "unused"), executionStore: store, taskLifecycle: { enabled: true } });
+  const channel = new MemoryChannel(); h.addChannel(channel); h.onStateChange = async () => {}; t.after(() => h.stop(0));
+  const refs = [] as Awaited<ReturnType<typeof store.enrollTask>>[];
+  for (let i = 0; i < 4; i++) refs.push(await store.enrollTask("mem:room1", `o${i}`, `Order ${i}`, `o${i}`, "operator"));
+  h.restoreSessions([{ key: "mem:room1", replyTo: ROOM, tasks: refs.map((ref, i) => ({ id: `o${i}`, taskRef: ref, original: `Order ${i}`, state: "active" as const, depth: 1,
+    recoveryEnrollment: "current" as const, anchor: { id: `o${i}`, task: `Order ${i}`, receivedAt: 1, replyTo: ROOM } })) }]);
+  const s = h.sessions.get("mem:room1")!;
+  for (const task of h["tasks"](s)) for (let i = 0; i < 3; i++) h["retainForReassessment"](task, s);
+  assert.ok(h["tasks"](s).every((task: { state: string }) => task.state === "blocked"), "all paused");
+  assert.equal(s.outbox.filter(entry => entry.id.startsWith("evidence-stalled:")).length, 1, "one question for the conversation, not one per order");
+  // The operator answers: every paused order is re-armed; a later stall may ask once again.
+  h["recheckOrdersAfterOperatorInput"](s);
+  const rearmed = h["tasks"](s).filter((task: { state: string }) => task.state === "active");
+  assert.equal(rearmed.length, 4);
+  for (let i = 0; i < 3; i++) h["retainForReassessment"](rearmed[1], s);
+  assert.equal(s.outbox.filter(entry => entry.id.startsWith("evidence-stalled:")).length, 2, "an unasked order may ask after the answer");
+  for (let i = 0; i < 3; i++) h["retainForReassessment"](rearmed[0], s);
+  assert.equal(s.outbox.filter(entry => entry.id.startsWith("evidence-stalled:")).length, 2, "never twice per order generation");
+});
+
+test("a pre-upgrade completed verdict whose order stayed technically open is reassessed for closure only", async t => {
+  const store = await storeFixture(t);
+  const seen: string[] = []; let checks = 0;
+  const h = new Harness({ runtime: new FakeRuntime(text => (seen.push(text), "unused")), executionStore: store, taskLifecycle: { enabled: true },
+    completionCheck: async () => (checks++, { state: "completed" }) });
+  const channel = new MemoryChannel(); h.addChannel(channel); h.onStateChange = async () => {}; t.after(() => h.stop(0));
+  const ref = await store.enrollTask("mem:room1", "order", "Carry over", "order", "operator");
+  await store.beginTurn("turn-1", "mem:room1");
+  await store.settleTurn("turn-1", "mem:room1", { consumed: [], outbox: [], taskOutcome: { ref, expectedRevision: 1, eventId: "turn-1", technical: { state: "open", evidence: "Moved." } } });
+  h.restoreSessions([{ key: "mem:room1", replyTo: ROOM, tasks: [{ id: "order", taskRef: ref, original: "Carry over", state: "completed", depth: 1,
+    supervisorDecision: { verdict: "completed" }, recoveryEnrollment: "current", lastReply: "Moved.", anchor: { id: "order", task: "Carry over", receivedAt: 1, replyTo: ROOM } }] }]);
+  await h.recoverTasks();
+  const s = h.sessions.get("mem:room1")!; const task = h["tasks"](s).find((item: { id: string }) => item.id === "order");
+  assert.ok(task.recoveryRetry && task.closureOnly, "closure-only owner for a final result");
+  task.recoveryRetry.nextAt = 0;
+  for (let i = 0; i < 5 && store.coreTask(ref.id)!.operatorStatus === "open"; i++) {
+    await h["pump"](s); await h.tick(); await Promise.race([h.drained(), new Promise(r => setTimeout(r, 300))]); await store.quiesce();
+  }
+  assert.equal(seen.length, 0, "no work");
+  assert.equal(store.coreTask(ref.id)!.operatorStatus, "done");
 });
 
 test("an accepted but unprocessed operator message fences an already queued continuation", async t => {
