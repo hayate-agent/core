@@ -72,6 +72,10 @@ export interface Inbound {
   /** Core operator authority captured at admission, not reconstructed from model text. */
   taskRef?: import("./task-lifecycle.js").TaskRef;
   taskRevision?: number;
+  /** Withdrawn before its prompt (newer operator input): never executed; only its empty turn settlement remains. */
+  withdrawn?: true;
+  /** Durable operator ingress sequence reserved at acceptance (persisted with the inbox). */
+  operatorSeq?: number;
   /** Trusted numeric authorization boundary inherited by generated work. */
   continuationExpiresAt?: number;
   /** Core-captured original chat input; inherited by generated follow-ups, never reply text. */
@@ -85,7 +89,9 @@ export interface Inbound {
     resolved?: import("./completion-context.js").ResolvedCompletionContext;
     /** Bounded task-local evidence. Saved plans and replies remain untrusted. */
     retained?: { original: string; savedNext?: string; priorReply?: string; parentReconciliation?: string;
-      order?: { id: string; generation: number; revision: number; operatorStatus: string; sources?: Array<{ id: string; text: string }>; plan?: import("./task-lifecycle.js").TaskTodo[] };
+      order?: { id: string; generation: number; revision: number; operatorStatus: string; sources?: Array<{ id: string; text: string }>; plan?: import("./task-lifecycle.js").TaskTodo[];
+        /** Authentic later operator messages of the SAME conversation (other orders). They can complete, narrow or supersede this order (e.g. "I already did it"), never widen it. */
+        laterOperatorMessagesSameConversation?: Array<{ at: number; text: string; truncated?: true }> };
       /** Host's actual loaded Core, not an available release or proof of task completion. */
       runtime?: { phase: "process-started"; version: string; revision?: string; startedAt: number };
       technical: { verdict?: string; diagnostic?: import("./completion-check.js").CompletionDiagnostic;

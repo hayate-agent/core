@@ -84,6 +84,8 @@ export interface DurableTask {
   completionObservations?: import("./session-archive.js").ArchiveEntry[];
   /** Persisted host admission; inference dedup is not an execution permit. */
   recoveryAdmission?: { id: string; depth: number; next: string; original: string; expiresAt?: number;
+    /** Operator-input watermark the admitting assessment saw; any newer operator input voids the admission. */
+    operatorMark?: string;
     /** Scheduler permission for this parent step only, never worker replay authority. */
     independent?: { evidence: string; taskId: string; sessionKey: string } };
   recoveryAttentionId?: string;
@@ -100,7 +102,18 @@ export interface DurableTask {
    * Used only for persisted backoff, never as a total attempt/authority limit. */
   recoveryRetry?: { attempts: number; nextAt: number; diagnostic?: import("./completion-check.js").CompletionDiagnostic;
     detail?: import("./validator.js").CompletionFailureDetail };
-  wait?: { reason: string; nextAt: number; deadline: number };
+  /** `operatorMark`: operator-input watermark the waiting verdict saw (newer input → reassess, not recheck). */
+  wait?: { reason: string; nextAt: number; deadline: number; operatorMark?: string };
+  /** Paused after the single evidence-stalled question; the next operator message re-arms one reassessment. */
+  evidenceStalled?: true;
+  /** Order generation for which the single evidence-stalled question was already issued (never repeated). */
+  evidenceQuestion?: number;
+  /** Order generation whose settled-but-unclosed completion was reconciled at startup (once). */
+  evidenceReconciled?: number;
+  /** Read-only closure reassessment owner: a "continue" verdict admits no work (backoff, then one question). */
+  closureOnly?: true;
+  /** Order generation whose evidence closure was settled session-side (notice issued once). */
+  evidenceSettled?: number;
   /** Monotonic scheduler claims, independent of productive follow-up depth. */
   waitChecks?: number;
   lastWait?: DurableTask["wait"];

@@ -110,5 +110,7 @@
   "usage.tool.started": "iniciado",
   "usage.tool.completed": "finalizado",
   "usage.tool.failed": "fallido",
-  "dispatcher.assessmentStalled": "Evaluación detenida por falta de nuevas pruebas. Se necesita información nueva o una continuación explícita; se conservan los resultados anteriores."
+  "dispatcher.assessmentStalled": "Evaluación detenida por falta de nuevas pruebas. Se necesita información nueva o una continuación explícita; se conservan los resultados anteriores.",
+  "task.evidenceClosed": "✅ Hecho y cerrado (verificado de forma independiente): {original}. Si aún queda algo pendiente: /orders reopen {id}",
+  "task.evidenceStalled": "❓ Este encargo parece terminado pero no puede cerrarse con seguridad: {original}. ¿Está listo? Entonces /orders done {id}; si no, indica qué falta. (Pregunta única, sin recordatorios.)"
 }
