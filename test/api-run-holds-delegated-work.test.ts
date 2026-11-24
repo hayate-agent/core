@@ -68,7 +68,13 @@ test("an API run window closes honestly as blocked when delegated work outlives 
   const { run_id } = await start();
   assert.equal(runs.get(run_id)!.status, "running");
   advance(DEFAULT_API_RESULT_HOLD_MS + 1);
-  await harness.tick(); for (let i = 0; i < 100 && runs.get(run_id)!.status === "running"; i++) await settle();
+  // A tick may observe Main still settling its held answer. Keep driving the
+  // scheduler while waiting, as the host does, rather than relying on start()'s sleeps.
+  await harness.tick();
+  for (let i = 0; i < 100 && runs.get(run_id)!.status === "running"; i++) {
+    await settle();
+    await harness.tick();
+  }
   assert.equal(runs.get(run_id)!.status, "completed");
   assert.match(runs.get(run_id)!.output!, /^Interim: worker dispatched\.\n\nStatus: blocked/);
 });

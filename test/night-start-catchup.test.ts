@@ -95,6 +95,30 @@ test("periodic catchup retains pause/busy intent and restart budget", async t =>
   assert.equal((await f.state()).pending, undefined);
 });
 
+test("periodic continuation reserves turn two once after unrelated busy work drains", async t => {
+  const f = await fixture(t);
+  const result = "turn one completed";
+  await f.seed({ version: 1, night: "2026-10-31", turns: 1, results: [result] });
+  f.setNow("2026-10-31T22:05:00Z");
+  const other = f.harness.state("interactive");
+  other.running = true;
+  await f.jobs[2].trigger();
+  assert.equal((await f.state()).pending, undefined);
+  assert.equal((await f.state()).turns, 1);
+  other.running = false;
+  f.setNow("2026-10-31T22:10:00Z");
+  await f.jobs[2].trigger();
+  for (let i = 0; i < 2; i++) {
+    const state = await f.state();
+    assert.equal(state.night, "2026-10-31");
+    assert.equal(state.turns, 1);
+    assert.deepEqual(state.results, [result]);
+    assert.equal(state.pending, "improvement:2026-10-31:2");
+    assert.equal(f.harness.sessions.get("improvement:nightly")!.queue.length, 1);
+    await f.jobs[2].trigger();
+  }
+});
+
 test("periodic catchup cannot start outside window, disabled policy or disabled/changing strategy", async t => {
   const f = await fixture(t);
   for (const time of ["2026-10-31T21:55:00Z", "2026-11-01T04:00:00Z"]) {
