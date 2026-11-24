@@ -107,7 +107,7 @@ export class TaskBookStorage {
     };
     await pages("tasks", book.tasks, 64, tasks);
     await pages("bindings", book.bindings, 256, bindings);
-    const root = await this.put({ version: 1, tasks, bindings });
+    const root = await this.put({ version: 1, tasks, bindings, ...(book.sourceSeq ? { sourceSeq: book.sourceSeq } : {}) });
     await syncDirStrict(this.dir);
     return { version: 1, root };
   }
@@ -133,7 +133,8 @@ export class TaskBookStorage {
     await this.validateDirectory();
     const root = JSON.parse((await this.read(r.root)).raw);
     if (root.version !== 1 || !Array.isArray(root.tasks) || !Array.isArray(root.bindings)) throw Error("Invalid task book manifest");
-    const book: TaskBook = { tasks: [], bindings: [] };
+    if (root.sourceSeq !== undefined && (!Number.isSafeInteger(root.sourceSeq) || root.sourceSeq < 1)) throw Error("Invalid task book manifest");
+    const book: TaskBook = { tasks: [], bindings: [], ...(root.sourceSeq ? { sourceSeq: root.sourceSeq } : {}) };
     for (const kind of ["tasks", "bindings"] as const) for (const hash of root[kind]) {
       const page = JSON.parse((await this.read(hash)).raw);
       if (page.kind !== kind || !Array.isArray(page.items) || page.items.length > (kind === "tasks" ? 64 : 256)) throw Error("Invalid task book page");
