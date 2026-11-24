@@ -173,7 +173,18 @@ export class ImprovementController {
     if (input.sessionKey === KEY) setImmediate(() => { this.scheduledTick(false); });
   }
   constructor(private home: string, private harness: Harness, private timezone: string, private now: () => number, private readonly strategy: NightlyStrategy, private readonly validateClosure?: NightlyCompletionValidator,
-    private readonly delegatedExecutions?: () => readonly import("./execution.js").Execution[]) {}
+    private readonly delegatedExecutions?: () => readonly import("./execution.js").Execution[],
+    /** Optional diagnostics: fixed gate codes and counters only, never prompts, replies, session keys or credentials. */
+    private readonly gateLog?: (message: string) => void) {}
+  private lastGate?: string;
+  /** Records why a tick did not admit work; identical consecutive outcomes are logged once. */
+  private gate(code: string, detail: Record<string, string | number | boolean | undefined> = {}): void {
+    if (!this.gateLog) return;
+    const message = `tick-gate ${code} ${JSON.stringify(detail)}`;
+    if (message === this.lastGate) return;
+    this.lastGate = message;
+    try { this.gateLog(message); } catch { /* Diagnostics must never change admission. */ }
+  }
   private get file(): string { return path.join(this.home, "improvement", "state.json"); }
   async policy(): Promise<ImprovementPolicy> {
     try { return improvementPolicy({ timezone: this.timezone, ...parse(await readFile(path.join(this.home, "improvement.yaml"), "utf8")) }); }
@@ -399,14 +410,14 @@ export class ImprovementController {
   }
 
   private async tickForeground(cronStart: boolean): Promise<void> {
-    if (this.checking || this.strategyChanging) return;
+    if (this.checking || this.strategyChanging) { this.gate("reentrant", { checking: this.checking, strategyChanging: !!this.strategyChanging }); return; }
     this.checking = true;
     try {
       await this.load();
       for (const task of this.delegatedExecutions?.() ?? []) await this.delegatedResult(task.id);
       const strategy = this.currentStrategy;
       // Disabled selection never creates a new reservation or empty night state.
-      if (!strategy) return;
+      if (!strategy) { this.gate("no-strategy"); return; }
       const p = await this.policy();
       const w = improvementWindow(this.now(), p);
       // Persist actual imported evidence only after strategy/policy validation;
@@ -453,10 +464,10 @@ export class ImprovementController {
         await this.save();
         return;
       }
-      if (!p.enabled || !w.active) return;
+      if (!p.enabled || !w.active) { this.gate("window", { enabled: p.enabled, active: w.active }); return; }
       if (!this.state || this.state.night !== w.night) {
-        if (!cronStart && this.state?.nextNightRequested !== w.night) return;
-        if (this.state && !this.state.reportQueued) return;
+        if (!cronStart && this.state?.nextNightRequested !== w.night) { this.gate("new-night-not-requested"); return; }
+        if (this.state && !this.state.reportQueued) { this.gate("previous-night-report-pending"); return; }
         // Preserve improved proposals across nights without relabelling them as
         // new experiments, reopening old turns or granting publication authority.
         const deliveries = [...(this.state?.deliveryBacklog ?? []), ...(this.state?.experiments ?? [])]
@@ -467,7 +478,14 @@ export class ImprovementController {
           deliveryImportIssues: this.state?.deliveryImportIssues, recentHypotheses: this.state?.recentHypotheses ?? [] };
         await this.save(); // persist Cron intent even if interactive work delays execution
       }
-      if (this.harness.paused || busy || [...this.harness.sessions.values()].some((s) => s.running || s.queue.length)) return;
+      const others = [...this.harness.sessions.values()].filter((s) => s.running || s.queue.length);
+      if (this.harness.paused || busy || others.length) {
+        this.gate("busy", { paused: this.harness.paused, ownerBusy: !!busy, ownerRunning: !!session?.running,
+          ownerQueued: session?.queue.length ?? 0, ownerOutbox: session?.outbox.length ?? 0,
+          delegatedActive: delegated.filter(task => ["ready", "running"].includes(task.status)).length,
+          sessionsRunning: others.filter((s) => s.running).length, sessionsQueued: others.reduce((n, s) => n + s.queue.length, 0) });
+        return;
+      }
       // An adopted night is closed even if wall time re-enters its old window.
       // Never resume it under a newly selected strategy generation.
       const assessment = this.state.closureAssessment;
@@ -483,7 +501,12 @@ export class ImprovementController {
         await this.save();
       }
       if (this.state.reportQueued || this.state.done || this.state.turns >= p.maxTurns ||
-          (this.state.closureFailures ?? 0) >= 3) return;
+          (this.state.closureFailures ?? 0) >= 3) {
+        this.gate("night-closed", { reportQueued: !!this.state.reportQueued, done: !!this.state.done, turns: this.state.turns,
+          maxTurns: p.maxTurns, closureFailures: this.state.closureFailures ?? 0 });
+        return;
+      }
+      this.lastGate = undefined;
       if (this.state.pending) {
         this.state.results.push("Vorheriger Versuch unterbrochen oder fehlgeschlagen; vor Fortsetzung tatsächlichen Zustand prüfen.");
         this.state.pending = undefined;
