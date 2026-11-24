@@ -2743,11 +2743,12 @@ export class Harness {
       // admission, assessment or release (crash between ledger close and checkpoint).
       this.recoverEvidenceClosures(s);
       for (const task of this.tasks(s)) this.recoverUnclosedCompletion(s, task);
-      // An order paused under an older host evidence policy was refused on evidence the host
-      // could not show then: one read-only reassessment under the current policy (no question,
-      // the per-generation question stays spent; closure-only kept).
-      for (const task of this.tasks(s)) if (task.evidenceStalled && task.evidencePolicy !== EVIDENCE_POLICY) {
-        this.rearmStalled(task); task.evidencePolicy = EVIDENCE_POLICY; s.unsaved = true;
+      // A final result paused under an older host evidence policy was refused on evidence the host
+      // could not show then: one reassessment under the current policy. Only closure-only owners
+      // (read-only by construction: a continue verdict never admits work); orders with remaining
+      // work wait for the operator as before. No new question: the conversation was already asked.
+      for (const task of this.tasks(s)) if (task.closureOnly && task.evidenceStalled && task.evidencePolicy !== EVIDENCE_POLICY && this.rearmStalled(task)) {
+        task.evidencePolicy = EVIDENCE_POLICY; if (task.taskRef) task.evidenceQuestion = task.taskRef.generation; s.unsaved = true;
       }
       for (const task of [...this.tasks(s)].sort((a, b) => priorityRank(this.committedPriority(b)) - priorityRank(this.committedPriority(a)))) {
       if (task.recoveryEnrollment === "held-legacy" || !this.taskAllowed(task) || this.apiRunGone(s, task)) continue;

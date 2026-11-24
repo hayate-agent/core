@@ -1257,3 +1257,21 @@ test("an order paused under an older evidence policy gets one read-only reassess
   await h.recoverTasks();
   assert.equal(task.state, "blocked", "re-armed once per policy, not per restart");
 });
+
+test("the upgrade re-arm never touches a paused order with remaining work (not closure-only)", async t => {
+  const store = await storeFixture(t);
+  const seen: string[] = []; let checks = 0;
+  const h = new Harness({ runtime: new FakeRuntime(text => (seen.push(text), "unused")), executionStore: store, taskLifecycle: { enabled: true },
+    completionCheck: async () => (checks++, { state: "continue", next: "Do the remaining work" }) });
+  const channel = new MemoryChannel(); h.addChannel(channel); h.onStateChange = async () => {}; t.after(() => h.stop(0));
+  const ref = await store.enrollTask("mem:room1", "order", "Reconcile TEST board", "order", "operator");
+  h.restoreSessions([{ key: "mem:room1", replyTo: ROOM, tasks: [{ id: "order", taskRef: ref, original: "Reconcile TEST board", state: "blocked", depth: 1,
+    recoveryEnrollment: "current", lastReply: "Half done.", evidenceStalled: true, evidenceQuestion: ref.generation,
+    recoveryAttentionId: "task-recovery:mem:room1:order", anchor: { id: "order", task: "Reconcile TEST board", receivedAt: 1, replyTo: ROOM } }] }]);
+  await h.recoverTasks();
+  const s = h.sessions.get("mem:room1")!;
+  for (let i = 0; i < 3; i++) { await h["pump"](s); await h.tick(); await Promise.race([h.drained(), new Promise(r => setTimeout(r, 200))]); }
+  const task = h["tasks"](s).find((item: { id: string }) => item.id === "order");
+  assert.equal(task.state, "blocked", "stays paused until the operator answers");
+  assert.equal(checks, 0); assert.equal(seen.length, 0, "no work");
+});
