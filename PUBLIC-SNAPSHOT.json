@@ -1,5 +1,5 @@
 {
-  "contentDigest": "ad7a5afe20277ea46f8439b279bdf05600d8de6ef1d144014d1b1791497781ed",
+  "contentDigest": "7cdf842b0e56c9618ef0d7d5c9822b9adb78e0b9db409a74002c7e5aa3a51df2",
   "files": [
     {
       "mode": "100644",
@@ -954,12 +954,12 @@
     {
       "mode": "100644",
       "path": "src/harness-state.ts",
-      "sha256": "7ebd96936d5977324f395671edca706f7db7d95cff8ee2d665d83bc4bf14d1d6"
+      "sha256": "45ebbf4a9c872c6bdde2fdcd166242cfb69702d2be7b75a9311025b9cbad738a"
     },
     {
       "mode": "100644",
       "path": "src/harness.ts",
-      "sha256": "a2b48419f2191d6f995a69a0da7652877a0318495aaa3fa2d9b9067082e4a032"
+      "sha256": "3cb943212c20afdb73db625799d240b01e0d5d6f0305dbda683bfd5b5237bf0a"
     },
     {
       "mode": "100644",
@@ -3349,7 +3349,7 @@
     {
       "mode": "100644",
       "path": "test/order-self-completion.test.ts",
-      "sha256": "0d14d72590fa990a245bfa8bc09be15c0daa14b717e5ec7d93fa75a547c87c13"
+      "sha256": "21a321390dd74b612b87d64de7fc1e1922b72d3e8f84ae14dd8580569acbb99b"
     },
     {
       "mode": "100644",
@@ -4720,5 +4720,5 @@
   "historyPolicy": "fresh-root; no source commits, tags, refs or deleted blobs",
   "pluginSHA": "9d5373e49a1194f78386ad782236aa92c49d293c",
   "schema": 1,
-  "sourceSHA": "3924886d6888936d40da95302af4ab01bed39f7b"
+  "sourceSHA": "6c837cd3257e98ef1fb47c92fff3ed67b720c670"
 }
