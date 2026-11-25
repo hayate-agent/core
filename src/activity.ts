@@ -49,6 +49,8 @@ export class TurnActivity {
   private readonly enabled: boolean;
   constructor(private readonly input: { id: string; role: "main" | "worker" | "dispatcher-classifier"; parent?: string; outputTags?: string[]; context: ActivitySnapshot["context"] },
     private readonly emit: (event: ActivityEvent) => void, policy: ActivityPolicy = {}, private readonly now = Date.now) {
+    // Assignment identity is host-owned, not a live view of caller-owned metadata.
+    this.input = { ...input, outputTags: input.outputTags ? [...input.outputTags] : undefined };
     this.enabled = policy.enabled !== false;
     this.started = this.last = this.lastEmitted = now();
     this.interval = Number.isFinite(policy.intervalMs) ? Math.max(1000, Math.min(300000, policy.intervalMs!)) : 30000;
