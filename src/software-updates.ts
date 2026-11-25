@@ -341,6 +341,15 @@ export class NativeSoftwareUpdates {
         await this.command("npm", ["run", "build"], linkDirectory, buildEnv);
         if (!existsSync(path.join(linkDirectory, "vendor/websocket.mjs"))) throw Error("agent-link WebSocket runtime was not built");
       }
+      // The workspace plugin decodes uploaded images with sharp. Without it the plugin silently reports no image
+      // support and every browser upload is refused ("This agent does not yet support image uploads"), so install the
+      // pinned production dependencies and require the module to load before this tree can be selected.
+      stage = "workspace plugin dependencies";
+      const workspaceDirectory = path.join(root, "plugins", "workspace");
+      if (existsSync(path.join(workspaceDirectory, "package.json")) && existsSync(path.join(workspaceDirectory, "package-lock.json"))) {
+        await this.command("npm", ["ci", "--omit=dev", "--ignore-scripts", "--no-audit", "--no-fund"], workspaceDirectory, buildEnv);
+        await this.command(process.execPath, ["--input-type=module", "-e", "await import('sharp')"], workspaceDirectory, buildEnv);
+      }
       for (component of ["core", "webui"] as const) {
         stage = "dependency installation";
         const cwd = path.join(root, component);
