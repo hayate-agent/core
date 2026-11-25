@@ -1275,3 +1275,46 @@ test("the upgrade re-arm never touches a paused order with remaining work (not c
   assert.equal(task.state, "blocked", "stays paused until the operator answers");
   assert.equal(checks, 0); assert.equal(seen.length, 0, "no work");
 });
+
+test("a backlog order the conversation has moved past closes silently; only an awaited order notifies", async t => {
+  const store = await storeFixture(t);
+  const h = new Harness({ runtime: new FakeRuntime(() => "unused"), executionStore: store, taskLifecycle: { enabled: true },
+    completionCheck: async () => ({ state: "completed" }) });
+  const channel = new MemoryChannel(); h.addChannel(channel); h.onStateChange = async () => {}; t.after(() => h.stop(0));
+  const old = await store.enrollTask("mem:room1", "old", "Bitte analysiere das. Arbeite aus, wie wir das Deployment managen können:\n\"Yes, the codebase is ready\"", "old", "operator");
+  const latest = await store.enrollTask("mem:room1", "latest", "Status?", "latest", "operator");
+  h.restoreSessions([{ key: "mem:room1", replyTo: ROOM, tasks: [
+    { id: "old", taskRef: old, original: "Bitte analysiere das. Arbeite aus, wie wir das Deployment managen können:\n\"Yes, the codebase is ready\"", state: "active", depth: 1,
+      recoveryEnrollment: "current", lastReply: "Plan steht.", anchor: { id: "old", task: "Bitte analysiere das. Arbeite aus, wie wir das Deployment managen können:\n\"Yes, the codebase is ready\"", receivedAt: 1, replyTo: ROOM } },
+    { id: "latest", taskRef: latest, original: "Status?", state: "active", depth: 1,
+      recoveryEnrollment: "current", lastReply: "Alles erledigt.", anchor: { id: "latest", task: "Status?", receivedAt: 2, replyTo: ROOM } }] }]);
+  const s = h.sessions.get("mem:room1")!;
+  for (let i = 0; i < 8 && [old, latest].some(ref => store.coreTask(ref.id)!.operatorStatus === "open"); i++) {
+    for (const task of h["tasks"](s)) if (task.recoveryRetry) task.recoveryRetry.nextAt = 0;
+    await h["pump"](s); await h.tick(); await Promise.race([h.drained(), new Promise(r => setTimeout(r, 200))]); await store.quiesce();
+  }
+  assert.equal(store.coreTask(old.id)!.operatorStatus, "done", "backlog order closed");
+  assert.equal(store.coreTask(old.id)!.receipts.at(-1)!.kind, "evidence-close");
+  assert.equal(store.coreTask(latest.id)!.operatorStatus, "done");
+  const notices = channel.sent.filter(m => m.text.includes("/orders reopen"));
+  assert.equal(notices.length, 1, "one notice, only for the order nothing later superseded");
+  assert.ok(notices[0].text.includes(latest.id));
+  await h.recoverTasks(); await h.tick(); await h.drained();
+  assert.equal(channel.sent.filter(m => m.text.includes("/orders reopen")).length, 1, "the silent close is not replayed as a notice");
+});
+
+test("a closure notice names the order by its first line, cut at a word boundary", async t => {
+  const store = await storeFixture(t);
+  const h = new Harness({ runtime: new FakeRuntime(() => "unused"), executionStore: store, taskLifecycle: { enabled: true },
+    completionCheck: async () => ({ state: "completed" }) });
+  const channel = new MemoryChannel(); h.addChannel(channel); h.onStateChange = async () => {}; t.after(() => h.stop(0));
+  const original = "Reverse Proxy: Welcher Proxy vor puppeteer*.value.ag steht, ist unbekannt (Frage 2). Von seinem Verhalten hängen Rate-Limit und Audit-Log ab\n\nChecke das?";
+  const ref = await store.enrollTask("mem:room1", "order", original, "order", "operator");
+  h.restoreSessions([{ key: "mem:room1", replyTo: ROOM, tasks: [{ id: "order", taskRef: ref, original, state: "active", depth: 1,
+    recoveryEnrollment: "current", lastReply: "HAProxy.", anchor: { id: "order", task: original, receivedAt: 1, replyTo: ROOM } }] }]);
+  await h.tick(); await h.drained();
+  const notice = channel.sent.find(m => m.text.includes("/orders reopen"))!;
+  assert.ok(notice, "notified");
+  assert.ok(/ist unbekannt \(Frage 2\)\. Von seinem …\./.test(notice.text), notice.text);
+  assert.ok(!notice.text.includes("Checke das"), "only the first line");
+});

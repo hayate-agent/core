@@ -387,7 +387,7 @@ export class ApiChannel implements Channel {
     // "drain". Replayed history is bounded by the registry's buffer and always sent; a client
     // whose backlog of *live* frames exceeds the limit is not keeping up and is disconnected
     // (it reconnects with Last-Event-ID). A single large frame never counts as slowness.
-    const pending: Array<{ frame: string; live: boolean } | null> = [];
+    let pending: Array<{ frame: string; live: boolean } | null> = [];
     let liveBytes = 0;
     let waiting = false;
     const pump = () => {
@@ -428,7 +428,7 @@ export class ApiChannel implements Channel {
       res.write(`data: ${JSON.stringify({ event: "replay.truncated", run_id: runId, oldest_retained_seq: s.truncated, requested_seq: lastSeq })}\n\n`);
     }
     // Replay goes ahead of anything published meanwhile (subscribe delivers only newer events).
-    pending.unshift(...s.replay.map((e) => ({ frame: frame(e), live: false })));
+    pending = [...s.replay.map((e) => ({ frame: frame(e), live: false })), ...pending];
     if (s.closed) pending.push(null);
     pump();
     if (s.closed) return;

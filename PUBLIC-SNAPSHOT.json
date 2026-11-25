@@ -1,5 +1,5 @@
 {
-  "contentDigest": "7cdf842b0e56c9618ef0d7d5c9822b9adb78e0b9db409a74002c7e5aa3a51df2",
+  "contentDigest": "6c3feb22fced7605ed5920a912fdd3688ad4010ed4070befba86daa59bfd7f8f",
   "files": [
     {
       "mode": "100644",
@@ -599,7 +599,7 @@
     {
       "mode": "100644",
       "path": "src/activity.ts",
-      "sha256": "b49c7c4731b51e7a1e31bd426a1078a8dab881171189ccdb8d0ac3c3901275b0"
+      "sha256": "0f83c8a9a7684d60558e33228b4813799500e560a6e6a2e0eca84701ce0e6a4c"
     },
     {
       "mode": "100644",
@@ -619,7 +619,7 @@
     {
       "mode": "100644",
       "path": "src/api/server.ts",
-      "sha256": "9dda404e0082c3754e7c93f40c24843c065fb019a25610247b41a596c5a4c7e6"
+      "sha256": "c13a241068b626a5751ddcbe670212f1b4717966f20bb1985fbeedf8afe3c865"
     },
     {
       "mode": "100644",
@@ -959,7 +959,7 @@
     {
       "mode": "100644",
       "path": "src/harness.ts",
-      "sha256": "3cb943212c20afdb73db625799d240b01e0d5d6f0305dbda683bfd5b5237bf0a"
+      "sha256": "ac79fae407d16f1d30c011a6e822e56ff3bd68fddc0478f2c8c067ff663c1f52"
     },
     {
       "mode": "100644",
@@ -1583,6 +1583,11 @@
     },
     {
       "mode": "100644",
+      "path": "test/activity-assignment-ownership.test.ts",
+      "sha256": "6271dc96de56f415437c93846d5221dfd7bf6d418778a0f40e1cdcc13f210935"
+    },
+    {
+      "mode": "100644",
       "path": "test/activity-boundary.test.ts",
       "sha256": "0cd774d39085bd44a4abfd99a913f95fa2a1275649b0ecdc9644dfba8f3dae2f"
     },
@@ -1640,6 +1645,11 @@
       "mode": "100644",
       "path": "test/api-keepalive.test.ts",
       "sha256": "e9737ad56e3815365fcef0f1d6838e596da797e8da8c7dc574306728c9bc9a01"
+    },
+    {
+      "mode": "100644",
+      "path": "test/api-large-replay.test.ts",
+      "sha256": "3e92bd1c59a616cb745424e37fd514a70a2dc75793e3a14642ad27761e2c8774"
     },
     {
       "mode": "100644",
@@ -3349,7 +3359,7 @@
     {
       "mode": "100644",
       "path": "test/order-self-completion.test.ts",
-      "sha256": "21a321390dd74b612b87d64de7fc1e1922b72d3e8f84ae14dd8580569acbb99b"
+      "sha256": "73c5ca152a05ebcbad9c255b2025ed7dcb2c8ac8cdae1ad5c169b223ab5c0721"
     },
     {
       "mode": "100644",
@@ -4720,5 +4730,5 @@
   "historyPolicy": "fresh-root; no source commits, tags, refs or deleted blobs",
   "pluginSHA": "9d5373e49a1194f78386ad782236aa92c49d293c",
   "schema": 1,
-  "sourceSHA": "6c837cd3257e98ef1fb47c92fff3ed67b720c670"
+  "sourceSHA": "836130c4026e8e061be3b7b0b8e8ab61ab0650d6"
 }
