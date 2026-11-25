@@ -11,6 +11,10 @@ export class TaskBookStorage {
   private readonly dir: string;
   private readonly known = new Map<string, string>();
   private readonly limit = 256 * 1024 * 1024;
+  /** Pages of the last COMMITTED root (hydrated or acknowledged by committed()). */
+  private committedPages?: Set<string>;
+  /** Pages of each root this writer staged but has not seen committed yet. */
+  private readonly staged = new Map<string, Set<string>>();
   constructor(ledger: string) { this.dir = `${ledger}.task-book`; }
   private hash(raw: string): string { return createHash("sha256").update(raw).digest("hex"); }
   private authorizedGroup(gid: number): boolean {
@@ -109,14 +113,34 @@ export class TaskBookStorage {
     await pages("bindings", book.bindings, 256, bindings);
     const root = await this.put({ version: 1, tasks, bindings, ...(book.sourceSeq ? { sourceSeq: book.sourceSeq } : {}) });
     await syncDirStrict(this.dir);
+    this.staged.clear(); this.staged.set(root, new Set([root, ...tasks, ...bindings]));
     return { version: 1, root };
+  }
+  /** The ledger root now durably names `ref`. Pages only the previous committed root
+   * used are unreachable from every committed generation and are removed. Call ONLY
+   * after a successful (non-uncertain) ledger publication by the single home owner. */
+  async committed(ref: { version: 1; root: string }): Promise<number> {
+    const next = this.staged.get(ref.root); this.staged.clear();
+    if (!next) return 0;
+    const previous = this.committedPages; this.committedPages = next;
+    if (!previous) return 0;
+    let removed = 0;
+    for (const hash of previous) {
+      if (next.has(hash)) continue;
+      try { await unlink(path.join(this.dir, `${hash}.json`)); removed++; }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+      this.known.delete(hash);
+    }
+    if (removed) await syncDirStrict(this.dir);
+    return removed;
   }
   /** Offline maintenance only: caller must hold exclusive ownership across all
    * readers and writers, e.g. with the existing process-wide home lock. */
   async collectOffline(ref: { version: 1; root: string }): Promise<number> {
     const manifest = JSON.parse((await this.read(ref.root)).raw);
     if (manifest.version !== 1 || !Array.isArray(manifest.tasks) || !Array.isArray(manifest.bindings)) throw Error("Invalid task book manifest");
-    const keep = new Set([ref.root, ...manifest.tasks, ...manifest.bindings]); let removed = 0;
+    const keep = new Set<string>([ref.root, ...manifest.tasks, ...manifest.bindings]); let removed = 0;
+    this.committedPages = keep;
     for (const name of await readdir(this.dir)) {
       const match = /^([a-f0-9]{64})\.json$/.exec(name);
       if (match && !keep.has(match[1])) { await unlink(path.join(this.dir, name)); this.known.delete(match[1]); removed++; }
@@ -135,6 +159,7 @@ export class TaskBookStorage {
     if (root.version !== 1 || !Array.isArray(root.tasks) || !Array.isArray(root.bindings)) throw Error("Invalid task book manifest");
     if (root.sourceSeq !== undefined && (!Number.isSafeInteger(root.sourceSeq) || root.sourceSeq < 1)) throw Error("Invalid task book manifest");
     const book: TaskBook = { tasks: [], bindings: [], ...(root.sourceSeq ? { sourceSeq: root.sourceSeq } : {}) };
+    this.committedPages = new Set<string>([r.root, ...root.tasks, ...root.bindings]);
     for (const kind of ["tasks", "bindings"] as const) for (const hash of root[kind]) {
       const page = JSON.parse((await this.read(hash)).raw);
       if (page.kind !== kind || !Array.isArray(page.items) || page.items.length > (kind === "tasks" ? 64 : 256)) throw Error("Invalid task book page");

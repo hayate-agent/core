@@ -219,6 +219,9 @@ export class ExecutionStore {
     enforceTaskAuthority?: boolean;
     /** Maximum total worker attempts (initial run + retries) per task before a manual-intervention hold. */
     workerRetryMax?: number | (() => number);
+    /** This process exclusively owns the home (home lock held): reclaim task-book pages no
+     * committed ledger generation references, at load and after every successful commit. */
+    reclaimTaskBookPages?: boolean;
   } = {}) {
     this.dependencies = new ExecutionDependencyStorage(file);
     this.taskBooks = new TaskBookStorage(file);
@@ -255,7 +258,13 @@ export class ExecutionStore {
       if (stored.version !== 1 && stored.version !== 2) throw Error("Unsupported execution ledger");
       if (stored.taskBook !== undefined && stored.taskBookRef !== undefined) throw Error("Ambiguous task book storage");
       const data = (stored.version === 2 ? { ...stored, version: 1, executions: await this.dependencies.hydrate(stored.executions as unknown[]) } : stored) as unknown as Ledger & { taskBookRef?: unknown };
-      if (stored.taskBookRef !== undefined) { data.taskBook = await this.taskBooks.hydrate(stored.taskBookRef); delete data.taskBookRef; }
+      if (stored.taskBookRef !== undefined) {
+        data.taskBook = await this.taskBooks.hydrate(stored.taskBookRef);
+        // Exclusive owner after full verification: orphans (superseded generations, crashed
+        // stages) are unreachable; without this the directory grows without bound.
+        if (this.retention.reclaimTaskBookPages) await this.taskBooks.collectOffline(stored.taskBookRef as { version: 1; root: string });
+        delete data.taskBookRef;
+      }
       if (data.version !== 1 || !Array.isArray(data.executions) || !Array.isArray(data.events)) throw Error("Unsupported execution ledger");
       if (data.waitAuthorityDenials !== undefined && (!Array.isArray(data.waitAuthorityDenials) ||
           data.waitAuthorityDenials.length > 100 || data.waitAuthorityDenials.some(r =>
@@ -405,6 +414,12 @@ export class ExecutionStore {
       const { taskBook: _taskBook, ...root } = draft;
       await this.storage.save({ ...root, version: 2, executions, ...(taskBookRef ? { taskBookRef } : {}) }, true);
       this.data = draft;
+      if (taskBookRef && this.retention.reclaimTaskBookPages) {
+        // Committed: reclaiming superseded pages is housekeeping. A failure must not turn a
+        // durable commit into a reported failure; leftovers are swept at the next start.
+        try { await this.taskBooks.committed(taskBookRef); }
+        catch (error) { console.warn(`[task-book] page reclaim deferred: ${(error as Error).message}`); }
+      }
       return structuredClone(result);
     });
     this.queue = next;
