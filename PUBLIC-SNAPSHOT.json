@@ -1,5 +1,5 @@
 {
-  "contentDigest": "6c3feb22fced7605ed5920a912fdd3688ad4010ed4070befba86daa59bfd7f8f",
+  "contentDigest": "aa3476ac05226d2790d7ac45212313531a8be62c75424628ae469f4f0fac4d26",
   "files": [
     {
       "mode": "100644",
@@ -739,7 +739,7 @@
     {
       "mode": "100644",
       "path": "src/cli.ts",
-      "sha256": "7ac81e8c4009b31f7ec49376471a2dcfd9ecb845e89bf160f0c01b727b4bc17b"
+      "sha256": "0f2fb889b3c386786e2e8446b495e08d48804d9f0ef9e0ef821147d9ad63923d"
     },
     {
       "mode": "100644",
@@ -924,7 +924,7 @@
     {
       "mode": "100644",
       "path": "src/execution.ts",
-      "sha256": "991e4515cdaad7b7f4ec783ce1107fcd0cd20e234681819512e526b547f8da2e"
+      "sha256": "deb8fcea9bafebe993d92e5127d761e00d2818e2fd20d9c39c87f00aa76fe099"
     },
     {
       "mode": "100644",
@@ -1474,7 +1474,7 @@
     {
       "mode": "100644",
       "path": "src/task-book-storage.ts",
-      "sha256": "793c518b0e578b2b21a76a311e6b6a580d3f8f9aa7ba219d6dbf741cdcae322a"
+      "sha256": "ae5ed8ec5aba534cd222c34608f0096fe82f2a02884ff3b073ad7223d5bfb58a"
     },
     {
       "mode": "100644",
@@ -4168,6 +4168,11 @@
     },
     {
       "mode": "100644",
+      "path": "test/task-book-page-reclaim.test.ts",
+      "sha256": "c042f9030039f6ac4a849159eeb28881491c5d06679d25a5dda4a7c440a67a4c"
+    },
+    {
+      "mode": "100644",
       "path": "test/task-lifecycle.test.ts",
       "sha256": "c0cffaba9ae6f566605c71560458847b8fe51efa0ceb6fc7e8a71911fe7ca181"
     },
@@ -4730,5 +4735,5 @@
   "historyPolicy": "fresh-root; no source commits, tags, refs or deleted blobs",
   "pluginSHA": "9d5373e49a1194f78386ad782236aa92c49d293c",
   "schema": 1,
-  "sourceSHA": "836130c4026e8e061be3b7b0b8e8ab61ab0650d6"
+  "sourceSHA": "fafec5fb875fd4e7d7d9cc73cc26ed6a2ab762c9"
 }

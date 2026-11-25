@@ -279,6 +279,8 @@ async function main(argv: string[]): Promise<void> {
   // One persistence foundation in both modes, also covering managed child turns.
   const executions = new ExecutionStore(path.join(config.home, "executions.json"), {
     enforceTaskAuthority: true,
+    // Home lock is held (acquireHome above): this process is the only task-book writer/reader.
+    reclaimTaskBookPages: true,
     protectedExecutions: () => new Set(harness?.pendingInputs().flatMap(input => input.hostEvent ? [input.hostEvent.executionId] : []) ?? []),
     // Live overlay read: an operator can lower the retry budget without a restart.
     workerRetryMax: () => dispatcherConfig(settings.effective().dispatcher).workerRetryMax,
