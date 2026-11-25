@@ -7,7 +7,7 @@ import { NativeSoftwareUpdates, softwareUpdatePolicy, updateCommand, type Update
 import { defaultConfig } from "../src/config.js";
 
 const revisions = { core: "a".repeat(40), plugins: "b".repeat(40), webui: "c".repeat(40) };
-async function fixture(options: { vendored?: boolean; tags?: string; history?: string; metadataFailure?: boolean; webuiRestart?: string[]; webuiEnabled?: boolean; noAgentLink?: boolean; linkBuildFails?: boolean; noLock?: boolean } = {}) {
+async function fixture(options: { vendored?: boolean; tags?: string; history?: string; metadataFailure?: boolean; webuiRestart?: string[]; webuiEnabled?: boolean; noAgentLink?: boolean; linkBuildFails?: boolean; noLock?: boolean; noWorkspace?: boolean; sharpMissing?: boolean; noWorkspaceLock?: boolean } = {}) {
   const home = await mkdtemp(path.join(os.tmpdir(), "hy-update-"));
   const events: string[] = [], commands: Array<{ command: string; args: string[]; cwd: string; env?: NodeJS.ProcessEnv }> = [];
   let fail = "";
@@ -32,6 +32,11 @@ async function fixture(options: { vendored?: boolean; tags?: string; history?: s
         await writeFile(path.join(cwd, "agent-link/package.json"), '{"scripts":{"build":"x"}}');
         if (!options.noLock) await writeFile(path.join(cwd, "agent-link/package-lock.json"), "{}");
       }
+      if (component === "plugins" && !options.noWorkspace) {
+        await mkdir(path.join(cwd, "workspace"), { recursive: true });
+        await writeFile(path.join(cwd, "workspace/package.json"), '{"dependencies":{"sharp":"0.35.5"}}');
+        if (!options.noWorkspaceLock) await writeFile(path.join(cwd, "workspace/package-lock.json"), "{}");
+      }
       if (component === "core" && options.vendored) {
         await mkdir(path.join(cwd, "vendor/plugins"), { recursive: true });
         await mkdir(path.join(cwd, "vendor/plugin-assets", "f".repeat(40)), { recursive: true });
@@ -41,6 +46,7 @@ async function fixture(options: { vendored?: boolean; tags?: string; history?: s
       return "";
     }
     if (args[0] === "rev-parse") return heads[component] + "\n";
+    if (options.sharpMissing && command === process.execPath && String(args.at(-1)).includes("import('sharp')")) throw Error("Cannot find package 'sharp'");
     if (command === "npm" && args[0] === "run" && component === "agent-link" && !options.linkBuildFails) {
       await mkdir(path.join(cwd, "vendor"), { recursive: true }); await writeFile(path.join(cwd, "vendor/websocket.mjs"), "export {}");
     }
@@ -308,6 +314,44 @@ test("a missing agent-link WebSocket runtime fails preparation instead of instal
     const value = await f.settled();
     assert.equal(value.phase, "failed");
     await assert.rejects(readFile(path.join(f.home, "software-updates/selected.json")), /ENOENT/);
+  } finally { await f.cleanup(); }
+});
+
+test("the workspace plugin's pinned production dependencies (sharp, for image uploads) are installed and must load", async () => {
+  const f = await fixture();
+  try {
+    await f.owner.request("update");
+    assert.equal((await f.settled()).phase, "prepared");
+    const workspace = f.commands.filter(c => c.cwd.endsWith("/plugins/workspace"));
+    assert.deepEqual(workspace.map(c => c.command === "npm" ? c.args.join(" ") : "load sharp"), ["ci --omit=dev --ignore-scripts --no-audit --no-fund", "load sharp"]);
+    assert.ok(!f.commands.some(c => c.cwd.endsWith("/plugins/workspace") && c.args[0] === "test"), "no development suite");
+  } finally { await f.cleanup(); }
+});
+
+test("a workspace plugin whose sharp does not load fails preparation instead of being installed without image support", async () => {
+  const f = await fixture({ sharpMissing: true });
+  try {
+    await f.owner.request("update");
+    assert.equal((await f.settled()).phase, "failed");
+    await assert.rejects(readFile(path.join(f.home, "software-updates/selected.json")), /ENOENT/);
+  } finally { await f.cleanup(); }
+});
+
+test("plugin trees without a workspace plugin or without its lockfile install nothing unpinned", async () => {
+  const f = await fixture({ noWorkspace: true });
+  try {
+    await f.owner.request("update");
+    assert.equal((await f.settled()).phase, "prepared");
+    assert.ok(!f.commands.some(c => c.cwd.endsWith("/plugins/workspace")));
+  } finally { await f.cleanup(); }
+});
+
+test("a workspace plugin without a lockfile is never installed unpinned", async () => {
+  const f = await fixture({ noWorkspaceLock: true });
+  try {
+    await f.owner.request("update");
+    assert.equal((await f.settled()).phase, "prepared");
+    assert.ok(!f.commands.some(c => c.cwd.endsWith("/plugins/workspace")), "no unpinned npm install");
   } finally { await f.cleanup(); }
 });
 
