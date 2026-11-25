@@ -159,6 +159,15 @@ export interface UpdateAdmissionStatus {
 const API_LEGACY_SCOPE = "api:legacy-unscoped";
 
 /** Bump when the host shows the completion assessor materially more evidence (2: full later operator input, #863). */
+/** Short, readable reference to an order in a lifecycle notice: first line, cut at a word boundary. */
+function noticeTitle(original: string): string {
+  const line = original.split(/\n/).map(part => part.trim()).find(Boolean) ?? "";
+  const text = line.replace(/\s+/g, " ");
+  if (text.length <= 100) return text;
+  const cut = text.slice(0, 100), space = cut.lastIndexOf(" ");
+  return (space > 60 ? cut.slice(0, space) : cut).replace(/[\s,.;:–-]+$/, "") + " …";
+}
+
 const EVIDENCE_POLICY = 2;
 
 export class Harness {
@@ -1542,6 +1551,10 @@ export class Harness {
       JSON.stringify(view.laterOperatorInput(s.key)) === JSON.stringify(assessedLater ?? []) && !assessedLater?.some(item => item.truncated) &&
       (!openTodos || !!assessedLater?.length);
     if (!guard({ executions: store.list(s.key), laterOperatorInput: key => store.laterOperatorInput(key, ref), operatorMark: key => store.operatorMark(key) })) return "refused";
+    // The conversation already moved on (later operator messages exist): closing such a backlog
+    // order is bookkeeping, not news. It closes silently (receipt + /orders); only an order the
+    // operator is still waiting on (nothing later) gets the one notice.
+    if (assessedLater?.length) notify = false;
     let closed = false;
     // Serialized with operator ingress of this conversation (see accept): the guard's view of
     // accepted input stays valid until the close is committed.
@@ -1572,7 +1585,7 @@ export class Harness {
     if (notify && to && !s.outbox.some(entry => entry.id === noticeId)) {
       const locale = resolveLanguage(this.opts.language?.() ?? {}, { kind: "conversation", sessionKey: s.key, language: task.anchor?.language });
       s.outbox.push({ ...this.outbox.create(s.key, to, message(locale, "task.evidenceClosed", {
-        original: task.original.replace(/\s+/g, " ").trim().slice(0, 160), id: ref.id })), id: noticeId });
+        original: noticeTitle(task.original), id: ref.id })), id: noticeId });
     }
     s.unsaved = true;
   }
