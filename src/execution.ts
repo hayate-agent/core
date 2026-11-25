@@ -251,6 +251,7 @@ export class ExecutionStore {
 
   async load(): Promise<void> {
     if (this.loaded) throw Error("Execution store already loaded");
+    let committedTaskBook: { version: 1; root: string } | undefined;
     try {
       if ((await stat(this.file)).size > 32 * 1024 * 1024) throw Error("Execution ledger size limit exceeded");
       const stored = await this.storage.load();
@@ -260,9 +261,7 @@ export class ExecutionStore {
       const data = (stored.version === 2 ? { ...stored, version: 1, executions: await this.dependencies.hydrate(stored.executions as unknown[]) } : stored) as unknown as Ledger & { taskBookRef?: unknown };
       if (stored.taskBookRef !== undefined) {
         data.taskBook = await this.taskBooks.hydrate(stored.taskBookRef);
-        // Exclusive owner after full verification: orphans (superseded generations, crashed
-        // stages) are unreachable; without this the directory grows without bound.
-        if (this.retention.reclaimTaskBookPages) await this.taskBooks.collectOffline(stored.taskBookRef as { version: 1; root: string });
+        committedTaskBook = stored.taskBookRef as { version: 1; root: string };
         delete data.taskBookRef;
       }
       if (data.version !== 1 || !Array.isArray(data.executions) || !Array.isArray(data.events)) throw Error("Unsupported execution ledger");
@@ -384,6 +383,14 @@ export class ExecutionStore {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
     this.loaded = true;
+    // Outside the missing-ledger handling: the ledger is fully loaded and verified. Only the
+    // exclusive home owner removes pages the committed root does not reference (superseded
+    // generations, crashed stages); without this the directory grows without bound. A sweep
+    // failure is housekeeping and never discards or replaces the loaded state.
+    if (committedTaskBook && this.retention.reclaimTaskBookPages) {
+      try { await this.taskBooks.collectOffline(committedTaskBook); }
+      catch (error) { console.warn(`[task-book] startup page reclaim deferred: ${(error as Error).message}`); }
+    }
   }
   private mutate<T>(fn: (draft: Ledger) => T | Promise<T>, shouldCommit?: () => boolean, unchanged?: (data: Ledger) => boolean): Promise<T> {
     const next = this.queue.catch(() => {}).then(async () => {

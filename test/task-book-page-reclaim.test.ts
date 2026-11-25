@@ -42,3 +42,17 @@ test("a store that does not own the home never deletes pages", async t => {
   for (let i = 0; i < 5; i++) await store.enrollTask("matrix:room", `t${i}`, `Mandate ${i}`, `t${i}`, "operator");
   assert.ok(await pages(file) >= 10);
 });
+
+test("a failing startup sweep never discards the loaded ledger", async t => {
+  const file = await home(t);
+  const writer = new ExecutionStore(file); await writer.load();
+  const ref = await writer.enrollTask("matrix:room", "t0", "Mandate", "t0", "operator");
+  const owner = new ExecutionStore(file, { reclaimTaskBookPages: true });
+  const storage = (owner as unknown as { taskBooks: { collectOffline: () => Promise<number> } }).taskBooks;
+  storage.collectOffline = async () => { throw Object.assign(new Error("vanished"), { code: "ENOENT" }); };
+  await owner.load();
+  assert.equal(owner.coreTask(ref.id)!.original, "Mandate", "hydrated authority kept, not an empty store");
+  await owner.enrollTask("matrix:room", "t1", "Next", "t1", "operator");
+  const cold = new ExecutionStore(file); await cold.load();
+  assert.equal(cold.coreTask(ref.id)!.original, "Mandate", "the next commit did not overwrite the ledger with an empty book");
+});

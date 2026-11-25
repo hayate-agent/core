@@ -143,7 +143,10 @@ export class TaskBookStorage {
     this.committedPages = keep;
     for (const name of await readdir(this.dir)) {
       const match = /^([a-f0-9]{64})\.json$/.exec(name);
-      if (match && !keep.has(match[1])) { await unlink(path.join(this.dir, name)); this.known.delete(match[1]); removed++; }
+      if (!match || keep.has(match[1])) continue;
+      try { await unlink(path.join(this.dir, name)); removed++; }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+      this.known.delete(match[1]);
     }
     await syncDirStrict(this.dir); return removed;
   }
