@@ -19,7 +19,7 @@ import { TurnActivity } from "./activity.js";
 import { continuationProvenance, continuationRequest, recoveryProposalGuidance } from "./continuation-provenance.js";
 import { deliverTaskStatus, routineWait, taskStatusId } from "./notification-routing.js";
 import type { PersistedSession } from "./state.js";
-import { executionTarget } from "./execution.js";
+import { executionTarget, ownsWorkerSession } from "./execution.js";
 import type { Address, AgentRuntime, BusyMode, Channel, Inbound, PromptOptions, RuntimeSession, SendMeta, TurnEvent, TurnOutcome } from "./types.js";
 import { InboxLedger, idsOf, replayable } from "./delivery/inbox.js";
 import { parseHashtags, selectHashtagContext, hashtagContext } from "./hashtags.js";
@@ -3590,7 +3590,7 @@ export class Harness {
         // the current parent task (which may have changed since dispatch).
         const execution = input.source === "host"
           ? this.hostExecution(input)
-          : this.opts.executionStore?.list().find(task => s.key === `dispatch:${task.id}:${task.token}`);
+          : this.opts.executionStore?.list().find(task => ownsWorkerSession(task, s.key));
         input.outputTags = (input.source === "host" || s.key.startsWith("dispatch:"))
           ? structuredClone(execution?.dependency?.anchor?.outputTags)
           : input.source === "api" ? undefined : structuredClone(input.completionAnchor?.outputTags ?? input.outputTags);

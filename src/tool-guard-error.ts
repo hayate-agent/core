@@ -1,7 +1,7 @@
 /** Only host-created guard denials receive a specific, model-visible reason.
  * Never forward an arbitrary exception's message, properties or string conversion.
  */
-export type ToolGuardCode = "operator_task_closed" | "report_only" | "dispatcher_required" | "review_required" | "worker_orchestration_denied" | "authority_revoked" | "result_not_ready" | "deadline_expired" | "execution_cancelled" | "ownership_lost" | "parent_mandate_missing" | "dispatcher_unavailable" | "continuation_budget_exhausted";
+export type ToolGuardCode = "operator_task_closed" | "report_only" | "dispatcher_required" | "review_required" | "worker_orchestration_denied" | "authority_revoked" | "result_not_ready" | "deadline_expired" | "execution_cancelled" | "ownership_lost" | "parent_mandate_missing" | "dispatcher_unavailable" | "continuation_budget_exhausted" | "swarm_scope";
 
 const codes = new WeakMap<object, ToolGuardCode>();
 
@@ -28,6 +28,7 @@ export function toolGuardDenialReason(error: unknown): string {
     case "authority_revoked": return "authority_revoked: The host could not validate this action's execution authority. This code alone does not establish an operator revocation. Do not replay or create a replacement; return control for host state reconciliation.";
     case "continuation_budget_exhausted": return "continuation_budget_exhausted: Productive follow-up budget exhausted; no work tool was executed. Status-only dependency rechecks remain allowed until the fixed deadline. Record waiting or a blocked next step; do not disguise productive work as waiting.";
     case "dispatcher_required": return "dispatcher_required: Dispatcher is enabled and available. Delegate shell and implementation work through plugin_dispatch; worker failure does not permit Main takeover. The dispatcher retains and reconciles the interrupted execution.";
+    case "swarm_scope": return "swarm_scope: Parallel swarm members may only use read/grep/find/ls and write/edit inside their operator-approved targets. Do not touch other targets; report what remains as a gap.";
     case "dispatcher_unavailable": return "dispatcher_unavailable: The required dispatcher is unavailable; this action is blocked.";
     default: return "Tool guard blocked this action; authorization could not be established.";
   }
