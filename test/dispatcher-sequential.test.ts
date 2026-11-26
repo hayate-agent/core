@@ -11,8 +11,11 @@ import { ValidatorRegistry } from "../src/validator.js";
 import { Dispatcher } from "../src/dispatcher.js";
 import { ExecutionStore, executionRecoveryHash, type ExecutionEvent } from "../src/execution.js";
 import { Harness } from "../src/harness.js";
-import { parsePlan, planPrompt, stepStatus, validatorRole, crossCheckRole, type SequentialState } from "../src/dispatcher-sequential.js";
+import { parsePlan, parsePlanned, planPrompt, stepStatus, validatorRole, crossCheckRole, type SequentialState } from "../src/dispatcher-sequential.js";
 import { FakeRuntime } from "./fakes.js";
+import { parseSwarm, swarmDeliverable, swarmWritesDisjoint, classifySwarmAnswer } from "../src/dispatcher-swarm.js";
+import { mkdtempSync, mkdirSync, symlinkSync, realpathSync, rmSync, writeFileSync, linkSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dispatcherPlugin } from "../src/builtin-plugins/dispatcher-plugin.js";
 import { PluginHost } from "../src/plugins.js";
 import type { ModelRoles } from "../src/model-roles.js";
@@ -2001,4 +2004,340 @@ test("STEP-STATUS progress is unfinished work, never completion or a blocker", (
   assert.equal(stepStatus("x\nSTEP-STATUS: progress"), undefined);
   assert.equal(stepStatus("x\nSTEP-STATUS: inadequate: needs more"), "inadequate");
   assert.equal(stepStatus("x\nSTEP-STATUS: complete"), "complete");
+});
+
+// ---- Operator-approved agent swarm -------------------------------------------------
+const swarmPlan = (members: Array<{ task: string; writes: string[] }>) => JSON.stringify({
+  steps: [{ task: "do all parts sequentially", role: "medium", reason: "fallback", evidence: "all parts done" }],
+  swarm: { reason: "independent parts", synthesis: "merge reports", members: members.map(m => ({ task: m.task, role: "simple", evidence: `evidence ${m.task}`, writes: m.writes })) },
+});
+function enableSwarm(f: { bridge: DispatcherRuntime }, maxSize = 4) {
+  f.bridge.swarmPolicy = () => ({ enabled: true, maxSize });
+  f.bridge.swarmEligible = () => true;
+  f.bridge.swarmWorkspace = () => swarmRoot;
+}
+const swarmRoot = mkdtempSync(path.join(tmpdir(), "swarm-ws-"));
+
+test("swarm: disabled policy keeps the planner prompt byte-identical and never proposes", async t => {
+  assert.equal(planPrompt("x"), planPrompt("x", "", undefined));
+  assert.doesNotMatch(planPrompt("x"), /SWARM/);
+  assert.match(planPrompt("x", "", 3), /OPTIONAL SWARM PROPOSAL: Only if the task contains 2-3/);
+  const f = await setup(t, { plan: steps(["read", "simple"]) });
+  const task = await f.run("read");
+  assert.equal(task.status, "completed");
+  assert.equal(task.question, undefined);
+});
+
+test("swarm: proposal waits for the operator; Main/model answers are refused; ja runs members in parallel in ONE slot", async t => {
+  let entered = 0; let release!: () => void; const barrier = new Promise<void>(r => { release = r; });
+  let maxActive = 0;
+  const f = await setup(t, {
+    plan: swarmPlan([{ task: "part A", writes: ["a.txt"] }, { task: "part B", writes: ["b.txt"] }]),
+    worker: async prompt => {
+      if (++entered === 2) release();
+      await barrier; // both members must be running at the same time
+      return `${/YOUR PART \(m1\)/.test(prompt) ? "A done" : "B done"}\nSTEP-STATUS: complete`;
+    },
+    verdict: () => '{"state":"completed"}',
+  });
+  enableSwarm(f);
+  const task = await f.run("do A and B");
+  assert.equal(task.status, "paused");
+  assert.equal(task.question?.swarm, true);
+  assert.match(task.question!.text, /Schwarm-Vorschlag: 2 Agenten parallel/);
+  assert.match(task.question!.text, /\/swarm \S+ v1 ja \| nein/);
+  assert.equal(f.calls.worker.length, 0, "nothing runs before the operator decides");
+  await assert.rejects(f.dispatcher.answer("parent", task.id, task.question!.id, "ja"), /only by the operator/);
+  const probe = setInterval(() => { maxActive = Math.max(maxActive, f.dispatcher.workers.active); }, 1);
+  t.after(() => clearInterval(probe));
+  await f.dispatcher.answerSwarm("parent", task.id, "v1", "ja");
+  await f.dispatcher.waitForExecution(task.id);
+  while (f.store.list()[0]!.status !== "completed") { await f.dispatcher.kick(); await new Promise(r => setTimeout(r, 5)); }
+  clearInterval(probe);
+  const done = f.store.list()[0]!;
+  assert.equal(f.calls.worker.length, 2, "each member ran exactly once");
+  assert.ok(maxActive <= 1, "a swarm occupies exactly one dispatcher slot");
+  assert.match(done.result!, /Schwarm abgeschlossen \(2 parallele Mitglieder/);
+  assert.match(done.result!, /m1: unabhängig bestätigt[\s\S]*A done/);
+  assert.match(done.result!, /m2: unabhängig bestätigt[\s\S]*B done/);
+  assert.ok(f.calls.worker.every(c => c.model === "p/cheap"), "member role routes are exact");
+});
+
+test("swarm: nein runs the sequential fallback plan and never starts members", async t => {
+  const f = await setup(t, {
+    plan: swarmPlan([{ task: "part A", writes: [] }, { task: "part B", writes: [] }]),
+    worker: () => "all done\nSTEP-STATUS: complete",
+  });
+  enableSwarm(f);
+  const task = await f.run("do A and B");
+  await f.dispatcher.answerSwarm("parent", task.id, "v1", "nein");
+  await f.dispatcher.waitForExecution(task.id);
+  while (f.store.list()[0]!.status !== "completed") { await f.dispatcher.kick(); await new Promise(r => setTimeout(r, 5)); }
+  assert.equal(f.calls.worker.length, 1);
+  assert.match(f.calls.worker[0]!.prompt, /STEP 1\/1:\ndo all parts sequentially/);
+  const saved = state(f.store.list()[0]!.checkpoint);
+  assert.equal(saved.swarm, undefined);
+  assert.equal(saved.swarmRejected?.answer, "nein");
+});
+
+test("swarm: an operator correction re-plans (bounded) and asks again; nothing runs meanwhile", async t => {
+  let plans = 0;
+  const f = await setup(t, {
+    plan: () => (++plans === 1 ? swarmPlan([{ task: "part A", writes: [] }, { task: "part B", writes: [] }])
+      : swarmPlan([{ task: "part A", writes: [] }, { task: "part B", writes: [] }, { task: "part C", writes: [] }])),
+  });
+  enableSwarm(f);
+  const task = await f.run("do A, B and C");
+  await f.dispatcher.answerSwarm("parent", task.id, "v1", "Bitte C als eigenen Agenten");
+  await f.dispatcher.waitForExecution(task.id);
+  const asked = f.store.list()[0]!;
+  assert.equal(asked.status, "paused");
+  assert.match(asked.question!.text, /überarbeitet, Version 2\): 3 Agenten/);
+  assert.equal(f.calls.worker.length, 0);
+  assert.equal(plans, 2);
+  const saved = state(asked.checkpoint);
+  assert.equal(saved.swarm?.corrections, 1);
+  assert.equal(saved.swarm?.consumed.length, 1);
+  // A delayed answer to the superseded v1 must never accept the current v2 proposal.
+  await assert.rejects(f.dispatcher.answerSwarm("parent", task.id, "v1", "ja"), /refers to proposal v1; the current proposal is v2/);
+  assert.equal(f.store.list()[0]!.question?.answer, undefined);
+  assert.match(f.store.list()[0]!.question!.text, /\/swarm \S+ v2 ja/);
+});
+
+test("swarm: held, revoked or expired proposals are neither delivered nor answerable", async t => {
+  const f = await setup(t, { plan: swarmPlan([{ task: "part A", writes: [] }, { task: "part B", writes: [] }]) });
+  enableSwarm(f);
+  const task = await f.run("do A and B");
+  const row = f.store.list()[0]!;
+  const event = { id: row.question!.eventId! };
+  assert.equal(swarmDeliverable(row, event), true);
+  assert.equal(swarmDeliverable({ ...row, ownershipHold: { reason: "x" } as never }, event), false, "held");
+  assert.equal(swarmDeliverable({ ...row, dependency: { ...row.dependency, expiresAt: 1 } as never }, event, 2), false, "expired");
+  (f.store as unknown as { data: { executions: Array<{ dependency?: { expiresAt?: number } }> } }).data.executions[0]!.dependency = { ...(row.dependency ?? {}), expiresAt: Date.now() - 1 } as never;
+  await assert.rejects(f.dispatcher.answerSwarm("parent", task.id, "v1", "ja"), /no longer valid/);
+});
+
+test("swarm: restart after one settled member reconciles only the unfinished member, never reruns the settled one", async t => {
+  const home = await mkdtemp(path.join(os.tmpdir(), "swarm-restart-"));
+  retainFixture(t, { home, stop: async () => {} });
+  const file = path.join(home, "executions.json");
+  const store = new ExecutionStore(file); await store.load();
+  const task = await store.submit("parent", "req", "do A and B", "sequential");
+  const running = await store.claim(task.id);
+  const proposal = JSON.parse(swarmPlan([{ task: "part A", writes: [] }, { task: "part B", writes: [] }]));
+  const persisted: SequentialState = { v: 1, planner: { requested: { model: "p/disp" } }, plan: proposal.steps, outcomes: [],
+    swarm: { v: 1, phase: "running", revision: 0, corrections: 0, consumed: ["q1"], decision: { answer: "ja", questionId: "q1", at: 1 },
+      reason: proposal.swarm.reason, synthesis: proposal.swarm.synthesis, token: running.token!, started: ["m1", "m2"],
+      members: proposal.swarm.members.map((m: object, i: number) => ({ id: `m${i + 1}`, ...m })),
+      results: { m1: { reply: "A settled\nSTEP-STATUS: complete", route: { model: "p/cheap" }, tools: 1, verdict: "completed" } } } };
+  await store.checkpoint(task.id, running.token!, JSON.stringify(persisted));
+  await store.intent(task.id, running.token!, `swarm:${task.id}:0`, "unsafe", { model: "p/disp" });
+  const env = await setup(t, { worker: prompt => `${prompt.includes("RECOVERY") ? "B reconciled" : "B fresh"}\nSTEP-STATUS: complete` }, { home, file, retainedTranscript: "m2 partial work" });
+  enableSwarm(env);
+  await env.dispatcher.start();
+  while (!["completed", "blocked"].includes(env.store.list()[0]!.status)) { await env.dispatcher.kick(); await new Promise(r => setTimeout(r, 10)); }
+  const done = env.store.list()[0]!;
+  assert.equal(done.status, "completed", JSON.stringify(done));
+  assert.equal(env.calls.worker.length, 1, "settled member m1 is never rerun");
+  assert.match(env.calls.worker[0]!.prompt, /YOUR PART \(m2\)/);
+  assert.match(env.calls.worker[0]!.prompt, /^RECOVERY/);
+  assert.match(done.result!, /A settled/);
+});
+
+test("swarm: restart without a retained member transcript reports a gap instead of blind replay", async t => {
+  const home = await mkdtemp(path.join(os.tmpdir(), "swarm-noevidence-"));
+  retainFixture(t, { home, stop: async () => {} });
+  const file = path.join(home, "executions.json");
+  const store = new ExecutionStore(file); await store.load();
+  const task = await store.submit("parent", "req", "do A and B", "sequential");
+  const running = await store.claim(task.id);
+  const proposal = JSON.parse(swarmPlan([{ task: "part A", writes: [] }, { task: "part B", writes: [] }]));
+  await store.checkpoint(task.id, running.token!, JSON.stringify({ v: 1, planner: { requested: { model: "p/disp" } }, plan: proposal.steps, outcomes: [],
+    swarm: { v: 1, phase: "running", revision: 0, corrections: 0, consumed: ["q1"], decision: { answer: "ja", questionId: "q1", at: 1 },
+      reason: proposal.swarm.reason, synthesis: proposal.swarm.synthesis, token: running.token!, started: ["m1", "m2"],
+      members: proposal.swarm.members.map((m: object, i: number) => ({ id: `m${i + 1}`, ...m })) } }));
+  await store.intent(task.id, running.token!, `swarm:${task.id}:0`, "unsafe", { model: "p/disp" });
+  const env = await setup(t, {}, { home, file });
+  enableSwarm(env);
+  await env.dispatcher.start();
+  while (!["completed", "blocked"].includes(env.store.list()[0]!.status)) { await env.dispatcher.kick(); await new Promise(r => setTimeout(r, 10)); }
+  const done = env.store.list()[0]!;
+  assert.equal(env.calls.worker.length, 0, "started members without evidence are never blindly rerun");
+  assert.match(done.result!, /2 Lücke\(n\): m1, m2/);
+  assert.match(done.result!, /Effekte unbekannt, nicht wiederholt/);
+});
+
+test("swarm: a failed member is reported as a gap, never as completed", async t => {
+  const f = await setup(t, {
+    plan: swarmPlan([{ task: "part A", writes: [] }, { task: "part B", writes: [] }]),
+    worker: prompt => /YOUR PART \(m2\)/.test(prompt) ? "could not\nSTEP-STATUS: blocked: missing access" : "A done\nSTEP-STATUS: complete",
+    verdict: text => /part B/.test(text) && /could not/.test(text) ? '{"state":"blocked","next":"missing access"}' : '{"state":"completed"}',
+  });
+  enableSwarm(f);
+  const task = await f.run("do A and B");
+  await f.dispatcher.answerSwarm("parent", task.id, "v1", "ja");
+  await f.dispatcher.waitForExecution(task.id);
+  while (f.store.list()[0]!.status !== "completed") { await f.dispatcher.kick(); await new Promise(r => setTimeout(r, 5)); }
+  const result = f.store.list()[0]!.result!;
+  assert.match(result, /1 Lücke\(n\): m2/);
+  assert.match(result, /m2: LÜCKE \(blocked/);
+  assert.doesNotMatch(result, /m2: unabhängig bestätigt/);
+});
+
+test("swarm: strict schema rejects shared write targets, oversize swarms and unknown keys", () => {
+  assert.equal(parseSwarm({ reason: "r", synthesis: "s", members: [{ task: "a", role: "simple", evidence: "e", writes: ["x"] }, { task: "b", role: "simple", evidence: "e", writes: ["x"] }] }, 4), undefined);
+  const three = { reason: "r", synthesis: "s", members: ["a", "b", "c"].map(task => ({ task, role: "simple", evidence: "e", writes: [] })) };
+  assert.equal(parseSwarm(three, 2), undefined);
+  assert.equal(parseSwarm(three, 3)?.members.length, 3);
+  assert.equal(parseSwarm({ ...three, extra: 1 }, 3), undefined);
+  assert.equal(parseSwarm({ ...three, members: three.members.slice(0, 1) }, 3), undefined, "one member is not a swarm");
+  // An invalid swarm drops only the proposal, never the valid sequential plan.
+  const planned = parsePlanned(JSON.stringify({ steps: JSON.parse(steps(["x", "simple"])).steps, swarm: { bogus: true } }), 4);
+  assert.equal(planned?.steps.length, 1); assert.equal(planned?.swarm, undefined);
+  assert.equal(parsePlanned(JSON.stringify({ steps: JSON.parse(steps(["x", "simple"])).steps, swarm: three })), undefined, "disabled policy keeps the strict legacy schema");
+});
+
+test("swarm config: bounded by the subagent ceiling and requires the sequential planner", async () => {
+  const { dispatcherConfig } = await import("../src/dispatcher-config.js");
+  const base = { enabled: true, concurrentRequests: true, strategy: "sequential" };
+  assert.deepEqual(dispatcherConfig({ ...base, swarm: { enabled: true } as never }).swarm, { enabled: true, maxSize: 4 });
+  assert.throws(() => dispatcherConfig({ ...base, swarm: { enabled: true, maxSize: 5 } }), /maxSize/);
+  assert.throws(() => dispatcherConfig({ ...base, swarm: { enabled: true, maxSize: 1 } }), /maxSize/);
+  assert.throws(() => dispatcherConfig({ ...base, swarm: { enabled: true, mode: "auto" } as never }), /swarm/);
+  assert.throws(() => dispatcherConfig({ ...base, strategy: "direct", swarm: { enabled: true, maxSize: 2 } }), /sequential/);
+  assert.equal(dispatcherConfig({ ...base }).swarm, undefined);
+});
+
+test("swarm: the operator sees every member task, evidence and write target verbatim; undisplayable proposals are never offered", async t => {
+  const longTask = `part A ${"with a precise long instruction ".repeat(20)}END-OF-A`;
+  const writes = Array.from({ length: 12 }, (_, i) => `src/module-${i}/very/long/path/file-${i}.ts`);
+  const f = await setup(t, { plan: JSON.stringify({ steps: JSON.parse(steps(["all", "medium"])).steps,
+    swarm: { reason: "independent", synthesis: "merge", members: [
+      { task: longTask, role: "simple", evidence: "evidence A", writes },
+      { task: "part B", role: "simple", evidence: "evidence B", writes: [] }] } }) });
+  enableSwarm(f);
+  const task = await f.run("do A and B");
+  assert.equal(task.question?.swarm, true);
+  assert.ok(task.question!.text.includes(longTask), "full member task shown");
+  for (const target of writes) assert.ok(task.question!.text.includes(target), `write target ${target} shown`);
+  assert.match(task.question!.text, /Nachweis: evidence A/);
+  // A proposal that cannot be displayed in full is dropped; sequential plan runs, nothing asked.
+  const huge = Array.from({ length: 4 }, (_, i) => ({ task: `${i} ${"x".repeat(3500)}`, role: "simple", evidence: "e", writes: [] }));
+  const g = await setup(t, { plan: JSON.stringify({ steps: JSON.parse(steps(["all", "simple"])).steps, swarm: { reason: "r", synthesis: "s", members: huge } }) });
+  enableSwarm(g);
+  const plain = await g.run("huge");
+  assert.equal(plain.question, undefined);
+  assert.equal(plain.status, "completed");
+  assert.equal(state(plain.checkpoint).swarm, undefined);
+});
+
+test("swarm: write targets must be disjoint across aliases and parent/child paths", () => {
+  const member = (writes: string[]) => ({ task: "t", role: "simple", evidence: "e", writes });
+  const parse = (a: string[], b: string[]) => parseSwarm({ reason: "r", synthesis: "s", members: [member(a), member(b)] }, 4);
+  assert.ok(parse(["src/a.ts"], ["src/b.ts"]), "really disjoint targets pass");
+  assert.ok(parse(["src/ab.ts"], ["src/a"]), "segment boundary, not string prefix");
+  for (const [a, b] of [[["src/"], ["src/file.ts"]], [["src/a.ts"], ["./src/a.ts"]], [["src//a.ts"], ["src/a.ts"]], [["SRC/A.ts"], ["src/a.ts"]], [["docs/x/../a.md"], ["docs/a.md"]], [["src\\a.ts"], ["src/a.ts"]]])
+    assert.equal(parse(a, b), undefined, `${a} vs ${b} overlap`);
+  for (const bad of [["src/*.ts"], ["."], ["../outside"], ["/"]]) assert.equal(parse(bad, ["x"]), undefined, `${bad} is not a decidable target`);
+});
+
+test("swarm: only the current proposal event is delivered to the operator", () => {
+  const task = { status: "paused", question: { swarm: true as const, eventId: "e2" } };
+  assert.equal(swarmDeliverable(task, { id: "e2" }), true);
+  assert.equal(swarmDeliverable(task, { id: "e1" }), false, "superseded revision event never shown");
+  assert.equal(swarmDeliverable({ ...task, question: { ...task.question, answer: "ja" } }, { id: "e2" }), false);
+  assert.equal(swarmDeliverable({ ...task, parentStopped: true }, { id: "e2" }), false);
+  assert.equal(swarmDeliverable({ ...task, status: "running" }, { id: "e2" }), false);
+});
+
+test("swarm: real write targets are resolved on the filesystem (absolute/relative, symlink aliases, outside)", () => {
+  const root = mkdtempSync(path.join(tmpdir(), "swarm-real-"));
+  mkdirSync(path.join(root, "src"));
+  symlinkSync(path.join(root, "src"), path.join(root, "alias"));
+  const m = (writes: string[]) => ({ writes });
+  const ok = (a: string[], b: string[], ws: string | undefined = root) => swarmWritesDisjoint(ws, { members: [m(a), m(b)] as never });
+  assert.equal(ok(["src/a.ts"], ["src/b.ts"]), true);
+  assert.equal(ok(["src/a.ts"], [path.join(realpathSync(root), "src/a.ts")]), false, "absolute and relative spelling");
+  assert.equal(ok(["src/a.ts"], ["alias/a.ts"]), false, "symlinked directory alias");
+  assert.equal(ok(["src"], ["alias/new/deep.ts"]), false, "parent vs not-yet-existing child through symlink");
+  assert.equal(ok(["/etc/passwd"], ["src/a.ts"]), false, "outside the workspace is undecidable");
+  assert.equal(ok(["."], ["src/a.ts"]), false, "workspace root is undecidable");
+  assert.equal(ok(["src/a.ts"], ["src/b.ts"], ""), false, "no workspace fails closed");
+  assert.equal(ok([], []), true, "read-only members");
+  assert.equal(ok(["alias/../src/a.ts"], ["src/b.ts"]), false, "parent segment after a symlink is undecidable");
+  assert.equal(ok([`${root}/alias/../x.ts`], ["src/b.ts"]), false, "absolute parent segment is undecidable");
+  symlinkSync(path.join(tmpdir(), `swarm-nowhere-${process.pid}-${Date.now()}`, "x"), path.join(root, "dangling"));
+  assert.equal(ok(["dangling"], ["src/a.ts"]), false, "dangling symlink to outside is undecidable");
+  assert.equal(ok(["dangling/child.ts"], ["src/a.ts"]), false, "path below a dangling symlink is undecidable");
+  symlinkSync(path.join(root, "loop"), path.join(root, "loop"));
+  assert.equal(ok(["loop/x"], ["src/a.ts"]), false, "symlink loop is undecidable");
+});
+
+test("swarm: a proposal whose members alias the same real file is never offered; the sequential plan runs", async t => {
+  const f = await setup(t, { plan: JSON.stringify({ steps: JSON.parse(steps(["all", "simple"])).steps,
+    swarm: { reason: "r", synthesis: "s", members: [
+      { task: "A", role: "simple", evidence: "e", writes: ["a.ts"] },
+      { task: "B", role: "simple", evidence: "e", writes: [path.join(realpathSync(swarmRoot), "a.ts")] }] } }) });
+  enableSwarm(f);
+  const task = await f.run("alias");
+  assert.equal(task.question, undefined, "no approval asked for overlapping writers");
+  assert.equal(state(task.checkpoint).swarm, undefined);
+  assert.equal(task.status, "completed");
+});
+
+test("swarm: write targets are re-resolved at acceptance; a symlink swapped in meanwhile blocks before any member starts", async t => {
+  const ws = mkdtempSync(path.join(tmpdir(), "swarm-swap-"));
+  mkdirSync(path.join(ws, "a")); mkdirSync(path.join(ws, "b"));
+  const f = await setup(t, { plan: swarmPlan([{ task: "part A", writes: ["a/x.ts"] }, { task: "part B", writes: ["b/x.ts"] }]),
+    worker: () => "done\nSTEP-STATUS: complete", verdict: () => '{"state":"completed"}' });
+  enableSwarm(f);
+  f.bridge.swarmWorkspace = () => ws;
+  const task = await f.run("do A and B");
+  assert.equal(task.question?.swarm, true, "disjoint at proposal time");
+  rmSync(path.join(ws, "b"), { recursive: true });
+  symlinkSync(path.join(ws, "a"), path.join(ws, "b")); // b now aliases a
+  await f.dispatcher.answerSwarm("parent", task.id, "v1", "ja");
+  await f.dispatcher.waitForExecution(task.id);
+  for (let i = 0; i < 50 && !["failed", "completed", "cancelled"].includes(f.store.list()[0]!.status); i++) { await f.dispatcher.kick(); await new Promise(r => setTimeout(r, 5)); }
+  const after = f.store.list()[0]!;
+  assert.equal(f.calls.worker.length, 0, "no member started on overlapping real targets");
+  assert.notEqual(after.status, "completed");
+  assert.equal(f.calls.worker.length, 0, "still no member after the dispatcher settled");
+});
+
+test("swarm: only an exact ja starts and only an exact nein rejects; everything else is a correction", () => {
+  for (const value of ["ja", "Ja", " JA "]) assert.equal(classifySwarmAnswer(value), "accept", value);
+  for (const value of ["nein", "Nein"]) assert.equal(classifySwarmAnswer(value), "reject", value);
+  for (const value of ["ja!", "ja.", "Nein.", "ok", "yes", "start", "los", "y", "j", "no", "n", "seriell", "ja, aber ohne Teil 2"]) assert.equal(classifySwarmAnswer(value), "correct", value);
+});
+
+test("swarm: hard links to one file are the same write target, also inside directory targets", () => {
+  const root = mkdtempSync(path.join(tmpdir(), "swarm-hard-"));
+  mkdirSync(path.join(root, "a")); mkdirSync(path.join(root, "b"));
+  writeFileSync(path.join(root, "a", "File.ts"), "x");
+  linkSync(path.join(root, "a", "File.ts"), path.join(root, "b", "copy.ts"));
+  writeFileSync(path.join(root, "b", "other.ts"), "y");
+  const pair = (a: string[], b: string[]) => swarmWritesDisjoint(root, { members: [{ writes: a }, { writes: b }] as never });
+  assert.equal(pair(["a/File.ts"], ["b/copy.ts"]), false, "two paths, one inode");
+  assert.equal(pair(["a"], ["b/copy.ts"]), false, "directory target containing the linked file");
+  assert.equal(pair(["a/File.ts"], ["b/other.ts"]), true, "different files stay disjoint");
+  symlinkSync(path.join(root, "a"), path.join(root, "b", "inner"));
+  assert.equal(pair(["b"], ["a/File.ts"]), false, "a symlink inside a writable directory is undecidable");
+});
+
+test("swarm: a member that reports blocked/progress is a gap even if the validator says completed", async t => {
+  const f = await setup(t, {
+    plan: swarmPlan([{ task: "part A", writes: [] }, { task: "part B", writes: [] }]),
+    worker: prompt => /YOUR PART \(m2\)/.test(prompt) ? "half\nSTEP-STATUS: progress: rest open" : "A done\nSTEP-STATUS: complete",
+    verdict: () => '{"state":"completed"}',
+  });
+  enableSwarm(f);
+  const task = await f.run("do A and B");
+  await f.dispatcher.answerSwarm("parent", task.id, "v1", "ja");
+  await f.dispatcher.waitForExecution(task.id);
+  while (f.store.list()[0]!.status !== "completed") { await f.dispatcher.kick(); await new Promise(r => setTimeout(r, 5)); }
+  const result = f.store.list()[0]!.result!;
+  assert.match(result, /m1: unabhängig bestätigt/);
+  assert.match(result, /1 Lücke\(n\): m2/);
+  assert.doesNotMatch(result, /m2: unabhängig bestätigt/);
 });

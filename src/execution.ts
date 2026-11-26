@@ -10,6 +10,7 @@ import { ExecutionDependencyStorage, freezeExecutionDependency } from "./executi
 import { TaskBookStorage } from "./task-book-storage.js";
 import { recoveryBlock, type RecoveryStrategy, type ExecutionRecoveryPolicy } from "./execution-recovery.js";
 import { message, resolveLanguage } from "./language.js";
+import { swarmRevisionRef } from "./dispatcher-swarm.js";
 
 /** Exact host state fence for evidence-backed parent continuation. */
 export function executionRecoveryHash(task: Readonly<Execution>): string {
@@ -134,7 +135,7 @@ export interface Execution {
   controlRevision?: number;
   parentContinuation?: { requestId: string; executionHash: string; evidence: string; fingerprint: string; resumedManualPause?: boolean; at: number };
   terminalAt?: number;
-  question?: { id: string; text: string; answer?: string; retainedAssessment?: boolean; eventId?: string };
+  question?: { id: string; text: string; answer?: string; retainedAssessment?: boolean; eventId?: string; /** Swarm proposal: only the authenticated operator may answer. */ swarm?: true };
   /** Durable receipt for the current stalled-assessment notification. */
   assessmentStalledEventId?: string;
   /** Question episode represented by the stalled notification. */
@@ -294,6 +295,7 @@ export class ExecutionStore {
             typeof item.question.text !== "string" || !item.question.text.trim() || item.question.text.length > 8000 ||
             (item.question.answer !== undefined && (typeof item.question.answer !== "string" || item.question.answer.length > 8000)) ||
             (item.question.retainedAssessment !== undefined && typeof item.question.retainedAssessment !== "boolean") ||
+            (item.question.swarm !== undefined && (item.question.swarm !== true || item.question.retainedAssessment)) ||
             (item.question.eventId !== undefined && (typeof item.question.eventId !== "string" || !item.question.eventId)))) throw Error("Invalid execution question");
         if (item.assessmentStalledEventId !== undefined && (typeof item.assessmentStalledEventId !== "string" || !item.assessmentStalledEventId)) throw Error("Invalid assessment notification receipt");
         if (item.terminalAt !== undefined && (!Number.isSafeInteger(item.terminalAt) || item.terminalAt < 0)) throw Error("Invalid terminal timestamp");
@@ -525,7 +527,7 @@ export class ExecutionStore {
       const turn = draft.turns?.find(item => item.id === id && item.sessionKey === sessionKey);
       if (!turn || turn.state !== "settled") return;
       if (draft.executions.some(task => task.token && task.intent &&
-          sessionKey === `dispatch:${task.id}:${task.token}`)) return;
+          ownsWorkerSession(task, sessionKey))) return;
       const consumed = new Set([id, ...(turn.settlement?.consumed ?? [])]);
       draft.turns = draft.turns?.filter(item => item.sessionKey !== sessionKey || !consumed.has(item.id));
     });
@@ -535,7 +537,7 @@ export class ExecutionStore {
   reconcileSettledTurns(pendingIds: ReadonlySet<string>): Promise<void> {
     return this.mutate(draft => {
       draft.turns = draft.turns?.filter(turn => pendingIds.has(turn.id) ||
-        draft.executions.some(task => task.token && task.intent && turn.sessionKey === `dispatch:${task.id}:${task.token}`));
+        draft.executions.some(task => task.token && task.intent && ownsWorkerSession(task, turn.sessionKey)));
     });
   }
   beginTurn(id: string, sessionKey: string, scheduledOccurrence?: { taskId: string; ref: TaskRef }, takeoverTaskId?: string): Promise<void> {
@@ -1019,9 +1021,10 @@ export class ExecutionStore {
       this.event(draft, task, "status", text);
     });
   }
-  ask(id: string, token: string, text: string, retainedAssessment = false): Promise<void> {
+  ask(id: string, token: string, text: string, retainedAssessment = false, swarm = false): Promise<void> {
     return this.mutate(draft => {
       const task = this.owned(draft, id, token);
+      if (swarm && (retainedAssessment || task.intent)) throw Error("Swarm proposal requires an effect-free boundary");
       // Trusted strategy may ask about retained review evidence. The intent
       // stays unresolved; an answer cannot settle it or authorize effect replay.
       if (task.intent && !retainedAssessment) throw Error("Cannot ask with unresolved effect intent");
@@ -1037,7 +1040,7 @@ export class ExecutionStore {
       // later notification for this one. This does not release the intent.
       delete task.assessmentStalledEventId;
       delete task.assessmentStalledQuestionId;
-      task.question = { id: randomUUID(), text, ...(retainedAssessment ? { retainedAssessment: true } : {}) };
+      task.question = { id: randomUUID(), text, ...(retainedAssessment ? { retainedAssessment: true } : {}), ...(swarm ? { swarm: true as const } : {}) };
       task.status = "paused";
       delete task.workerRetry;
       delete task.assessmentHold;
@@ -1234,11 +1237,21 @@ export class ExecutionStore {
       delete task.token;
     });
   }
-  answer(parent: string, id: string, questionId: string, text: string): Promise<void> {
+  /** operator: authenticated operator command ingress, never a model tool. */
+  /** `swarmRevision`: proposal reference the operator answered (`v1`, …); checked inside the same mutation. */
+  answer(parent: string, id: string, questionId: string, text: string, operator = false, swarmRevision?: string): Promise<void> {
     return this.mutate(draft => {
       const task = this.find(draft, id);
       if (task.parent !== parent || task.parentStopped || (task.intent && !task.question?.retainedAssessment) || task.status !== "paused" ||
           task.question?.id !== questionId || task.question.answer !== undefined) throw Error("Question no longer awaiting an answer");
+      // A swarm proposal is an operator decision; Main/models cannot accept it.
+      if (task.question.swarm && !operator) throw Error("Swarm proposals are answered only by the operator (/swarm)");
+      if (task.question.swarm) {
+        const current = swarmRevisionRef(task.checkpoint);
+        if (!current || swarmRevision !== current) throw Error(`This answer refers to proposal ${swarmRevision ?? "?"}; the current proposal is ${current ?? "unknown"}`);
+        if (task.ownershipHold || !this.executionTaskAllowed(task) || (task.dependency?.expiresAt !== undefined && task.dependency.expiresAt <= this.now()))
+          throw Error("The swarm proposal is no longer valid (held, revoked or expired)");
+      }
       if (typeof text !== "string" || !text.trim() || text.length > 8000) throw Error("Invalid answer");
       task.question.answer = text;
       task.status = "ready";
@@ -1548,7 +1561,7 @@ export class ExecutionStore {
       // Dispatcher inboxes never replay independently; after claim recovery
       // their orphan turn records carry no additional execution authority.
       draft.turns = draft.turns?.filter(turn => !turn.sessionKey.startsWith("dispatch:") ||
-        draft.executions.some(task => task.token && task.intent && turn.sessionKey === `dispatch:${task.id}:${task.token}`));
+        draft.executions.some(task => task.token && task.intent && ownsWorkerSession(task, turn.sessionKey)));
     });
   }
   /** Explicit acknowledgement retains ambiguous intent and audit history. No budget reset. */
@@ -1679,6 +1692,12 @@ function validAddress(value: unknown): value is import("./types.js").Address {
 }
 
 /** Delivery target of an execution: task anchor, else submitting turn's origin, else configured home. Never another session's address. */
+/** Exact current worker session of an execution, including its swarm members. */
+export function ownsWorkerSession(task: Pick<Execution, "id" | "token">, key: string): boolean {
+  if (!task.token) return false;
+  const base = `dispatch:${task.id}:${task.token}`;
+  return key === base || key.startsWith(`${base}:swarm:`) && /^m\d{1,2}$/.test(key.slice(base.length + 7));
+}
 export function executionTarget(task: Pick<Execution, "dependency" | "origin"> | undefined, home: import("./types.js").Address | undefined): import("./types.js").Address | undefined {
   return task?.dependency?.anchor?.replyTo ?? task?.origin ?? home;
 }

@@ -705,3 +705,38 @@ registration alone does not provision workers, credentials or backend access.
 Observe `signal` and wait for actual worker termination before returning on
 cancellation. Restart after code/configuration changes; a build does not activate
 them in an already running process.
+
+## Operator-approved agent swarms
+
+`dispatcher.swarm: { enabled: false, maxSize: 4 }` (requires `strategy: sequential`).
+`maxSize` is 2..4, bounded by the host subagent ceiling. There is no automatic
+mode: a swarm never starts without an explicit operator decision.
+
+When enabled, the sequential planner may add an optional `swarm` proposal next
+to its complete sequential `steps`: 2..maxSize independent members, each with
+task, role, required evidence and its exclusive write targets (disjoint; `[]`
+means read-only), plus a synthesis note. Any defect drops only the proposal.
+Members' roles must resolve to configured, preflighted model roles; otherwise
+no proposal is made.
+
+The proposal is a durable execution question delivered to the operator (not to
+Main). Only `/swarm <executionId> <vN> ja | nein | <Korrektur>` from an authenticated
+admin in the operator conversation answers it; `plugin_dispatch answer` and
+`/dispatch answer` are refused. `vN` is the proposal version printed in the
+proposal; an answer naming a superseded version (e.g. a delayed old message) is
+refused instead of being applied to the current proposal. Held, revoked or
+expired proposals are neither delivered nor answerable. Exactly the word `ja` (case-insensitive, no
+punctuation) starts the swarm; exactly `nein` records a rejection receipt and runs the
+sequential plan. Any other text is a correction: the planner revises the
+proposal (at most 2 corrections) and asks again.
+
+An accepted swarm occupies ONE dispatcher capacity slot (`capacity` keeps
+counting independent processes). Members run concurrently in sessions
+`dispatch:<id>:<token>:swarm:m<N>` with the parent execution's authority,
+deadline and stop, the worker orchestration denylist (no nesting) and one
+swarm effect intent. Each member is persisted as started before its turn and as
+settled after it; a restart never reruns a settled member and reconciles an
+interrupted one from its retained transcript, or reports it as a gap when no
+evidence exists. Every member report is independently validated; anything not
+confirmed is reported as a gap. The final result lists all members and the
+synthesis task for the parent.

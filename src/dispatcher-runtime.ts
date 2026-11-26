@@ -2,7 +2,7 @@ import { classifyComplexity, resolveModelRole, resolveWorkerPin, type ModelRoles
 import { taskContextLabel } from "./builtin-plugins/execution-metadata.js";
 import { TurnActivity } from "./activity.js";
 import { labelOutput } from "./hashtags.js";
-import { ExecutionWorkerFailure, executionTarget, type Execution, type ExecutionEvent } from "./execution.js";
+import { ExecutionWorkerFailure, executionTarget, ownsWorkerSession, type Execution, type ExecutionEvent } from "./execution.js";
 import { ToolGuardError } from "./tool-guard-error.js";
 import { childDeniedTools } from "./child-tools.js";
 import { pickModelRule, type DispatchModelRule } from "./dispatcher-config.js";
@@ -24,6 +24,10 @@ export class DispatcherRuntime {
   private pending = new Map<string, { resolve(value: string): void; reject(error: Error): void }>();
   /** Host-observed selection/tool count of the current worker turn, keyed by task:token. */
   private turns = new Map<string, { observed?: ModelPair; tools: number; evidence: Array<{ name: string; error: boolean; call?: string; result?: string; callId?: string }> }>();
+  /** Host-owned operator swarm policy; set once by the CLI, never by workers. */
+  swarmPolicy?: () => import("./dispatcher-config.js").DispatcherSwarmConfig | undefined;
+  swarmEligible?: (task: Readonly<Execution>) => boolean;
+  swarmWorkspace?: (task: Readonly<Execution>) => string | undefined;
   constructor(private readonly harness: Harness, private readonly store: ExecutionStore, private readonly rules?: DispatchModelRule[] | (() => Promise<DispatchModelRule[] | undefined>), private readonly roleSettings?: () => { config?: ModelRoles; defaults: ModelPair; review?: ModelPair }, private readonly validators?: ValidatorRegistry, private readonly runtimeProvenance?: () => import("./dispatcher-sequential.js").WorkerRuntimeProvenance) {}
   eventText(event: ExecutionEvent): string {
     const task = this.store.list(event.parent).find(item => item.id === event.executionId);
@@ -34,10 +38,11 @@ export class DispatcherRuntime {
       ? event.requiresAttention || task?.assessmentHold ? `${event.text} Nächste automatische Prüfung ab ${new Date(event.automaticRetryAt).toISOString()}.`
       : `Automatische Wiederaufnahme ab ${new Date(event.automaticRetryAt).toISOString()}; Dispatcher behält denselben Auftrag. Keine Nutzeraktion erforderlich.`
       : question?.[2] ?? event.text;
-    return `${taskContextLabel(event.executionId, task?.dependency?.anchor?.outputTags, !!task?.dependency?.anchor)} · Dispatcher — ${text}${event.type === "question" ? `\n/dispatch answer ${event.executionId} ${questionId} <Antwort>` : ""}`;
+    const swarmQuestion = event.type === "question" && !!task?.question?.swarm && task.question.id === questionId;
+    return `${taskContextLabel(event.executionId, task?.dependency?.anchor?.outputTags, !!task?.dependency?.anchor)} · Dispatcher — ${text}${event.type === "question" && !swarmQuestion ? `\n/dispatch answer ${event.executionId} ${questionId} <Antwort>` : ""}`;
   }
   private taskForSession(key: string) {
-    return this.store.list().find(task => key === `dispatch:${task.id}:${task.token}`);
+    return this.store.list().find(task => ownsWorkerSession(task, key));
   }
   approvalTarget(key: string): Address | undefined {
     const task = this.taskForSession(key);
@@ -225,6 +230,8 @@ export class DispatcherRuntime {
   get sequential(): DispatcherStrategy { return this.sequentialStrategy ??= { ...sequentialStrategy({
     harness: this.harness, store: this.store, validators: this.validators, runtimeProvenance: this.runtimeProvenance, roles: () => this.roleSettings?.(),
     runTurn: (context, key, id, text, rule, options) => this.runTurn(context, key, id, text, rule, options),
+    swarm: () => this.swarmPolicy?.(), swarmEligible: task => this.swarmEligible?.(task) ?? false,
+    swarmWorkspace: task => this.swarmWorkspace?.(task),
     turn: key => { const turn = this.turns.get(key) ?? { tools: 0, evidence: [] }; this.turns.delete(key); return { ...turn, evidence: turn.evidence.map(({ callId: _id, ...rest }) => rest) }; },
     resetTurn: key => { this.turns.set(key, { tools: 0, evidence: [] }); },
   }), prepareWorker: task => this.prepareWorker(task) }; }

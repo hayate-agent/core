@@ -1,6 +1,7 @@
 import { ToolGuardError } from "./tool-guard-error.js";
 import { childDeniedTools } from "./child-tools.js";
 import { randomUUID } from "node:crypto";
+import { SWARM_MEMBER_CEILING } from "./dispatcher-config.js";
 import type { Harness } from "./harness.js";
 import type { Address, Channel, SendMeta, Inbound } from "./types.js";
 import type { Execution } from "./execution.js";
@@ -238,7 +239,7 @@ export class Subagents {
       if (typeof handover[key]!=="string" || !handover[key].trim() || handover[key].length>8000) throw Error(`Invalid subagent ${key}`);
     }
     if (!handover.model.includes("/") || !["off","minimal","low","medium","high","xhigh"].includes(handover.thinking)) throw Error("Invalid model/reasoning selection");
-    if (this.records.size>=200 || [...this.records.values()].filter(r=>["queued","running"].includes(r.state)).length>=4) throw Error("Subagent capacity reached");
+    if (this.records.size>=200 || [...this.records.values()].filter(r=>["queued","running"].includes(r.state)).length>=SWARM_MEMBER_CEILING) throw Error("Subagent capacity reached");
     if ([...this.records.values()].some(r=>r.sessionKey===parent)) throw Error("Nested subagents are not enabled");
     const id=randomUUID();
     const selected={...handover,...this.policy.get(parent)};
