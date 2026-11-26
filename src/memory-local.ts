@@ -28,6 +28,8 @@ export class LocalMemory implements MemoryProvider {
     child.on("error", failed); child.on("exit", failed);
   }
   static async open(home: string, config: MemoryConfig): Promise<LocalMemory> {
+    // Capture the IPC configuration before filesystem work yields to the caller.
+    config = structuredClone(config);
     const dir = path.join(home, "memory");
     await mkdir(dir, { recursive: true, mode: 0o700 });
     const ext = import.meta.url.endsWith(".ts") ? "ts" : "js";
