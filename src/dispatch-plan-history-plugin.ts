@@ -1,4 +1,5 @@
 import type { Dispatcher } from "./dispatcher.js";
+import { ownsWorkerSession } from "./execution.js";
 import type { PluginModule } from "./plugins.js";
 
 /** Read-only exact completed evidence for parent or its currently owned worker. */
@@ -16,7 +17,7 @@ export function dispatchPlanHistoryPlugin(get: () => Dispatcher | undefined): Pl
             return { id: input.id, parent: context.sessionKey }; // archive binding checked during read
           }
           if (!task || task.parent !== context.sessionKey && !(task.status === "running" && !task.parentStopped && !task.ownershipHold && task.token &&
-              (task.dependency?.expiresAt === undefined || task.dependency.expiresAt > Date.now()) && context.sessionKey === `dispatch:${task.id}:${task.token}`)) throw Error("Plan history outside current execution ownership");
+              (task.dependency?.expiresAt === undefined || task.dependency.expiresAt > Date.now()) && ownsWorkerSession(task, context.sessionKey))) throw Error("Plan history outside current execution ownership");
           context.signal?.throwIfAborted(); return task;
         };
         const task = allowed();

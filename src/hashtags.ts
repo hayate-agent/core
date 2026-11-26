@@ -117,7 +117,11 @@ export async function hashtagContext(selection: HashtagSelection | undefined,
 }
 
 export function transcriptEntries(entries: unknown[]): ArchiveEntry[] {
-  return entries.map((raw) => {
+  return entries.filter((raw) => {
+    if (!raw || typeof raw !== "object") return false;
+    const entry = raw as { id?: unknown; type?: unknown };
+    return typeof entry.id === "string" && entry.id.length > 0 && typeof entry.type === "string" && entry.type.length > 0;
+  }).map((raw) => {
     const entry = raw as { id: string; type: string; message?: { role: string; content: unknown } };
     const msg = entry.type === "message" ? entry.message : undefined;
     const text = typeof msg?.content === "string" ? msg.content : Array.isArray(msg?.content)

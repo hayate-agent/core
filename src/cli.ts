@@ -50,7 +50,7 @@ import { sessionObserverPlugin, attachObserver } from "./builtin-plugins/session
 import { gatewayPlugin } from "./builtin-plugins/gateway-plugin.js";
 import { PluginHost } from "./plugins.js";
 import { Subagents } from "./subagents.js";
-import { ExecutionStore, executionTarget } from "./execution.js";
+import { ExecutionStore, executionTarget, ownsWorkerSession } from "./execution.js";
 import { Dispatcher, stopDispatcherParent } from "./dispatcher.js";
 import { MaintenanceJournal } from "./update-maintenance.js";
 import { ShutdownDeadline } from "./shutdown-deadline.js";
@@ -75,6 +75,8 @@ import { workflowTools } from "./workflow-tools.js";
 import { continuationPlugin } from "./builtin-plugins/continuation-plugin.js";
 import { executionControlPlugin } from "./execution-control.js";
 import { dispatchPlanHistoryPlugin } from "./dispatch-plan-history-plugin.js";
+import { dispatchSwarmPlugin } from "./dispatch-swarm-plugin.js";
+import { swarmDeliverable } from "./dispatcher-swarm.js";
 import { dispatchRecoveryPlugin } from "./dispatch-recovery-plugin.js";
 import { dispatchDecisionsPlugin } from "./dispatch-decisions-plugin.js";
 import { cronCheckpointPlugin } from "./cron-checkpoint.js";
@@ -441,7 +443,7 @@ async function main(argv: string[]): Promise<void> {
     toolGuard: async (key, tool, input) => {
       if (tool === "plugin_review") await reloadRuntimeSettings();
       subagents.guardTool(key, tool);
-      dispatchRuntime?.guardTool(key, tool);
+      dispatchRuntime?.guardTool(key, tool, input);
       await harness.guardWaitTool(key, tool, input);
       const current = harness.sessions.get(key)?.current;
       if (current?.source === "host") {
@@ -457,6 +459,8 @@ async function main(argv: string[]): Promise<void> {
       }
       await plugins.policies.beforeTool(cwdFor(key), tool, input);
     },
+    // Swarm write confinement is re-checked after every awaited guard and approval.
+    finalToolGuard: (key, tool, input) => dispatchRuntime?.guardSwarmScope(key, tool, input),
     personaSections: async (cwd = config.cwd, worker = false) => {
       await protectedContent.verify();
       return personaSections(await loadPersona(config.persona, personality), { name: config.agent, workspace: cwd, worker });
@@ -753,7 +757,7 @@ async function main(argv: string[]): Promise<void> {
   // The state file doubles as the inbox: unfinished user/cron inputs are part of every save.
   const subagents = new Subagents(harness, async () => { await persist(); });
   contextParent = key => subagents.snapshot().find(record => record.sessionKey === key)?.parent ??
-    executions.list().find(task => key === `dispatch:${task.id}:${task.token}`)?.parent;
+    executions.list().find(task => ownsWorkerSession(task, key))?.parent;
   subagents.restore(saved?.subagents ?? []);
   subagents.restoreOverrides(saved?.subagentOverrides ?? {});
   // Freeze contexts of previously used conversations before plugins can bind new
@@ -861,7 +865,7 @@ async function main(argv: string[]): Promise<void> {
     admit: (id: string, request: import("./context-maintenance.js").MaintenanceRequest, version: number) => maintenance.admit(values["--maintenance-session"]!, id, request, version),
     cancel: (id: string, version: number) => maintenance.cancelAdmission(values["--maintenance-session"]!, id, version),
     maintain: () => harness.maintainIdle(values["--maintenance-session"]!),
-  }), path.resolve(values["--maintenance-directory"]))] : []), ...(values["--observe-directory"] ? [sessionObserverPlugin(Object.freeze({ observeSession: (key: string) => harness.observeSession(key) }), path.resolve(values["--observe-directory"]), values["--observe-session"]!)] : []), validatorPlugin, memoryOrchestrationPlugin(plugins.memoryOrchestration, settings, harness, config.memory.enabled), completionStrategyPlugin(completion, settings, harness), contextStrategyPlugin(strategies, settings, harness, maintenance), compactionStrategyPlugin(selectedCompaction, settings, harness, maintenance), nightlyStrategyPlugin(nightly, settings, improvement), reportPlugin, dispatcherPlugin(() => dispatcher), dispatchDecisionsPlugin(() => dispatcher), dispatchPlanHistoryPlugin(() => dispatcher), dispatchRecoveryPlugin(() => dispatcher, key => runtime.retainedSessionHistory?.(key) ?? Promise.resolve(undefined)), ...(dispatchPolicy.enabled ? [executionControlPlugin(() => dispatcher, path.join(config.home, "operator-control"), key => harness.resetSession(key), (key, digest, paused) => harness.freezeLoopForMigration(key, digest, paused), scheduler,
+  }), path.resolve(values["--maintenance-directory"]))] : []), ...(values["--observe-directory"] ? [sessionObserverPlugin(Object.freeze({ observeSession: (key: string) => harness.observeSession(key) }), path.resolve(values["--observe-directory"]), values["--observe-session"]!)] : []), validatorPlugin, memoryOrchestrationPlugin(plugins.memoryOrchestration, settings, harness, config.memory.enabled), completionStrategyPlugin(completion, settings, harness), contextStrategyPlugin(strategies, settings, harness, maintenance), compactionStrategyPlugin(selectedCompaction, settings, harness, maintenance), nightlyStrategyPlugin(nightly, settings, improvement), reportPlugin, dispatcherPlugin(() => dispatcher), dispatchDecisionsPlugin(() => dispatcher), dispatchPlanHistoryPlugin(() => dispatcher), dispatchSwarmPlugin(() => dispatcher), dispatchRecoveryPlugin(() => dispatcher, key => runtime.retainedSessionHistory?.(key) ?? Promise.resolve(undefined)), ...(dispatchPolicy.enabled ? [executionControlPlugin(() => dispatcher, path.join(config.home, "operator-control"), key => harness.resetSession(key), (key, digest, paused) => harness.freezeLoopForMigration(key, digest, paused), scheduler,
       (key, duplicate, keeper, revision, keeperRevision, requestId) => harness.retireScheduledDuplicate(key, duplicate, keeper, revision, keeperRevision, requestId))] : []), workerTasksPlugin(config.home, () => dispatcher, async (parent, requestId, input) => {
       if (!dispatcher || harness.paused) throw Error("Dispatcher unavailable or Harness paused");
       const existing = await executions.findRequest(parent, requestId);
@@ -892,6 +896,11 @@ async function main(argv: string[]): Promise<void> {
       registeredValidators: plugins.validators.versions(),
     }));
     harness.addChannel(dispatchRuntime.channel);
+    dispatchRuntime.swarmPolicy = () => dispatchPolicy.swarm?.enabled ? dispatchPolicy.swarm : undefined;
+    // Only interactive operator conversations can approve a proposal.
+    dispatchRuntime.swarmWorkspace = task => cwdFor(task.parent);
+    dispatchRuntime.swarmEligible = task => !/^(dispatch|subagent|cron|cron-followup|improvement|api|local-api):/.test(task.parent) &&
+      !task.parent.startsWith("api:") && !["dispatch", "subagents", "api"].includes(executionTarget(task, harness.home)?.channel ?? "dispatch");
     const strategy = dispatchPolicy.strategy === "direct" ? dispatchRuntime.strategy : dispatchPolicy.strategy === "sequential" ? dispatchRuntime.sequential : plugins.dispatchers.get(dispatchPolicy.strategy);
     if (!strategy) throw Error("Configured dispatcher strategy unavailable");
     dispatcher = new Dispatcher(executions, strategy, dispatchPolicy.capacity, async event => {
@@ -904,6 +913,14 @@ async function main(argv: string[]): Promise<void> {
         if (event.parent.startsWith("cron-followup:")) return;
         const question = task?.question;
         if (!task || !question || task.parent !== event.parent) return;
+        // A swarm proposal is an operator decision, not Main input: show it to the operator.
+        if (question.swarm) {
+          // Only the current proposal: a delayed event of a superseded revision is never shown.
+          // Same authority as an ordinary question: owned, not held/revoked, not expired.
+          if (!swarmDeliverable(task, event) || !executions.executionTaskAllowed(task) || !target) return;
+          await harness.deliver(target, dispatchRuntime!.eventText(event), { deliveryId: `dispatch-event:${event.id}` });
+          return;
+        }
         const input: Inbound = { id: `dispatch-event:${event.id}`, source: "host", sessionKey: event.parent,
           hostEvent: { executionId: event.executionId, question: { id: question.id, eventId: event.id } },
           text: executions.questionText(task.id, question), replyTo: target };

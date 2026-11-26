@@ -4,7 +4,7 @@ import path from "node:path";
 /** Canonical defaults; explicit homes may point at any existing state directory. */
 export function agentHome(explicit?: string, env = process.env, userHome = os.homedir()): string {
   if (explicit !== undefined) return explicit;
-  if (env.HAYATE_AGENT_HOME !== undefined) return env.HAYATE_AGENT_HOME;
+  if (env.HAYATE_AGENT_HOME?.trim()) return env.HAYATE_AGENT_HOME;
   return path.join(userHome, ".hayate-agent");
 }
 

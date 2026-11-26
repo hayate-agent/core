@@ -16,7 +16,7 @@ export interface DispatchContext {
   /** Optional only for source compatibility with existing strategy test adapters. */
   status?(text: string): Promise<void>;
   /** Persists a question and suspends this execution; never returns normally. */
-  question?(text: string, retainedAssessment?: boolean): Promise<never>;
+  question?(text: string, retainedAssessment?: boolean, swarm?: boolean): Promise<never>;
   intent(key: string, replay: "safe" | "unsafe", route?: import("./model-roles.js").ModelPair, decisionRevision?: number): Promise<void>;
   settleIntent(key: string, result: string, checkpoint: string, decisionRevision?: number): Promise<void>;
   /** Authenticated parent data, not authority expansion or verdict override. */
@@ -285,8 +285,8 @@ export class Dispatcher {
           // event remains queued until a later delivery attempt succeeds.
           void this.flushEvents().catch(this.report);
         },
-        question: async (text, retainedAssessment) => {
-          check(); await this.store.ask(task.id, token, text, retainedAssessment);
+        question: async (text, retainedAssessment, swarm) => {
+          check(); await this.store.ask(task.id, token, text, retainedAssessment, swarm);
           void this.flushEvents().catch(this.report);
           throw new ExecutionClaimConflict("Execution waiting for answer");
         },
@@ -405,6 +405,17 @@ export class Dispatcher {
   }
   async answer(parent: string, id: string, questionId: string, text: string): Promise<void> {
     await this.store.answer(parent, id, questionId, text);
+    await this.kick();
+  }
+  /** Authenticated operator decision on a pending swarm proposal. */
+  /** `revision` is the proposal reference the operator saw (`v1`, `v2`, …): an answer to a
+   * superseded proposal is refused, never applied to the current one. */
+  async answerSwarm(parent: string, id: string, revision: string, text: string): Promise<void> {
+    if (/^(dispatch|subagent):/.test(parent)) throw Error("Swarm decisions belong to the operator conversation");
+    const task = this.store.list(parent).find(row => row.id === id);
+    if (!task?.question?.swarm || task.question.answer !== undefined) throw Error("No pending swarm proposal for this execution");
+    // Revision, hold, authority and deadline are re-checked inside the store mutation.
+    await this.store.answer(parent, id, task.question.id, text, true, revision);
     await this.kick();
   }
   async control(parent: string, id: string, action: "pause" | "resume" | "cancel"): Promise<void> {

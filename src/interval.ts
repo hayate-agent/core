@@ -1,11 +1,11 @@
-const UNITS: Record<string, number> = { s: 1_000, m: 60_000, h: 3_600_000, d: 86_400_000 };
+const UNITS: Record<string, number> = { ms: 1, s: 1_000, m: 60_000, h: 3_600_000, d: 86_400_000 };
 
-/** Parse "30s", "15m", "2h", "1d" (also "1h30m"). Units must be unique and descending. Returns ms or undefined. */
+/** Parse "1500ms", "30s", "15m", "2h", "1d" (also "1h30m"). Units must be unique and descending. Returns ms or undefined. */
 export function parseInterval(text: string): number | undefined {
   const s = text.trim().toLowerCase();
-  if (!s || !/^(\d+d)?(\d+h)?(\d+m)?(\d+s)?$/.test(s)) return undefined;
+  if (!s || !/^(\d+d)?(\d+h)?(\d+m)?(\d+s)?(\d+ms)?$/.test(s)) return undefined;
   let total = 0;
-  for (const [, n, u] of s.matchAll(/(\d+)([smhd])/g)) total += Number(n) * UNITS[u];
+  for (const [, n, u] of s.matchAll(/(\d+)(ms|[smhd])/g)) total += Number(n) * UNITS[u];
   return Number.isSafeInteger(total) && total > 0 ? total : undefined;
 }
 

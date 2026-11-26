@@ -2,7 +2,7 @@ import { classifyComplexity, resolveModelRole, resolveWorkerPin, type ModelRoles
 import { taskContextLabel } from "./builtin-plugins/execution-metadata.js";
 import { TurnActivity } from "./activity.js";
 import { labelOutput } from "./hashtags.js";
-import { ExecutionWorkerFailure, executionTarget, type Execution, type ExecutionEvent } from "./execution.js";
+import { ExecutionWorkerFailure, executionTarget, ownsWorkerSession, type Execution, type ExecutionEvent } from "./execution.js";
 import { ToolGuardError } from "./tool-guard-error.js";
 import { childDeniedTools } from "./child-tools.js";
 import { pickModelRule, type DispatchModelRule } from "./dispatcher-config.js";
@@ -12,6 +12,7 @@ import type { DispatcherStrategy, DispatchContext } from "./dispatcher.js";
 import type { ExecutionStore } from "./execution.js";
 import { sequentialStrategy } from "./dispatcher-sequential.js";
 import type { ValidatorRegistry } from "./validator.js";
+import { swarmToolDenial } from "./dispatcher-swarm.js";
 
 /** Correlation only: the originating input's anchor id, never its prose or tags. */
 const activityAnchor = (task: Execution) => task.dependency?.anchor && { id: task.dependency.anchor.id, task: "", receivedAt: task.dependency.anchor.receivedAt };
@@ -24,6 +25,10 @@ export class DispatcherRuntime {
   private pending = new Map<string, { resolve(value: string): void; reject(error: Error): void }>();
   /** Host-observed selection/tool count of the current worker turn, keyed by task:token. */
   private turns = new Map<string, { observed?: ModelPair; tools: number; evidence: Array<{ name: string; error: boolean; call?: string; result?: string; callId?: string }> }>();
+  /** Host-owned operator swarm policy; set once by the CLI, never by workers. */
+  swarmPolicy?: () => import("./dispatcher-config.js").DispatcherSwarmConfig | undefined;
+  swarmEligible?: (task: Readonly<Execution>) => boolean;
+  swarmWorkspace?: (task: Readonly<Execution>) => string | undefined;
   constructor(private readonly harness: Harness, private readonly store: ExecutionStore, private readonly rules?: DispatchModelRule[] | (() => Promise<DispatchModelRule[] | undefined>), private readonly roleSettings?: () => { config?: ModelRoles; defaults: ModelPair; review?: ModelPair }, private readonly validators?: ValidatorRegistry, private readonly runtimeProvenance?: () => import("./dispatcher-sequential.js").WorkerRuntimeProvenance) {}
   eventText(event: ExecutionEvent): string {
     const task = this.store.list(event.parent).find(item => item.id === event.executionId);
@@ -34,10 +39,11 @@ export class DispatcherRuntime {
       ? event.requiresAttention || task?.assessmentHold ? `${event.text} Nächste automatische Prüfung ab ${new Date(event.automaticRetryAt).toISOString()}.`
       : `Automatische Wiederaufnahme ab ${new Date(event.automaticRetryAt).toISOString()}; Dispatcher behält denselben Auftrag. Keine Nutzeraktion erforderlich.`
       : question?.[2] ?? event.text;
-    return `${taskContextLabel(event.executionId, task?.dependency?.anchor?.outputTags, !!task?.dependency?.anchor)} · Dispatcher — ${text}${event.type === "question" ? `\n/dispatch answer ${event.executionId} ${questionId} <Antwort>` : ""}`;
+    const swarmQuestion = event.type === "question" && !!task?.question?.swarm && task.question.id === questionId;
+    return `${taskContextLabel(event.executionId, task?.dependency?.anchor?.outputTags, !!task?.dependency?.anchor)} · Dispatcher — ${text}${event.type === "question" && !swarmQuestion ? `\n/dispatch answer ${event.executionId} ${questionId} <Antwort>` : ""}`;
   }
   private taskForSession(key: string) {
-    return this.store.list().find(task => key === `dispatch:${task.id}:${task.token}`);
+    return this.store.list().find(task => ownsWorkerSession(task, key));
   }
   approvalTarget(key: string): Address | undefined {
     const task = this.taskForSession(key);
@@ -88,11 +94,34 @@ export class DispatcherRuntime {
     if (task.parentStopped || task.status === "cancelled") throw new ToolGuardError("execution_cancelled", "Dispatcher worker no longer authorized: stopped");
     if (task.status !== "running") throw new ToolGuardError("ownership_lost", "Dispatcher worker no longer authorized: not running");
   }
-  guardTool(key: string, tool: string): void {
+  guardTool(key: string, tool: string, input?: unknown): void {
     this.beforeTurn(key);
     if (this.reportOnly.has(key)) throw new ToolGuardError("report_only", "Completion consistency check is tool-free; reconcile existing facts, never repeat effects or manufacture success");
     if (this.isWorker(key) && childDeniedTools(key).includes(tool)) {
       throw new ToolGuardError("worker_orchestration_denied", "Dispatcher worker orchestration is disabled; return a result or blocker");
+    }
+    this.guardSwarmScope(key, tool, input);
+  }
+  /** Swarm member write confinement. The host calls this as the LAST synchronous guard
+   * immediately before the tool executes (no awaits after it). Threat model: members
+   * themselves cannot create links (only read/grep/find/ls and write/edit of plain files);
+   * this is not a sandbox against concurrent processes that already hold shell authority
+   * in the same workspace. */
+  guardSwarmScope(key: string, tool: string, input?: unknown): void {
+    const member = /:swarm:(m\d{1,2})$/.exec(key)?.[1];
+    if (member && this.isWorker(key)) {
+      // Authority may have been revoked, held or expired while an awaited guard or
+      // approval was pending: re-check it here, immediately before execution.
+      this.beforeTurn(key);
+      const owner = this.taskForSession(key)!;
+      if (owner.dependency?.expiresAt !== undefined && owner.dependency.expiresAt <= Date.now())
+        throw new ToolGuardError("deadline_expired", "Swarm member mandate deadline elapsed");
+      // Approved write scope is enforced here, not only stated in the prompt. Fail closed.
+      const task = this.taskForSession(key)!;
+      let writes: readonly string[] | undefined;
+      try { writes = (JSON.parse(task.checkpoint ?? "") as { swarm?: { phase?: string; members?: Array<{ id: string; writes: string[] }> } }).swarm?.members?.find(m => m.id === member)?.writes; } catch { /* undecidable */ }
+      const denial = writes ? swarmToolDenial(this.swarmWorkspace?.(task), writes, tool, input) : "Swarm member scope unavailable";
+      if (denial) throw new ToolGuardError("swarm_scope", denial);
     }
   }
   readonly strategy: DispatcherStrategy = {
@@ -225,6 +254,8 @@ export class DispatcherRuntime {
   get sequential(): DispatcherStrategy { return this.sequentialStrategy ??= { ...sequentialStrategy({
     harness: this.harness, store: this.store, validators: this.validators, runtimeProvenance: this.runtimeProvenance, roles: () => this.roleSettings?.(),
     runTurn: (context, key, id, text, rule, options) => this.runTurn(context, key, id, text, rule, options),
+    swarm: () => this.swarmPolicy?.(), swarmEligible: task => this.swarmEligible?.(task) ?? false,
+    swarmWorkspace: task => this.swarmWorkspace?.(task),
     turn: key => { const turn = this.turns.get(key) ?? { tools: 0, evidence: [] }; this.turns.delete(key); return { ...turn, evidence: turn.evidence.map(({ callId: _id, ...rest }) => rest) }; },
     resetTurn: key => { this.turns.set(key, { tools: 0, evidence: [] }); },
   }), prepareWorker: task => this.prepareWorker(task) }; }

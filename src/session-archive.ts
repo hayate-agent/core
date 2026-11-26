@@ -33,7 +33,11 @@ export class SessionArchives {
   }
   async load(key: string, id: string): Promise<SessionArchive> {
     const archive = JSON.parse(await readFile(this.file(key, id), "utf8"));
-    if (!archive || archive.version !== 1 || archive.id !== id || !Array.isArray(archive.entries) ||
+    if (!archive || archive.version !== 1 || archive.id !== id ||
+        typeof archive.sourceSessionId !== "string" || typeof archive.createdAt !== "string" ||
+        typeof archive.retrospective !== "string" || typeof archive.forward !== "string" ||
+        (archive.targetSessionId !== undefined && typeof archive.targetSessionId !== "string") ||
+        !Array.isArray(archive.entries) ||
         archive.entries.some((entry: unknown) => !entry || typeof entry !== "object" || Array.isArray(entry) ||
           typeof (entry as ArchiveEntry).id !== "string" || typeof (entry as ArchiveEntry).role !== "string" ||
           typeof (entry as ArchiveEntry).text !== "string" ||
