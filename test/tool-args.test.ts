@@ -62,7 +62,7 @@ import assert from "node:assert/strict";
 import { PiRuntime } from "./src/runtime/pi.ts";
 const tool = {
   name: "plugin_items", description: "Items",
-  parameters: { type: "object", properties: { action: { type: "string" }, items: { type: "array" }, meta: { type: "object" } }, required: ["action"] },
+  parameters: { type: "object", properties: { action: { type: "string" }, items: { type: ["array", "null"] }, meta: { type: ["object", "null"] } }, required: ["action"] },
   execute: async (input) => JSON.stringify({ action: input.action, items: input.items, meta: input.meta }),
 };
 const runtime = new PiRuntime({

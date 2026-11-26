@@ -34,7 +34,12 @@ export function prepareStructuredToolArgs(parameters: unknown, args: unknown): u
   for (const [key, property] of Object.entries(properties)) {
     const value = out[key];
     if (typeof value !== "string" || !STRUCTURED_PREFIX.test(value)) continue;
-    const type = (property as { type?: unknown } | undefined)?.type;
+    const declared = (property as { type?: unknown } | undefined)?.type;
+    // A nullable structured type still has one unambiguous decoded shape.
+    // Other unions remain untouched so validation can report the real error.
+    const type = Array.isArray(declared) && declared.length === 2 && declared.includes("null")
+      ? declared.find(value => value !== "null")
+      : declared;
     if (type !== "array" && type !== "object") continue;
     let parsed: unknown;
     try {
