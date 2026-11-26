@@ -127,6 +127,11 @@ export interface HarnessConfig {
   home_address?: { channel: string; target: string };
 }
 
+function systemTimezone(): string {
+  const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  return zone && zone !== "Etc/Unknown" ? zone : "UTC";
+}
+
 export function defaultConfig(overrides: Partial<HarnessConfig> = {}): HarnessConfig {
   if (overrides.language !== undefined) validateLanguagePolicy(overrides.language);
   if (overrides.localModelScheduling !== undefined) validateLocalModelScheduling(overrides.localModelScheduling);
@@ -191,10 +196,10 @@ export function defaultConfig(overrides: Partial<HarnessConfig> = {}): HarnessCo
   const home = agentHome(overrides.home);
   return {
     activity: overrides.activity,
-    agent: overrides.agent ?? process.env.HAYATE_AGENT_AGENT ?? "agent",
+    agent: overrides.agent ?? (process.env.HAYATE_AGENT_AGENT?.trim() ? process.env.HAYATE_AGENT_AGENT : "agent"),
     home,
     cwd: overrides.cwd ?? process.cwd(),
-    timezone: overrides.timezone ?? process.env.TZ ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
+    timezone: overrides.timezone ?? (process.env.TZ?.trim() ? process.env.TZ : systemTimezone()),
     model: overrides.model,
     thinking: overrides.thinking,
     localModelScheduling: overrides.localModelScheduling,

@@ -27,6 +27,23 @@ export interface DispatcherConfig {
   workerRetryMax: number;
   /** Per-task model routing rules (first match wins; at most one empty-match fallback, last). */
   rules?: DispatchModelRule[];
+  /** Operator-approved parallel agent swarm. Always proposed first; a swarm occupies ONE capacity slot. */
+  swarm?: DispatcherSwarmConfig;
+}
+export interface DispatcherSwarmConfig {
+  enabled: boolean;
+  /** Members per swarm, bounded by the host subagent ceiling. */
+  maxSize: number;
+}
+/** Same ceiling as concurrently active subagents; a swarm never exceeds it. */
+export const SWARM_MEMBER_CEILING = 4;
+export function swarmConfig(value: unknown): DispatcherSwarmConfig {
+  if (value === undefined) return { enabled: false, maxSize: SWARM_MEMBER_CEILING };
+  if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).some(key => !["enabled", "maxSize"].includes(key))) throw Error("Invalid dispatcher.swarm");
+  const config = { enabled: false, maxSize: SWARM_MEMBER_CEILING, ...(value as Partial<DispatcherSwarmConfig>) };
+  if (typeof config.enabled !== "boolean" || !Number.isSafeInteger(config.maxSize) || config.maxSize < 2 || config.maxSize > SWARM_MEMBER_CEILING)
+    throw Error(`Invalid dispatcher.swarm (maxSize must be 2..${SWARM_MEMBER_CEILING})`);
+  return config;
 }
 export function dispatcherConfig(value?: Partial<DispatcherConfig>): DispatcherConfig {
   if (value !== undefined && (!value || typeof value !== "object" || Array.isArray(value))) throw Error("Invalid dispatcher configuration");
@@ -38,6 +55,12 @@ export function dispatcherConfig(value?: Partial<DispatcherConfig>): DispatcherC
       !Number.isSafeInteger(config.workerRetryMax) || config.workerRetryMax < 1 ||
       !Number.isSafeInteger(config.retentionDays) || config.retentionDays < 1 || config.retentionDays > 3650) throw Error("Invalid dispatcher configuration");
   if (config.enabled && !config.concurrentRequests) throw Error("Dispatcher requires explicit concurrentRequests support");
+  if (config.swarm !== undefined) {
+    const swarm = swarmConfig(config.swarm);
+    // Swarm proposals come from the sequential planner; never silently ignored.
+    if (swarm.enabled && config.strategy !== "sequential") throw Error("dispatcher.swarm requires strategy sequential");
+    config.swarm = swarm;
+  }
   if (config.rules !== undefined) {
     if (!Array.isArray(config.rules) || config.rules.length > 8) throw Error("Invalid dispatcher configuration");
     const THINKING = ["off", "minimal", "low", "medium", "high", "xhigh"];
