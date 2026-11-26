@@ -2413,3 +2413,35 @@ test("swarm: an ancestor swapped for a symlink after approval is refused at the 
   symlinkSync(outside, path.join(ws, "a"));
   assert.match(String(swarmToolDenial(ws, ["a"], "write", { path: "a/x.ts" })), /outside the workspace or undecidable|not among/);
 });
+
+test("swarm: the final guard re-checks authority and deadline, not only write scope", async t => {
+  const ws = mkdtempSync(path.join(tmpdir(), "swarm-auth-"));
+  mkdirSync(path.join(ws, "a"));
+  const seen: string[] = [];
+  let bridge!: DispatcherRuntime; let store!: { list(): Array<{ dependency?: { expiresAt?: number } }> };
+  const final = (key: string) => { try { bridge.guardSwarmScope(key, "write", { path: "a/x.ts" }); return "allowed"; } catch (error) { return String((error as Error).message); } };
+  const f = await setup(t, {
+    plan: swarmPlan([{ task: "part A", writes: ["a"] }, { task: "part B", writes: [] }]),
+    worker: async (prompt, _m, key) => {
+      if (/YOUR PART \(m1\)/.test(prompt)) {
+        seen.push(final(key!));
+        const row = (store as unknown as { data: { executions: Array<{ dependency?: { expiresAt?: number } }> } }).data.executions[0]!;
+        const saved = row.dependency; row.dependency = { ...(saved ?? {}), expiresAt: Date.now() - 1 } as never; // mandate expired during a pending approval
+        seen.push(final(key!));
+        row.dependency = saved;
+      }
+      return "done\nSTEP-STATUS: complete";
+    },
+    verdict: () => '{"state":"completed"}',
+  });
+  bridge = f.bridge; store = f.store as never;
+  enableSwarm(f); f.bridge.swarmWorkspace = () => ws;
+  const task = await f.run("A and B");
+  await f.dispatcher.answerSwarm("parent", task.id, "v1", "ja");
+  await f.dispatcher.waitForExecution(task.id);
+  for (let i = 0; i < 200 && f.store.list()[0]!.status !== "completed"; i++) { await f.dispatcher.kick(); await new Promise(r => setTimeout(r, 5)); }
+  assert.equal(seen[0], "allowed");
+  assert.match(seen[1]!, /deadline elapsed/);
+  // A non-running (held/stopped) execution is refused by the final guard too.
+  assert.notEqual(final(`dispatch:${task.id}:stale:swarm:m1`), "allowed");
+});

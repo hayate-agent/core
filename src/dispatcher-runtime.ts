@@ -110,6 +110,12 @@ export class DispatcherRuntime {
   guardSwarmScope(key: string, tool: string, input?: unknown): void {
     const member = /:swarm:(m\d{1,2})$/.exec(key)?.[1];
     if (member && this.isWorker(key)) {
+      // Authority may have been revoked, held or expired while an awaited guard or
+      // approval was pending: re-check it here, immediately before execution.
+      this.beforeTurn(key);
+      const owner = this.taskForSession(key)!;
+      if (owner.dependency?.expiresAt !== undefined && owner.dependency.expiresAt <= Date.now())
+        throw new ToolGuardError("deadline_expired", "Swarm member mandate deadline elapsed");
       // Approved write scope is enforced here, not only stated in the prompt. Fail closed.
       const task = this.taskForSession(key)!;
       let writes: readonly string[] | undefined;
