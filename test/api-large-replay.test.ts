@@ -15,7 +15,9 @@ for (const count of [0, 1, 2000, 150000]) {
     const api = new ApiChannel({ key, agent: "probe", runs, port: 0, host: "127.0.0.1", cancel: async () => false, models: async () => [], log: m => { if (!m.startsWith("listening on ")) logs.push(m); } });
     await api.start(async () => {});
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 20000);
+    // Correctness test, not a latency bound: abort just inside the declared 60s test timeout
+    // (a full parallel Linux suite on 4 CPUs needs ~21-25s for 150000 events).
+    const timer = setTimeout(() => controller.abort(), 55000);
     try {
       const response = await fetch(`http://127.0.0.1:${api.address!.port}/v1/runs/${run.run_id}/events`, { headers: { Authorization: `Bearer ${key}` }, signal: controller.signal });
       assert.equal(response.status, 200);

@@ -147,6 +147,8 @@ export interface PiRuntimeOptions {
   /** Fresh validated skill context before each turn, without reloading extensions. */
   skillContext?: () => Promise<string>;
   toolGuard?: (sessionKey: string, tool: string, input: unknown) => Promise<void>;
+  /** Synchronous last-moment guard, run after every awaited guard/approval with no await before execution. */
+  finalToolGuard?: (sessionKey: string, tool: string, input: unknown) => void;
   /** Provider-neutral instruction supplier: reread before every working model call,
    * including existing sessions and continuation iterations; reject read failures. */
   personaSections: (cwd?: string, worker?: boolean) => Promise<string[]>;
@@ -1128,10 +1130,14 @@ export class PiRuntime implements AgentRuntime {
             pi.on("tool_call", async (event) => {
               try { await this.opts.toolGuard?.(sessionKey, event.toolName, event.input); }
               catch (error) { return { block: true, reason: toolGuardDenialReason(error) }; }
-              if (approvals.mode !== "manual" || !requestApproval) return undefined;
-              if (approvals.tools.length && !approvals.tools.includes(event.toolName)) return undefined;
+              const final = () => {
+                try { this.opts.finalToolGuard?.(sessionKey, event.toolName, event.input); return undefined; }
+                catch (error) { return { block: true, reason: toolGuardDenialReason(error) }; }
+              };
+              if (approvals.mode !== "manual" || !requestApproval) return final();
+              if (approvals.tools.length && !approvals.tools.includes(event.toolName)) return final();
               const ok = await requestApproval(sessionKey, event.toolName, event.input);
-              return ok ? undefined : { block: true, reason: `${event.toolName} was denied by the operator` };
+              return ok ? final() : { block: true, reason: `${event.toolName} was denied by the operator` };
             });
           },
         },

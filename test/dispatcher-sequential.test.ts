@@ -13,7 +13,7 @@ import { ExecutionStore, executionRecoveryHash, type ExecutionEvent } from "../s
 import { Harness } from "../src/harness.js";
 import { parsePlan, parsePlanned, planPrompt, stepStatus, validatorRole, crossCheckRole, type SequentialState } from "../src/dispatcher-sequential.js";
 import { FakeRuntime } from "./fakes.js";
-import { parseSwarm, swarmDeliverable, swarmWritesDisjoint, classifySwarmAnswer } from "../src/dispatcher-swarm.js";
+import { parseSwarm, swarmDeliverable, swarmWritesDisjoint, classifySwarmAnswer, swarmToolDenial } from "../src/dispatcher-swarm.js";
 import { mkdtempSync, mkdirSync, symlinkSync, realpathSync, rmSync, writeFileSync, linkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dispatcherPlugin } from "../src/builtin-plugins/dispatcher-plugin.js";
@@ -30,7 +30,7 @@ const roles: ModelRoles = { enabled: true, roles: {
 const defaults = { model: "p/default", thinking: "high" };
 const steps = (...list: Array<[string, string]>) => JSON.stringify({ steps: list.map(([task, role]) => ({ task, role, reason: `${role} suffices`, evidence: `evidence of ${task}` })) });
 
-interface Script { ready?: string | (() => Promise<string>); verdictDelayMs?: number; verdict?: string | ((prompt: string) => string | Promise<string>); toolEvents?: (prompt: string) => Array<{ name: string; detail: string; result: string }>; plan?: string | (() => string); worker?: (prompt: string, model?: string) => string | Promise<string>; tools?: (prompt: string) => number }
+interface Script { ready?: string | (() => Promise<string>); verdictDelayMs?: number; verdict?: string | ((prompt: string) => string | Promise<string>); toolEvents?: (prompt: string) => Array<{ name: string; detail: string; result: string }>; plan?: string | (() => string); worker?: (prompt: string, model?: string, key?: string) => string | Promise<string>; tools?: (prompt: string) => number }
 const fixtureCleanup = new WeakMap<import("node:test").TestContext, Array<{ home: string; stop(): Promise<void> }>>();
 function retainFixture(t: import("node:test").TestContext, fixture: { home: string; stop(): Promise<void> }): void {
   let fixtures = fixtureCleanup.get(t);
@@ -88,7 +88,7 @@ async function setup(t: import("node:test").TestContext, script: Script, opts: {
       }
       for (let i = 0; i < (script.tools?.(text) ?? 0); i++) o.onEvent?.({ type: "tool", phase: "start", name: "bash" });
       await prompt(text, o);
-      return (await script.worker?.(text, o.model)) ?? "content\nSTEP-STATUS: complete";
+      return (await script.worker?.(text, o.model, key)) ?? "content\nSTEP-STATUS: complete";
     };
     return session;
   };
@@ -2320,7 +2320,9 @@ test("swarm: hard links to one file are the same write target, also inside direc
   const pair = (a: string[], b: string[]) => swarmWritesDisjoint(root, { members: [{ writes: a }, { writes: b }] as never });
   assert.equal(pair(["a/File.ts"], ["b/copy.ts"]), false, "two paths, one inode");
   assert.equal(pair(["a"], ["b/copy.ts"]), false, "directory target containing the linked file");
-  assert.equal(pair(["a/File.ts"], ["b/other.ts"]), true, "different files stay disjoint");
+  assert.equal(pair(["a/File.ts"], ["b/other.ts"]), false, "a hard-linked target is reachable under an unapproved name");
+  writeFileSync(path.join(root, "a", "plain.ts"), "p");
+  assert.equal(pair(["a/plain.ts"], ["b/other.ts"]), true, "different unlinked files stay disjoint");
   symlinkSync(path.join(root, "a"), path.join(root, "b", "inner"));
   assert.equal(pair(["b"], ["a/File.ts"]), false, "a symlink inside a writable directory is undecidable");
 });
@@ -2340,4 +2342,74 @@ test("swarm: a member that reports blocked/progress is a gap even if the validat
   assert.match(result, /m1: unabhängig bestätigt/);
   assert.match(result, /1 Lücke\(n\): m2/);
   assert.doesNotMatch(result, /m2: unabhängig bestätigt/);
+});
+
+test("swarm: each member is confined to its approved targets at the tool boundary, not only by prompt", async t => {
+  const ws = mkdtempSync(path.join(tmpdir(), "swarm-scope-"));
+  mkdirSync(path.join(ws, "a")); mkdirSync(path.join(ws, "b"));
+  const denials: Record<string, string[]> = {};
+  let bridge!: DispatcherRuntime;
+  const attempt = (key: string, tool: string, input?: unknown) => { try { bridge.guardTool(key, tool, input); return "allowed"; } catch (error) { return String((error as Error).message); } };
+  const f = await setup(t, {
+    plan: swarmPlan([{ task: "part A", writes: ["a"] }, { task: "part B", writes: [] }]),
+    worker: async (prompt, _model, key) => {
+      const own = /YOUR PART \((m\d)\)/.exec(prompt)![1]!;
+      denials[own] = [
+        attempt(key!, "read", { path: "b/x.ts" }),
+        attempt(key!, "write", { path: "a/new.ts" }),
+        attempt(key!, "edit", { path: path.join(realpathSync(ws), "a", "deep", "y.ts") }),
+        attempt(key!, "write", { path: "b/x.ts" }),
+        attempt(key!, "write", { path: "../escape.ts" }),
+        attempt(key!, "bash", { command: "echo > b/x.ts" }),
+        attempt(key!, "plugin_dispatch", {}),
+      ];
+      return `${own} done\nSTEP-STATUS: complete`;
+    },
+    verdict: () => '{"state":"completed"}',
+  });
+  bridge = f.bridge;
+  enableSwarm(f);
+  f.bridge.swarmWorkspace = () => ws;
+  const task = await f.run("do A and B");
+  await f.dispatcher.answerSwarm("parent", task.id, "v1", "ja");
+  await f.dispatcher.waitForExecution(task.id);
+  while (f.store.list()[0]!.status !== "completed") { await f.dispatcher.kick(); await new Promise(r => setTimeout(r, 5)); }
+  const [readB, writeOwn, editOwnAbs, writeOther, escape, shell, orchestrate] = denials.m1!;
+  assert.equal(readB, "allowed", "reading is shared");
+  assert.equal(writeOwn, "allowed");
+  assert.equal(editOwnAbs, "allowed", "absolute spelling inside own target");
+  assert.match(writeOther!, /not among this member's approved targets/);
+  assert.match(escape!, /outside the workspace or undecidable/);
+  assert.match(shell!, /"bash" is not available in a parallel swarm/);
+  assert.notEqual(orchestrate, "allowed");
+  assert.equal(denials.m2![0], "allowed");
+  assert.match(denials.m2![1]!, /read-only/, "writes: [] means read-only, enforced");
+  assert.equal(swarmToolDenial(ws, ["a"], "read", {}), undefined);
+  // Granting is exact: a differently cased path is not the approved target.
+  assert.match(String(swarmToolDenial(ws, ["a"], "write", { path: "A/file.ts" })), /not among this member's approved targets|undecidable/);
+  assert.equal(swarmToolDenial(ws, ["a"], "write", { path: "a/file.ts" }), undefined);
+  // The authorized string is exactly the executed one; reinterpretable spellings are refused.
+  assert.equal(swarmToolDenial(ws, ["a/file"], "write", { path: "a/file" }), undefined);
+  // An approved file hard-linked to an unapproved one is refused at the tool and the proposal.
+  writeFileSync(path.join(ws, "b", "foreign.ts"), "s");
+  linkSync(path.join(ws, "b", "foreign.ts"), path.join(ws, "a", "linked.ts"));
+  assert.match(String(swarmToolDenial(ws, ["a"], "edit", { path: "a/linked.ts" })), /hard-linked/);
+  assert.equal(swarmWritesDisjoint(ws, { members: [{ writes: ["a/linked.ts"] }, { writes: ["c"] }] as never }), false);
+  mkdirSync(path.join(ws, "a", "dir"));
+  assert.match(String(swarmToolDenial(ws, ["a"], "write", { path: "a/dir" })), /not a plain file/);
+  for (const tricky of ["a/file ", " a/file", "a/file\t", "a\\file", "a/fi\u202fle", "a/fi\u00a0le", "@a/file", "~/a/file", "a/e\u0301.ts"])
+    assert.match(String(swarmToolDenial(ws, ["a"], "write", { path: tricky })), /plain, explicit workspace path/, JSON.stringify(tricky));
+  // An ordinary (non-member) dispatch worker keeps its normal tools.
+  const plain = `dispatch:${task.id}:${f.store.list()[0]!.token ?? "t"}`;
+  assert.doesNotMatch(attempt(plain, "bash", { command: "true" }), /swarm/);
+});
+
+test("swarm: an ancestor swapped for a symlink after approval is refused at the final guard", () => {
+  const ws = mkdtempSync(path.join(tmpdir(), "swarm-final-"));
+  const outside = mkdtempSync(path.join(tmpdir(), "swarm-outside-"));
+  mkdirSync(path.join(ws, "a"));
+  assert.equal(swarmToolDenial(ws, ["a"], "write", { path: "a/x.ts" }), undefined);
+  rmSync(path.join(ws, "a"), { recursive: true });
+  symlinkSync(outside, path.join(ws, "a"));
+  assert.match(String(swarmToolDenial(ws, ["a"], "write", { path: "a/x.ts" })), /outside the workspace or undecidable|not among/);
 });

@@ -443,7 +443,7 @@ async function main(argv: string[]): Promise<void> {
     toolGuard: async (key, tool, input) => {
       if (tool === "plugin_review") await reloadRuntimeSettings();
       subagents.guardTool(key, tool);
-      dispatchRuntime?.guardTool(key, tool);
+      dispatchRuntime?.guardTool(key, tool, input);
       await harness.guardWaitTool(key, tool, input);
       const current = harness.sessions.get(key)?.current;
       if (current?.source === "host") {
@@ -459,6 +459,8 @@ async function main(argv: string[]): Promise<void> {
       }
       await plugins.policies.beforeTool(cwdFor(key), tool, input);
     },
+    // Swarm write confinement is re-checked after every awaited guard and approval.
+    finalToolGuard: (key, tool, input) => dispatchRuntime?.guardSwarmScope(key, tool, input),
     personaSections: async (cwd = config.cwd, worker = false) => {
       await protectedContent.verify();
       return personaSections(await loadPersona(config.persona, personality), { name: config.agent, workspace: cwd, worker });

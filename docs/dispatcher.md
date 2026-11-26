@@ -730,6 +730,16 @@ punctuation) starts the swarm; exactly `nein` records a rejection receipt and ru
 sequential plan. Any other text is a correction: the planner revises the
 proposal (at most 2 corrections) and asks again.
 
+Members are confined at the tool boundary, not only by their prompt: a member
+may use `read`, `grep`, `find` and `ls`, and `write`/`edit` only for paths that
+resolve (real path, inside the workspace) to one of its approved targets. Shell
+and every other tool are denied (`swarm_scope`); `writes: []` is read-only.
+The check runs again as the final synchronous guard after every awaited guard
+and approval, immediately before the tool executes. Hard-linked files are
+refused. Threat model: members themselves cannot create links or run shell;
+this is not a sandbox against other processes that already hold shell authority
+in the same workspace.
+
 An accepted swarm occupies ONE dispatcher capacity slot (`capacity` keeps
 counting independent processes). Members run concurrently in sessions
 `dispatch:<id>:<token>:swarm:m<N>` with the parent execution's authority,

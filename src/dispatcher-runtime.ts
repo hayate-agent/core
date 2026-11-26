@@ -12,6 +12,7 @@ import type { DispatcherStrategy, DispatchContext } from "./dispatcher.js";
 import type { ExecutionStore } from "./execution.js";
 import { sequentialStrategy } from "./dispatcher-sequential.js";
 import type { ValidatorRegistry } from "./validator.js";
+import { swarmToolDenial } from "./dispatcher-swarm.js";
 
 /** Correlation only: the originating input's anchor id, never its prose or tags. */
 const activityAnchor = (task: Execution) => task.dependency?.anchor && { id: task.dependency.anchor.id, task: "", receivedAt: task.dependency.anchor.receivedAt };
@@ -93,11 +94,28 @@ export class DispatcherRuntime {
     if (task.parentStopped || task.status === "cancelled") throw new ToolGuardError("execution_cancelled", "Dispatcher worker no longer authorized: stopped");
     if (task.status !== "running") throw new ToolGuardError("ownership_lost", "Dispatcher worker no longer authorized: not running");
   }
-  guardTool(key: string, tool: string): void {
+  guardTool(key: string, tool: string, input?: unknown): void {
     this.beforeTurn(key);
     if (this.reportOnly.has(key)) throw new ToolGuardError("report_only", "Completion consistency check is tool-free; reconcile existing facts, never repeat effects or manufacture success");
     if (this.isWorker(key) && childDeniedTools(key).includes(tool)) {
       throw new ToolGuardError("worker_orchestration_denied", "Dispatcher worker orchestration is disabled; return a result or blocker");
+    }
+    this.guardSwarmScope(key, tool, input);
+  }
+  /** Swarm member write confinement. The host calls this as the LAST synchronous guard
+   * immediately before the tool executes (no awaits after it). Threat model: members
+   * themselves cannot create links (only read/grep/find/ls and write/edit of plain files);
+   * this is not a sandbox against concurrent processes that already hold shell authority
+   * in the same workspace. */
+  guardSwarmScope(key: string, tool: string, input?: unknown): void {
+    const member = /:swarm:(m\d{1,2})$/.exec(key)?.[1];
+    if (member && this.isWorker(key)) {
+      // Approved write scope is enforced here, not only stated in the prompt. Fail closed.
+      const task = this.taskForSession(key)!;
+      let writes: readonly string[] | undefined;
+      try { writes = (JSON.parse(task.checkpoint ?? "") as { swarm?: { phase?: string; members?: Array<{ id: string; writes: string[] }> } }).swarm?.members?.find(m => m.id === member)?.writes; } catch { /* undecidable */ }
+      const denial = writes ? swarmToolDenial(this.swarmWorkspace?.(task), writes, tool, input) : "Swarm member scope unavailable";
+      if (denial) throw new ToolGuardError("swarm_scope", denial);
     }
   }
   readonly strategy: DispatcherStrategy = {
