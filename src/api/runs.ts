@@ -317,7 +317,8 @@ export class RunRegistry {
       return { replay: seq > lastSeq ? [terminal] : [], truncated: seq > lastSeq + 1 ? seq : undefined, closed: true, unsubscribe: () => {} };
     }
     const all = live?.events ?? [];
-    const replay = all.filter((e) => e.seq > lastSeq);
+    // Public event values must not alias retained replay history.
+    const replay = all.filter((e) => e.seq > lastSeq).map((e) => structuredClone(e));
     const oldest = all[0]?.seq ?? r?.seq ?? 0;
     const truncated = oldest > lastSeq + 1 ? oldest : undefined;
     if (!r || !live || TERMINAL.has(r.status)) return { replay, truncated, closed: true, unsubscribe: () => {} };
@@ -366,7 +367,7 @@ export class RunRegistry {
     const event: RunEvent = { seq: r.seq++, data: { event: name, run_id: r.run_id, timestamp: this.now() / 1000, ...fields } };
     live.events.push(event);
     if (live.events.length > this.maxEvents) live.events.splice(0, live.events.length - this.maxEvents);
-    for (const l of [...live.listeners]) l(event);
+    for (const l of [...live.listeners]) l(structuredClone(event));
   }
 
   /** Terminal: notify subscribers once; the replay buffer stays until the record expires. */
