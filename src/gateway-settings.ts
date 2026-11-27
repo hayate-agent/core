@@ -42,8 +42,9 @@ export function mergeConversationPolicy(base?: ConversationPolicy, override?: Co
   if (!base && !override) return undefined;
   const channels = { ...base?.channels };
   for (const [id, rule] of Object.entries(override?.channels ?? {})) channels[id] = { ...channels[id], ...rule };
-  return { defaults: { ...base?.defaults, ...override?.defaults },
-    allowedChannels: override?.allowedChannels ?? base?.allowedChannels ?? "*", channels };
+  // Effective policies must not retain mutable references to configuration inputs.
+  return structuredClone({ defaults: { ...base?.defaults, ...override?.defaults },
+    allowedChannels: override?.allowedChannels ?? base?.allowedChannels ?? "*", channels });
 }
 
 export interface GatewaySettings {
