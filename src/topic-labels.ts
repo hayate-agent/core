@@ -20,7 +20,13 @@ const validTags = (tags: unknown): tags is string[] => Array.isArray(tags) && ta
 function jsonPrefix(text: string, budget: number): string {
   let result = "", used = 2;
   for (const point of text) {
-    used += JSON.stringify(point).length - 2;
+    const code = point.charCodeAt(0);
+    // JSON escapes quotes/backslashes and controls; a lone surrogate is \uXXXX.
+    // for-of keeps valid surrogate pairs together (two unescaped UTF-16 units).
+    const width = code === 0x22 || code === 0x5c ? 2
+      : code < 0x20 ? (code === 8 || code === 9 || code === 10 || code === 12 || code === 13 ? 2 : 6)
+      : point.length === 1 && code >= 0xd800 && code <= 0xdfff ? 6 : point.length;
+    used += width;
     if (used > budget) break;
     result += point;
   }
