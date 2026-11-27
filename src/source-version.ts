@@ -8,7 +8,7 @@ export function sourceVersion(revision: string, tags: string, history: string, p
   const names = new Map<string, { direct?: string; peeled?: string; version: string }>();
   for (const line of tags.split("\n")) {
     const match = /^([a-f0-9]{40})\s+refs\/tags\/(v(\d+\.\d+\.\d+))(\^\{\})?$/.exec(line.trim());
-    if (!match) continue;
+    if (!match || match[3]!.split(".").some(part => part.length > 1 && part.startsWith("0"))) continue;
     const entry = names.get(match[2]!) ?? { version: match[3]! };
     if (match[4]) entry.peeled = match[1]; else entry.direct = match[1];
     names.set(match[2]!, entry);
@@ -32,6 +32,6 @@ export function sourceVersion(revision: string, tags: string, history: string, p
     })[0]!;
     return commit === revision ? version : `${version}+dev.${revision.slice(0, 12)}`;
   }
-  const base = packageVersion && /^\d+\.\d+\.\d+$/.test(packageVersion) ? packageVersion : "0.0.0";
+  const base = packageVersion && /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(packageVersion) ? packageVersion : "0.0.0";
   return `${base}+git.${revision.slice(0, 12)}`;
 }
