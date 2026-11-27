@@ -1,5 +1,5 @@
 {
-  "contentDigest": "8dc13f54276a28b6e2d1ca48aa6a79f61711017341bbbc842007920e528db84d",
+  "contentDigest": "fe3304a8634bb292b94f29cc73a62f2b1f3a15c48bdaf9e3c65bf7296a512853",
   "files": [
     {
       "mode": "100644",
@@ -1089,7 +1089,7 @@
     {
       "mode": "100644",
       "path": "src/memory-local.ts",
-      "sha256": "19e386a5e608b29e065b2a12216fe07cdf833857fcd8e47bcfc888bf414f3df1"
+      "sha256": "06b21c6d3d815c359e029fd004bf59a39f3905b7166dc19c7df980d56bfb77ad"
     },
     {
       "mode": "100644",
@@ -1524,7 +1524,7 @@
     {
       "mode": "100644",
       "path": "src/topic-labels.ts",
-      "sha256": "e2feca21c86a7b6dfc5f900c1e524cbdb30cc0f3421b3119f0db4a74d4469bbd"
+      "sha256": "dbdd7765304b3d76966feeb1d0fa7027933fabcf9bdb0273763b470d0bfaa831"
     },
     {
       "mode": "100644",
@@ -3078,6 +3078,11 @@
     },
     {
       "mode": "100644",
+      "path": "test/memory-open-snapshot.test.ts",
+      "sha256": "e14834d5016557d10beca90b87222ad040a1c32fa2dfb994117d66d1dd25aaf2"
+    },
+    {
+      "mode": "100644",
       "path": "test/memory-orchestration-live.test.ts",
       "sha256": "9ef6d2753f70bf47cd2517d8e622238cb3601a258b288c0de6bd02b19c210b2e"
     },
@@ -4288,6 +4293,11 @@
     },
     {
       "mode": "100644",
+      "path": "test/topic-json-width.test.ts",
+      "sha256": "7ed66321d27921ef028e5e7e87a281c7231fa8b8a65f912985ea8ee0191a4bb1"
+    },
+    {
+      "mode": "100644",
       "path": "test/topic-labels.test.ts",
       "sha256": "374e2d17156e358b590b8705f322777dd06131c789e1fe8020e25e2b05cfd780"
     },
@@ -4775,5 +4785,5 @@
   "historyPolicy": "fresh-root; no source commits, tags, refs or deleted blobs",
   "pluginSHA": "69a860ab414de6112da02647017c60fab57de755",
   "schema": 1,
-  "sourceSHA": "93821524013e11abf3c19c4217d1739097c246bf"
+  "sourceSHA": "148a4f96a159c033bffa8b3c52d58aa8f5762fa9"
 }
