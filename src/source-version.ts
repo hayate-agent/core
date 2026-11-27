@@ -16,7 +16,11 @@ export function sourceVersion(revision: string, tags: string, history: string, p
   const versions = new Map<string, string[]>();
   for (const entry of names.values()) {
     const commit = entry.peeled ?? entry.direct;
-    if (commit) versions.set(commit, [...(versions.get(commit) ?? []), entry.version]);
+    if (commit) {
+      const bucket = versions.get(commit);
+      if (bucket) bucket.push(entry.version);
+      else versions.set(commit, [entry.version]);
+    }
   }
   const commits = [revision, ...history.split(/\s+/).filter(value => /^[a-f0-9]{40}$/.test(value))];
   for (const commit of commits) {
