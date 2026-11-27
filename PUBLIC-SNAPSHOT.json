@@ -1,5 +1,5 @@
 {
-  "contentDigest": "fe3304a8634bb292b94f29cc73a62f2b1f3a15c48bdaf9e3c65bf7296a512853",
+  "contentDigest": "ddf57cbccd042cb7b6f51a7c2afdc47a7b8989f56d53ef641af6342262461ec9",
   "files": [
     {
       "mode": "100644",
@@ -1454,7 +1454,7 @@
     {
       "mode": "100644",
       "path": "src/source-version.ts",
-      "sha256": "a630af0efe33f5d99f01d4e8de5530e5a1d7664a4e44c45d5338c250b13ec77c"
+      "sha256": "fedf9bb5027319694d8d14bdb72d1f2ff5fe585dfe4cef03f8e49ba77f017de5"
     },
     {
       "mode": "100644",
@@ -1509,7 +1509,7 @@
     {
       "mode": "100644",
       "path": "src/tool-args.ts",
-      "sha256": "212a7b53111c43206e1860846250d55631e247a61b21d5feafc34074d082cb18"
+      "sha256": "5307a565f0e004b1b985bde09f35073173b824bd861edbde7cbd96f6e7e6e18d"
     },
     {
       "mode": "100644",
@@ -4088,6 +4088,11 @@
     },
     {
       "mode": "100644",
+      "path": "test/source-version-buckets.test.ts",
+      "sha256": "63fbfb257bc684d432a04e07a67a1051574bdea2724b50d24f71e770765408ec"
+    },
+    {
+      "mode": "100644",
       "path": "test/source-version-build.test.ts",
       "sha256": "9620cb75cfad037a41d0e0a82a097b6a07a8e9ce2b2d4e958259fadcff872582"
     },
@@ -4258,8 +4263,13 @@
     },
     {
       "mode": "100644",
+      "path": "test/tool-args-nullable.test.ts",
+      "sha256": "9b1956ebc97d3601f2977365c3a4780e90d9b6a68d2c07ed9af3c6361bb815fa"
+    },
+    {
+      "mode": "100644",
       "path": "test/tool-args.test.ts",
-      "sha256": "3aee6984e796512549d5d3d0f002a95f743801e37c399a0f4bd549fdb659b6e6"
+      "sha256": "4b25a873ed1aa23b5cd61a25ee7ef053a47e4e826205477b9bbc375027d81bfc"
     },
     {
       "mode": "100644",
@@ -4785,5 +4795,5 @@
   "historyPolicy": "fresh-root; no source commits, tags, refs or deleted blobs",
   "pluginSHA": "69a860ab414de6112da02647017c60fab57de755",
   "schema": 1,
-  "sourceSHA": "148a4f96a159c033bffa8b3c52d58aa8f5762fa9"
+  "sourceSHA": "b5c45258c1220dac38950ffe5db02cb57a52b400"
 }
