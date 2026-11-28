@@ -137,13 +137,15 @@ export class RunRegistry {
 
   get(runId: string): RunRecord | undefined {
     this.expire();
-    return this.runs.get(runId);
+    const record = this.runs.get(runId);
+    return record ? structuredClone(record) : undefined;
   }
 
   byIdempotencyKey(key: string): RunRecord | undefined {
     this.expire();
     const id = this.byKey.get(key);
-    return id ? this.runs.get(id) : undefined;
+    const record = id ? this.runs.get(id) : undefined;
+    return record ? structuredClone(record) : undefined;
   }
 
   /** New queued run (not yet saved: the caller saves before accepting the turn). */
